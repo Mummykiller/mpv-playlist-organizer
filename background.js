@@ -1,5 +1,5 @@
 // --- Constants ---
-const NATIVE_HOST_NAME = 'com.shinku.mpv_handler';
+const NATIVE_HOST_NAME = 'com.mpv_playlist_organizer.handler';
 
 // --- Debounce Utility ---
 /**
