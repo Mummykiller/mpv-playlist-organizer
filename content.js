@@ -22,6 +22,8 @@
         if (request.action === 'show_ui') {
             if (controllerHost) {
                 controllerHost.style.display = 'block';
+                // When explicitly shown, save its state as not minimized.
+                localStorage.setItem('mpv-controller-minimized', 'false');
             }
             return; // No response needed, so we don't return true.
         }
@@ -211,6 +213,7 @@
         // --- Minimize Button ---
         shadowRoot.getElementById('btn-toggle-minimize').addEventListener('click', () => {
             controllerHost.style.display = 'none';
+            localStorage.setItem('mpv-controller-minimized', 'true');
         });
 
         const logContainer = shadowRoot.getElementById('log-container');
@@ -447,6 +450,12 @@
         const savedPinState = localStorage.getItem('mpv-controller-pinned');
         uiApi.setPinState(savedPinState === null ? false : JSON.parse(savedPinState)); // Default to unpinned
 
+        // Load and apply saved minimized state
+        const savedMinimizedState = localStorage.getItem('mpv-controller-minimized');
+        if (savedMinimizedState === 'true') {
+            controllerHost.style.display = 'none';
+        }
+        
         // Load and apply saved controller position
         const savedLeft = localStorage.getItem('mpv-controller-left');
         const savedTop = localStorage.getItem('mpv-controller-top');
