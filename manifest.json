@@ -46,7 +46,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "mpv-handler@shinku.com",
+      "id": "mpv-playlist-organizer@example.com",
       "strict_min_version": "109.0"
     }
   }

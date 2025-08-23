@@ -28,6 +28,8 @@
         if (request.action === 'show_ui') {
             if (controllerHost) {
                 controllerHost.style.display = 'block';
+                // When the user explicitly shows the UI, remember this choice.
+                localStorage.setItem('mpv-controller-minimized', 'false');
             }
             return; // No response needed, so we don't return true.
         }
@@ -231,6 +233,8 @@
         // --- Minimize Button ---
         shadowRoot.getElementById('btn-toggle-minimize').addEventListener('click', () => {
             controllerHost.style.display = 'none';
+            // Remember that the user minimized the UI.
+            localStorage.setItem('mpv-controller-minimized', 'true');
         });
 
         const logContainer = shadowRoot.getElementById('log-container');
@@ -481,6 +485,12 @@
             controllerHost.style.top = savedTop + 'px';
             controllerHost.style.right = 'auto'; // Disable the initial 'right: 10px'
             controllerHost.style.bottom = 'auto';
+        }
+
+        // Load and apply saved minimized state
+        const isMinimized = localStorage.getItem('mpv-controller-minimized') === 'true';
+        if (isMinimized) {
+            controllerHost.style.display = 'none';
         }
     }
 

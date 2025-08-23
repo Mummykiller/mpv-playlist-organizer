@@ -1,5 +1,5 @@
 // --- Constants ---
-const NATIVE_HOST_NAME = 'com.shinku.mpv_handler'; // IMPORTANT: This must match the name in your native host manifest JSON.
+const NATIVE_HOST_NAME = 'com.mpv_playlist_organizer.handler'; // IMPORTANT: This must match the name in your native host manifest JSON.
 
 // --- Debounce Utility ---
 /**
