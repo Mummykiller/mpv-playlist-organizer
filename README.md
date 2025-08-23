@@ -18,6 +18,10 @@ It features a draggable on-page UI, synchronization with a command-line interfac
 - **CLI Integration**: Includes a command-line interface to play your saved playlists directly from the terminal.
 - **Data Sync**: Playlist data is stored in a local `folders.json` file, keeping the extension and CLI perfectly in sync.
 
+## Limitations
+
+- **M3U8 Stream Detection**: The extension's ability to detect M3U8 streams relies on standard web request patterns. Some websites, such as `https://hianime.to/`, use advanced methods like Blob URLs or DRM to serve video, which can prevent the extension from detecting the stream URL. In these cases, the controller UI will not indicate that a stream has been found.
+
 ---
 
 ## Installation
