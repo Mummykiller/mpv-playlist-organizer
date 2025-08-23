@@ -1,5 +1,6 @@
 /* --- CSS Variables for a Modern Theme --- */
-:root {
+/* By defining variables on the container, we ensure they are scoped correctly within the shadow DOM. */
+#m3u8-controller {
     --bg-primary: #111214; /* Very dark background */
     --bg-secondary: #1d1f23; /* Darker surface */
     --bg-tertiary: #2c2e33; /* Medium dark surface/hover */
@@ -16,10 +17,8 @@
     --font-mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
     --radius: 6px;
     --shadow: 0 6px 18px rgba(0, 0, 0, 0.4); /* Slightly more pronounced shadow */
-}
 
-/* --- Main Controller Container --- */
-#m3u8-controller {
+    /* --- Main Controller Container Styles --- */
     background-color: var(--bg-primary);
     color: var(--text-primary);
     border-radius: var(--radius);
@@ -92,7 +91,7 @@ button {
 }
 
 button:hover {
-    background-color: var(--surface-hover-color); /* Use a variable for hover */
+    background-color: var(--bg-tertiary); /* Use a defined variable for hover */
     border-color: var(--border-hover);
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
 }
@@ -125,17 +124,11 @@ button:active {
 }
 
 /* Icon-only buttons */
-#btn-toggle-reorder {
-    padding: 4px;
-    background-color: transparent;
-}
-
-/* Icon-only buttons */
-#btn-toggle-minimize, #btn-stop-mpv, #btn-clear-log, #btn-toggle-log, #ui-toggles button {
+#btn-toggle-minimize, #btn-clear-log, #btn-toggle-log, #ui-toggles button {
     padding: 6px;
     background-color: transparent;
 }
-#btn-toggle-minimize:hover, #btn-stop-mpv:hover, #btn-clear-log:hover, #btn-toggle-log:hover, #ui-toggles button:hover {
+#btn-toggle-minimize:hover, #btn-clear-log:hover, #btn-toggle-log:hover, #ui-toggles button:hover {
     background-color: var(--bg-tertiary);
     border-color: transparent;
 }
@@ -182,9 +175,27 @@ select:focus-visible {
     display: flex;
 }
 
-#bottom-buttons {
+#playback-controls {
+    display: flex;
+    gap: 8px;
+}
+
+#playback-controls #btn-play {
+    flex-grow: 1; /* Make play button take up remaining space */
+}
+
+#playback-controls #btn-close-mpv {
+    flex-shrink: 0;
+    padding: 6px; /* Make it squarish */
+    background-color: var(--accent-danger);
+}
+#playback-controls #btn-close-mpv:hover {
+    background-color: var(--accent-danger-hover);
+}
+
+#list-controls {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: 1fr 1fr;
     gap: 8px;
 }
 
@@ -213,6 +224,14 @@ select:focus-visible {
 
 #compact-controls button {
     padding: 8px;
+}
+
+/* Style the new close button in compact mode */
+#compact-controls #btn-compact-close-mpv {
+    background-color: var(--accent-danger);
+}
+#compact-controls #btn-compact-close-mpv:hover {
+    background-color: var(--accent-danger-hover);
 }
 
 /* --- Queue & Log Shared Styles --- */

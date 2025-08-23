@@ -6,7 +6,7 @@ import subprocess
 import platform
 
 # --- Configuration ---
-HOST_NAME = "com.mpv_playlist_organizer.handler"
+HOST_NAME = "com.shinku.mpv_handler"
 HOST_DESCRIPTION = "MPV Playlist Organizer Native Host"
 SCRIPT_NAME = "native_host.py"
 CONFIG_NAME = "config.json"

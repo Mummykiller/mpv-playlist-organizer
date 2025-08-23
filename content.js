@@ -19,17 +19,9 @@
     // This listener is now defined in the top-level scope and registered only once.
     // It will survive all UI re-injections by the MutationObserver.
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        if (request.action === 'get_ui_visibility') {
-            const isVisible = !!(controllerHost && getComputedStyle(controllerHost).display !== 'none');
-            sendResponse({ isVisible: isVisible });
-            return true; // Indicate that we will send a response.
-        }
-
         if (request.action === 'show_ui') {
             if (controllerHost) {
                 controllerHost.style.display = 'block';
-                // When the user explicitly shows the UI, remember this choice.
-                localStorage.setItem('mpv-controller-minimized', 'false');
             }
             return; // No response needed, so we don't return true.
         }
@@ -67,30 +59,6 @@
         // Attach the shadow root for isolation.
         shadowRoot = controllerHost.attachShadow({ mode: 'open' });
 
-        // --- New CSS Injection Method ---
-        // Fetch the CSS content and inject it into a <style> tag.
-        // This is more robust than using a <link> tag inside a shadow DOM.
-        try {
-            const cssUrl = chrome.runtime.getURL('content.css');
-            const response = await fetch(cssUrl);
-            // Add robust checking to ensure the stylesheet was fetched successfully.
-            if (!response.ok) {
-                throw new Error(`Stylesheet fetch failed: ${response.status} ${response.statusText}`);
-            }
-            const css = await response.text();
-            if (!css) {
-                throw new Error('Fetched stylesheet content is empty.');
-            }
-            const styleSheet = document.createElement('style');
-            styleSheet.textContent = css;
-            shadowRoot.appendChild(styleSheet);
-        } catch (error) {
-            // Log the error, but DO NOT return. This allows the UI to render (albeit unstyled)
-            // which is better for debugging than the UI disappearing completely.
-            console.error('MPV Handler: Failed to load stylesheet. The UI will be unstyled.', error);
-            // The 'return' statement that was here has been removed.
-        }
-
         // Inject styles for the host element and the dragging class into the main document's head.
         // The host element needs to handle positioning in the main document.
         const hostAndDragStyle = document.createElement('style');
@@ -116,7 +84,10 @@
         // The UI container now lives inside the shadow DOM.
         const uiWrapper = document.createElement('div');
         uiWrapper.id = 'm3u8-controller';
+        // Get the URL for the stylesheet, which is made available via web_accessible_resources.
+        const cssUrl = chrome.runtime.getURL('content.css');
         uiWrapper.innerHTML = `
+        <link rel="stylesheet" type="text/css" href="${cssUrl}">
         <div id="status-banner">
             <span id="stream-status">No stream detected</span>
         </div>
@@ -135,9 +106,6 @@
                     <path d="M15 9l5 3-5 3V9z" fill="currentColor" stroke-width="0" />
                 </svg>
                 <span class="title-text">MPV Playlist Organizer</span>
-                <button id="btn-stop-mpv" title="Close MPV">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" x2="12" y1="2" y2="12"/></svg>
-                </button>
             </div>
             <div id="ui-toggles">
                 <button id="btn-toggle-pin" title="Pin UI Position">
@@ -170,11 +138,18 @@
                     <select id="folder-select"><!-- Options populated dynamically --></select>
                 </div>
 
-                <div id="bottom-buttons">
-                    <button id="btn-add"><span class="emoji">📥</span> Add</button>
+                <div id="playback-controls">
                     <button id="btn-play"><span class="emoji">▶️</span> Play</button>
+                    <button id="btn-close-mpv" title="Close MPV Instance">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                    </button>
+                </div>
+
+                <div id="list-controls">
+                    <button id="btn-add"><span class="emoji">📥</span> Add</button>
                     <button id="btn-clear"><span class="emoji">🗑️</span> Clear</button>
                 </div>
+
             </div>
 
             <div id="playlist-container">
@@ -217,6 +192,9 @@
                 <button id="btn-compact-add" title="Add Current URL"><span class="emoji">📥</span></button>
                 <button id="btn-compact-play" title="Play List"><span class="emoji">▶️</span></button>
                 <button id="btn-compact-clear" title="Clear List"><span class="emoji">🗑️</span></button>
+                <button id="btn-compact-close-mpv" title="Close MPV Instance">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
             </div>
         </div>
         `;
@@ -233,8 +211,6 @@
         // --- Minimize Button ---
         shadowRoot.getElementById('btn-toggle-minimize').addEventListener('click', () => {
             controllerHost.style.display = 'none';
-            // Remember that the user minimized the UI.
-            localStorage.setItem('mpv-controller-minimized', 'true');
         });
 
         const logContainer = shadowRoot.getElementById('log-container');
@@ -293,28 +269,22 @@
         // --- Refactored Event Handlers to reduce duplication ---
         const handleAddClick = () => {
             const folderId = getCurrentFolderId();
-            let urlToAdd = null;
-            const currentWindowUrl = window.location.href;
-
-            // Specifically check for YouTube video pages, not just the domain.
-            if (currentWindowUrl.includes('youtube.com/watch?v=') || currentWindowUrl.includes('youtu.be/')) {
-                urlToAdd = currentWindowUrl;
-            } else {
-                // For all other pages, rely on the detected M3U8 stream URL.
-                urlToAdd = detectedUrl;
-            }
+            // The detectedUrl is now correctly set for both M3U8 streams and YouTube pages
+            // by the handlePageUpdate and message listener functions. No separate check is needed here.
+            const urlToAdd = detectedUrl;
 
             if (!urlToAdd) {
                 // If no specific stream or valid page was found, inform the user and do nothing.
                 addLogEntry({ text: `[Content]: No stream/video detected to add.`, type: 'error' });
                 return; // Stop execution here.
             }
-            
+
             // Now that we have a valid URL, send it.
             sendCommandToBackground('add', folderId, { url: urlToAdd });
         };
         const handlePlayClick = () => sendCommandToBackground('play', getCurrentFolderId());
         const handleClearClick = () => sendCommandToBackground('clear', getCurrentFolderId());
+        const handleCloseMpvClick = () => sendCommandToBackground('close_mpv', getCurrentFolderId());
 
         // Assigning handlers to both full and compact UI buttons
         shadowRoot.getElementById('btn-add').addEventListener('click', handleAddClick);
@@ -323,8 +293,8 @@
         shadowRoot.getElementById('btn-compact-play').addEventListener('click', handlePlayClick);
         shadowRoot.getElementById('btn-clear').addEventListener('click', handleClearClick);
         shadowRoot.getElementById('btn-compact-clear').addEventListener('click', handleClearClick);
-
-        shadowRoot.getElementById('btn-stop-mpv').addEventListener('click', () => sendCommandToBackground('stop', getCurrentFolderId()));
+        shadowRoot.getElementById('btn-close-mpv').addEventListener('click', handleCloseMpvClick);
+        shadowRoot.getElementById('btn-compact-close-mpv').addEventListener('click', handleCloseMpvClick);
 
         // --- Event Delegation for Removing Playlist Items ---
         const playlistContainer = shadowRoot.getElementById('playlist-container');
@@ -485,12 +455,6 @@
             controllerHost.style.top = savedTop + 'px';
             controllerHost.style.right = 'auto'; // Disable the initial 'right: 10px'
             controllerHost.style.bottom = 'auto';
-        }
-
-        // Load and apply saved minimized state
-        const isMinimized = localStorage.getItem('mpv-controller-minimized') === 'true';
-        if (isMinimized) {
-            controllerHost.style.display = 'none';
         }
     }
 
@@ -712,14 +676,15 @@
         }
 
         // Now, check for special cases like YouTube video pages.
-        // This check runs after the potential reset, allowing it to take effect on the new page.
         const isYouTubeVideo = window.location.href.includes('youtube.com/watch?v=') || window.location.href.includes('youtu.be/');
 
-        // If an M3U8 stream hasn't been detected, but we're on a YouTube page, update the banner.
+        // If an M3U8 stream hasn't been detected, but we're on a YouTube page,
+        // treat the page URL as the "detected" URL and update the banner.
         if (isYouTubeVideo && !detectedUrl) {
+            detectedUrl = window.location.href;
             updateStatusBanner('YouTube video detected');
         }
-    }, 500); // 500ms delay is a good starting point.
+    }, 250); // Reduced delay for faster detection on SPAs.
 
     /**
      * Main entry point. Initializes the UI and sets up the observer to handle

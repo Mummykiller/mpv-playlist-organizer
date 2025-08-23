@@ -1,5 +1,5 @@
 // --- Constants ---
-const NATIVE_HOST_NAME = 'com.mpv_playlist_organizer.handler'; // IMPORTANT: This must match the name in your native host manifest JSON.
+const NATIVE_HOST_NAME = 'com.shinku.mpv_handler';
 
 // --- Debounce Utility ---
 /**
@@ -43,33 +43,24 @@ async function getAllFolderIds() {
 /**
  * Retrieves a specific folder's data object from storage.
  * @param {string} folderId - The ID of the folder to retrieve.
- * @returns {Promise<{playlist: string[], last_played_pos: number}>} A promise that resolves to the folder data object.
+ * @returns {Promise<{playlist: string[]}>} A promise that resolves to the folder data object.
  */
 async function getFolderData(folderId) {
     const key = `folder_${folderId}`;
     const data = await chrome.storage.local.get(key);
     const storedValue = data[key];
 
-    // Case 1: Nothing stored for this key. Return default structure.
     if (!storedValue) {
-        return { playlist: [], last_played_pos: 0 };
+        return { playlist: [] };
     }
 
-    // Case 2: Already in the new format. Return as is.
     if (Array.isArray(storedValue.playlist)) {
-        // Ensure last_played_pos exists to be safe
-        return {
-            playlist: storedValue.playlist,
-            last_played_pos: storedValue.last_played_pos || 0
-        };
+        return { playlist: storedValue.playlist };
     }
 
-    // Case 3: Legacy format (either a raw array of URLs, or an object with a `urls` property).
-    // We need to convert it to the new format.
-    const playlist = Array.isArray(storedValue) ? storedValue : storedValue.urls || [];
-    const last_played_pos = storedValue.last_played_pos || 0;
-
-    return { playlist, last_played_pos };
+    // Handle legacy formats (raw array or object with 'urls')
+    const playlist = Array.isArray(storedValue) ? storedValue : (storedValue.urls || []);
+    return { playlist };
 }
 
 /**
@@ -82,22 +73,6 @@ async function saveFolderData(folderId, folderData) {
     await chrome.storage.local.set({ [key]: folderData });
 }
 
-/**
- * Wraps chrome.runtime.sendNativeMessage in a Promise for async/await.
- * @param {string} hostName - The name of the native messaging host.
- * @param {object} message - The message to send to the native host.
- * @returns {Promise<object>} A promise that resolves with the native host's response.
- */
-function sendNativeMessagePromise(hostName, message) {
-    return new Promise((resolve, reject) => {
-        chrome.runtime.sendNativeMessage(hostName, message, (response) => {
-            if (chrome.runtime.lastError) {
-                return reject(chrome.runtime.lastError);
-            }
-            resolve(response);
-        });
-    });
-}
 // --- Messaging Helper ---
 
 /**
@@ -113,6 +88,45 @@ function broadcastToTabs(message) {
     });
 }
 
+// --- Native Host Communication (using a persistent connection) ---
+
+let nativePort = null;
+let requestPromises = {}; // Stores { resolve, reject } for ongoing requests
+let requestIdCounter = 0; // Simple counter for unique request IDs
+
+function connectToNativeHost() {
+    if (nativePort) return; // Already connected or connecting
+
+    broadcastToTabs({ log: { text: `[Background]: Connecting to native host...`, type: 'info' } });
+    nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+
+    nativePort.onMessage.addListener((response) => {
+        const { request_id, ...responseData } = response;
+        if (request_id && requestPromises[request_id]) {
+            const { resolve } = requestPromises[request_id];
+            resolve(responseData); // Resolve with the data part of the response
+            delete requestPromises[request_id];
+        } else {
+            console.warn("Received message from native host without a matching request ID:", response);
+        }
+    });
+
+    nativePort.onDisconnect.addListener(() => {
+        const errorMessage = chrome.runtime.lastError ? chrome.runtime.lastError.message : "Native host disconnected.";
+        console.error("Native host disconnected:", errorMessage);
+        broadcastToTabs({ log: { text: `[Background]: Native host disconnected. It may need to be re-installed. Error: ${errorMessage}`, type: 'error' } });
+
+        // Reject all pending promises with an error
+        for (const id in requestPromises) {
+            const { reject } = requestPromises[id];
+            reject(new Error(`Native host disconnected: ${errorMessage}`));
+        }
+
+        nativePort = null;
+        requestPromises = {};
+    });
+}
+
 /**
  * A wrapper for sending a message to the native host that includes
  * centralized error handling and logging.
@@ -120,18 +134,37 @@ function broadcastToTabs(message) {
  * @returns {Promise<object>} A promise that resolves with the native host's response.
  */
 async function callNativeHost(message) {
-    try {
-        const response = await sendNativeMessagePromise(NATIVE_HOST_NAME, message);
+    return new Promise((resolve, reject) => {
+        if (!nativePort) {
+            connectToNativeHost();
+        }
+
+        const requestId = `req_${requestIdCounter++}`;
+        requestPromises[requestId] = { resolve, reject };
+
+        const messageToSend = { ...message, request_id: requestId };
+
+        try {
+            nativePort.postMessage(messageToSend);
+        } catch (e) {
+            const errorMessage = `Failed to send message to native host. It may have disconnected. Error: ${e.message}`;
+            reject(new Error(errorMessage));
+            delete requestPromises[requestId];
+            nativePort = null; // Force reconnect on next call
+        }
+    }).then(response => {
+        // This part runs after the promise from the native host resolves. Log the outcome.
         const logType = response.success ? 'info' : 'error';
         const logMessage = response.message || response.error || 'Received response from native host.';
         broadcastToTabs({ log: { text: `[Native Host]: ${logMessage}`, type: logType } });
         return response;
-    } catch (error) {
-        const errorMessage = `Could not connect to native host. Ensure it's installed correctly. Error: ${error.message}`;
+    }).catch(error => {
+        // This part runs if the promise was rejected (e.g., disconnect, postMessage error).
+        const errorMessage = `Could not communicate with native host. Error: ${error.message}`;
         console.error(errorMessage);
         broadcastToTabs({ log: { text: `[Background]: ${errorMessage}`, type: 'error' } });
         return { success: false, error: errorMessage };
-    }
+    });
 }
 
 /**
@@ -221,9 +254,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         sendResponse({ success: false, error: 'A folder with that name already exists.' });
                         return;
                     }
-                    allIds.push(request.folderId);
-                    await chrome.storage.local.set({ folder_ids: allIds });
-                    await saveFolderData(request.folderId, { playlist: [], last_played_pos: 0 });
+                    allIds.push(request.folderId); // Add the new ID
+                    await chrome.storage.local.set({ folder_ids: allIds }); // Save the new list of IDs
+                    await saveFolderData(request.folderId, { playlist: [] }); // Create the empty playlist object
                     updateContextMenus(); // Update context menus with the new folder
                     broadcastToTabs({ foldersChanged: true });
                     debouncedSyncToNativeHostFile();
@@ -288,8 +321,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 }
 
                 case 'clear': {
-                    // Reset the playlist and the last played position.
-                    await saveFolderData(request.folderId, { playlist: [], last_played_pos: 0 });
+                    // Reset the playlist.
+                    await saveFolderData(request.folderId, { playlist: [] });
                     broadcastToTabs({ action: 'render_playlist', folderId: request.folderId, playlist: [] });
                     debouncedSyncToNativeHostFile();
                     sendResponse({ success: true, message: `Playlist in folder ${request.folderId} cleared` });
@@ -301,13 +334,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     const indexToRemove = request.data?.index;
                     if (typeof indexToRemove === 'number' && indexToRemove >= 0 && indexToRemove < folderData.playlist.length) {
                         folderData.playlist.splice(indexToRemove, 1);
-                        // If we remove an item before the last played position, we need to adjust the position.
-                        if (folderData.last_played_pos > 0 && indexToRemove < folderData.last_played_pos) {
-                            folderData.last_played_pos--;
-                        } else if (indexToRemove === folderData.last_played_pos && folderData.last_played_pos >= folderData.playlist.length) {
-                            // If we removed the last item which was also the last played, reset to 0.
-                            folderData.last_played_pos = 0;
-                        }
                         await saveFolderData(request.folderId, folderData);
                         broadcastToTabs({ action: 'render_playlist', folderId: request.folderId, playlist: folderData.playlist });
                         debouncedSyncToNativeHostFile();
@@ -320,8 +346,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
                 // --- MPV Actions (from content.js) ---
                 case 'play': {
-                    const folderData = await getFolderData(request.folderId);
-                    const { playlist, last_played_pos } = folderData;
+                    const { playlist } = await getFolderData(request.folderId);
 
                     if (!playlist || playlist.length === 0) {
                         const message = `Playlist in folder '${request.folderId}' is empty. Nothing to play.`;
@@ -332,36 +357,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
                     const response = await callNativeHost({
                         action: 'play',
-                        playlist: playlist,
-                        start_index: last_played_pos || 0
+                        playlist: playlist
                     });
                     sendResponse(response);
                     break;
                 }
-                case 'stop': {
-                    const response = await callNativeHost({ action: 'stop' });
 
-                    // After stopping, save the last played position if available.
-                    if (response.success && typeof response.playlist_pos === 'number' && response.playlist_pos >= 0) {
-                        const folderData = await getFolderData(request.folderId);
-                        const playlistLength = folderData.playlist.length;
-                        let new_pos = response.playlist_pos;
-
-                        // If mpv reports a position equal to length, it means it finished the last track.
-                        // Reset to 0 so next play starts from the beginning.
-                        if (playlistLength > 0 && new_pos >= playlistLength) {
-                            new_pos = 0;
-                        }
-                        if (folderData.last_played_pos !== new_pos) {
-                            folderData.last_played_pos = new_pos;
-                            await saveFolderData(request.folderId, folderData);
-                            const logMessage = `[Background]: Saved position ${new_pos} for folder '${request.folderId}'.`;
-                            broadcastToTabs({ log: { text: logMessage, type: 'info' } });
-                        }
-                    }
+                case 'close_mpv': {
+                    const response = await callNativeHost({ action: 'close_mpv' });
                     sendResponse(response);
                     break;
                 }
+
                 default:
                     sendResponse({ success: false, error: 'Unknown action.' });
                     break;

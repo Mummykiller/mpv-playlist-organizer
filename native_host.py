@@ -3,9 +3,13 @@ import sys
 import json
 import struct
 import subprocess
+import atexit
 import socket
 import os
 import logging
+import time
+import signal
+import threading
 import platform
 
 # --- Configuration ---
@@ -13,8 +17,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(SCRIPT_DIR, "native_host.log")
 MAX_LOG_LINES = 200
 FOLDERS_FILE = os.path.join(SCRIPT_DIR, "folders.json")
-IPC_HOST = '127.0.0.1'
-IPC_PORT = 7531 # A default port for MPV communication
+
+# --- Global State ---
+current_mpv_process = None
+current_mpv_ipc_path = None
 
 class TrimmingFileHandler(logging.FileHandler):
     """
@@ -58,22 +64,13 @@ formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 root_logger.addHandler(handler)
 
-def _check_ipc_server():
-    """
-    Checks if the MPV IPC server is active by trying to connect to its TCP socket.
-    Returns True if the server is live, False otherwise.
-    """
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.2)
-            s.connect((IPC_HOST, IPC_PORT))
-        return True # Socket is live
-    except (ConnectionRefusedError, socket.timeout):
-        # This is the expected result if the server is not running.
-        return False
-    except Exception as e:
-        logging.warning(f"Unexpected error when checking IPC server: {e}")
-        return False
+def log_stream(stream, log_level):
+    """Reads from a stream line by line and logs it."""
+    # The `for line in iter(...)` construct is a standard way to read
+    # from a stream until it's closed.
+    for line in iter(stream.readline, b''):
+        log_level(f"[MPV Process]: {line.decode('utf-8', errors='ignore').strip()}")
+    stream.close()
 
 def get_message():
     """Reads a message from stdin and decodes it."""
@@ -92,57 +89,26 @@ def send_message(message_content):
     sys.stdout.buffer.write(encoded_content)
     sys.stdout.buffer.flush()
 
-def get_mpv_property(property_name):
-    """Queries a property from the running mpv instance via its IPC socket."""
-    try:
-        # Use a unique request_id to match response to request
-        request_id = 1 # Simple ID, could be more robust if multiple concurrent requests were possible
-        command = {"command": ["get_property", property_name], "request_id": request_id}
-        command_str = json.dumps(command) + '\n'
-        
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.5)
-            s.connect((IPC_HOST, IPC_PORT))
-            s.sendall(command_str.encode('utf-8'))
+def get_ipc_path():
+    """Generates a unique, platform-specific path for the mpv IPC socket/pipe."""
+    pid = os.getpid()
+    if platform.system() == "Windows":
+        # Named pipes on Windows have a specific format.
+        return f"\\\\.\\pipe\\mpv-ipc-{pid}"
+    else:
+        # Use a temporary directory for Unix sockets, which is standard.
+        return f"/tmp/mpv-socket-{pid}"
 
-            response_buffer = b""
-            while True:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                response_buffer += chunk
-                # MPV IPC responses are newline-terminated.
-                if b'\n' in response_buffer:
-                    line, _, response_buffer = response_buffer.partition(b'\n')
-                    if line.strip():
-                        try:
-                            response_obj = json.loads(line.decode('utf-8'))
-                            if response_obj.get("request_id") == request_id:
-                                if response_obj.get("error") == "success":
-                                    return response_obj.get("data")
-                                else:
-                                    logging.warning(f"MPV IPC error for property '{property_name}': {response_obj.get('error')}")
-                                    return None
-                        except json.JSONDecodeError:
-                            pass # Not a valid JSON response, might be an event. Ignore.
-            
-            logging.warning(f"No matching response for property '{property_name}' with request_id {request_id}.")
-            return None
-    except (ConnectionRefusedError, socket.timeout) as e:
-        logging.warning(f"Could not connect to MPV IPC socket to get property '{property_name}': {e}")
-        return None
-    except Exception as e:
-        logging.error(f"Error getting MPV property '{property_name}': {e}")
-        return None
-
-def send_mpv_command(command_obj):
-    """Sends a JSON command to the running mpv instance via its IPC socket."""
-    # This function assumes the socket is valid and will raise exceptions on failure.
-    command_str = json.dumps(command_obj) + '\n'
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((IPC_HOST, IPC_PORT))
-        s.sendall(command_str.encode('utf-8'))
-    logging.info(f"Sent command to MPV: {command_str.strip()}")
+def cleanup_ipc_socket():
+    """Remove the IPC socket file on exit, if it exists (non-Windows)."""
+    global current_mpv_ipc_path
+    if current_mpv_ipc_path and platform.system() != "Windows":
+        if os.path.exists(current_mpv_ipc_path):
+            try:
+                os.remove(current_mpv_ipc_path)
+                logging.info(f"Cleaned up IPC socket: {current_mpv_ipc_path}")
+            except OSError as e:
+                logging.warning(f"Error removing IPC socket file {current_mpv_ipc_path}: {e}")
 
 def get_mpv_executable():
     """Gets the path to the mpv executable based on OS and config."""
@@ -155,77 +121,109 @@ def get_mpv_executable():
         return "mpv.exe" # Fallback
     return "mpv" # For Linux/macOS
 
-def start_mpv(playlist, start_index=0):
-    """Starts a new mpv process or loads URLs into an existing one."""
+def start_mpv(playlist):
+    """Starts a new mpv process, preventing duplicates if one is already running."""
+    global current_mpv_process, current_mpv_ipc_path
+
+    # Check if a process was previously launched and is still running
+    if current_mpv_process and current_mpv_process.poll() is None:
+        logging.warning("MPV process is already running. Blocking new instance.")
+        return {"success": False, "error": "An MPV instance is already running. Close it to start a new one."}
+
     if not playlist:
         logging.warning("Received empty playlist for MPV. Nothing to play.")
-        return {"success": False, "error": "Playlist is empty for MPV playback."}
+        return {"success": False, "error": "Playlist is empty. Nothing to play."}
 
-    is_running = _check_ipc_server()
-
-    if is_running:
-        # MPV is running, load the new playlist.
-        logging.info("MPV is already running. Loading new playlist.")
-        try:
-            # Atomically replace the playlist and start at the desired index
-            send_mpv_command({"command": ["playlist-clear"]})
-            for url in playlist:
-                send_mpv_command({"command": ["loadfile", url, "append-play"]})
-
-            # Now, explicitly set the position and ensure it's playing
-            send_mpv_command({"command": ["set_property", "playlist-pos", start_index]})
-            logging.info(f"Set MPV playlist position to {start_index}.")
-            
-            return {"success": True, "message": "Loaded new playlist into existing MPV instance."}
-        except Exception as e:
-            logging.error(f"Failed to load playlist into running MPV: {e}")
-            return {"success": False, "error": f"Failed to load playlist: {e}"}
-    else:
-        # MPV is not running, start a new process.
-        logging.info("MPV not running. Starting a new instance.")
-        mpv_exe = get_mpv_executable()
-        try:
-            mpv_args = [
-                mpv_exe, '--no-terminal', '--force-window', '--idle=once',
-                f'--input-ipc-server=tcp://{IPC_HOST}:{IPC_PORT}',
-                '--save-position-on-quit', # Save playback position for each file
-                '--write-filename-in-watch-later-config' # Use filename in watch_later config
-            ] + playlist
-            if start_index > 0 and start_index < len(playlist):
-                mpv_args.append(f'--playlist-start={start_index}')
-                logging.info(f"Starting MPV with playlist position at {start_index}.")
-
-            # --- Add creationflags for Windows to prevent console window flashing ---
-            popen_kwargs = {}
-            if platform.system() == "Windows":
-                # This flag prevents a console window from being created for the mpv process.
-                popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-
-            subprocess.Popen(mpv_args, **popen_kwargs)
-            logging.info(f"Attempting to start MPV process with {len(playlist)} items.")
-            return {"success": True, "message": "MPV playback initiated."}
-        except FileNotFoundError:
-            logging.error(f"Failed to launch mpv. Make sure '{mpv_exe}' is installed and in your system's PATH or configured correctly.")
-            return {"success": False, "error": f"Error: '{mpv_exe}' executable not found."}
-        except Exception as e:
-            logging.error(f"An error occurred while trying to launch mpv: {e}")
-            return {"success": False, "error": f"Error launching mpv: {e}"}
-
-def stop_mpv(): # Modified to return playlist_pos
-    """Stops the running mpv instance via its IPC socket and returns current playlist position."""
-    current_playlist_pos = get_mpv_property("playlist-pos")
+    logging.info("Starting a new MPV instance.")
+    mpv_exe = get_mpv_executable()
+    ipc_path = get_ipc_path()
     
-    if not _check_ipc_server():
-        logging.info("Stop command received, but MPV not running (no active IPC server).")
-        return {"success": True, "message": "MPV was not running.", "playlist_pos": current_playlist_pos}
-
     try:
-        send_mpv_command({"command": ["quit"]})
-        logging.info("Sent 'quit' command to MPV via IPC socket.")
-        return {"success": True, "message": "Quit command sent to MPV.", "playlist_pos": current_playlist_pos}
+        # Add the --input-ipc-server flag to enable reliable communication.
+        mpv_args = [
+            mpv_exe, '--no-terminal', '--force-window',
+            '--save-position-on-quit',
+            '--write-filename-in-watch-later-config',
+            f'--input-ipc-server={ipc_path}'
+        ] + playlist
+
+        popen_kwargs = {
+            'stderr': subprocess.PIPE,
+            'stdout': subprocess.DEVNULL,
+            'universal_newlines': False
+        }
+        if platform.system() == "Windows":
+            # CREATE_NO_WINDOW prevents a console from flashing.
+            # CREATE_NEW_PROCESS_GROUP is required to send CTRL_C_EVENT for graceful shutdown.
+            popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+
+        process = subprocess.Popen(mpv_args, **popen_kwargs)
+        current_mpv_process = process # Store the new process object
+        current_mpv_ipc_path = ipc_path # Store the IPC path for later use
+
+        # Monitor stderr for diagnostics in a separate thread
+        stderr_thread = threading.Thread(target=log_stream, args=(process.stderr, logging.warning))
+        stderr_thread.daemon = True
+        stderr_thread.start()
+
+        logging.info(f"MPV process launched (PID: {process.pid}) with {len(playlist)} items.")
+        return {"success": True, "message": "MPV playback initiated."}
+
+    except FileNotFoundError:
+        logging.error(f"Failed to launch mpv. Make sure '{mpv_exe}' is installed and in your system's PATH or configured correctly.")
+        return {"success": False, "error": f"Error: '{mpv_exe}' executable not found."}
     except Exception as e:
-        logging.error(f"Failed to send quit command to MPV: {e}")
-        return {"success": False, "error": f"Failed to stop MPV: {e}", "playlist_pos": current_playlist_pos}
+        logging.error(f"An error occurred while trying to launch mpv: {e}")
+        return {"success": False, "error": f"Error launching mpv: {e}"}
+
+def close_mpv():
+    """Closes the currently running mpv process, if any."""
+    global current_mpv_process, current_mpv_ipc_path
+
+    # Check if we have a process object and if it's still running
+    if current_mpv_process and current_mpv_process.poll() is None:
+        try:
+            pid = current_mpv_process.pid
+            # --- Method 1: IPC Command (Most Reliable) ---
+            if current_mpv_ipc_path:
+                try:
+                    logging.info(f"Attempting to close MPV (PID: {pid}) via IPC: {current_mpv_ipc_path}")
+                    command = json.dumps({"command": ["quit"]}) + '\n'
+                    if platform.system() == "Windows":
+                        with open(current_mpv_ipc_path, 'w') as pipe: pipe.write(command)
+                    else: # Linux/macOS
+                        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                            sock.connect(current_mpv_ipc_path)
+                            sock.sendall(command.encode('utf-8'))
+                    current_mpv_process.wait(timeout=5)
+                    logging.info(f"MPV process (PID: {pid}) closed gracefully via IPC.")
+                    return {"success": True, "message": "MPV instance has been closed."}
+                except Exception as e:
+                    logging.warning(f"IPC command to close MPV failed: {e}. Falling back to signal method.")
+
+            # --- Method 2: Signal (Fallback) ---
+            logging.info(f"Attempting to close MPV process (PID: {pid}) via signal fallback.")
+            if platform.system() == "Windows": current_mpv_process.send_signal(signal.CTRL_C_EVENT)
+            else: current_mpv_process.terminate() # Sends SIGTERM
+            current_mpv_process.wait(timeout=5)
+            logging.info(f"MPV process (PID: {pid}) terminated successfully via signal.")
+            return {"success": True, "message": "MPV instance has been closed."}
+        except subprocess.TimeoutExpired:
+            logging.warning(f"MPV process (PID: {pid}) did not terminate in time, forcing kill.")
+            current_mpv_process.kill()
+            return {"success": True, "message": "MPV instance was forcefully closed."}
+        except Exception as e:
+            error_msg = f"An error occurred while closing MPV process (PID: {pid}): {e}"
+            logging.error(error_msg)
+            return {"success": False, "error": error_msg}
+        finally:
+            # This block ensures the global state is always cleaned up after an attempt to close.
+            current_mpv_process = None
+            current_mpv_ipc_path = None
+    else:
+        logging.info("Received 'close_mpv' command, but no active MPV process was found.")
+        # Return success as the desired state (no mpv) is met.
+        return {"success": True, "message": "No running MPV instance was found."}
 
 def get_all_folders_from_file(): # Modified to handle new structure
     """Reads all folders data from folders.json, ensuring new format."""
@@ -241,20 +239,18 @@ def get_all_folders_from_file(): # Modified to handle new structure
             if isinstance(folder_content, dict) and "playlist" in folder_content:
                 # Already in new format, just ensure keys exist
                 converted_folders[folder_id] = {
-                    "playlist": folder_content.get("playlist", []),
-                    "last_played_pos": folder_content.get("last_played_pos", 0)
+                    "playlist": folder_content.get("playlist", [])
                 }
             elif isinstance(folder_content, list):
                 # Old format: a raw list of URLs
                 logging.info(f"Converting old format (list) for folder '{folder_id}' to new format.")
-                converted_folders[folder_id] = {"playlist": folder_content, "last_played_pos": 0}
+                converted_folders[folder_id] = {"playlist": folder_content}
                 needs_resave = True
             elif isinstance(folder_content, dict) and "urls" in folder_content:
                 # Old format: a dict with a 'urls' key
                 logging.info(f"Converting old format (dict with 'urls') for folder '{folder_id}' to new format.")
                 converted_folders[folder_id] = {
-                    "playlist": folder_content.get("urls", []),
-                    "last_played_pos": folder_content.get("last_played_pos", 0)
+                    "playlist": folder_content.get("urls", [])
                 }
                 needs_resave = True
             else:
@@ -297,36 +293,34 @@ def handle_cli(): # Modified to use new structure and pass start_index
             sys.exit(1)
         
         playlist = folder_info["playlist"]
-        start_index = folder_info.get("last_played_pos", 0)
 
         logging.info(f"Found folder '{folder_id}' with {len(playlist)} item(s). Starting mpv...")
         print(f"Starting mpv for folder '{folder_id}' with {len(playlist)} item(s)...")
-        start_mpv(playlist, start_index) # Pass start_index to CLI play
+        start_mpv(playlist)
     except Exception as e:
         print(f"An error occurred: {e}")
         logging.error(f"CLI Error: {e}")
         sys.exit(1)
 
-def main(): # Modified to pass start_index and handle stop response
+def main():
     """Main message loop for native messaging from the browser."""
     logging.info("Native host started in messaging mode.")
     while True:
         try:
             message = get_message() # This will block or sys.exit() on disconnect
+            request_id = message.get('request_id')
             command = message.get('action')
 
-            logging.info(f"Received message: {json.dumps(message)}")
+            logging.info(f"Received message (ID: {request_id}): {json.dumps(message)}")
 
+            response = {}
             if command == 'play':
                 playlist = message.get('playlist', [])
-                start_index = message.get('start_index', 0) # Get start_index from message
-                response = start_mpv(playlist, start_index)
-                send_message(response)
+                response = start_mpv(playlist)
 
-            elif command == 'stop':
-                response = stop_mpv() # stop_mpv now returns playlist_pos
-                send_message(response)
-            
+            elif command == 'close_mpv':
+                response = close_mpv()
+
             elif command == 'export_data':
                 data_to_export = message.get('data')
                 if data_to_export is not None:
@@ -334,23 +328,35 @@ def main(): # Modified to pass start_index and handle stop response
                         with open(FOLDERS_FILE, 'w') as f:
                             json.dump(data_to_export, f, indent=4)
                         logging.info(f"Data exported to {FOLDERS_FILE}")
-                        send_message({"success": True, "message": "Data successfully synced to file."})
+                        response = {"success": True, "message": "Data successfully synced to file."}
                     except Exception as e:
                         error_msg = f"Failed to write to {FOLDERS_FILE}: {e}"
                         logging.error(error_msg)
-                        send_message({"success": False, "error": error_msg})
+                        response = {"success": False, "error": error_msg}
                 else:
-                    send_message({"success": False, "error": "No data provided for export."})
+                    response = {"success": False, "error": "No data provided for export."}
 
             else:
-                send_message({"success": False, "error": "Unknown command"})
+                response = {"success": False, "error": "Unknown command"}
+
+            # Add the request_id to the response so the extension can match it
+            if request_id:
+                response['request_id'] = request_id
+            send_message(response)
 
         except Exception as e:
             logging.error(f"Error in main loop: {e}", exc_info=True)
             try:
-                send_message({"success": False, "error": f"An unexpected error occurred in the native host: {str(e)}"})
+                error_response = {"success": False, "error": f"An unexpected error occurred in the native host: {str(e)}"}
+                # Check if 'message' was successfully assigned before the error
+                if 'message' in locals() and message.get('request_id'):
+                    error_response['request_id'] = message.get('request_id')
+                send_message(error_response)
             except Exception as send_e:
                 logging.error(f"Could not send error message back to extension: {send_e}")
+
+# Register a cleanup function to run when the script exits.
+atexit.register(cleanup_ipc_socket)
 
 if __name__ == '__main__':
     # If 'play' is the first argument, it's a CLI call.
