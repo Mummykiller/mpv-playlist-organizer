@@ -1,0 +1,376 @@
+/* --- CSS Variables for a Modern Theme --- */
+:root {
+    --bg-primary: #111214; /* Very dark background */
+    --bg-secondary: #1d1f23; /* Darker surface */
+    --bg-tertiary: #2c2e33; /* Medium dark surface/hover */
+    --text-primary: #e1e1e1; /* Light text */
+    --text-secondary: #9e9e9e; /* Muted text */
+    --border-primary: #33363b; /* Subtle border */
+    --border-hover: #5865f2; /* Accent color for hover borders */
+    --accent-primary: #5865f2; /* Vibrant blue/purple */
+    --accent-primary-hover: #4f5bda; /* Darker blue/purple on hover */
+    --accent-danger: #ed4245; /* Vibrant red */
+    --accent-danger-hover: #da3739; /* Darker red on hover */
+    --accent-success: #43b581; /* Vibrant green */
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
+    --radius: 6px;
+    --shadow: 0 6px 18px rgba(0, 0, 0, 0.4); /* Slightly more pronounced shadow */
+}
+
+/* --- Main Controller Container --- */
+#m3u8-controller {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    font-family: var(--font-sans); /* Keep sans-serif for general UI */
+    font-size: 14px;
+    width: 360px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border-primary);
+}
+
+/* --- Draggable Banner --- */
+#status-banner {
+    background-color: var(--bg-tertiary);
+    padding: 8px 12px; /* Slightly more padding */
+    text-align: center;
+    font-weight: bold;
+    cursor: grab;
+    transition: background-color 0.2s ease, color 0.2s ease; /* Smooth transitions */
+}
+
+#status-banner.detected {
+    background-color: var(--accent-success); /* A modern green for success */
+    color: var(--accent-primary-dark);
+}
+
+/* --- Header --- */
+#m3u8-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-primary);
+}
+
+#m3u8-url {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#m3u8-url .title-text {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#ui-toggles {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* --- General Button Styling --- */
+button {
+    background-color: var(--bg-tertiary); /* Use a variable for neutral buttons */
+    color: var(--text-primary);
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.1s ease, color 0.2s ease, box-shadow 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-weight: 500;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Subtle shadow for depth */
+}
+
+button:hover {
+    background-color: var(--surface-hover-color); /* Use a variable for hover */
+    border-color: var(--border-hover);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
+}
+
+button:active {
+    transform: scale(0.97);
+}
+
+/* --- Specific Buttons --- */
+#btn-play {
+    background-color: var(--accent-primary);
+    color: white; /* Ensure good contrast */
+    font-weight: 700;
+}
+#btn-play:hover {
+    background-color: var(--accent-primary-hover);
+    border-color: var(--accent-primary); /* Keep accent border */
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+#btn-clear {
+    background-color: var(--accent-danger);
+    color: white; /* Ensure good contrast */
+    font-weight: 700;
+}
+#btn-clear:hover {
+    background-color: var(--accent-danger-hover);
+    border-color: var(--accent-danger);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Icon-only buttons */
+#btn-toggle-reorder {
+    padding: 4px;
+    background-color: transparent;
+}
+
+/* Icon-only buttons */
+#btn-toggle-minimize, #btn-stop-mpv, #btn-clear-log, #btn-toggle-log, #ui-toggles button {
+    padding: 6px;
+    background-color: transparent;
+}
+#btn-toggle-minimize:hover, #btn-stop-mpv:hover, #btn-clear-log:hover, #btn-toggle-log:hover, #ui-toggles button:hover {
+    background-color: var(--bg-tertiary);
+    border-color: transparent;
+}
+
+#ui-toggles button.active-toggle {
+    background-color: var(--accent-primary);
+    color: white; /* Ensure good contrast */
+}
+
+/* --- Select Dropdowns --- */
+select {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-primary); /* Consistent border */
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    flex-grow: 1;
+    transition: border-color 0.2s;
+}
+select:hover {
+    border-color: var(--border-hover);
+}
+select:focus-visible {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.3); /* Subtle focus ring */
+}
+
+/* --- UI Containers --- */
+#full-ui-container, #compact-ui-container {
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+    gap: 12px;
+}
+
+#controls-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+#top-controls {
+    display: flex;
+}
+
+#bottom-buttons {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+#compact-ui-container {
+    padding: 10px;
+}
+
+#compact-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+#compact-item-count-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background-color: var(--bg-secondary);
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-primary);
+    color: var(--text-secondary);
+    font-weight: 600;
+    cursor: default;
+}
+
+#compact-controls button {
+    padding: 8px;
+}
+
+/* --- Queue & Log Shared Styles --- */
+#playlist-container, #log-container {
+    background-color: var(--bg-secondary);
+    border-radius: var(--radius);
+    padding: 8px; /* Increased padding for content */
+    overflow: auto; /* Enable both vertical and horizontal scrolling */
+    border: 1px solid var(--border-primary);
+}
+
+/* Custom Scrollbars */
+#playlist-container::-webkit-scrollbar,
+#log-container::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+}
+#playlist-container::-webkit-scrollbar-track,
+#log-container::-webkit-scrollbar-track {
+    background: var(--bg-secondary); /* Match container background */
+}
+#playlist-container::-webkit-scrollbar-thumb,
+#log-container::-webkit-scrollbar-thumb {
+    background-color: var(--bg-tertiary);
+    border-radius: 4px;
+}
+
+/* --- Playlist --- */
+#playlist-container {
+    max-height: 120px; /* Slightly taller */
+    font-size: 13px;
+}
+
+.list-item {
+    display: flex;
+    align-items: flex-start; /* Align to top for multi-line URLs */
+    padding: 3px 4px;
+    padding-right: 28px; /* Space for remove button */
+    position: relative;
+    border-bottom: 1px solid var(--border-primary);
+    white-space: nowrap;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+    min-height: 28px; /* Ensure consistent height for single line items */
+}
+.list-item:last-child {
+    border-bottom: none;
+}
+
+.list-item:hover {
+    background-color: var(--bg-tertiary);
+    cursor: default; /* Indicate not clickable */
+}
+
+.url-index {
+    color: var(--text-secondary);
+    margin-right: 8px;
+    flex-shrink: 0; /* Prevent index from shrinking */
+}
+
+.url-text {
+    color: var(--text-primary);
+}
+
+.btn-remove-item {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 22px;
+    line-height: 1;
+    padding: 0 5px;
+    opacity: 0; /* Hidden by default with opacity */
+    transition: opacity 0.2s ease, color 0.2s ease;
+}
+
+.list-item:hover .btn-remove-item {
+    opacity: 1; /* Show on hover */
+}
+
+.btn-remove-item:hover {
+    color: var(--accent-danger);
+}
+
+/* --- Log Section --- */
+#log-section {
+    /* Reduce the top margin to bring it closer to the list container above. */
+    margin-top: 8px; /* Consistent spacing */
+}
+
+#log-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 4px 4px 4px;
+}
+
+#log-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+#log-buttons {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+#log-container {
+    max-height: 100px; /* Slightly shorter log */
+    font-family: var(--font-mono);
+    font-size: 11px;
+    transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease, padding 0.3s ease, border-width 0.3s ease;
+    overflow: hidden;
+}
+
+#btn-toggle-log.active {
+    color: var(--accent-primary); /* Keep accent color */
+    /* A subtle glow effect using box-shadow */
+    box-shadow: 0 0 6px 0px var(--accent-primary);
+}
+
+.log-item {
+    padding: 2px 0;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.log-item-error {
+    color: var(--accent-danger); /* Use the new accent danger */
+}
+
+.log-hidden {
+    max-height: 0 !important;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin-top: 0;
+    border-width: 0;
+}
+
+/* --- Placeholders --- */
+#playlist-placeholder,
+#log-placeholder {
+    color: var(--text-secondary);
+    text-align: center;
+    font-style: italic;
+    padding: 6px 4px;
+    margin: 0;
+    min-height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}

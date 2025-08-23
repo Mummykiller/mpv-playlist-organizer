@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "MPV Playlist Organizer",
+  "version": "1.2",
+  "description": "Organize playlists and send them to the MPV media player.",
+  "permissions": [
+    "storage",
+    "nativeMessaging",
+    "webRequest",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content.css"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+        "16": "images/icon16.png",
+        "32": "images/icon32.png",
+        "48": "images/icon48.png",
+        "128": "images/icon128.png"
+    }
+  },
+  "icons": {
+      "16": "images/icon16.png",
+      "32": "images/icon32.png",
+      "48": "images/icon48.png",
+      "128": "images/icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "mpv-handler@shinku.com",
+      "strict_min_version": "109.0"
+    }
+  }
+}
