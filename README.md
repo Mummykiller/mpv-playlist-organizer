@@ -8,7 +8,7 @@ A browser extension designed to capture video stream URLs (like M3U8) and YouTub
 
 It features a draggable on-page UI, synchronization with a command-line interface, and robust controls for managing playback—all without leaving your browser.
 
-![Screenshot of the UI](assets/screenshot.png)
+![Screenshot of the UI](images/big.png)
 <!-- Replace 'assets/screenshot.png' with the actual path to your screenshot -->
 
 ---
