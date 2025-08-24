@@ -144,7 +144,8 @@ def start_mpv(playlist):
             mpv_exe, '--no-terminal', '--force-window',
             '--save-position-on-quit',
             '--write-filename-in-watch-later-config',
-            f'--input-ipc-server={ipc_path}'
+            f'--input-ipc-server={ipc_path}',
+            '--' # Treat all subsequent arguments as URLs, not options.
         ] + playlist
 
         popen_kwargs = {
