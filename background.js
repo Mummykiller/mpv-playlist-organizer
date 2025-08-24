@@ -90,68 +90,102 @@ function broadcastToTabs(message) {
 
 // --- Native Host Communication (using a persistent connection) ---
 
+const ConnectionStatus = {
+    DISCONNECTED: 'DISCONNECTED',
+    CONNECTING: 'CONNECTING',
+    CONNECTED: 'CONNECTED',
+};
+
+let tabUiState = {}; // Tracks the minimized state of the UI for each tab
 let nativePort = null;
+let connectionStatus = ConnectionStatus.DISCONNECTED;
 let requestPromises = {}; // Stores { resolve, reject } for ongoing requests
 let requestIdCounter = 0; // Simple counter for unique request IDs
+let connectionPromise = null; // A promise that resolves when connection is established
 
+/**
+ * Establishes a persistent connection to the native host.
+ * This function is designed to be called only once while a connection is being attempted.
+ * @returns {Promise<void>} A promise that resolves when the connection is successful or rejects if it fails.
+ */
 function connectToNativeHost() {
-    if (nativePort) return; // Already connected or connecting
+    if (connectionStatus !== ConnectionStatus.DISCONNECTED) {
+        return connectionPromise;
+    }
 
+    connectionStatus = ConnectionStatus.CONNECTING;
     broadcastToTabs({ log: { text: `[Background]: Connecting to native host...`, type: 'info' } });
-    nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
 
-    nativePort.onMessage.addListener((response) => {
-        const { request_id, ...responseData } = response;
-        if (request_id && requestPromises[request_id]) {
-            const { resolve } = requestPromises[request_id];
-            resolve(responseData); // Resolve with the data part of the response
-            delete requestPromises[request_id];
-        } else {
-            console.warn("Received message from native host without a matching request ID:", response);
-        }
+    connectionPromise = new Promise((resolve, reject) => {
+        nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+
+        const onDisconnect = () => {
+            const errorMessage = chrome.runtime.lastError ? chrome.runtime.lastError.message : "Native host disconnected.";
+            console.error("Native host disconnected:", errorMessage);
+            broadcastToTabs({ log: { text: `[Background]: Native host disconnected. It may need to be re-installed. Error: ${errorMessage}`, type: 'error' } });
+
+            // Reject all pending promises
+            for (const id in requestPromises) {
+                requestPromises[id].reject(new Error(`Native host disconnected: ${errorMessage}`));
+            }
+
+            nativePort = null;
+            connectionStatus = ConnectionStatus.DISCONNECTED;
+            requestPromises = {};
+            reject(new Error(errorMessage)); // Reject the connection promise itself
+        };
+
+        nativePort.onDisconnect.addListener(onDisconnect);
+
+        nativePort.onMessage.addListener((response) => {
+            const { request_id, ...responseData } = response;
+            if (request_id && requestPromises[request_id]) {
+                requestPromises[request_id].resolve(responseData);
+                delete requestPromises[request_id];
+            } else {
+                console.warn("Received message from native host without a matching request ID:", response);
+            }
+        });
+
+        // If we reach here without onDisconnect being called immediately, the connection is likely established.
+        connectionStatus = ConnectionStatus.CONNECTED;
+        broadcastToTabs({ log: { text: `[Background]: Successfully connected to native host.`, type: 'info' } });
+        resolve();
     });
 
-    nativePort.onDisconnect.addListener(() => {
-        const errorMessage = chrome.runtime.lastError ? chrome.runtime.lastError.message : "Native host disconnected.";
-        console.error("Native host disconnected:", errorMessage);
-        broadcastToTabs({ log: { text: `[Background]: Native host disconnected. It may need to be re-installed. Error: ${errorMessage}`, type: 'error' } });
-
-        // Reject all pending promises with an error
-        for (const id in requestPromises) {
-            const { reject } = requestPromises[id];
-            reject(new Error(`Native host disconnected: ${errorMessage}`));
-        }
-
-        nativePort = null;
-        requestPromises = {};
-    });
+    return connectionPromise;
 }
 
 /**
- * A wrapper for sending a message to the native host that includes
- * centralized error handling and logging.
+ * Sends a message to the native host, handling connection logic automatically.
  * @param {object} message - The message to send to the native host.
  * @returns {Promise<object>} A promise that resolves with the native host's response.
  */
 async function callNativeHost(message) {
     return new Promise((resolve, reject) => {
-        if (!nativePort) {
-            connectToNativeHost();
-        }
+        // This function ensures the connection is ready before proceeding.
+        const ensureConnectedAndSend = async () => {
+            if (connectionStatus !== ConnectionStatus.CONNECTED) {
+                // Wait for the connection to be established or fail.
+                await connectToNativeHost();
+            }
 
-        const requestId = `req_${requestIdCounter++}`;
-        requestPromises[requestId] = { resolve, reject };
+            const requestId = `req_${requestIdCounter++}`;
+            requestPromises[requestId] = { resolve, reject };
+            const messageToSend = { ...message, request_id: requestId };
 
-        const messageToSend = { ...message, request_id: requestId };
+            try {
+                nativePort.postMessage(messageToSend);
+            } catch (e) {
+                const errorMessage = `Failed to send message to native host. It may have disconnected. Error: ${e.message}`;
+                reject(new Error(errorMessage));
+                delete requestPromises[requestId];
+                // The onDisconnect listener will handle resetting the state.
+            }
+        };
 
-        try {
-            nativePort.postMessage(messageToSend);
-        } catch (e) {
-            const errorMessage = `Failed to send message to native host. It may have disconnected. Error: ${e.message}`;
-            reject(new Error(errorMessage));
-            delete requestPromises[requestId];
-            nativePort = null; // Force reconnect on next call
-        }
+        // Execute the logic and catch any errors from connection or sending.
+        ensureConnectedAndSend().catch(reject);
     }).then(response => {
         // This part runs after the promise from the native host resolves. Log the outcome.
         const logType = response.success ? 'info' : 'error';
@@ -243,6 +277,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     (async () => {
         try {
             switch (request.action) {
+                // --- UI State Management ---
+                case 'content_script_init': { // From content.js on load
+                    const tabId = sender.tab?.id;
+                    if (tabId) {
+                        const state = tabUiState[tabId];
+                        if (!state || !state.minimized) {
+                            // If state is not recorded or not minimized, tell UI to show itself.
+                            chrome.tabs.sendMessage(tabId, { action: 'show_ui' }).catch(() => {});
+                        }
+                    }
+                    break; // No response needed
+                }
+                case 'set_ui_minimized_state': { // From content.js on minimize/show
+                    const tabId = sender.tab?.id;
+                    if (tabId) {
+                        tabUiState[tabId] = { minimized: request.minimized };
+                        sendResponse({ success: true });
+                    } else {
+                        sendResponse({ success: false, error: 'Could not determine sender tab ID.' });
+                    }
+                    break;
+                }
+                case 'get_ui_state_for_tab': { // From popup.js on open
+                    const tabId = request.tabId;
+                    const state = tabUiState[tabId] || { minimized: false }; // Default to not minimized
+                    sendResponse({ success: true, state });
+                    break;
+                }
+                case 'report_detected_url': { // From content.js
+                    const tabId = sender.tab?.id;
+                    if (tabId) {
+                        if (!tabUiState[tabId]) tabUiState[tabId] = {};
+                        tabUiState[tabId].detectedUrl = request.url;
+                    }
+                    // No response needed, and no re-broadcast.
+                    break;
+                }
                 // --- Folder Management Actions (from popup.js) ---
                 case 'create_folder': {
                     if (!request.folderId || !request.folderId.trim()) {
@@ -304,10 +375,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
                 // --- Playlist Item Actions (from content.js) ---
                 case 'add': {
+                    // The tabId now comes from the popup's payload for mini-controller actions,
+                    // or from the sender for on-page controller actions.
+                    const tabId = request.tabId || sender.tab?.id;
+                    const urlToAdd = tabId ? tabUiState[tabId]?.detectedUrl : null;
+
+                    if (!urlToAdd) {
+                        sendResponse({ success: false, error: 'No URL detected on the page to add.' });
+                        return;
+                    }
+
                     const folderData = await getFolderData(request.folderId);
-                    folderData.playlist.push(request.url);
+                    folderData.playlist.push(urlToAdd);
                     await saveFolderData(request.folderId, folderData);
-                    // Broadcast the updated list to all tabs
+
                     broadcastToTabs({ action: 'render_playlist', folderId: request.folderId, playlist: folderData.playlist });
                     debouncedSyncToNativeHostFile();
                     sendResponse({ success: true, message: `Added to playlist in folder: ${request.folderId}` });
@@ -384,7 +465,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 // --- Initial Setup ---
 // On install, ensure the default 'YT' folder exists and set up context menus.
-chrome.runtime.onInstalled.addListener(async (details) => {
+chrome.runtime.onInstalled.addListener(async () => {
     // Create context menu for the action icon (toolbar button)
     // This allows the user to bring back the UI if it has been minimized.
     chrome.contextMenus.create({
@@ -512,6 +593,9 @@ chrome.webRequest.onHeadersReceived.addListener(
 
 // Clean up the cache when a tab is closed to prevent memory leaks.
 chrome.tabs.onRemoved.addListener((tabId) => {
+    if (tabUiState[tabId]) {
+        delete tabUiState[tabId];
+    }
     if (lastDetectedUrls[tabId]) {
         delete lastDetectedUrls[tabId];
     }
@@ -519,8 +603,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // When a tab is reloaded or navigates to a new page, clear its cached M3U8 URL.
 // This ensures that if the same stream is present on the new page, it will be detected again.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (changeInfo.status === 'loading' && lastDetectedUrls[tabId]) {
-        delete lastDetectedUrls[tabId];
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === 'loading') {
+        // A new page is loading, so reset the stream detection caches for this tab.
+        // The minimized state is intentionally NOT cleared to make it persistent.
+        if (lastDetectedUrls[tabId]) delete lastDetectedUrls[tabId];
+        if (tabUiState[tabId]) tabUiState[tabId].detectedUrl = null;
     }
 });

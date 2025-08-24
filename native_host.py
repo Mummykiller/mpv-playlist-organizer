@@ -182,8 +182,8 @@ def close_mpv():
 
     # Check if we have a process object and if it's still running
     if current_mpv_process and current_mpv_process.poll() is None:
+        pid = current_mpv_process.pid # Capture PID while process is confirmed alive
         try:
-            pid = current_mpv_process.pid
             # --- Method 1: IPC Command (Most Reliable) ---
             if current_mpv_ipc_path:
                 try:

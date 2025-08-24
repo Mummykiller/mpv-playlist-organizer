@@ -3,6 +3,7 @@ import sys
 import os
 import json
 import subprocess
+import shutil
 import platform
 
 # --- Configuration ---
@@ -23,20 +24,22 @@ def get_config_path():
 def find_mpv_windows():
     """Finds mpv.exe on Windows, checking PATH first, then prompting the user."""
     print("Searching for mpv.exe...")
-    try:
-        # Use 'where' command to find the executable in PATH
-        result = subprocess.run(['where', 'mpv.exe'], check=True, capture_output=True, text=True)
-        mpv_path = result.stdout.strip().split('\n')[0]
+    # Use shutil.which for a more secure way to find the executable in PATH.
+    # It does not search the current directory by default, which prevents a
+    # class of binary planting attacks where a malicious mpv.exe is in the same
+    # folder as the installer.
+    mpv_path = shutil.which('mpv.exe')
+    if mpv_path:
         print(f"Found mpv.exe at: {mpv_path}")
         return mpv_path
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("mpv.exe not found in your system's PATH.")
-        while True:
-            mpv_path = input("Please enter the full path to mpv.exe (e.g., C:\\path\\to\\mpv.exe): ").strip()
-            if os.path.isfile(mpv_path) and mpv_path.endswith('.exe'):
-                return mpv_path
-            else:
-                print("Invalid path. Please ensure the path is correct and points to mpv.exe.")
+
+    print("mpv.exe not found in your system's PATH.")
+    while True:
+        user_path = input("Please enter the full path to mpv.exe (e.g., C:\\path\\to\\mpv.exe): ").strip()
+        if os.path.isfile(user_path) and user_path.lower().endswith('.exe'):
+            return user_path
+        else:
+            print("Invalid path. Please ensure the path is correct and points to mpv.exe.")
 
 def save_config(mpv_path):
     """Saves the configuration (like mpv path) to config.json."""
@@ -53,7 +56,6 @@ def install_windows(extension_id):
     save_config(mpv_path)
 
     script_path = get_script_path()
-
     # --- Create a .bat wrapper for robustness ---
     # This ensures the correct python interpreter is used, regardless of file associations.
     python_executable = sys.executable
@@ -67,35 +69,46 @@ def install_windows(extension_id):
         f.write(wrapper_content)
     print(f"Created wrapper script at: {wrapper_path}")
 
-    manifest = {
+    # --- Create Manifests (one for Chrome-based, one for Firefox) ---
+    chrome_manifest = {
         "name": HOST_NAME,
         "description": HOST_DESCRIPTION,
-        "path": wrapper_path, # Point to the .bat wrapper
+        "path": wrapper_path,
         "type": "stdio",
-        # For Manifest V3, "allowed_origins" must be used instead of "allowed_extensions".
-        # The format must include the protocol and a trailing slash.
         "allowed_origins": [f"chrome-extension://{extension_id}/"]
     }
+    firefox_manifest = {
+        "name": HOST_NAME,
+        "description": HOST_DESCRIPTION,
+        "path": wrapper_path,
+        "type": "stdio",
+        "allowed_extensions": [extension_id]
+    }
 
-    manifest_path = os.path.join(os.path.dirname(script_path), f"{HOST_NAME}.json")
-    with open(manifest_path, 'w') as f:
-        json.dump(manifest, f, indent=4)
-    print(f"Native host manifest created at: {manifest_path}")
+    chrome_manifest_path = os.path.join(INSTALL_DIR, f"{HOST_NAME}-chrome.json")
+    with open(chrome_manifest_path, 'w') as f:
+        json.dump(chrome_manifest, f, indent=4)
+    print(f"Created Chrome-style manifest at: {chrome_manifest_path}")
+
+    firefox_manifest_path = os.path.join(INSTALL_DIR, f"{HOST_NAME}-firefox.json")
+    with open(firefox_manifest_path, 'w') as f:
+        json.dump(firefox_manifest, f, indent=4)
+    print(f"Created Firefox-style manifest at: {firefox_manifest_path}")
 
     # --- Register with browsers via Windows Registry ---
     browsers = {
-        "Google Chrome": "SOFTWARE\\Google\\Chrome\\NativeMessagingHosts",
-        "Mozilla Firefox": "SOFTWARE\\Mozilla\\NativeMessagingHosts", # For completeness
-        "Brave": "SOFTWARE\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts",
-        "Microsoft Edge": "SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts",
-        "Chromium": "SOFTWARE\\Chromium\\NativeMessagingHosts",
+        "Google Chrome": ("SOFTWARE\\Google\\Chrome\\NativeMessagingHosts", chrome_manifest_path),
+        "Brave": ("SOFTWARE\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts", chrome_manifest_path),
+        "Microsoft Edge": ("SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts", chrome_manifest_path),
+        "Chromium": ("SOFTWARE\\Chromium\\NativeMessagingHosts", chrome_manifest_path),
+        "Mozilla Firefox": ("SOFTWARE\\Mozilla\\NativeMessagingHosts", firefox_manifest_path),
     }
 
-    for browser, reg_path in browsers.items():
+    for browser, (reg_path, manifest_to_register) in browsers.items():
         try:
             key_path = os.path.join(reg_path, HOST_NAME)
             key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
-            winreg.SetValue(key, '', winreg.REG_SZ, manifest_path)
+            winreg.SetValue(key, '', winreg.REG_SZ, manifest_to_register)
             winreg.CloseKey(key)
             print(f"Successfully registered native host for {browser}.")
         except OSError as e:
@@ -137,7 +150,7 @@ def install_linux_macos(is_mac, extension_id):
         "description": HOST_DESCRIPTION,
         "path": script_path,
         "type": "stdio",
-        "allowed_extensions": [f"{extension_id}"]
+        "allowed_extensions": [extension_id]
     }
 
     if is_mac:
@@ -196,9 +209,8 @@ def main():
     print("\nFirst, we need the extension's ID for your browser.")
     print("For Chrome/Edge/Brave: Go to your extensions page (e.g., chrome://extensions), enable 'Developer mode', and copy the ID.")
     print("For Firefox: Go to about:debugging, click 'This Firefox', find the extension, and copy its 'Internal UUID' or 'ID'.")
-    extension_id = input("Please enter your extension ID: ").strip()
+    extension_id = input("> Please enter your extension ID: ").strip()
 
-    # A simple check is enough, as IDs can have very different formats between browsers.
     if not extension_id:
         print("Extension ID cannot be empty. Installation aborted.")
         sys.exit(1)
@@ -219,8 +231,9 @@ def main():
         sys.exit(1)
 
     print("\n--- Installation Finished! ---")
-    print("The final and most important step is to RESTART your browser completely.")
-    print("(Close all browser windows and ensure it's not running in the background).")
+    print("\n[!!!] FINAL STEP [!!!]")
+    print("You must now RESTART your browser completely for the changes to take effect.")
+    print("Close all browser windows and ensure it is not running in the background.")
 
 if __name__ == "__main__":
     try:
@@ -230,4 +243,5 @@ if __name__ == "__main__":
     finally:
         # Keep the console open on Windows if run by double-clicking
         if platform.system() == "Windows":
-            input("Press Enter to exit.")
+            print("\nSetup is complete.")
+            input("Press Enter to exit the installer.")

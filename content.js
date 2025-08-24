@@ -20,21 +20,24 @@
     // It will survive all UI re-injections by the MutationObserver.
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.action === 'show_ui') {
-            if (controllerHost) {
-                controllerHost.style.display = 'block';
-                // When explicitly shown, save its state as not minimized.
-                localStorage.setItem('mpv-controller-minimized', 'false');
+            // Re-query the host from the DOM to ensure we have a live reference,
+            // as the global `controllerHost` variable could be stale if the UI was re-injected.
+            const host = document.getElementById('m3u8-controller-host');
+            if (host) {
+                host.style.display = 'block';
+                // When explicitly shown, tell the background script we are no longer minimized.
+                chrome.runtime.sendMessage({ action: 'set_ui_minimized_state', minimized: false });
             }
-            return; // No response needed, so we don't return true.
-        }
-        if (request.m3u8) {
+        } else if (request.m3u8) {
             detectedUrl = request.m3u8;
+            // Report the detected stream URL to the background script
+            chrome.runtime.sendMessage({ action: 'report_detected_url', url: detectedUrl });
             // Call the global UI update function
             updateStatusBanner(`Stream detected`);
         } else if (request.action === 'render_playlist') {
             // The background has sent an updated list. Render it only if it
             // matches the currently selected folder.
-            const currentFolderId = shadowRoot?.getElementById('folder-select')?.value;
+            const currentFolderId = shadowRoot ?.getElementById('folder-select') ?.value;
             if (currentFolderId === request.folderId) {
                 renderPlaylist(request.playlist);
             }
@@ -45,8 +48,6 @@
             // Call the global UI update function
             addLogEntry(request.log);
         }
-        // If we fall through without sending a response, the channel closes automatically.
-        // This is fine for all the other message types.
     });
 
     /**
@@ -57,6 +58,7 @@
         // All styling and positioning will be applied to this host.
         controllerHost = document.createElement('div');
         controllerHost.id = 'm3u8-controller-host';
+        controllerHost.style.display = 'none'; // Start hidden, background script will tell us to show.
 
         // Attach the shadow root for isolation.
         shadowRoot = controllerHost.attachShadow({ mode: 'open' });
@@ -90,6 +92,23 @@
         const cssUrl = chrome.runtime.getURL('content.css');
         uiWrapper.innerHTML = `
         <link rel="stylesheet" type="text/css" href="${cssUrl}">
+        <style>
+            /* Fix for long text overflowing its container */
+            .title-text, .list-item .url-text {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                /* These properties are crucial for flexbox truncation */
+                flex-grow: 1;
+                min-width: 0;
+            }
+
+            /* Adjust icon and title position */
+            #m3u8-url > svg {
+                /* This moves the icon and the title that follows it slightly to the left */
+                margin-left: -4px;
+            }
+        </style>
         <div id="status-banner">
             <span id="stream-status">No stream detected</span>
         </div>
@@ -213,7 +232,8 @@
         // --- Minimize Button ---
         shadowRoot.getElementById('btn-toggle-minimize').addEventListener('click', () => {
             controllerHost.style.display = 'none';
-            localStorage.setItem('mpv-controller-minimized', 'true');
+            // Tell the background script we are now minimized.
+            chrome.runtime.sendMessage({ action: 'set_ui_minimized_state', minimized: true });
         });
 
         const logContainer = shadowRoot.getElementById('log-container');
@@ -273,8 +293,8 @@
         const handleAddClick = () => {
             const folderId = getCurrentFolderId();
             // The detectedUrl is now correctly set for both M3U8 streams and YouTube pages
-            // by the handlePageUpdate and message listener functions. No separate check is needed here.
-            const urlToAdd = detectedUrl;
+            // by the handlePageUpdate and message listener functions.
+            const urlToAdd = detectedUrl; // Use the globally tracked URL for this tab.
 
             if (!urlToAdd) {
                 // If no specific stream or valid page was found, inform the user and do nothing.
@@ -283,7 +303,7 @@
             }
 
             // Now that we have a valid URL, send it.
-            sendCommandToBackground('add', folderId, { url: urlToAdd });
+            sendCommandToBackground('add', folderId); // Background will get the URL from its state
         };
         const handlePlayClick = () => sendCommandToBackground('play', getCurrentFolderId());
         const handleClearClick = () => sendCommandToBackground('clear', getCurrentFolderId());
@@ -450,13 +470,6 @@
         const savedPinState = localStorage.getItem('mpv-controller-pinned');
         uiApi.setPinState(savedPinState === null ? false : JSON.parse(savedPinState)); // Default to unpinned
 
-        // Load and apply saved minimized state
-        const savedMinimizedState = localStorage.getItem('mpv-controller-minimized');
-        if (savedMinimizedState === 'true') {
-            controllerHost.style.display = 'none';
-        }
-        
-        // Load and apply saved controller position
         const savedLeft = localStorage.getItem('mpv-controller-left');
         const savedTop = localStorage.getItem('mpv-controller-top');
         if (savedLeft !== null && savedTop !== null) {
@@ -475,7 +488,9 @@
         const uiApi = bindEventListeners();
         applyInitialState(uiApi); // Apply position, UI mode, etc.
         await updateFolderDropdowns(); // This will fetch folders, populate dropdowns, and call refreshPlaylist
-        console.log("MPV Controller content script initialized.");
+        // After everything is ready, notify the background script to check if we should be visible.
+        chrome.runtime.sendMessage({ action: 'content_script_init' });
+        console.log("MPV Controller content script initialized and ready.");
 
         // After initializing, check if we are in fullscreen mode and hide the UI if so.
         // This handles cases where the UI is re-injected on a page that is already fullscreen.
@@ -680,12 +695,18 @@
         // Check if the URL has changed, which indicates a navigation event.
         if (window.location.href !== lastUrl) {
             lastUrl = window.location.href;
-            detectedUrl = null; // Reset the detected M3U8 stream.
+            detectedUrl = null; // Reset the detected URL.
+            chrome.runtime.sendMessage({ action: 'report_detected_url', url: null });
             updateStatusBanner('No stream detected'); // Reset banner to default.
         }
 
         // Now, check for special cases like YouTube video pages.
         const isYouTubeVideo = window.location.href.includes('youtube.com/watch?v=') || window.location.href.includes('youtu.be/');
+        if (isYouTubeVideo && !detectedUrl) {
+            detectedUrl = window.location.href;
+            chrome.runtime.sendMessage({ action: 'report_detected_url', url: detectedUrl });
+            updateStatusBanner('YouTube video detected');
+        }
 
         // If an M3U8 stream hasn't been detected, but we're on a YouTube page,
         // treat the page URL as the "detected" URL and update the banner.
@@ -706,14 +727,17 @@
         // --- Fullscreen Change Handler ---
         // This will hide the controller when a video goes fullscreen and show it again when it exits.
         document.addEventListener('fullscreenchange', () => {
-            // The controllerHost is a global variable in this script's scope.
-            if (controllerHost) {
+            // Re-query the host from the DOM to ensure we have a live reference.
+            const host = document.getElementById('m3u8-controller-host');
+            if (host) {
                 if (document.fullscreenElement) {
-                    // An element has entered fullscreen mode, so hide the controller.
-                    controllerHost.style.display = 'none';
+                    // Entering fullscreen, always hide the controller.
+                    host.style.display = 'none';
                 } else {
-                    // Exited fullscreen mode, so show the controller again.
-                    controllerHost.style.display = 'block';
+                    // Exiting fullscreen. Tell background script to check if we should be visible.
+                    // This is more robust than checking localStorage directly, as it respects the
+                    // centralized state in background.js.
+                    chrome.runtime.sendMessage({ action: 'content_script_init' });
                 }
             }
         });

@@ -4,7 +4,7 @@ import os
 import platform
 
 # --- Configuration (must match install.py) ---
-HOST_NAME = "com.shinku.mpv_handler"
+HOST_NAME = "com.mpv_playlist_organizer.handler"
 INSTALL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def uninstall_windows():
@@ -34,8 +34,10 @@ def uninstall_windows():
 
     # 2. Remove generated files
     files_to_remove = [
-        f"{HOST_NAME}.json",
-        "run_native_host.bat"
+        f"{HOST_NAME}-chrome.json",    # Manifest for Chrome-based browsers
+        f"{HOST_NAME}-firefox.json",   # Manifest for Firefox
+        "run_native_host.bat",        # The Windows wrapper script
+        "config.json"                 # The configuration file with the mpv path
     ]
     print("\n--- Removing generated files ---")
     for filename in files_to_remove:
@@ -59,17 +61,20 @@ def uninstall_linux_macos(is_mac):
             "Chromium": os.path.join(base_path, "Chromium/NativeMessagingHosts"),
             "Brave": os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             "Microsoft Edge": os.path.join(base_path, "Microsoft Edge/NativeMessagingHosts"),
+            "Mozilla Firefox": os.path.join(base_path, "Mozilla/NativeMessagingHosts"),
         }
     else:  # Linux
         base_path = os.path.expanduser("~/.config/")
+        mozilla_base_path = os.path.expanduser("~/.mozilla/")
         browser_paths = {
             "Google Chrome": os.path.join(base_path, "google-chrome/NativeMessagingHosts"),
             "Chromium": os.path.join(base_path, "chromium/NativeMessagingHosts"),
             "Brave": os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             "Microsoft Edge": os.path.join(base_path, "microsoft-edge/NativeMessagingHosts"),
+            "Mozilla Firefox": os.path.join(mozilla_base_path, "native-messaging-hosts"),
         }
 
-    # Remove manifest files
+    # Remove manifest file from all possible locations
     manifest_filename = f"{HOST_NAME}.json"
     for browser, path in browser_paths.items():
         manifest_path = os.path.join(path, manifest_filename)
@@ -79,6 +84,8 @@ def uninstall_linux_macos(is_mac):
                 print(f"Successfully removed manifest for {browser} at: {manifest_path}")
             except OSError as e:
                 print(f"Error removing manifest for {browser}: {e}")
+        else:
+            print(f"Manifest for {browser} not found (skipping).")
 
 def main():
     """Main function to run the uninstaller."""
