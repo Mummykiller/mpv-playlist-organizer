@@ -67,6 +67,27 @@ Installation is a multi-step process that involves installing the extension in y
 -   **MPV Player**: You must have MPV installed on your system and accessible from your command line (i.e., in your system's PATH).
 - **Python**: Python 3.7+ is required to run the installation script.
 
+How to Add mpv.exe to Your PATH on Windows
+Find your MPV folder:
+Locate where you extracted or installed mpv.exe (for example: C:\Tools\mpv\mpv.exe).
+
+Copy the folder path:
+Click the address bar in File Explorer where mpv.exe is located, and copy the folder path (e.g., C:\Tools\mpv).
+
+Open System Properties:
+
+Press <kbd>Win</kbd> + <kbd>Pause/Break</kbd>, or
+Right-click "This PC" → Properties → Advanced system settings.
+Edit Environment Variables:
+
+Click "Environment Variables…"
+In the "System variables" section, scroll to Path and click "Edit…"
+Click "New" and paste the folder path you copied.
+Apply and restart:
+Click "OK" to save, then restart any command prompts or your PC for changes to take effect.
+
+You can now run mpv from any command prompt window.
+
 ### Step 1: Download the Project
 
 Download the latest release from the **Releases** page and unzip it to a **permanent location** on your computer (e.g., your `Documents` or `home` folder).
