@@ -69,7 +69,7 @@ def install_windows(extension_id):
         f.write(wrapper_content)
     print(f"Created wrapper script at: {wrapper_path}")
 
-    # --- Create Manifests (one for Chrome-based, one for Firefox) ---
+    # --- Create Manifest for Chrome-based browsers ---
     chrome_manifest = {
         "name": HOST_NAME,
         "description": HOST_DESCRIPTION,
@@ -77,23 +77,11 @@ def install_windows(extension_id):
         "type": "stdio",
         "allowed_origins": [f"chrome-extension://{extension_id}/"]
     }
-    firefox_manifest = {
-        "name": HOST_NAME,
-        "description": HOST_DESCRIPTION,
-        "path": wrapper_path,
-        "type": "stdio",
-        "allowed_extensions": [extension_id]
-    }
 
     chrome_manifest_path = os.path.join(INSTALL_DIR, f"{HOST_NAME}-chrome.json")
     with open(chrome_manifest_path, 'w') as f:
         json.dump(chrome_manifest, f, indent=4)
     print(f"Created Chrome-style manifest at: {chrome_manifest_path}")
-
-    firefox_manifest_path = os.path.join(INSTALL_DIR, f"{HOST_NAME}-firefox.json")
-    with open(firefox_manifest_path, 'w') as f:
-        json.dump(firefox_manifest, f, indent=4)
-    print(f"Created Firefox-style manifest at: {firefox_manifest_path}")
 
     # --- Register with browsers via Windows Registry ---
     browsers = {
@@ -101,7 +89,6 @@ def install_windows(extension_id):
         "Brave": ("SOFTWARE\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts", chrome_manifest_path),
         "Microsoft Edge": ("SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts", chrome_manifest_path),
         "Chromium": ("SOFTWARE\\Chromium\\NativeMessagingHosts", chrome_manifest_path),
-        "Mozilla Firefox": ("SOFTWARE\\Mozilla\\NativeMessagingHosts", firefox_manifest_path),
     }
 
     for browser, (reg_path, manifest_to_register) in browsers.items():
@@ -135,22 +122,13 @@ def install_linux_macos(is_mac, extension_id):
     except Exception as e:
         print(f"Could not make script executable: {e}")
 
-    # --- Generate different manifests for Chrome-based and Firefox-based browsers ---
+    # --- Generate manifest for Chrome-based browsers ---
     chrome_manifest = {
         "name": HOST_NAME,
         "description": HOST_DESCRIPTION,
         "path": script_path,
         "type": "stdio",
         "allowed_origins": [f"chrome-extension://{extension_id}/"]
-    }
-
-    # Firefox uses a different key and format for the extension ID.
-    firefox_manifest = {
-        "name": HOST_NAME,
-        "description": HOST_DESCRIPTION,
-        "path": script_path,
-        "type": "stdio",
-        "allowed_extensions": [extension_id]
     }
 
     if is_mac:
@@ -161,17 +139,14 @@ def install_linux_macos(is_mac, extension_id):
             "Chromium": (os.path.join(base_path, "Chromium/NativeMessagingHosts"), chrome_manifest),
             "Brave": (os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"), chrome_manifest),
             "Microsoft Edge": (os.path.join(base_path, "Microsoft Edge/NativeMessagingHosts"), chrome_manifest),
-            "Mozilla Firefox": (os.path.join(base_path, "Mozilla/NativeMessagingHosts"), firefox_manifest),
         }
     else: # Linux
         base_path = os.path.expanduser("~/.config/")
-        mozilla_base_path = os.path.expanduser("~/.mozilla/")
         browser_configs = {
             "Google Chrome": (os.path.join(base_path, "google-chrome/NativeMessagingHosts"), chrome_manifest),
             "Chromium": (os.path.join(base_path, "chromium/NativeMessagingHosts"), chrome_manifest),
             "Brave": (os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"), chrome_manifest),
             "Microsoft Edge": (os.path.join(base_path, "microsoft-edge/NativeMessagingHosts"), chrome_manifest),
-            "Mozilla Firefox": (os.path.join(mozilla_base_path, "native-messaging-hosts"), firefox_manifest),
         }
 
     for browser, (path, manifest_to_use) in browser_configs.items():
@@ -208,7 +183,6 @@ def main():
     # --- Get Extension ID ---
     print("\nFirst, we need the extension's ID for your browser.")
     print("For Chrome/Edge/Brave: Go to your extensions page (e.g., chrome://extensions), enable 'Developer mode', and copy the ID.")
-    print("For Firefox: Go to about:debugging, click 'This Firefox', find the extension, and copy its 'Internal UUID' or 'ID'.")
     extension_id = input("> Please enter your extension ID: ").strip()
 
     if not extension_id:

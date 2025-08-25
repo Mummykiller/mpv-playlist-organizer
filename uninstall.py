@@ -3,57 +3,51 @@ import sys
 import os
 import platform
 
-# --- Configuration (must match install.py) ---
+# --- Configuration (should match install.py) ---
 HOST_NAME = "com.mpv_playlist_organizer.handler"
 INSTALL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def uninstall_windows():
-    """Uninstaller for Windows. Removes manifest, wrapper, and registry keys."""
+    """Uninstaller for Windows. Removes registry keys and generated files."""
     import winreg
-    print("--- Uninstalling for Windows ---")
 
-    # Registry paths for various browsers
+    print("Uninstalling for Windows...")
+
+    # --- Unregister from browsers via Windows Registry ---
     browsers = {
         "Google Chrome": "SOFTWARE\\Google\\Chrome\\NativeMessagingHosts",
-        "Mozilla Firefox": "SOFTWARE\\Mozilla\\NativeMessagingHosts",
         "Brave": "SOFTWARE\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts",
         "Microsoft Edge": "SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts",
         "Chromium": "SOFTWARE\\Chromium\\NativeMessagingHosts",
     }
 
-    # 1. Remove Registry Keys
     for browser, reg_path in browsers.items():
         try:
             key_path = os.path.join(reg_path, HOST_NAME)
             winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
-            print(f"Successfully removed registry key for {browser}.")
+            print(f"Successfully unregistered native host for {browser}.")
         except FileNotFoundError:
-            print(f"Registry key for {browser} not found (already removed or browser not installed).")
+            print(f"Native host was not registered for {browser} (or already removed).")
         except OSError as e:
-            print(f"Could not remove registry key for {browser}. You may need to run as administrator. Error: {e}")
+            print(f"Could not unregister for {browser}. You may need to run as administrator. Error: {e}")
 
-    # 2. Remove generated files
+    # --- Clean up generated files ---
     files_to_remove = [
-        f"{HOST_NAME}-chrome.json",    # Manifest for Chrome-based browsers
-        f"{HOST_NAME}-firefox.json",   # Manifest for Firefox
-        "run_native_host.bat",        # The Windows wrapper script
-        "config.json"                 # The configuration file with the mpv path
+        os.path.join(INSTALL_DIR, "run_native_host.bat"),
+        os.path.join(INSTALL_DIR, f"{HOST_NAME}-chrome.json")
     ]
-    print("\n--- Removing generated files ---")
-    for filename in files_to_remove:
-        file_path = os.path.join(INSTALL_DIR, filename)
+    for file_path in files_to_remove:
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
-                print(f"Removed file: {file_path}")
+                print(f"Removed generated file: {os.path.basename(file_path)}")
             except OSError as e:
-                print(f"Error removing file {file_path}: {e}")
+                print(f"Could not remove file {file_path}. Error: {e}")
 
 def uninstall_linux_macos(is_mac):
     """Uninstaller for Linux and macOS. Removes manifest files."""
-    print(f"--- Uninstalling for {'macOS' if is_mac else 'Linux'} ---")
+    print(f"Uninstalling for {'macOS' if is_mac else 'Linux'}...")
 
-    # Base paths for browser configurations
     if is_mac:
         base_path = os.path.expanduser("~/Library/Application Support/")
         browser_paths = {
@@ -61,41 +55,40 @@ def uninstall_linux_macos(is_mac):
             "Chromium": os.path.join(base_path, "Chromium/NativeMessagingHosts"),
             "Brave": os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             "Microsoft Edge": os.path.join(base_path, "Microsoft Edge/NativeMessagingHosts"),
-            "Mozilla Firefox": os.path.join(base_path, "Mozilla/NativeMessagingHosts"),
         }
     else:  # Linux
         base_path = os.path.expanduser("~/.config/")
-        mozilla_base_path = os.path.expanduser("~/.mozilla/")
         browser_paths = {
             "Google Chrome": os.path.join(base_path, "google-chrome/NativeMessagingHosts"),
             "Chromium": os.path.join(base_path, "chromium/NativeMessagingHosts"),
             "Brave": os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             "Microsoft Edge": os.path.join(base_path, "microsoft-edge/NativeMessagingHosts"),
-            "Mozilla Firefox": os.path.join(mozilla_base_path, "native-messaging-hosts"),
         }
 
-    # Remove manifest file from all possible locations
     manifest_filename = f"{HOST_NAME}.json"
     for browser, path in browser_paths.items():
         manifest_path = os.path.join(path, manifest_filename)
         if os.path.exists(manifest_path):
             try:
                 os.remove(manifest_path)
-                print(f"Successfully removed manifest for {browser} at: {manifest_path}")
+                print(f"Successfully removed manifest for {browser}.")
             except OSError as e:
-                print(f"Error removing manifest for {browser}: {e}")
+                print(f"Failed to remove manifest for {browser}. Error: {e}")
         else:
-            print(f"Manifest for {browser} not found (skipping).")
+            print(f"Manifest for {browser} not found (or already removed).")
 
 def main():
     """Main function to run the uninstaller."""
     print("--- MPV Playlist Organizer Native Host Uninstaller ---")
-    print("This script will remove the native host configuration from your system.")
-    confirm = input("> Are you sure you want to uninstall the native host? (yes/no): ").strip().lower()
+    print("This script will remove the native messaging host registration from your browsers.")
+    print("\n[!] This will NOT remove the browser extension itself or this folder.")
+
+    confirm = input("> Type 'yes' to confirm you wish to uninstall the native host: ").strip().lower()
     if confirm != 'yes':
         print("\nUninstallation aborted.")
         sys.exit(0)
 
+    # --- Run Platform-Specific Uninstaller ---
     current_platform = platform.system()
     if current_platform == 'Windows':
         uninstall_windows()
@@ -103,11 +96,22 @@ def main():
         uninstall_linux_macos(is_mac=True)
     elif current_platform == 'Linux':
         uninstall_linux_macos(is_mac=False)
+    else:
+        print(f"Unsupported platform: {current_platform}")
+        sys.exit(1)
 
     print("\n--- Uninstallation Finished! ---")
-    print("The native host has been deregistered. You can now safely delete this folder.")
+    print("\nNext Steps:")
+    print("1. Remove the 'MPV Playlist Organizer' extension from your browser's extensions page.")
+    print(f"2. You can now safely delete this folder: '{INSTALL_DIR}'")
 
 if __name__ == "__main__":
-    main()
-    if platform.system() == "Windows":
-        input("Press Enter to exit.")
+    try:
+        main()
+    except Exception as e:
+        print(f"\nAn unexpected error occurred: {e}")
+    finally:
+        # Keep the console open on Windows if run by double-clicking
+        if platform.system() == "Windows":
+            print("\nUninstallation is complete.")
+            input("Press Enter to exit the uninstaller.")

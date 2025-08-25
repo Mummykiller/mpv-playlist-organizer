@@ -47,6 +47,27 @@
         } else if (request.log) {
             // Call the global UI update function
             addLogEntry(request.log);
+        } else if (request.action === 'apply_ui_preferences') {
+            const prefs = request.preferences;
+            if (prefs && shadowRoot) { // Ensure UI is present
+                // Apply changes without re-saving state to prevent loops.
+                switchUi(prefs.mode || 'full', false);
+                setLogVisibility(prefs.logVisible === null ? true : prefs.logVisible, false);
+                setPinState(prefs.pinned === null ? false : prefs.pinned, false);
+
+                if (prefs.position && controllerHost) {
+                    controllerHost.style.left = prefs.position.left;
+                    controllerHost.style.top = prefs.position.top;
+                    controllerHost.style.right = prefs.position.right;
+                    controllerHost.style.bottom = prefs.position.bottom;
+                }
+            }
+        } else if (request.action === 'apply_minimize_state') {
+            // This message is broadcast when the minimized state changes on another tab.
+            const host = document.getElementById('m3u8-controller-host');
+            if (host) {
+                host.style.display = request.minimized ? 'none' : 'block';
+            }
         }
     });
 
@@ -94,13 +115,19 @@
         <link rel="stylesheet" type="text/css" href="${cssUrl}">
         <style>
             /* Fix for long text overflowing its container */
-            .title-text, .list-item .url-text {
+            .title-text { /* Keep header title truncated */
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 /* These properties are crucial for flexbox truncation */
                 flex-grow: 1;
                 min-width: 0;
+            }
+
+            .list-item .url-text { /* Allow URL to overflow for horizontal scrolling */
+                white-space: nowrap;
+                flex-grow: 1;
+                min-width: 0; /* Still important for flex behavior */
             }
 
             /* Adjust icon and title position */
@@ -194,6 +221,7 @@
                     <p id="log-placeholder">Logs will appear here...</p>
                 </div>
             </div>
+
         </div>
 
         <div id="compact-ui-container" style="display: none;">
@@ -218,11 +246,129 @@
                 </button>
             </div>
         </div>
+
+        <!-- Confirmation Modal -->
+        <div id="confirmation-modal" style="display: none;">
+            <div class="modal-content">
+                <p id="modal-message"></p>
+                <div class="modal-actions">
+                    <button id="modal-confirm-btn">Confirm</button>
+                    <button id="modal-cancel-btn">Cancel</button>
+                </div>
+            </div>
+        </div>
         `;
         shadowRoot.appendChild(uiWrapper);
 
         // Append the host to the body *after* the shadow DOM is populated
         document.body.appendChild(controllerHost);
+    }
+
+    function switchUi(uiMode, saveState = true) {
+        const fullUiContainer = shadowRoot?.getElementById('full-ui-container');
+        const compactUiContainer = shadowRoot?.getElementById('compact-ui-container');
+        const toggleFullBtn = shadowRoot?.getElementById('btn-toggle-full');
+        const toggleCompactBtn = shadowRoot?.getElementById('btn-toggle-compact');
+        if (!fullUiContainer || !compactUiContainer || !toggleFullBtn || !toggleCompactBtn) return;
+
+        currentUiMode = uiMode;
+        if (uiMode === 'full') {
+            fullUiContainer.style.display = 'flex';
+            compactUiContainer.style.display = 'none';
+            toggleFullBtn.classList.add('active-toggle');
+            toggleCompactBtn.classList.remove('active-toggle');
+        } else if (uiMode === 'compact') {
+            fullUiContainer.style.display = 'none';
+            compactUiContainer.style.display = 'flex';
+            toggleFullBtn.classList.remove('active-toggle');
+            toggleCompactBtn.classList.add('active-toggle');
+        }
+        if (saveState) {
+            chrome.runtime.sendMessage({ action: 'set_ui_preferences', preferences: { mode: uiMode } });
+        }
+        refreshPlaylist();
+    }
+
+    /**
+     * Displays a custom confirmation modal inside the controller UI.
+     * @param {string} message The message to display in the modal.
+     * @returns {Promise<boolean>} A promise that resolves to true if confirmed, false if cancelled.
+     */
+    function showConfirmationModal(message) {
+        return new Promise((resolve) => {
+            const modal = shadowRoot.getElementById('confirmation-modal');
+            const messageEl = shadowRoot.getElementById('modal-message');
+            const confirmBtn = shadowRoot.getElementById('modal-confirm-btn');
+            const cancelBtn = shadowRoot.getElementById('modal-cancel-btn');
+
+            if (!modal || !messageEl || !confirmBtn || !cancelBtn) {
+                // Fallback to browser confirm if the modal elements are not found
+                resolve(confirm(message));
+                return;
+            }
+
+            messageEl.textContent = message;
+            modal.style.display = 'flex';
+
+            const close = (result) => {
+                modal.style.display = 'none';
+                // Remove listeners to prevent memory leaks
+                confirmBtn.onclick = null;
+                cancelBtn.onclick = null;
+                resolve(result);
+            };
+
+            // Assign new click handlers
+            confirmBtn.onclick = () => close(true);
+            cancelBtn.onclick = () => close(false);
+        });
+    }
+
+    // --- UI State Setters ---
+    // These functions update the UI and, by default, save the state to storage.
+    // They can be called with `saveState = false` during initialization to prevent
+    // a redundant write operation.
+
+    function setLogVisibility(isVisible, saveState = true) {
+        const logContainer = shadowRoot?.getElementById('log-container');
+        const toggleLogBtn = shadowRoot?.getElementById('btn-toggle-log');
+        if (!logContainer || !toggleLogBtn) return;
+
+        if (isVisible) { // If log should be visible
+            logContainer.classList.remove('log-hidden'); // Remove the hidden class
+            toggleLogBtn.classList.add('active');
+            toggleLogBtn.title = 'Hide Log';
+        } else { // If log should be hidden
+            logContainer.classList.add('log-hidden'); // Add the hidden class
+            toggleLogBtn.classList.remove('active');
+            toggleLogBtn.title = 'Show Log';
+        }
+        if (saveState) {
+            chrome.runtime.sendMessage({ action: 'set_ui_preferences', preferences: { logVisible: isVisible } });
+        }
+    }
+
+    function setPinState(shouldBePinned, saveState = true) {
+        const togglePinBtn = shadowRoot?.getElementById('btn-toggle-pin');
+        const dragHandle = shadowRoot?.getElementById('status-banner');
+        if (!controllerHost || !togglePinBtn || !dragHandle) return;
+
+        isPinned = shouldBePinned; // Update global state variable
+
+        if (shouldBePinned) {
+            controllerHost.classList.add('pinned');
+            togglePinBtn.classList.add('active-toggle');
+            togglePinBtn.title = 'Unpin UI (allows dragging)';
+            dragHandle.style.cursor = 'default';
+        } else {
+            controllerHost.classList.remove('pinned');
+            togglePinBtn.classList.remove('active-toggle');
+            togglePinBtn.title = 'Pin UI (locks at current position)';
+            dragHandle.style.cursor = 'grab';
+        }
+        if (saveState) {
+            chrome.runtime.sendMessage({ action: 'set_ui_preferences', preferences: { pinned: shouldBePinned } });
+        }
     }
 
     /**
@@ -240,48 +386,10 @@
         const toggleLogBtn = shadowRoot.getElementById('btn-toggle-log');
         const dragHandle = shadowRoot.getElementById('status-banner');
 
-        function setLogVisibility(isVisible) {
-        if (isVisible) { // If log should be visible
-            logContainer.classList.remove('log-hidden'); // Remove the hidden class
-            toggleLogBtn.classList.add('active');
-            toggleLogBtn.title = 'Hide Log';
-        } else { // If log should be hidden
-            logContainer.classList.add('log-hidden'); // Add the hidden class
-            toggleLogBtn.classList.remove('active');
-            toggleLogBtn.title = 'Show Log';
-        }
-        localStorage.setItem('mpv-controller-log-visible', JSON.stringify(isVisible));
-        }
-
         function clearLog() {
-        while (logContainer.firstChild) {
-            logContainer.removeChild(logContainer.firstChild);
+            // addLogEntry will clear the log and handle the placeholder
+            addLogEntry({ text: '[Content]: Log cleared.', type: 'info' }, true);
         }
-        const placeholder = document.createElement('p');
-        placeholder.id = 'log-placeholder';
-        placeholder.textContent = 'Logs will appear here...';
-        logContainer.appendChild(placeholder);
-        addLogEntry({ text: '[Content]: Log cleared.', type: 'info' });
-        }
-
-        function setPinState(shouldBePinned) {
-            isPinned = shouldBePinned;
-            const togglePinBtn = shadowRoot.getElementById('btn-toggle-pin');
-
-            if (shouldBePinned) {
-                controllerHost.classList.add('pinned');
-                togglePinBtn.classList.add('active-toggle');
-                togglePinBtn.title = 'Unpin UI (allows dragging)';
-                dragHandle.style.cursor = 'default';
-            } else {
-                controllerHost.classList.remove('pinned');
-                togglePinBtn.classList.remove('active-toggle');
-                togglePinBtn.title = 'Pin UI (locks at current position)';
-                dragHandle.style.cursor = 'grab';
-            }
-            localStorage.setItem('mpv-controller-pinned', JSON.stringify(isPinned));
-        }
-
         const folderSelect = shadowRoot.getElementById('folder-select');
         const compactFolderSelect = shadowRoot.getElementById('compact-folder-select');
 
@@ -290,7 +398,7 @@
         }
 
         // --- Refactored Event Handlers to reduce duplication ---
-        const handleAddClick = () => {
+        const handleAddClick = async () => {
             const folderId = getCurrentFolderId();
             // The detectedUrl is now correctly set for both M3U8 streams and YouTube pages
             // by the handlePageUpdate and message listener functions.
@@ -302,12 +410,40 @@
                 return; // Stop execution here.
             }
 
-            // Now that we have a valid URL, send it.
-            sendCommandToBackground('add', folderId); // Background will get the URL from its state
+            try {
+                const currentPlaylist = await getPlaylistFromBackground(folderId);
+                const isDuplicate = currentPlaylist.includes(urlToAdd);
+
+                if (isDuplicate) {
+                    const confirmed = await showConfirmationModal('This URL is already in the playlist. Are you sure you want to add it again?');
+                    if (!confirmed) {
+                        addLogEntry({ text: `[Content]: Add action cancelled by user.`, type: 'info' });
+                        return; // User cancelled the action.
+                    }
+                }
+                // If not a duplicate, or if user confirmed, proceed.
+                sendCommandToBackground('add', folderId); // Background will get the URL from its state
+            } catch (error) {
+                addLogEntry({ text: `[Content]: Error checking for duplicates: ${error.message}`, type: 'error' });
+            }
         };
         const handlePlayClick = () => sendCommandToBackground('play', getCurrentFolderId());
         const handleClearClick = () => sendCommandToBackground('clear', getCurrentFolderId());
-        const handleCloseMpvClick = () => sendCommandToBackground('close_mpv', getCurrentFolderId());
+        const handleCloseMpvClick = async () => {
+            const isRunning = await isMpvRunningFromBackground();
+            if (!isRunning) {
+                addLogEntry({ text: `[Content]: Close command ignored, MPV is not running.`, type: 'info' });
+                return;
+            }
+
+            const confirmed = await showConfirmationModal('Are you sure you want to close MPV?');
+            if (!confirmed) {
+                addLogEntry({ text: `[Content]: Close MPV action cancelled by user.`, type: 'info' });
+                return;
+            }
+
+            sendCommandToBackground('close_mpv', getCurrentFolderId());
+        };
 
         // Assigning handlers to both full and compact UI buttons
         shadowRoot.getElementById('btn-add').addEventListener('click', handleAddClick);
@@ -339,7 +475,8 @@
         function handleFolderChange(newFolderId) {
             folderSelect.value = newFolderId;
             compactFolderSelect.value = newFolderId;
-            localStorage.setItem('mpv-controller-folder-id', newFolderId);
+            // Save the last used folder in secure extension storage, not page-accessible localStorage
+            chrome.runtime.sendMessage({ action: 'set_last_folder_id', folderId: newFolderId });
             refreshPlaylist();
         }
 
@@ -351,24 +488,6 @@
         const toggleFullBtn = shadowRoot.getElementById('btn-toggle-full');
         const toggleCompactBtn = shadowRoot.getElementById('btn-toggle-compact');
 
-        function switchUi(uiMode) {
-        currentUiMode = uiMode;
-        if (uiMode === 'full') {
-            fullUiContainer.style.display = 'flex';
-            compactUiContainer.style.display = 'none';
-            toggleFullBtn.classList.add('active-toggle');
-            toggleCompactBtn.classList.remove('active-toggle');
-        } else if (uiMode === 'compact') {
-            fullUiContainer.style.display = 'none';
-            compactUiContainer.style.display = 'flex';
-            toggleFullBtn.classList.remove('active-toggle');
-            toggleCompactBtn.classList.add('active-toggle');
-        }
-        localStorage.setItem('mpv-controller-ui-mode', uiMode);
-        refreshPlaylist();
-        }
-
-        // **Start of added code for log visibility**
         toggleLogBtn.addEventListener('click', () => {
         const isCurrentlyVisible = !logContainer.classList.contains('log-hidden');
         setLogVisibility(!isCurrentlyVisible);
@@ -417,9 +536,14 @@
         isDragging = false;
         document.body.classList.remove('mpv-controller-dragging');
         controllerHost.style.transition = ''; // Re-enable transition for smooth placement
-        // Save the current position to localStorage
-        localStorage.setItem('mpv-controller-left', controllerHost.offsetLeft);
-        localStorage.setItem('mpv-controller-top', controllerHost.offsetTop);
+        // Save the current position to global storage
+        const newPosition = {
+            left: controllerHost.style.left,
+            top: controllerHost.style.top,
+            right: controllerHost.style.right,
+            bottom: controllerHost.style.bottom
+        };
+        chrome.runtime.sendMessage({ action: 'set_ui_preferences', preferences: { position: newPosition } });
     });
 
         // Debounced function to handle repositioning on window resize
@@ -438,55 +562,58 @@
             if (newLeft !== currentLeft || newTop !== currentTop) {
                 controllerHost.style.left = `${newLeft}px`;
                 controllerHost.style.top = `${newTop}px`;
-                localStorage.setItem('mpv-controller-left', newLeft);
-                localStorage.setItem('mpv-controller-top', newTop);
+                const newPosition = {
+                    left: controllerHost.style.left,
+                    top: controllerHost.style.top,
+                    right: controllerHost.style.right,
+                    bottom: controllerHost.style.bottom
+                };
+                // Only update position, don't overwrite other preferences
+                chrome.runtime.sendMessage({ action: 'set_ui_preferences', preferences: { position: newPosition } });
             }
         }, 250); // 250ms debounce delay
 
         window.addEventListener('resize', debouncedReposition);
 
         // Return an object containing functions that might be needed externally (by applyInitialState)
-        return { switchUi, setLogVisibility, setPinState };
+        return;
     }
 
     /**
      * Loads saved state from localStorage and applies it to the UI.
      */
-    function applyInitialState(uiApi) {
-        const folderSelect = shadowRoot.getElementById('folder-select');
-        const compactFolderSelect = shadowRoot.getElementById('compact-folder-select');
+    async function applyInitialState() {
+        const response = await chrome.runtime.sendMessage({ action: 'get_ui_preferences' });
+        if (response?.success && response.preferences) {
+            const prefs = response.preferences;
 
-        // Load and apply saved UI mode
-        const savedUiMode = localStorage.getItem('mpv-controller-ui-mode');
-        if (savedUiMode) {
-            uiApi.switchUi(savedUiMode);
-        }
+            // Apply UI mode, log visibility, and pin state
+            switchUi(prefs.mode || 'full', false);
+            // Apply state without re-saving it.
+            setLogVisibility(prefs.logVisible === null ? true : prefs.logVisible, false);
+            setPinState(prefs.pinned === null ? false : prefs.pinned, false);
 
-        // Load and apply saved log visibility
-        const savedLogVisibility = localStorage.getItem('mpv-controller-log-visible');
-        uiApi.setLogVisibility(savedLogVisibility === null ? true : JSON.parse(savedLogVisibility)); // Default to visible
-
-        // Load and apply saved pin state
-        const savedPinState = localStorage.getItem('mpv-controller-pinned');
-        uiApi.setPinState(savedPinState === null ? false : JSON.parse(savedPinState)); // Default to unpinned
-
-        const savedLeft = localStorage.getItem('mpv-controller-left');
-        const savedTop = localStorage.getItem('mpv-controller-top');
-        if (savedLeft !== null && savedTop !== null) {
-            controllerHost.style.left = savedLeft + 'px';
-            controllerHost.style.top = savedTop + 'px';
-            controllerHost.style.right = 'auto'; // Disable the initial 'right: 10px'
-            controllerHost.style.bottom = 'auto';
+            // Apply position
+            if (prefs.position) {
+                controllerHost.style.left = prefs.position.left;
+                controllerHost.style.top = prefs.position.top;
+                controllerHost.style.right = prefs.position.right;
+                controllerHost.style.bottom = prefs.position.bottom;
+            }
+        } else {
+            // Fallback to defaults if message fails
+            switchUi('full', false);
+            setLogVisibility(true, false);
+            setPinState(false, false);
         }
     }
 
     // --- Main Initialization Orchestrator ---
     async function initializeMpvController() {
         if (document.getElementById('m3u8-controller-host')) return;
-
         await createAndInjectUi();
-        const uiApi = bindEventListeners();
-        applyInitialState(uiApi); // Apply position, UI mode, etc.
+        bindEventListeners();
+        await applyInitialState(); // Apply position, UI mode, etc.
         await updateFolderDropdowns(); // This will fetch folders, populate dropdowns, and call refreshPlaylist
         // After everything is ready, notify the background script to check if we should be visible.
         chrome.runtime.sendMessage({ action: 'content_script_init' });
@@ -516,17 +643,33 @@
         }
     }
 
-    function addLogEntry(logObject) {
+    function addLogEntry(logObject, clear = false) {
         const logContainer = shadowRoot?.getElementById('log-container');
         if (!logContainer) return; // UI not present, do nothing.
 
+        if (clear) {
+            while (logContainer.firstChild) {
+                logContainer.removeChild(logContainer.firstChild);
+            }
+        }
         const placeholder = shadowRoot.getElementById('log-placeholder');
         if (placeholder) placeholder.remove();
+
+        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
         const logEntry = document.createElement('div');
         logEntry.className = 'log-item';
         if (logObject.type === 'error') logEntry.classList.add('log-item-error');
-        logEntry.textContent = logObject.text;
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'log-timestamp';
+        timeSpan.textContent = `[${timestamp}]`;
+
+        const textSpan = document.createElement('span');
+        textSpan.className = 'log-text';
+        textSpan.textContent = logObject.text;
+
+        logEntry.append(timeSpan, textSpan);
 
         logContainer.appendChild(logEntry);
         logContainer.scrollTop = logContainer.scrollHeight;
@@ -534,58 +677,48 @@
 
     async function updateFolderDropdowns() {
         chrome.runtime.sendMessage({ action: 'get_all_folder_ids' }, (response) => {
-            if (response && response.success) {
-                const fullSelect = shadowRoot?.getElementById('folder-select');
-                const compactSelect = shadowRoot?.getElementById('compact-folder-select');
-                if (!fullSelect || !compactSelect) return;
-
-                const savedFolderId = localStorage.getItem('mpv-controller-folder-id');
-
-                // Clear existing options and prepare a fragment to build the new ones efficiently.
-                fullSelect.innerHTML = '';
-                compactSelect.innerHTML = '';
-                const optionsFragment = document.createDocumentFragment();
-
-                response.folderIds.forEach(id => {
-                    const option = document.createElement('option');
-                    option.value = id;
-                    option.textContent = id;
-                    optionsFragment.appendChild(option);
-                });
-
-                fullSelect.appendChild(optionsFragment.cloneNode(true));
-                compactSelect.appendChild(optionsFragment);
-
-                // Restore the previously selected folder if it still exists
-                if (savedFolderId && response.folderIds.includes(savedFolderId)) {
-                    fullSelect.value = savedFolderId;
-                    compactSelect.value = savedFolderId;
-                } else if (response.folderIds.length > 0) {
-                    // If saved folder doesn't exist (e.g., was deleted), select the first one
-                    const newFolderId = response.folderIds[0];
-                    fullSelect.value = newFolderId;
-                    compactSelect.value = newFolderId;
-                    // And update storage to reflect the new reality
-                    localStorage.setItem('mpv-controller-folder-id', newFolderId);
-                }
-                // After updating dropdowns, refresh the playlist for the currently selected folder
-                refreshPlaylist();
-            } else if (response) {
-                addLogEntry({ text: `[Content]: Failed to get folder list: ${response.error}`, type: 'error' });
+            if (!response?.success) {
+                if (response) addLogEntry({ text: `[Content]: Failed to get folder list: ${response.error}`, type: 'error' });
+                return;
             }
+
+            const fullSelect = shadowRoot?.getElementById('folder-select');
+            const compactSelect = shadowRoot?.getElementById('compact-folder-select');
+            if (!fullSelect || !compactSelect) return;
+
+            // Clear existing options and build new ones
+            fullSelect.innerHTML = '';
+            compactSelect.innerHTML = '';
+            const optionsFragment = document.createDocumentFragment();
+            response.folderIds.forEach(id => {
+                const option = document.createElement('option');
+                option.value = id;
+                option.textContent = id;
+                optionsFragment.appendChild(option);
+            });
+            fullSelect.appendChild(optionsFragment.cloneNode(true));
+            compactSelect.appendChild(optionsFragment);
+
+            // Ask the background script for the last used folder ID to restore selection
+            chrome.runtime.sendMessage({ action: 'get_last_folder_id' }, (res) => {
+                if (res?.success && res.folderId) {
+                    fullSelect.value = res.folderId;
+                    compactSelect.value = res.folderId;
+                }
+                // After setting the correct folder, refresh the playlist view
+                refreshPlaylist();
+            });
         });
     }
 
     function refreshPlaylist() {
-        // Find the elements each time, as the UI might have been re-injected.
-        const fullFolderSelect = shadowRoot?.getElementById('folder-select');
-        const compactFolderSelect = shadowRoot?.getElementById('compact-folder-select');
-
-        // If the UI isn't present, do nothing.
-        if (!fullFolderSelect || !compactFolderSelect) return;
-
-        // Determine the current queue ID based on the global UI mode state.
-        const currentFolderId = currentUiMode === 'full' ? fullFolderSelect.value : compactFolderSelect.value;
+        // The folder dropdowns are always kept in sync, so we can reliably get the
+        // current folder ID from the main dropdown without checking the UI mode.
+        const folderSelect = shadowRoot?.getElementById('folder-select');
+        if (!folderSelect || !folderSelect.value) {
+            return; // UI not ready or no folder selected.
+        }
+        const currentFolderId = folderSelect.value;
         sendCommandToBackground('get_playlist', currentFolderId);
     }
 
@@ -634,6 +767,47 @@
             fullContainer.appendChild(placeholder);
         }
         fullContainer.scrollTop = fullContainer.scrollHeight;
+    }
+
+    /**
+     * Checks if MPV is running by querying the background script.
+     * @returns {Promise<boolean>} A promise that resolves to true if MPV is running, false otherwise.
+     */
+    async function isMpvRunningFromBackground() {
+        return new Promise((resolve) => {
+            chrome.runtime.sendMessage({ action: 'is_mpv_running' }, (response) => {
+                if (chrome.runtime.lastError) {
+                    addLogEntry({ text: `[Content]: Error checking MPV status: ${chrome.runtime.lastError.message}`, type: 'error' });
+                    return resolve(false);
+                }
+                if (response?.success) {
+                    resolve(response.is_running);
+                } else {
+                    addLogEntry({ text: `[Content]: Failed to get MPV status: ${response?.error || 'Unknown error'}`, type: 'error' });
+                    resolve(false);
+                }
+            });
+        });
+    }
+
+    /**
+     * Retrieves the current playlist from the background script.
+     * @param {string} folderId - The ID of the folder to get the playlist for.
+     * @returns {Promise<string[]>} A promise that resolves with the array of URLs.
+     */
+    async function getPlaylistFromBackground(folderId) {
+        return new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage({ action: 'get_playlist', folderId }, (response) => {
+                if (chrome.runtime.lastError) {
+                    return reject(new Error(chrome.runtime.lastError.message));
+                }
+                if (response?.success) {
+                    resolve(response.list || []);
+                } else {
+                    reject(new Error(response?.error || 'Failed to get playlist.'));
+                }
+            });
+        });
     }
 
     /**

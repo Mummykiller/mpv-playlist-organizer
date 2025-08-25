@@ -1,0 +1,323 @@
+:root {
+    /* Slick, Modern & Dark Palette */
+    --bg-color: #111214;
+    --surface-color: #1d1f23;
+    --surface-hover-color: #2c2e33;
+    --border-color: #33363b;
+    --text-primary: #e1e1e1;
+    --text-secondary: #9e9e9e;
+    --accent-primary: #5865f2; /* A modern, vibrant blue/purple */
+    --accent-primary-hover: #4f5bda;
+    --accent-negative: #ed4245; /* A modern, vibrant red */
+    --accent-negative-hover: #da3739;
+    --accent-positive: #43b581;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --border-radius: 6px;
+    --transition-speed: 0.15s;
+}
+
+html {
+    background-color: transparent;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    width: 280px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    border-radius: 12px;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+h1 {
+    font-size: 18px; /* Slightly larger for prominence */
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+    text-align: center;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+h1 + .control-group { margin-top: 16px; } /* Add space after header */
+
+.control-group {
+    display: flex;
+    gap: 8px;
+}
+
+input, select {
+    flex-grow: 1;
+    box-sizing: border-box;
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: var(--border-radius);
+    padding: 10px;
+    font-size: 14px;
+    transition: all var(--transition-speed) ease;
+    min-width: 0; /* Allows the input to shrink below its default minimum size in a flex container */
+}
+
+select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239e9e9e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+input:hover, select:hover {
+    background-color: var(--surface-hover-color);
+    border-color: #555;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Subtle lift on hover */
+}
+
+input:focus-visible, select:focus-visible {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.3); /* Softer focus ring */
+}
+
+input::placeholder {
+    color: var(--text-secondary);
+}
+
+button {
+    color: #fff;
+    flex-shrink: 0;
+    border: none;
+    border-radius: var(--border-radius);
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-speed) ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Subtle shadow for depth */
+}
+
+button:disabled {
+    background-color: #33363b;
+    cursor: not-allowed;
+}
+#btn-create-folder {
+    background-color: var(--accent-primary);
+    color: white; /* Ensure good contrast */
+}
+#btn-create-folder:hover {
+    background-color: var(--accent-primary-hover);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
+}
+
+#btn-remove-folder {
+    background-color: var(--accent-negative);
+    color: white; /* Ensure good contrast */
+}
+#btn-remove-folder:hover {
+    background-color: var(--accent-negative-hover);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.custom-geometry-input {
+    width: 60px; /* Make them small */
+    text-align: center;
+}
+
+.custom-geometry-container {
+    /* This group should appear below the main dropdown, so we adjust its top margin */
+    margin-top: 8px;
+    justify-content: flex-end; /* Align to the right side */
+}
+
+.custom-geometry-separator {
+    color: var(--text-secondary);
+    font-weight: 600;
+    align-self: center; /* Vertically center the 'x' */
+}
+
+#btn-show-controller {
+    margin-top: 16px; /* More space above */
+    background-color: var(--accent-positive);
+}
+#btn-show-controller:hover {
+    /* A slightly darker version of the positive accent */
+    background-color: #3da874;
+}
+
+#status-message {
+    font-size: 13px;
+    text-align: center;
+    padding-top: 8px; /* Add some padding above */
+    min-height: 1.2em;
+    transition: color 0.2s ease;
+}
+
+/* --- Styles for the Mini Controller View --- */
+#mini-controller-view {
+    /* This is set to flex in popup.js when active */
+    flex-direction: column;
+    gap: 12px; /* A bit less gap for a tighter look */
+}
+
+#mini-controller-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: space-between; /* Distribute buttons evenly */
+}
+
+#mini-controller-actions button {
+    flex-grow: 1; /* Make buttons take up equal space */
+    padding: 8px; /* Tighter padding for icon buttons */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: var(--surface-color);
+}
+
+#mini-controller-actions button:hover {
+    background-color: var(--surface-hover-color);
+}
+
+/* Specific colors for key actions */
+/* Play button matches the main UI's primary action color */
+#mini-controller-actions #btn-mini-play {
+    background-color: var(--accent-primary);
+}
+#mini-controller-actions #btn-mini-play:hover {
+    background-color: var(--accent-primary-hover);
+}
+
+/* Add button turns green when a URL is detected, providing clear feedback */
+#mini-controller-actions #btn-mini-add.url-detected {
+    background-color: var(--accent-positive);
+}
+#mini-controller-actions #btn-mini-add.url-detected:hover {
+    background-color: #3da874; /* A slightly darker green */
+}
+
+/* Clear and Close buttons use the danger color for destructive actions */
+#mini-controller-actions #btn-mini-clear,
+#mini-controller-actions #btn-mini-close-mpv {
+    background-color: var(--accent-negative);
+}
+#mini-controller-actions #btn-mini-clear:hover,
+#mini-controller-actions #btn-mini-close-mpv:hover {
+    background-color: var(--accent-negative-hover);
+}
+
+#mini-controller-actions button svg {
+    stroke: var(--text-primary);
+}
+
+#mini-item-count-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background-color: var(--surface-color);
+    padding: 0 10px;
+    border-radius: var(--border-radius);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+/* Style for the secondary action button */
+.secondary-action {
+    background-color: var(--accent-primary);
+    border: none;
+    color: white; /* Ensure best contrast */
+    font-weight: 600;
+    width: 100%;
+    margin-top: 8px; /* Give it a bit more space */
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.secondary-action:hover {
+    background-color: var(--accent-primary-hover);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
+}
+
+/* Additional styles for folder management in mini-controller */
+#mini-folder-management-controls {
+    display: none; /* Hidden by default */
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    background-color: var(--surface-color);
+    border-radius: var(--border-radius);
+    border: 1px solid var(--border-color);
+    margin-top: 8px;
+}
+
+/* Styles for the buttons inside the mini folder manager for consistency */
+#mini-folder-management-controls #btn-mini-create-folder {
+    background-color: var(--accent-primary);
+}
+#mini-folder-management-controls #btn-mini-create-folder:hover {
+    background-color: var(--accent-primary-hover);
+}
+#mini-folder-management-controls #btn-mini-remove-folder {
+    width: 100%;
+    background-color: var(--accent-negative);
+}
+#mini-folder-management-controls #btn-mini-remove-folder:hover {
+    background-color: var(--accent-negative-hover);
+}
+/* --- Confirmation Modal --- */
+#popup-confirmation-modal {
+    position: fixed; /* Cover the entire popup viewport */
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.8); /* Darker overlay for popups */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 16px; /* Match body padding */
+    box-sizing: border-box;
+}
+
+#popup-confirmation-modal .modal-content {
+    background-color: var(--surface-color);
+    padding: 20px;
+    border-radius: var(--border-radius);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    text-align: center;
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%; /* Take up available width within padding */
+}
+
+#popup-confirmation-modal #popup-modal-message {
+    margin: 0;
+    font-size: 14px;
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+
+#popup-confirmation-modal .modal-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+}
+
+#popup-confirmation-modal .modal-actions button {
+    background-color: var(--accent-negative);
+}
+#popup-confirmation-modal .modal-actions button:hover {
+    background-color: var(--accent-negative-hover);
+}
+#popup-confirmation-modal .modal-actions button + button { /* The cancel button */
+    background-color: var(--surface-hover-color);
+}
+#popup-confirmation-modal .modal-actions button + button:hover {
+    background-color: var(--bg-tertiary);
+}
