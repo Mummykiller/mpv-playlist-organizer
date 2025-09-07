@@ -45,19 +45,41 @@ This extension streamlines your workflow. It acts as a bridge between your brows
 
 ## Features
 
-- 🔍 **Automatic Stream Detection**: Intelligently finds M3U8 video streams and recognizes YouTube video pages. Works seamlessly on Single-Page Applications (SPAs).
-- 📂 **Multi-Playlist Management**: Organize links into multiple, named playlists (called “folders”) that persist across sessions.
-- 🚀 **Direct to MPV**: Send an entire playlist to MPV with a single click.
-- ⚡ **Live Playlist Sync**: Add new items to a folder, and they are automatically appended to the live MPV playlist without interrupting playback.
-- ⚙️ **Customizable Launch Options**: Control how MPV launches with options to set the window size (e.g., 360p, 720p, 1080p, or a custom resolution).
-- 🖐️ **Draggable & Customizable UI**: The on-page controller can be moved, pinned, minimized, or switched to a compact mode. Its position, mode, and state are saved and synced across all tabs.
-- ✨ **Popup Mini-Controller**: When the on-page UI is minimized, the extension's toolbar icon provides a fully functional mini-controller for quick access.
-- 🖱️ **Context Menu Integration**: Right-click on links, videos, or pages to add them directly to any of your folders.
-- 🛡️ **Robust Session Management**: Prevents multiple MPV instances and can automatically reconnect to an existing session. Intelligently checks if MPV is running before performing actions to prevent errors.
-- 👍 **Smart Confirmations**: Warns you before adding a duplicate URL to a playlist and confirms before closing a running MPV instance, preventing accidental clicks.
-- 💾 **Saves Playback Position**: Leverages MPV’s `save-position-on-quit` feature, even when closed remotely.
-- 💻 **CLI Integration**: Includes a command-line interface to play your saved playlists directly from the terminal.
-- 🔄 **Data Sync**: Playlist data is stored in a local `folders.json` file, keeping the extension and CLI in sync.
+- 🔍 **Advanced Stream Detection**
+    - **Automatic Detection**: Intelligently finds M3U8 video streams and recognizes YouTube video pages on SPAs.
+    - **Manual Stream Scanner**: For tricky sites, the context menu opens a helper window to capture streams by interacting with the page.
+
+- 📂 **Comprehensive Playlist Management**
+    - **Full Folder Control**: Create, rename, and remove your playlists (called “folders”).
+    - **Drag-and-Drop Reordering**: Easily change the order of your folders right from the popup.
+
+- 🚀 **Powerful MPV Integration**
+    - **Direct Playback & Live Sync**: Send a playlist to MPV with one click. New items are automatically appended to the live MPV playlist without interrupting playback.
+    - **Launch Customization**: Control window size (presets or custom resolution) and add any custom command-line flags.
+    - **"Play New" Instance**: Option to launch a separate, unmanaged MPV instance for one-off plays.
+    - **Smart Session Handling**: Saves playback position, prevents multiple managed instances, and can reconnect to an existing session.
+    - **Automatic Clearing**: Option to automatically clear a playlist after it finishes playing, detected via a helper Lua script.
+
+- ✨ **Flexible & Informative UI**
+    - **Draggable & Pinnable Controller**: Move the on-page UI anywhere and lock its position.
+    - **Multiple UI Modes**: Switch between a full-featured view, a compact mode, or minimize it completely.
+    - **Persistent State**: Remembers its position and mode across all tabs and sessions.
+    - **On-Page Communication Log**: A detailed, filterable log for troubleshooting native host communication.
+
+- 🛠️ **Streamlined Workflow Tools**
+    - **AniList Integration**: View today's anime episode releases directly in the popup or in an adaptive side-panel on the page.
+    - **Popup Mini-Controller**: When the on-page UI is minimized, the toolbar icon provides a fully functional mini-controller.
+    - **Context Menu & CLI**: Add URLs via right-click or play saved playlists directly from your terminal.
+
+- 🛡️ **Smart & Configurable Behavior**
+    - **Duplicate Handling**: Choose whether to be asked, always add, or never add duplicate URLs.
+    - **Granular Confirmations**: Individually toggle confirmation prompts for all destructive actions.
+    - **Configurable Timeouts**: Set the timeout for the manual stream scanner.
+
+- 🔄 **Robust Data Portability**
+    - **Export & Import**: Export individual playlists or all playlists at once. Import from backup files.
+    - **Open Export Folder**: Instantly access your backup files with a dedicated button.
+    - **CLI Data Sync**: Playlist data is stored in a local `folders.json` file, keeping the extension and CLI in sync.
 
 ---
 
@@ -68,7 +90,7 @@ The extension consists of two main parts:
 1. **The Browser Extension**:  
    This is the UI you see in your browser. It detects video URLs, manages your playlists in the browser’s local storage, and displays the on-page controller.
 2. **The Native Host**:  
-   This is a Python script running on your computer. Since browsers can’t start MPV directly for security reasons, the extension sends messages (like “play this playlist”) to the native host, which t[...]
+   This is a Python script running on your computer. Since browsers can’t start MPV directly for security reasons, the extension sends messages (like “play this playlist”) to the native host, which then launches and controls MPV. It even uses a small helper script (`on_completion.lua`) to detect when a playlist finishes naturally.
 
 This setup ensures a secure and powerful connection between your browser and your local system.
 
@@ -287,6 +309,7 @@ The project is contained within a single directory.
 - `install.py` — The Python script to set up the native messaging host.
 - `uninstall.py` — The Python script to cleanly remove the native messaging host.
 - `native_host.py` — The Python script that acts as the bridge between the browser and MPV.
+- `on_completion.lua` — A helper script for MPV to detect when a playlist finishes naturally.
 - `background.js` — The extension's service worker; handles state management and communication.
 - `content.js` — Injected into web pages to provide the on-page UI.
 - `popup.js` — Logic for the extension's toolbar popup menu.

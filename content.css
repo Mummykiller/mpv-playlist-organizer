@@ -60,7 +60,27 @@
 #m3u8-url {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px; /* Reduced gap to give title more space */
+}
+/* This allows the left side of the header to shrink properly when the
+   adaptive AniList button is added, preventing the title from pushing
+   the right-side controls out of view. */
+#m3u8-url {
+    min-width: 0;
+}
+
+/* Fix for long text overflowing its container */
+.title-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* These properties are crucial for flexbox truncation */
+    flex-grow: 1;
+    min-width: 0;
+}
+/* This moves the icon and the title that follows it slightly to the left */
+#m3u8-url > svg {
+    margin-left: -4px;
 }
 
 #m3u8-url .title-text {
@@ -71,7 +91,7 @@
 #ui-toggles {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px; /* Reduced gap to make controls tighter */
 }
 
 /* --- General Button Styling --- */
@@ -102,34 +122,70 @@ button:active {
 }
 
 /* --- Specific Buttons --- */
-#btn-play {
+/* Primary Action (Play) */
+#btn-play,
+#btn-compact-play {
     background-color: var(--accent-primary);
     color: white; /* Ensure good contrast */
     font-weight: 700;
 }
-#btn-play:hover {
+#btn-play:hover,
+#btn-compact-play:hover {
     background-color: var(--accent-primary-hover);
     border-color: var(--accent-primary); /* Keep accent border */
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
-#btn-clear {
+/* Secondary Play Action (Play New) */
+#btn-play-new {
+    background-color: var(--accent-success);
+    color: white;
+}
+#btn-play-new:hover {
+    background-color: #3da874; /* A slightly darker green */
+}
+
+/* Negative Action (Clear, Close) */
+#btn-clear,
+#btn-compact-clear,
+#btn-close-mpv,
+#btn-compact-close-mpv {
     background-color: var(--accent-danger);
     color: white; /* Ensure good contrast */
+}
+#btn-clear, #btn-compact-clear {
     font-weight: 700;
 }
-#btn-clear:hover {
+#btn-clear:hover,
+#btn-compact-clear:hover,
+#btn-close-mpv:hover,
+#btn-compact-close-mpv:hover {
     background-color: var(--accent-danger-hover);
     border-color: var(--accent-danger);
+}
+#btn-clear:hover, #btn-compact-clear:hover {
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
+/* Add Button - Glows when stream is present */
+#btn-add.stream-present,
+#btn-compact-add.stream-present {
+    background-color: var(--accent-success);
+    color: white;
+    box-shadow: 0 0 8px 0px var(--accent-success);
+    border-color: var(--accent-success);
+}
+#btn-add.stream-present:hover,
+#btn-compact-add.stream-present:hover {
+    background-color: #3da874; /* A slightly darker green */
+}
+
 /* Icon-only buttons */
-#btn-toggle-minimize, #btn-clear-log, #btn-toggle-log, #ui-toggles button {
-    padding: 6px;
+#btn-toggle-minimize, #btn-clear-log, #btn-toggle-log, #ui-toggles button, #btn-toggle-anilist-left {
+    padding: 4px; /* Reduced padding for a tighter fit */
     background-color: transparent;
 }
-#btn-toggle-minimize:hover, #btn-clear-log:hover, #btn-toggle-log:hover, #ui-toggles button:hover {
+#btn-toggle-minimize:hover, #btn-clear-log:hover, #btn-toggle-log:hover, #ui-toggles button:hover, #btn-toggle-anilist-left:hover {
     background-color: var(--bg-tertiary);
     border-color: transparent;
 }
@@ -139,6 +195,10 @@ button:active {
     color: white; /* Ensure good contrast */
 }
 
+#btn-toggle-anilist-left.active-toggle,
+#btn-toggle-anilist-right.active-toggle {
+    background-color: var(--accent-primary);
+}
 /* --- Select Dropdowns --- */
 select {
     background-color: var(--bg-secondary);
@@ -177,21 +237,14 @@ select:focus-visible {
 }
 
 #playback-controls {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
     gap: 8px;
-}
-
-#playback-controls #btn-play {
-    flex-grow: 1; /* Make play button take up remaining space */
 }
 
 #playback-controls #btn-close-mpv {
     flex-shrink: 0;
     padding: 6px; /* Make it squarish */
-    background-color: var(--accent-danger);
-}
-#playback-controls #btn-close-mpv:hover {
-    background-color: var(--accent-danger-hover);
 }
 
 #list-controls {
@@ -227,19 +280,12 @@ select:focus-visible {
     padding: 8px;
 }
 
-/* Style the new close button in compact mode */
-#compact-controls #btn-compact-close-mpv {
-    background-color: var(--accent-danger);
-}
-#compact-controls #btn-compact-close-mpv:hover {
-    background-color: var(--accent-danger-hover);
-}
-
 /* --- Queue & Log Shared Styles --- */
 #playlist-container, #log-container {
     background-color: var(--bg-secondary);
     border-radius: var(--radius);
-    padding: 8px; /* Increased padding for content */
+    /* Keep vertical padding, but reduce horizontal padding to make the list more compact. */
+    padding: 8px 2px;
     overflow: auto; /* Enable both vertical and horizontal scrolling */
     border: 1px solid var(--border-primary);
 }
@@ -264,42 +310,63 @@ select:focus-visible {
 #playlist-container {
     max-height: 120px; /* Slightly taller */
     font-size: 13px;
+    /* Use flexbox for better item spacing and alignment */
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .list-item {
     display: flex;
-    align-items: flex-start; /* Align to top for multi-line URLs */
-    padding: 3px 4px;
-    padding-right: 28px; /* Space for remove button */
+    align-items: center; /* Vertically center content */
+    padding: 1px 1px; /* Further reduced horizontal padding */
+    padding-right: 32px; /* More space for remove button */
     position: relative;
-    border-bottom: 1px solid var(--border-primary);
+    /* border-bottom: 1px solid var(--border-primary); */ /* Replaced by gap on container */
     white-space: nowrap;
     border-radius: 4px;
-    transition: background-color 0.2s;
-    min-height: 28px; /* Ensure consistent height for single line items */
-}
-.list-item:last-child {
-    border-bottom: none;
+    transition: background-color 0.2s, border-color 0.2s;
+    /* Add a transparent border to prevent layout shift on hover */
+    border: 1px solid transparent;
 }
 
 .list-item:hover {
     background-color: var(--bg-tertiary);
+    border-color: var(--border-hover); /* Highlight with accent color on hover */
     cursor: default; /* Indicate not clickable */
 }
 
 .url-index {
     color: var(--text-secondary);
-    margin-right: 8px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    width: 1.6em; /* Further reduced width for alignment */
+    text-align: right;
+    margin-right: 4px; /* Further reduced margin */
     flex-shrink: 0; /* Prevent index from shrinking */
 }
 
 .url-text {
     color: var(--text-primary);
+    flex-grow: 1; /* Allow it to take up available space */
+    /* By not setting 'min-width: 0', the element won't shrink past its content size, enabling horizontal scroll. */
+}
+
+.url-position {
+    color: var(--accent-success);
+    background-color: rgba(67, 181, 129, 0.15); /* A subtle background */
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 5px;
+    border-radius: 4px;
+    margin-left: auto; /* Push the badge to the right */
+    flex-shrink: 0; /* Prevent the badge from shrinking */
 }
 
 .btn-remove-item {
     position: absolute;
-    right: 4px;
+    right: 6px;
     top: 50%;
     transform: translateY(-50%);
     background: none;
@@ -308,9 +375,10 @@ select:focus-visible {
     cursor: pointer;
     font-size: 22px;
     line-height: 1;
-    padding: 0 5px;
+    padding: 4px 8px; /* Increased padding for a larger click target */
     opacity: 0; /* Hidden by default with opacity */
-    transition: opacity 0.2s ease, color 0.2s ease;
+    transition: opacity 0.2s ease, color 0.2s ease, background-color 0.2s ease, transform 0.15s ease;
+    border-radius: 4px; /* Add border-radius for the hover background */
 }
 
 .list-item:hover .btn-remove-item {
@@ -319,6 +387,8 @@ select:focus-visible {
 
 .btn-remove-item:hover {
     color: var(--accent-danger);
+    background-color: rgba(237, 66, 69, 0.15); /* A subtle, tinted background */
+    transform: translateY(-50%) scale(1.1); /* A subtle pop effect */
 }
 
 /* --- Log Section --- */
@@ -331,7 +401,8 @@ select:focus-visible {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 4px 4px 4px;
+    /* Adjust horizontal padding to align with the log container's padding. */
+    padding: 0 8px 4px;
 }
 
 #log-title {
@@ -347,12 +418,41 @@ select:focus-visible {
     gap: 4px;
 }
 
+.log-filter-btn {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    background-color: transparent;
+    border: 1px solid var(--border-primary);
+    color: var(--text-secondary);
+    box-shadow: none;
+}
+
+.log-filter-btn:hover {
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+    background-color: var(--bg-tertiary);
+}
+
+.log-filter-btn.active {
+    color: white;
+}
+
+#btn-filter-info.active {
+    background-color: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+#btn-filter-error.active {
+    background-color: var(--accent-danger);
+    border-color: var(--accent-danger);
+}
+
 #log-container {
-    max-height: 100px; /* Slightly shorter log */
+    padding: 8px; /* Override shared horizontal padding for readability */
+    max-height: 120px; /* Increased max height */
     font-family: var(--font-mono);
     font-size: 11px;
     transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease, padding 0.3s ease, border-width 0.3s ease;
-    overflow: hidden;
 }
 
 #btn-toggle-log.active {
@@ -381,6 +481,11 @@ select:focus-visible {
 
 .log-item-error {
     color: var(--accent-danger); /* Use the new accent danger */
+}
+
+.log-item.hidden-by-filter {
+    /* Hide items that don't match the current filter */
+    display: none;
 }
 
 .log-hidden {
@@ -460,4 +565,122 @@ select:focus-visible {
 }
 .modal-actions button + button:hover {
     background-color: var(--surface-hover-color);
+}
+
+/* --- AniList Releases Section --- */
+#anilist-releases-container {
+    background-color: var(--bg-secondary);
+    border-radius: var(--radius);
+    /* Add a small horizontal padding for breathing room. */
+    padding: 0 8px;
+    overflow-y: auto;
+    border: 1px solid var(--border-primary);
+    max-height: 420px; /* Give it a max height to prevent it from being too tall */
+    display: flex;
+    flex-direction: column;
+    /* The following styles are for the floating panel, which has a transparent, blurred background */
+    background-color: transparent;
+    border: none;
+    flex-grow: 1;
+    min-height: 0;
+}
+
+/* --- Floating AniList Panel --- */
+/* This is the root element inside the AniList panel's shadow DOM */
+#anilist-panel-wrapper {
+    /* Use an RGBA value for 20% transparency (80% opacity). #111214 -> rgb(17, 18, 20) */
+    background-color: rgba(17, 18, 20, 0.2);
+    backdrop-filter: blur(1px); /* Reduced blur for more clarity */
+    color: var(--text-primary);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border-primary);
+    box-sizing: border-box;
+}
+
+/* Override the default item style for the one inside the floating panel */
+#anilist-panel-wrapper .anilist-release-item {
+    /* Override solid item background to also be semi-transparent (80% opacity). #2c2e33 -> rgb(44, 46, 51) */
+    background-color: rgba(44, 46, 51, 0.8);
+}
+
+/* Custom Scrollbars for the new container */
+#anilist-releases-container::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+}
+#anilist-releases-container::-webkit-scrollbar-track {
+    background: var(--bg-secondary);
+}
+#anilist-releases-container::-webkit-scrollbar-thumb {
+    background-color: var(--bg-tertiary);
+    border-radius: 4px;
+}
+
+.anilist-release-delay-info {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+    margin: 0; /* Let padding handle spacing */
+    padding: 4px 4px; /* Align with list items (container has 4px + item has 4px padding) */
+    flex-shrink: 0;
+}
+
+.anilist-releases-list {
+    list-style: none;
+    padding: 0 0 8px 0; /* Reset left/right/top padding, keep bottom */
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.anilist-release-item {
+    display: flex;
+    align-items: center;
+    gap: 8px; /* Increased gap for larger images */
+    padding: 6px; /* Increased padding for better spacing */
+    background-color: var(--bg-tertiary);
+    border-radius: 4px;
+    border: 1px solid var(--border-primary);
+}
+
+.release-cover-image {
+    width: 50px; /* Larger cover image */
+    height: 70px; /* Larger cover image */
+    border-radius: 4px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.release-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+}
+
+.release-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.release-episode-info {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.release-airing-time {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-success);
 }

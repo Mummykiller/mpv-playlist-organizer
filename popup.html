@@ -11,8 +11,14 @@
     <div id="mini-controller-view" style="display: none;">
         <div class="control-group">
             <select id="mini-folder-select" title="Select active folder" style="flex-grow: 1;"></select>
-            <button id="btn-mini-manage-folders" title="Manage Folders" style="flex-shrink: 0; padding: 8px; background-color: var(--surface-color);">
+            <button id="btn-mini-toggle-reorder" class="reorder-toggle-btn" title="Reorder Folders">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+            </button>
+            <button id="btn-mini-toggle-settings" title="Settings" style="flex-shrink: 0; padding: 8px; background-color: var(--surface-color);">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+            <button id="btn-mini-manage-folders" title="Manage Folders" style="flex-shrink: 0; padding: 8px; background-color: var(--surface-color);">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L8.6 3.3A2 2 0 0 0 6.9 2H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16z"></path></svg>
             </button>
             <div id="mini-item-count-container" title="Items in playlist" style="flex-shrink: 0;">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
@@ -33,31 +39,33 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
         </div>
+        <div id="mini-reorder-container" class="reorder-container" style="display: none;">
+            <!-- Reorderable list will be injected here by popup.js -->
+        </div>
+        <button id="btn-show-on-page-controller" class="secondary-action">Show On-Page Controller</button>
         <div id="mini-folder-management-controls">
             <div class="control-group">
                 <input type="text" id="mini-new-folder-name" placeholder="New folder name...">
                 <button id="btn-mini-create-folder">Create</button>
             </div>
-            <div class="control-group" style="margin-top: 12px;">
-                <button id="btn-mini-remove-folder">Remove Selected Folder</button>
+            <div class="control-group" style="margin-top: 8px;">
+                <button id="btn-mini-rename-folder">Rename</button>
+                <button id="btn-mini-remove-folder">Remove</button>
             </div>
-            <div class="control-group" style="margin-top: 12px;">
-                <label for="mini-geometry-select" style="white-space: nowrap; align-self: center; color: var(--text-secondary); font-weight: 500;">Window Size:</label>
-                <select id="mini-geometry-select">
-                    <option value="">Default</option>
-                    <option value="640x360">Small (360p)</option>
-                    <option value="1280x720">Medium (720p)</option>
-                    <option value="1920x1080">HD (1080p)</option>
-                    <option value="custom">Custom</option>
-                </select>
+            <div class="control-group" style="margin-top: 8px;">
+                <button id="btn-mini-export-data" class="secondary-action" title="Export the currently selected playlist">Export Selected</button>
+                <button id="btn-mini-export-all" title="Export all playlists to separate files" class="secondary-action">Export All</button>
+                <button id="btn-mini-import-data" class="secondary-action">Import</button>
             </div>
-            <div id="mini-custom-geometry-container" class="control-group custom-geometry-container" style="display: none;">
-                <input type="text" id="mini-custom-width" class="custom-geometry-input" placeholder="Width" pattern="[0-9]{1,4}" maxlength="4">
-                <span class="custom-geometry-separator">&times;</span>
-                <input type="text" id="mini-custom-height" class="custom-geometry-input" placeholder="Height" pattern="[0-9]{1,4}" maxlength="4">
+            <div class="control-group" style="margin-top: 8px;">
+                <button id="btn-mini-open-export-folder" class="secondary-action" title="Open the 'exported' folder on your computer">Open Export Folder</button>
             </div>
         </div>
-        <button id="btn-show-on-page-controller" class="secondary-action">Show On-Page Controller</button>
+        <div id="mini-settings-controls" style="display: none;">
+            <div id="mini-settings-placeholder" class="settings-placeholder"></div>
+        </div>
+        <div id="mini-status-placeholder"></div>
+        <div id="mini-anilist-placeholder"></div>
     </div>
 
     <!-- View 2: Folder Management (default view) -->
@@ -70,26 +78,122 @@
             <select id="remove-folder-select">
                 <option value="">Select folder to remove...</option>
             </select>
+            <button id="btn-toggle-reorder" class="reorder-toggle-btn" title="Reorder Folders">Reorder</button>
+        </div>
+        <div id="rename-remove-controls" class="control-group" style="margin-top: 8px;">
+            <button id="btn-rename-folder" disabled>Rename</button>
             <button id="btn-remove-folder" disabled>Remove</button>
         </div>
+        <div id="reorder-container" class="reorder-container" style="display: none;">
+            <!-- Reorderable list will be injected here by popup.js -->
+        </div>
+        <div class="section-separator">
+            <hr>
+        </div>
         <div class="control-group" style="margin-top: 12px;">
-            <label for="geometry-select" style="white-space: nowrap; align-self: center; color: var(--text-secondary); font-weight: 500;">Window Size:</label>
-            <select id="geometry-select">
-                <option value="">Default</option>
-                <option value="640x360">Small (360p)</option>
-                <option value="1280x720">Medium (720p)</option>
-                <option value="1920x1080">HD (1080p)</option>
-                <option value="custom">Custom</option>
-            </select>
+            <button id="btn-export-data" class="secondary-action" title="Export the currently selected playlist">Export Selected</button>
+            <button id="btn-export-all" title="Export all playlists to separate files" class="secondary-action">Export All</button>
+            <button id="btn-import-data" class="secondary-action">Import</button>
         </div>
-        <div id="custom-geometry-container" class="control-group custom-geometry-container" style="display: none;">
-            <input type="text" id="custom-width" class="custom-geometry-input" placeholder="Width" pattern="[0-9]{1,4}" maxlength="4">
-            <span class="custom-geometry-separator">&times;</span>
-            <input type="text" id="custom-height" class="custom-geometry-input" placeholder="Height" pattern="[0-9]{1,4}" maxlength="4">
+        <div class="control-group" style="margin-top: 8px;">
+            <button id="btn-open-export-folder" class="secondary-action" title="Open the 'exported' folder on your computer">Open Export Folder</button>
         </div>
+        <div id="full-settings-placeholder" class="settings-placeholder"></div>
+        <div id="full-status-placeholder"></div>
+        <div id="full-anilist-placeholder"></div>
     </div>
 
+    <details id="shared-anilist-section" class="anilist-releases-section">
+        <summary>AniList Releases Today</summary>
+        <div id="anilist-releases-content" class="anilist-releases-content">
+            Loading releases...
+        </div>
+    </details>
+
+    <!-- Shared Status Message Container (moved via JS) -->
     <div id="status-message"></div>
+
+    <!-- Shared Settings Container (moved via JS) -->
+    <div id="shared-settings-container" style="display: none;">
+        <details class="settings-section" open>
+            <summary class="settings-section-header">MPV Launch Settings</summary>
+            <div class="settings-section-content">
+                <div class="control-group">
+                    <label for="geometry-select" class="settings-label">Window Size:</label>
+                    <select id="geometry-select" title="Set the window size for MPV when it launches.">
+                        <option value="">Default</option>
+                        <option value="640x360">Small (360p)</option>
+                        <option value="1280x720">Medium (720p)</option>
+                        <option value="1920x1080">HD (1080p)</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                </div>
+                <div id="custom-geometry-container" class="control-group custom-geometry-container" style="display: none;">
+                    <input type="text" id="custom-width" class="custom-geometry-input" placeholder="Width" pattern="[0-9]{1,4}" maxlength="4" title="Custom window width in pixels.">
+                    <span class="custom-geometry-separator">&times;</span>
+                    <input type="text" id="custom-height" class="custom-geometry-input" placeholder="Height" pattern="[0-9]{1,4}" maxlength="4" title="Custom window height in pixels.">
+                </div>
+                <div class="control-group" style="flex-direction: column; align-items: stretch; gap: 4px;">
+                    <label for="custom-mpv-flags" class="settings-label" style="flex-basis: auto;">Custom MPV Flags:</label>
+                    <textarea id="custom-mpv-flags" rows="3" placeholder="e.g., --vo=gpu --hwdec=auto" title="Add custom command-line flags for MPV. Example: --vo=gpu --hwdec=auto"></textarea>
+                </div>
+                <div class="control-group">
+                    <label for="show-play-new-button-checkbox" class="settings-label">Show "Play New" Button:</label>
+                    <input type="checkbox" id="show-play-new-button-checkbox" class="settings-checkbox" title="If checked, shows a button to launch a second, unmanaged MPV instance.">
+                </div>
+            </div>
+        </details>
+        <details class="settings-section">
+            <summary class="settings-section-header">Behavior Settings</summary>
+            <div class="settings-section-content">
+                <div class="control-group">
+                    <label for="duplicate-behavior-select" class="settings-label">Duplicates:</label>
+                    <select id="duplicate-behavior-select" title="Choose what happens when adding a URL that is already in the playlist.">
+                        <option value="ask">Always Ask</option>
+                        <option value="always">Always Add</option>
+                        <option value="never">Never Add</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="default-ui-mode-select" class="settings-label">Default UI:</label>
+                    <select id="default-ui-mode-select" title="Set the default appearance of the on-page controller when a page loads.">
+                        <option value="full">Full</option>
+                        <option value="compact">Compact</option>
+                        <option value="minimized">Minimized</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="scanner-timeout-input" class="settings-label">Scanner Timeout (s):</label>
+                    <input type="number" id="scanner-timeout-input" class="settings-input" min="10" max="300" step="1" title="Set the time (in seconds) to wait for a stream to be detected in the manual scanner window before timing out.">
+                </div>
+                <div class="control-group">
+                    <label for="clear-on-completion-checkbox" class="settings-label">Clear on Completion:</label>
+                    <input type="checkbox" id="clear-on-completion-checkbox" class="settings-checkbox" title="If checked, automatically clears a playlist after it finishes playing in MPV.">
+                </div>
+            </div>
+        </details>
+        <details class="settings-section">
+            <summary class="settings-section-header">Confirmation Prompts</summary>
+            <div class="settings-section-content">
+                <div class="control-group">
+                    <label for="confirm-remove-folder-checkbox" class="settings-label">Confirm Delete:</label>
+                    <input type="checkbox" id="confirm-remove-folder-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before removing a folder.">
+                </div>
+                <div class="control-group">
+                    <label for="confirm-clear-playlist-checkbox" class="settings-label">Confirm Clear:</label>
+                    <input type="checkbox" id="confirm-clear-playlist-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before clearing a playlist.">
+                </div>
+                <div class="control-group">
+                    <label for="confirm-close-mpv-checkbox" class="settings-label">Confirm Close:</label>
+                    <input type="checkbox" id="confirm-close-mpv-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before closing a running MPV instance.">
+                </div>
+                <div class="control-group">
+                    <label for="confirm-play-new-checkbox" class="settings-label">Confirm "Play New":</label>
+                    <input type="checkbox" id="confirm-play-new-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before launching a new MPV instance.">
+                </div>
+            </div>
+        </details>
+    </details>
 
     <!-- Confirmation Modal for Popup -->
     <div id="popup-confirmation-modal" style="display: none;">
@@ -98,6 +202,42 @@
             <div class="modal-actions">
                 <button id="popup-modal-confirm-btn">Confirm</button>
                 <button id="popup-modal-cancel-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rename Folder Modal -->
+    <div id="rename-folder-modal" style="display: none;">
+        <div class="modal-content">
+            <p>Enter a new name for the folder:</p>
+            <input type="text" id="rename-folder-input" placeholder="New folder name">
+            <div class="modal-actions">
+                <button id="rename-save-btn">Save</button>
+                <button id="rename-cancel-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Export Filename Modal -->
+    <div id="export-filename-modal" style="display: none;">
+        <div class="modal-content">
+            <p>Enter a name for the export file (.json):</p>
+            <input type="text" id="export-filename-input" placeholder="e.g., my_backup">
+            <div class="modal-actions">
+                <button id="export-save-btn">Save</button>
+                <button id="export-cancel-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Selection Modal -->
+    <div id="import-selection-modal" style="display: none;">
+        <div class="modal-content">
+            <p>Select a backup file to import:</p>
+            <select id="import-file-select"></select>
+            <div class="modal-actions">
+                <button id="import-confirm-btn">Import</button>
+                <button id="import-cancel-btn">Cancel</button>
             </div>
         </div>
     </div>

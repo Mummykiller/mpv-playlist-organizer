@@ -12,6 +12,7 @@
     --accent-negative-hover: #da3739;
     --accent-positive: #43b581;
     --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
     --border-radius: 6px;
     --transition-speed: 0.15s;
 }
@@ -24,13 +25,13 @@ body {
     background-color: var(--bg-color);
     color: var(--text-primary);
     font-family: var(--font-sans);
-    width: 280px;
+    width: 388px; /* Increased width to allow more space for content */
     padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 16px;
     border-radius: 12px;
-    overflow: hidden;
+    /* Removed overflow-y: auto to allow the popup to naturally expand and rely on browser's scrollbar if content exceeds screen height */
     box-sizing: border-box;
 }
 
@@ -71,6 +72,38 @@ select {
     appearance: none;
 }
 
+textarea {
+    flex-grow: 1;
+    box-sizing: border-box;
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: var(--border-radius);
+    padding: 10px;
+    font-size: 13px; /* Slightly smaller for code-like text */
+    font-family: var(--font-mono); /* Use a monospace font */
+    transition: all var(--transition-speed) ease;
+    resize: vertical; /* Allow vertical resize */
+    min-height: 40px;
+}
+
+textarea:hover {
+    background-color: var(--surface-hover-color);
+    border-color: #555;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+textarea:focus-visible {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.3);
+}
+
+textarea::placeholder {
+    color: var(--text-secondary);
+    font-family: var(--font-sans); /* Placeholder can be sans-serif */
+}
+
 input:hover, select:hover {
     background-color: var(--surface-hover-color);
     border-color: #555;
@@ -80,7 +113,6 @@ input:hover, select:hover {
 input:focus-visible, select:focus-visible {
     outline: none;
     border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px var(--accent-primary);
     box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.3); /* Softer focus ring */
 }
 
@@ -105,22 +137,36 @@ button:disabled {
     background-color: #33363b;
     cursor: not-allowed;
 }
-#btn-create-folder {
+#btn-create-folder,
+#btn-rename-folder,
+#mini-folder-management-controls #btn-mini-create-folder,
+#mini-folder-management-controls #btn-mini-rename-folder {
     background-color: var(--accent-primary);
     color: white; /* Ensure good contrast */
 }
-#btn-create-folder:hover {
+#btn-create-folder:hover,
+#btn-rename-folder:hover,
+#mini-folder-management-controls #btn-mini-create-folder:hover,
+#mini-folder-management-controls #btn-mini-rename-folder:hover {
     background-color: var(--accent-primary-hover);
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
 }
 
-#btn-remove-folder {
+#btn-remove-folder,
+#mini-folder-management-controls #btn-mini-remove-folder {
     background-color: var(--accent-negative);
     color: white; /* Ensure good contrast */
 }
-#btn-remove-folder:hover {
+#btn-remove-folder:hover,
+#mini-folder-management-controls #btn-mini-remove-folder:hover {
     background-color: var(--accent-negative-hover);
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+#btn-rename-folder, #btn-remove-folder,
+#mini-folder-management-controls #btn-mini-rename-folder,
+#mini-folder-management-controls #btn-mini-remove-folder {
+    flex: 1; /* Make them fill the available space */
 }
 
 .custom-geometry-input {
@@ -130,7 +176,6 @@ button:disabled {
 
 .custom-geometry-container {
     /* This group should appear below the main dropdown, so we adjust its top margin */
-    margin-top: 8px;
     justify-content: flex-end; /* Align to the right side */
 }
 
@@ -152,7 +197,7 @@ button:disabled {
 #status-message {
     font-size: 13px;
     text-align: center;
-    padding-top: 8px; /* Add some padding above */
+    padding-bottom: 8px; /* Add some padding below to space it from the content that follows */
     min-height: 1.2em;
     transition: color 0.2s ease;
 }
@@ -172,15 +217,23 @@ button:disabled {
 
 #mini-controller-actions button {
     flex-grow: 1; /* Make buttons take up equal space */
-    padding: 8px; /* Tighter padding for icon buttons */
+    padding: 10px; /* Larger padding for better touch targets */
     display: flex;
     justify-content: center;
     align-items: center;
     background-color: var(--surface-color);
+    border: 1px solid var(--border-color); /* Add a border for definition */
+    transition: all var(--transition-speed) ease; /* Add smooth transitions */
 }
 
 #mini-controller-actions button:hover {
     background-color: var(--surface-hover-color);
+    border-color: var(--accent-primary); /* Highlight on hover */
+}
+
+#mini-controller-actions button:active {
+    transform: scale(0.96);
+    transition-duration: 0.05s;
 }
 
 /* Specific colors for key actions */
@@ -219,7 +272,7 @@ button:disabled {
     align-items: center;
     gap: 6px;
     background-color: var(--surface-color);
-    padding: 0 10px;
+    padding: 10px; /* Symmetrical padding to align with select box */
     border-radius: var(--border-radius);
     border: 1px solid var(--border-color);
     color: var(--text-secondary);
@@ -231,8 +284,8 @@ button:disabled {
     border: none;
     color: white; /* Ensure best contrast */
     font-weight: 600;
-    width: 100%;
-    margin-top: 8px; /* Give it a bit more space */
+    /* Use flex: 1 to make buttons share space equally in their flex container. */
+    flex: 1;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
@@ -250,23 +303,13 @@ button:disabled {
     background-color: var(--surface-color);
     border-radius: var(--border-radius);
     border: 1px solid var(--border-color);
-    margin-top: 8px;
 }
 
-/* Styles for the buttons inside the mini folder manager for consistency */
-#mini-folder-management-controls #btn-mini-create-folder {
-    background-color: var(--accent-primary);
+#mini-status-placeholder, #full-status-placeholder {
+    /* Reserve space for the status message to prevent layout shifts */
+    min-height: calc(1.2em + 8px);
 }
-#mini-folder-management-controls #btn-mini-create-folder:hover {
-    background-color: var(--accent-primary-hover);
-}
-#mini-folder-management-controls #btn-mini-remove-folder {
-    width: 100%;
-    background-color: var(--accent-negative);
-}
-#mini-folder-management-controls #btn-mini-remove-folder:hover {
-    background-color: var(--accent-negative-hover);
-}
+
 /* --- Confirmation Modal --- */
 #popup-confirmation-modal {
     position: fixed; /* Cover the entire popup viewport */
@@ -315,9 +358,372 @@ button:disabled {
 #popup-confirmation-modal .modal-actions button:hover {
     background-color: var(--accent-negative-hover);
 }
-#popup-confirmation-modal .modal-actions button + button { /* The cancel button */
+#popup-confirmation-modal .modal-actions #popup-modal-cancel-btn {
     background-color: var(--surface-hover-color);
 }
-#popup-confirmation-modal .modal-actions button + button:hover {
+#popup-confirmation-modal .modal-actions #popup-modal-cancel-btn:hover {
     background-color: var(--bg-tertiary);
+}
+
+/* --- Settings Controls --- */
+.settings-label {
+    white-space: nowrap;
+    align-self: center;
+    color: var(--text-primary);
+    font-weight: 400; /* Use normal weight for a cleaner look */
+    font-size: 15px; /* Increase font size for better readability */
+    flex-basis: 150px; /* Adjust basis to accommodate larger font */
+    flex-shrink: 0;
+}
+
+.settings-input {
+    text-align: center;
+    flex-grow: 1;
+}
+
+.settings-checkbox {
+    flex-grow: 0; /* Don't stretch */
+    margin-right: auto; /* Push to the left side of the available space */
+    align-self: center;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent-primary); /* Style the checkbox color */
+}
+
+/* --- Generic Modals (Export, Import, Rename) --- */
+#export-filename-modal,
+#import-selection-modal,
+#rename-folder-modal {
+    position: fixed; /* Cover the entire popup viewport */
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 16px;
+    box-sizing: border-box;
+}
+
+#export-filename-modal .modal-content,
+#import-selection-modal .modal-content,
+#rename-folder-modal .modal-content {
+    background-color: var(--surface-color);
+    padding: 20px;
+    border-radius: var(--border-radius);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    text-align: center;
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%; /* Take up available width within padding */
+}
+
+#export-filename-modal .modal-content p,
+#import-selection-modal .modal-content p,
+#rename-folder-modal .modal-content p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+
+#export-filename-modal .modal-actions,
+#import-selection-modal .modal-actions,
+#rename-folder-modal .modal-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+}
+
+#export-filename-modal #export-save-btn,
+#import-selection-modal #import-confirm-btn,
+#rename-folder-modal #rename-save-btn {
+    background-color: var(--accent-primary);
+}
+#export-filename-modal #export-save-btn:hover,
+#import-selection-modal #import-confirm-btn:hover,
+#rename-folder-modal #rename-save-btn:hover {
+    background-color: var(--accent-primary-hover);
+}
+#export-filename-modal #export-cancel-btn,
+#import-selection-modal #import-cancel-btn,
+#rename-folder-modal #rename-cancel-btn {
+    background-color: var(--surface-hover-color);
+}
+#export-filename-modal #export-cancel-btn:hover,
+#import-selection-modal #import-cancel-btn:hover,
+#rename-folder-modal #rename-cancel-btn:hover {
+    background-color: var(--bg-tertiary);
+}
+
+/* --- Reorder Controls --- */
+.reorder-toggle-btn {
+    padding: 8px;
+    background-color: var(--surface-color);
+    flex-shrink: 0;
+}
+.reorder-toggle-btn:hover {
+    background-color: var(--surface-hover-color);
+}
+.reorder-toggle-btn.active {
+    background-color: var(--accent-primary);
+    color: white;
+    flex: 1; /* Make the button take full width when active */
+}
+.reorder-toggle-btn.active:hover {
+    background-color: var(--accent-primary-hover);
+}
+
+.reorder-container {
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 8px;
+    background-color: var(--surface-color);
+    max-height: 150px;
+    overflow-y: auto;
+    margin-top: 8px;
+}
+
+.reorder-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.reorder-item {
+    display: flex;
+    align-items: center;
+    padding: 8px;
+    background-color: var(--surface-hover-color);
+    border-radius: 4px;
+    cursor: grab;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.reorder-item:active { cursor: grabbing; }
+.reorder-item.dragging { opacity: 0.5; background: #4f5bda; }
+
+.reorder-item .drag-handle {
+    margin-right: 8px;
+    color: var(--text-secondary);
+    pointer-events: none; /* Make sure the icon doesn't interfere with drag events */
+}
+
+/* --- Settings Sections (Collapsible) --- */
+.settings-section {
+    margin-top: 8px;
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    overflow: hidden; /* To keep border-radius on children */
+    transition: all var(--transition-speed) ease;
+}
+
+.settings-section[open] {
+    background-color: var(--bg-color);
+    border-color: var(--accent-primary);
+}
+
+.settings-section summary {
+    padding: 10px 12px;
+    font-weight: 500; /* Use medium weight instead of bold */
+    font-size: 16px; /* Make section headers slightly larger */
+    color: var(--text-primary);
+    cursor: pointer;
+    list-style: none; /* Remove default marker */
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background-color var(--transition-speed) ease;
+}
+
+.settings-section summary:hover {
+    background-color: var(--surface-hover-color);
+}
+
+.settings-section summary::-webkit-details-marker {
+    display: none; /* Hide default marker in Webkit */
+}
+
+.settings-section summary::after {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid var(--text-secondary);
+    transition: transform var(--transition-speed) ease;
+    transform-origin: center;
+}
+
+.settings-section[open] > summary::after {
+    transform: rotate(180deg);
+}
+
+.settings-section-content {
+    padding: 12px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.settings-placeholder {
+    display: flex;
+    flex-direction: column;
+    gap: 8px; /* Matches the gap between settings sections */
+    margin-top: 8px; /* Matches the margin-top of the first settings section */
+}
+
+/* --- AniList Releases Section --- */
+.anilist-releases-section {
+    margin-top: 12px; /* Add some space above */
+}
+
+.anilist-releases-section > summary {
+    /* Make it look like a full-width button */
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: var(--border-radius);
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-speed) ease;
+    list-style: none; /* Remove default marker */
+    display: flex;
+    justify-content: center; /* Center text */
+    align-items: center;
+    position: relative; /* For positioning the arrow */
+}
+
+.anilist-releases-section > summary:hover {
+    background-color: var(--surface-hover-color);
+    border-color: var(--accent-primary);
+}
+
+.anilist-releases-section > summary::-webkit-details-marker {
+    display: none; /* Hide default marker in Webkit */
+}
+
+/* Add an arrow indicator */
+.anilist-releases-section > summary::after {
+    content: '';
+    position: absolute;
+    right: 16px;
+    transition: transform var(--transition-speed) ease;
+    transform-origin: center;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid var(--text-secondary);
+}
+
+.anilist-releases-section[open] > summary::after {
+    transform: rotate(180deg);
+}
+
+.anilist-releases-section[open] > summary {
+    /* When open, change the style slightly to connect to the content */
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    background-color: var(--surface-hover-color);
+    border-color: var(--accent-primary);
+}
+
+.anilist-release-delay-info {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+    margin: 0 0 8px 0;
+    padding: 0 4px; /* Align with list items (container has 2px padding) */
+}
+
+.anilist-releases-section > #anilist-releases-content {
+    /* This container holds the scrollable list */
+    max-height: 300px; /* Give it a max height to make it scrollable */
+    overflow-y: auto;
+    /* Add 2px horizontal padding. Items inside have 8px, matching the 10px on the note above. */
+    padding: 0 8px;
+    margin: 0 0 8px 0; /* Keep bottom margin for spacing, remove side margins. */
+}
+
+.anilist-releases-list {
+    list-style: none;
+    padding: 0 0 8px 0; /* Reset left/right/top padding, keep bottom */
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.anilist-release-item {
+    display: flex;
+    align-items: center;
+    gap: 8px; /* Increased gap for larger images */
+    padding: 6px; /* Increased padding for better spacing */
+    background-color: var(--surface-hover-color);
+    border-radius: var(--border-radius);
+    border: 1px solid var(--border-color);
+}
+
+.release-cover-image {
+    width: 50px; /* Larger cover image */
+    height: 70px; /* Larger cover image */
+    border-radius: 4px;
+    object-fit: cover;
+}
+
+.release-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden; /* Prevent long titles from breaking layout */
+}
+
+.release-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.release-episode-info {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.release-airing-time {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-positive);
+}
+
+.loading-spinner {
+    border: 4px solid var(--surface-hover-color);
+    border-top: 4px solid var(--accent-primary);
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    animation: spin 1s linear infinite;
+    margin: 20px auto;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
 }
