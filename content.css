@@ -603,6 +603,44 @@ select:focus-visible {
     box-sizing: border-box;
 }
 
+.anilist-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px 4px 2px 12px;
+    background-color: rgba(44, 46, 51, 0.8);
+    border-bottom: 1px solid var(--border-primary);
+    flex-shrink: 0;
+}
+
+.anilist-panel-header .anilist-release-delay-info {
+    margin: 0;
+    padding: 0;
+    font-size: 12px;
+    cursor: grab;
+    flex-grow: 1; /* Make it fill available space to be a larger drag target */
+}
+
+#btn-close-anilist-panel {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 24px;
+    line-height: 1;
+    padding: 0 8px;
+    opacity: 0.8;
+    transition: opacity 0.2s, color 0.2s;
+    box-shadow: none;
+}
+
+#btn-close-anilist-panel:hover {
+    color: var(--accent-danger);
+    opacity: 1;
+    background: none;
+    border: none;
+}
+
 /* Override the default item style for the one inside the floating panel */
 #anilist-panel-wrapper .anilist-release-item {
     /* Override solid item background to also be semi-transparent (80% opacity). #2c2e33 -> rgb(44, 46, 51) */
@@ -620,15 +658,6 @@ select:focus-visible {
 #anilist-releases-container::-webkit-scrollbar-thumb {
     background-color: var(--bg-tertiary);
     border-radius: 4px;
-}
-
-.anilist-release-delay-info {
-    font-size: 13px;
-    color: var(--text-secondary);
-    text-align: center;
-    margin: 0; /* Let padding handle spacing */
-    padding: 4px 4px; /* Align with list items (container has 4px + item has 4px padding) */
-    flex-shrink: 0;
 }
 
 .anilist-releases-list {
@@ -683,4 +712,33 @@ select:focus-visible {
     font-size: 12px;
     font-weight: 600;
     color: var(--accent-success);
+}
+
+/* --- Minimized Stub --- */
+#m3u8-minimized-stub {
+    background-color: rgba(17, 18, 20, 0.8); /* Semi-transparent dark bg */
+    backdrop-filter: blur(2px);
+    color: var(--text-primary);
+    border: 1px solid var(--border-primary);
+    border-radius: 50%; /* Make it a circle */
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow);
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+#m3u8-minimized-stub:hover {
+    background-color: rgba(88, 101, 242, 0.8); /* Accent color on hover */
+    border-color: var(--border-hover);
+    transform: scale(1.1);
+}
+
+#m3u8-minimized-stub svg {
+    width: 24px;
+    height: 24px;
 }

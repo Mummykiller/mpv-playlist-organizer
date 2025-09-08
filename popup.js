@@ -43,6 +43,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const confirmCloseMpvCheckbox = document.getElementById('confirm-close-mpv-checkbox');
     const confirmPlayNewCheckbox = document.getElementById('confirm-play-new-checkbox');
     const clearOnCompletionCheckbox = document.getElementById('clear-on-completion-checkbox');
+    const autofocusNewFolderCheckbox = document.getElementById('autofocus-new-folder-checkbox');
+    const autoReattachAnilistCheckbox = document.getElementById('auto-reattach-anilist-checkbox');
 
     // Mini Controller View Elements
     const miniFolderSelect = document.getElementById('mini-folder-select');
@@ -698,6 +700,10 @@ document.addEventListener('DOMContentLoaded', () => {
         confirmPlayNewCheckbox.checked = prefs.confirm_play_new ?? true;
 
         clearOnCompletionCheckbox.checked = prefs.clear_on_completion ?? false;
+
+        autofocusNewFolderCheckbox.checked = prefs.autofocus_new_folder ?? false;
+
+        autoReattachAnilistCheckbox.checked = prefs.autoReattachAnilistPanel ?? true;
     }
 
     function saveAllPreferences() {
@@ -715,7 +721,9 @@ document.addEventListener('DOMContentLoaded', () => {
             confirm_clear_playlist: confirmClearPlaylistCheckbox.checked,
             confirm_close_mpv: confirmCloseMpvCheckbox.checked,
             confirm_play_new: confirmPlayNewCheckbox.checked,
-            clear_on_completion: clearOnCompletionCheckbox.checked
+            clear_on_completion: clearOnCompletionCheckbox.checked,
+            autofocus_new_folder: autofocusNewFolderCheckbox.checked,
+            autoReattachAnilistPanel: autoReattachAnilistCheckbox.checked
         };
 
         chrome.runtime.sendMessage({ action: 'set_ui_preferences', preferences: preferences }, (response) => {
@@ -755,7 +763,9 @@ document.addEventListener('DOMContentLoaded', () => {
         confirmClearPlaylistCheckbox,
         confirmCloseMpvCheckbox,
         confirmPlayNewCheckbox,
-        clearOnCompletionCheckbox
+        clearOnCompletionCheckbox,
+        autofocusNewFolderCheckbox,
+        autoReattachAnilistCheckbox
     ];
 
     preferenceControls.forEach(control => {
@@ -767,6 +777,11 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.runtime.sendMessage({ action: 'get_ui_preferences' }, (response) => {
         if (response?.success && response.preferences) {
             updateAllPreferencesUI(response.preferences);
+
+            // Now that preferences are loaded, apply focus if needed.
+            if (folderManagementView.style.display === 'block' && response.preferences.autofocus_new_folder) {
+                newFolderNameInput.focus();
+            }
         }
     });
 
@@ -928,6 +943,9 @@ document.addEventListener('DOMContentLoaded', () => {
             fullStatusPlaceholder.appendChild(statusMessage);
 
             updateRemoveButtonState(); // Ensure remove button state is correct
+                // We can't apply focus here because the preferences might not be loaded yet.
+                // The logic inside the `get_ui_preferences` callback at the end of the
+                // script will handle applying the focus after settings are loaded.
             return;
         }
 
@@ -1020,6 +1038,15 @@ document.addEventListener('DOMContentLoaded', () => {
             chrome.tabs.query({ active: true, currentWindow: true }).then(([activeTab]) => {
                 if (activeTab && activeTab.id === request.tabId && miniAddBtn) {
                     miniAddBtn.classList.toggle('url-detected', !!request.url);
+                }
+            });
+        }
+
+        // If preferences changed in another context (e.g., dragging the anilist panel), update our UI.
+        if (request.action === 'preferences_changed') {
+            chrome.runtime.sendMessage({ action: 'get_ui_preferences' }, (response) => {
+                if (response?.success && response.preferences) {
+                    updateAllPreferencesUI(response.preferences);
                 }
             });
         }

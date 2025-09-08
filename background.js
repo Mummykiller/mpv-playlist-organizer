@@ -60,6 +60,10 @@ class StorageManager {
                         custom_mpv_flags: '', show_play_new_button: false, duplicate_url_behavior: 'ask',
                         stream_scanner_timeout: 60, confirm_remove_folder: true, confirm_clear_playlist: true,
                         confirm_close_mpv: true, confirm_play_new: true, clear_on_completion: false,
+                        autofocus_new_folder: false, // Added in a previous step
+                        anilistPanelVisible: false,
+                        anilistPanelPosition: null,
+                        autoReattachAnilistPanel: true,
                     },
                     domains: {}
                 }
