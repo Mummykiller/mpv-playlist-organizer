@@ -10,7 +10,7 @@ It features a draggable on-page UI, synchronization with a command-line interfac
 
 > **Note on Development:** This extension was developed through a unique collaboration between a human and several AI assistants. The core logic, UI design, and feature implementation were primarily written by different AI models, guided and directed by **shinku**.
 
-![Screenshot of the UI](images/big.png)  ![Screenshot of the UI](images/small.png)  ![Screenshot of the UI](images/minimized.png)
+![Screenshot of the UI](images/big.png)  ![Screenshot of the UI](images/small.png)  ![Screenshot of the UI](images/minimized.png) ![Screenshot of the UI](images/releasing_anime.png)
 <!-- Replace 'assets/screenshot.png' with the actual path to your screenshot -->
 
 ---
