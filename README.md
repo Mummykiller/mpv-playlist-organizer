@@ -63,18 +63,22 @@ This extension streamlines your workflow. It acts as a bridge between your brows
 - ✨ **Flexible & Informative UI**
     - **Draggable & Pinnable Controller**: Move the on-page UI anywhere and lock its position.
     - **Multiple UI Modes**: Switch between a full-featured view, a compact mode, or minimize it completely.
-    - **Persistent State**: Remembers its position and mode across all tabs and sessions.
+    - **Persistent State**: Remembers its position, mode, and per-domain settings across all tabs and sessions.
+    - **Fullscreen Aware**: Automatically hides when a video enters fullscreen and reappears on exit.
     - **On-Page Communication Log**: A detailed, filterable log for troubleshooting native host communication.
 
 - 🛠️ **Streamlined Workflow Tools**
     - **AniList Integration**: View today's anime episode releases directly in the popup or in an adaptive side-panel on the page.
-    - **Popup Mini-Controller**: When the on-page UI is minimized, the toolbar icon provides a fully functional mini-controller.
+    - **Centralized Popup Hub**: The toolbar popup serves two roles:
+        - A fully functional mini-controller when the on-page UI is minimized.
+        - The central hub for folder management, settings, import/export, and reordering when the on-page UI is visible.
     - **Context Menu & CLI**: Add URLs via right-click or play saved playlists directly from your terminal.
 
 - 🛡️ **Smart & Configurable Behavior**
     - **Duplicate Handling**: Choose whether to be asked, always add, or never add duplicate URLs.
     - **Granular Confirmations**: Individually toggle confirmation prompts for all destructive actions.
     - **Configurable Timeouts**: Set the timeout for the manual stream scanner.
+    - **Default UI Mode**: Set a global default for the on-page controller (full or compact).
 
 - 🔄 **Robust Data Portability**
     - **Export & Import**: Export individual playlists or all playlists at once. Import from backup files.
@@ -217,16 +221,24 @@ The extension provides several ways to interact:
 
 ### Command-Line Interface (CLI)
 
-You can play your saved playlists directly from your terminal:
+The native host script also provides a command-line interface for managing and playing playlists directly from your terminal.
 
 1. Navigate to the project directory in your terminal.
-2. Use the `play` command followed by the folder name (case-sensitive).
+2. Use one of the available commands.
 
-**Example:**
-```sh
-# Play the playlist saved in the "YT" folder
-python3 native_host.py play YT
-```
+**Commands:**
+
+-   **`play [folder_name]`**: Plays the playlist from the specified folder.
+    ```sh
+    # Play the playlist saved in the "YT" folder
+    python3 native_host.py play YT
+    ```
+
+-   **`list`**: Lists all saved folders and the number of items in each.
+    ```sh
+    # List all available folders
+    python3 native_host.py list
+    ```
 
 ---
 
