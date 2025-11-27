@@ -284,8 +284,60 @@ class MpvController {
             // Call the global UI update function
             this.addLogEntry(request.log);
         } else if (request.action === 'preferences_changed') {
-            // Global or another domain's preferences changed, re-fetch ours.
-            this.applyInitialState();
+            const changedPrefs = request.preferences; // This will now contain the specific preferences that changed
+
+            // If the change is only UI position/size related, update directly without full re-initialization
+            if (changedPrefs.position || changedPrefs.anilistPanelPosition || changedPrefs.anilistPanelSize || changedPrefs.minimizedStubPosition || changedPrefs.anilistPanelVisible !== undefined || changedPrefs.showMinimizedStub !== undefined) {
+                // Apply specific position/size changes directly
+                if (changedPrefs.position && this.controllerHost) {
+                    this.controllerHost.style.left = changedPrefs.position.left;
+                    this.controllerHost.style.top = changedPrefs.position.top;
+                    this.controllerHost.style.right = changedPrefs.position.right;
+                    this.controllerHost.style.bottom = changedPrefs.position.bottom;
+                    this.preFullscreenPosition = null; // Clear this as the position has been updated by user interaction
+                    this.preResizePosition = null; // Clear this as the position has been updated by user interaction
+                    this.validateAndRepositionController(); // Ensure it's on screen
+                }
+                if (changedPrefs.anilistPanelPosition && this.anilistPanelHost) {
+                    this.anilistPanelHost.style.left = changedPrefs.anilistPanelPosition.left;
+                    this.anilistPanelHost.style.top = changedPrefs.anilistPanelPosition.top;
+                    this.anilistPanelHost.style.right = changedPrefs.anilistPanelPosition.right;
+                    this.anilistPanelHost.style.bottom = changedPrefs.anilistPanelPosition.bottom;
+                    this.isAnilistPanelManuallyPositioned = true; // Flag it as manually positioned
+                    this.validateAndRepositionAnilistPanel();
+                }
+                if (changedPrefs.anilistPanelSize && this.anilistPanelHost) {
+                    this.anilistPanelHost.style.width = changedPrefs.anilistPanelSize.width;
+                    this.anilistPanelHost.style.height = changedPrefs.anilistPanelSize.height;
+                }
+                if (changedPrefs.minimizedStubPosition && this.minimizedHost) {
+                    this.minimizedHost.style.left = changedPrefs.minimizedStubPosition.left;
+                    this.minimizedHost.style.top = changedPrefs.minimizedStubPosition.top;
+                    this.minimizedHost.style.right = changedPrefs.minimizedStubPosition.right;
+                    this.minimizedHost.style.bottom = changedPrefs.minimizedStubPosition.bottom;
+                    this.validateAndRepositionMinimizedStub();
+                }
+                // Handle show/hide anilist panel explicitly
+                if (changedPrefs.anilistPanelVisible !== undefined) {
+                    this.toggleAnilistPanel(changedPrefs.anilistPanelVisible, false);
+                }
+                // Handle show/hide minimized stub explicitly
+                if (changedPrefs.showMinimizedStub !== undefined) {
+                     this.showMinimizedStub = changedPrefs.showMinimizedStub;
+                     // Re-apply minimized state to ensure stub visibility is correct
+                     this.setMinimizedState(this.controllerHost.style.display === 'none', false);
+                }
+
+                // Call updateAdaptiveElements for adaptive button changes, etc.
+                // This is important because the position changes affect the side where the AniList button appears.
+                this.updateAdaptiveElements();
+
+                // Do NOT call applyInitialState() which triggers refreshPlaylist()
+            } else {
+                // If it's not just a position/size change, then a full re-initialization might be necessary.
+                // This could be for things like changing log visibility, pin state, UI mode, etc.
+                this.applyInitialState();
+            }
         } else if (request.action === 'show_confirmation') {
             // This is an async action that requires a response, so we must return true.
             (async () => {

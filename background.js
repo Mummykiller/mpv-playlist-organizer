@@ -85,6 +85,11 @@ class StorageManager {
                         minimizedStubPosition: { top: '15px', left: '15px', right: 'auto', bottom: 'auto' }, // Default to top-left corner
                         show_anilist_releases: true,
                         show_minimized_stub: true,
+                        // New: Dependency Status for MPV and yt-dlp
+                        dependencyStatus: {
+                            mpv: { found: null, path: null, error: null },
+                            ytdlp: { found: null, path: null, version: null, error: null }
+                        }
                     },
                     domains: {}
                 }
@@ -143,6 +148,12 @@ class StorageManager {
 
             const defaultGlobalPrefs = this._getDefaultData().settings.ui_preferences.global;
             storedValue.settings.ui_preferences.global = { ...defaultGlobalPrefs, ...globalPrefs };
+
+            // New Migration: Ensure dependencyStatus is initialized
+            if (!storedValue.settings.ui_preferences.global.dependencyStatus) {
+                storedValue.settings.ui_preferences.global.dependencyStatus = this._getDefaultData().settings.ui_preferences.global.dependencyStatus;
+                needsUpdate = true;
+            }
         }
     
         // New Migration: Convert string playlists to object playlists {url, title}
@@ -399,6 +410,29 @@ async function syncDataToNativeHostFile() {
 // it will only sync once after the user is done.
 const debouncedSyncToNativeHostFile = debounce(syncDataToNativeHostFile, 1000);
 
+/**
+ * Checks MPV and yt-dlp dependencies via the native host and stores the results.
+ * Also broadcasts a message to update UI components.
+ */
+async function _checkDependenciesAndStore() {
+    broadcastLog({ text: `[Background]: Checking MPV and yt-dlp dependencies...`, type: 'info' });
+    const response = await callNativeHost({ action: 'check_dependencies' });
+
+    if (response.success) {
+        const data = await storage.get();
+        data.settings.ui_preferences.global.dependencyStatus = {
+            mpv: response.mpv,
+            ytdlp: response.ytdlp
+        };
+        await storage.set(data);
+        broadcastLog({ text: `[Background]: Dependency check completed.`, type: 'info' });
+        broadcastToTabs({ action: 'dependencies_status_changed', status: data.settings.ui_preferences.global.dependencyStatus });
+    } else {
+        broadcastLog({ text: `[Background]: Dependency check failed: ${response.error}`, type: 'error' });
+    }
+}
+
+
 // --- Context Menu Management ---
 
 /**
@@ -626,7 +660,7 @@ async function handleSetUiPreferences(request, sender) {
     }
 
     await storage.set(data);
-    broadcastToTabs({ action: 'preferences_changed' });
+    broadcastToTabs({ action: 'preferences_changed', preferences: newPreferences }); // Send the actual preferences that changed
     return { success: true };
 }
 
@@ -1013,6 +1047,12 @@ async function handleYtdlpUpdateCheck(request) {
         return callNativeHost({ action: 'run_ytdlp_update' });
     }
 }
+
+async function handleGetDependencyStatus() {
+    const data = await storage.get();
+    return { success: true, status: data.settings.ui_preferences.global.dependencyStatus };
+}
+
 // --- Action Handler Map ---
 // This map centralizes all message actions to their corresponding handler functions.
 const actionHandlers = {
@@ -1061,6 +1101,7 @@ const actionHandlers = {
         broadcastLog({ text: `[Background]: Manual yt-dlp update triggered from settings.`, type: 'info' });
         return callNativeHost({ action: 'run_ytdlp_update' });
     },
+    'get_dependency_status': handleGetDependencyStatus,
 
     'log_from_scanner': (request) => {
         broadcastLog(request.log);
@@ -1122,6 +1163,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
     await updateContextMenus(); // Create the context menus for pages.
     await syncDataToNativeHostFile(); // Sync data on first install/update.
+    await _checkDependenciesAndStore(); // Perform initial dependency check
     console.log("MPV Handler extension installed and initialized.");
 });
 

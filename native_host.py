@@ -288,6 +288,55 @@ try:
             send_message({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
             return {"success": False, "error": error_msg}
 
+    def _check_mpv_and_ytdlp_status():
+        """
+        Checks for the presence and version of mpv and yt-dlp executables.
+        Returns a dictionary with their status.
+        """
+        mpv_status = {"found": False, "path": None, "error": None}
+        ytdlp_status = {"found": False, "path": None, "version": None, "error": None}
+
+        system = platform.system()
+
+        # --- Check MPV ---
+        mpv_exe_name = "mpv.exe" if system == "Windows" else "mpv"
+        mpv_path = get_mpv_executable() # This considers the config file for Windows
+        
+        # If get_mpv_executable returns a specific path (not just the name), check that.
+        # Otherwise, rely on shutil.which to find it in PATH.
+        if os.path.isabs(mpv_path) and os.path.exists(mpv_path):
+            mpv_status["found"] = True
+            mpv_status["path"] = mpv_path
+        else:
+            found_mpv_in_path = shutil.which(mpv_exe_name)
+            if found_mpv_in_path:
+                mpv_status["found"] = True
+                mpv_status["path"] = found_mpv_in_path
+            else:
+                mpv_status["error"] = f"'{mpv_exe_name}' not found in system PATH."
+                if system == "Windows" and mpv_path != mpv_exe_name:
+                    mpv_status["error"] += f" Also not found at configured path: '{mpv_path}'."
+
+
+        # --- Check yt-dlp ---
+        ytdlp_exe_name = "yt-dlp.exe" if system == "Windows" else "yt-dlp"
+        ytdlp_path = shutil.which(ytdlp_exe_name)
+
+        if ytdlp_path:
+            ytdlp_status["found"] = True
+            ytdlp_status["path"] = ytdlp_path
+            ytdlp_version = _get_ytdlp_version(ytdlp_path)
+            if ytdlp_version:
+                ytdlp_status["version"] = ytdlp_version
+            else:
+                ytdlp_status["error"] = "Could not retrieve yt-dlp version."
+        else:
+            ytdlp_status["error"] = f"'{ytdlp_exe_name}' not found in system PATH."
+
+        logging.info(f"Dependency check: MPV={mpv_status['found']} ({mpv_status['path']}), YTDLP={ytdlp_status['found']} ({ytdlp_status['path']}, {ytdlp_status['version']})")
+
+        return {"success": True, "mpv": mpv_status, "ytdlp": ytdlp_status}
+
     def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabled):
         """
         Handles fetching AniList releases with a file-based caching mechanism.
@@ -1289,6 +1338,9 @@ try:
 
                 elif command == 'run_ytdlp_update':
                     response = update_ytdlp()
+
+                elif command == 'check_dependencies':
+                    response = _check_mpv_and_ytdlp_status()
 
                 else:
                     response = {"success": False, "error": "Unknown command"}
