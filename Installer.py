@@ -106,6 +106,22 @@ class HostManagerApp:
         self.extension_id_entry = ttk.Entry(id_frame, textvariable=self.extension_id_var, font=("Segoe UI", 10))
         self.extension_id_entry.pack(fill=tk.X, expand=True)
 
+        # --- Attempt to load previous Extension ID ---
+        # The manifest file created by the Windows installer includes the extension ID.
+        # We can try to read it to pre-fill the field.
+        manifest_file_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
+        if os.path.exists(manifest_file_path):
+            try:
+                with open(manifest_file_path, 'r', encoding='utf-8') as f:
+                    manifest_data = json.load(f)
+                allowed_origins = manifest_data.get("allowed_origins")
+                if allowed_origins and len(allowed_origins) > 0:
+                    # Extract ID from "chrome-extension://{id}/"
+                    ext_id = allowed_origins[0].replace("chrome-extension://", "").replace("/", "")
+                    self.extension_id_var.set(ext_id)
+            except (IOError, json.JSONDecodeError, AttributeError, IndexError) as e:
+                self.log(f"WARNING: Could not read previous Extension ID from manifest file: {e}")
+
         # --- Buttons ---
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=10)
@@ -198,6 +214,7 @@ class HostManagerApp:
             mpv_path = filedialog.askopenfilename(title="Select mpv.exe", filetypes=[("Executable", "*.exe")])
             if not mpv_path or not os.path.basename(mpv_path).lower() == 'mpv.exe':
                 self.log("ERROR: mpv.exe not selected. Aborting installation.")
+                messagebox.showerror("Installation Error", "mpv.exe not selected or invalid file. Aborting installation.")
                 return
         self.log(f"Found mpv.exe at: {mpv_path}")
 
@@ -251,8 +268,26 @@ class HostManagerApp:
         self.log(f"Detected {os_name} OS.")
 
         # Check for mpv
-        if not shutil.which('mpv'):
-            self.log("WARNING: 'mpv' not found in PATH. Please ensure it is installed.")
+        self.log("Searching for mpv...")
+        mpv_path = shutil.which('mpv')
+        
+        if not mpv_path:
+            self.log("mpv not found in PATH. You may select it manually.")
+            mpv_path = filedialog.askopenfilename(title="Select mpv executable", filetypes=[("Executable", "*")])
+            if not mpv_path or not os.path.basename(mpv_path).lower().startswith('mpv'): # mpv, mpv.app, etc.
+                self.log("WARNING: mpv executable not selected. Native host will rely on 'mpv' being in PATH during runtime.")
+                mpv_path = "mpv" # Fallback to default name, relying on PATH
+                messagebox.showwarning("MPV Selection", "mpv executable not explicitly selected. The native host will attempt to find 'mpv' in your system's PATH during playback. Please ensure it is installed and accessible.")
+            else:
+                self.log(f"Selected mpv executable: {mpv_path}")
+        else:
+            self.log(f"Found mpv in PATH: {mpv_path}")
+
+        # Save config for Unix-like systems as well
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump({"mpv_path": mpv_path}, f, indent=4)
+        self.log(f"Configuration saved to {os.path.relpath(CONFIG_FILE, INSTALL_DIR)}")
 
         # Make script executable
         script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)

@@ -239,7 +239,13 @@ try:
                 elif shutil.which("kdesu"):
                     command = ["kdesu"] + command
                 else:
-                    error_msg = "No graphical sudo tool (pkexec, gksu, kdesu) found. Please run 'yt-dlp -U' manually in a terminal with sudo."
+                    error_msg = (
+                        "No graphical sudo tool (pkexec, gksu, kdesu) found. "
+                        f"You need administrator privileges to update yt-dlp in its current location ('{current_path}').\n\n"
+                        "Please open a terminal and run the following command:\n"
+                        f"sudo '{current_path}' -U\n"
+                        "(You may be asked for your password.)"
+                    )
                     send_message({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
                     return {"success": False, "error": error_msg}
                 
@@ -561,17 +567,27 @@ try:
 
     def get_mpv_executable():
         """Gets the path to the mpv executable based on OS and config."""
-        if platform.system() == "Windows":
-            if os.path.exists(CONFIG_FILE):
-                try:
-                    with open(CONFIG_FILE, 'r') as f:
-                        config = json.load(f)
-                    return config.get("mpv_path", "mpv.exe") # Use configured path
-                except (IOError, json.JSONDecodeError):
-                     # If config is unreadable, fall back to default
-                    return "mpv.exe"
-            return "mpv.exe" # Fallback
-        return "mpv" # For Linux/macOS
+        current_platform = platform.system()
+        mpv_default_name = "mpv.exe" if current_platform == "Windows" else "mpv"
+
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                configured_mpv_path = config.get("mpv_path")
+                if configured_mpv_path:
+                    # If an absolute path is configured, use it directly.
+                    # Otherwise, it might be just "mpv" or "mpv.exe", so rely on shutil.which later.
+                    if os.path.isabs(configured_mpv_path) and os.path.exists(configured_mpv_path):
+                        return configured_mpv_path
+                    else:
+                        # If it's a relative path or just a name, return it for shutil.which lookup.
+                        return configured_mpv_path
+            except (IOError, json.JSONDecodeError) as e:
+                logging.warning(f"Could not read or parse config.json for mpv path: {e}. Falling back to default.")
+        
+        # Fallback: if no config or unreadable, use platform default name
+        return mpv_default_name
 
     def is_process_alive(pid, ipc_path):
         """Checks if an MPV process is responsive at the given IPC path."""

@@ -44,6 +44,9 @@ This is an "unpacked" browser extension and does not have a traditional build st
     ```sh
     python Installer.py
     ```
+    *   The installer now attempts to remember the last used Extension ID, pre-filling the input field for convenience.
+    *   On Windows, if `mpv.exe` is not found, the installer will prompt you to select its path. An error will be shown if not selected.
+    *   On Linux/macOS, the installer will prompt you to select the `mpv` executable path if it's not found in your system's PATH, and this path will be saved in `config.json` for future use.
 3.  **Load Extension:**
     *   Open your browser's extension management page (e.g., `chrome://extensions`).
     *   Enable "Developer mode".
@@ -78,7 +81,7 @@ The native host script also provides a CLI for interacting with playlists from t
     *   Browser-side state is stored using `chrome.storage.local`.
     *   Filesystem-side playlists (`data/folders.json`) are kept in sync via the native host. The `background.js` script debounces write operations to this file for efficiency.
 *   **Modularity:** The code is organized by function. `background.js` handles logic, `content.js` handles the on-page UI, `popup.js` handles the popup UI, and `native_host.py` handles system interaction.
-*   **Error Handling:** The native host logs errors and operational messages to `data/native_host.log`. The background script logs errors to the browser's service worker console and broadcasts important status messages to the UI.
+*   **Error Handling:** The native host logs errors and operational messages to `data/native_host.log`. The background script logs errors to the browser's service worker console and broadcasts important status messages to the UI. The `native_host.py` now provides clearer fallback instructions for `yt-dlp` updates on Linux when graphical `sudo` tools are unavailable.
 
 ## Gemini CLI Interaction
 
