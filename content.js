@@ -1,0 +1,2636 @@
+/* ------------------------------------------------------------------
+ * content.js (fully fixed and now draggable, with saved position)
+ * UI + messaging with the local MPV server.
+ * ------------------------------------------------------------------*/
+
+// --- Utility Functions ---
+
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+const sendMessageAsync = (payload) => new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(payload, (response) => {
+        if (chrome.runtime.lastError) {
+            // The error message is more useful than a generic rejection.
+            return reject(new Error(chrome.runtime.lastError.message));
+        }
+        resolve(response);
+    });
+});
+
+class MpvController {
+    constructor() {
+        // --- State ---
+        this.detectedUrl = null;
+        this.controllerHost = null;
+        this.shadowRoot = null;
+        this.anilistPanelHost = null;
+        this.minimizedHost = null;
+        this.anilistShadowRoot = null;
+        this.currentUiMode = 'full';
+        this.isPinned = false;
+        this.lastUrl = window.location.href;
+        this.activeLogFilters = { info: true, error: true };
+        this.isAnilistPanelManuallyPositioned = false;
+        this.autoReattachAnilistPanel = true; // Default value
+        this.isAnilistPanelLocked = false; // New state for the hard lock
+        this.forceReattachAnilistPanel = false; // New state for the force re-attach setting
+        this.preFullscreenPosition = null; // New: Store position before fullscreen
+        this.showAnilistReleases = true; // Default value
+        this.preResizePosition = null; // New: Store position before a resize forces a move
+        this.showMinimizedStub = true; // Default value
+        this.isTearingDown = false; // Flag to prevent race conditions during teardown
+        this.heartbeatInterval = null; // For checking background script connection
+        this.enableDblclickCopy = false; // New: Preference for double-click copy
+        this.showCopyTitleButton = false; // New: Preference for the copy title button
+        this.scraperFilterWords = []; // New: For scraper junk words
+        this.lastRightClickedElement = null; // New: To track right-clicks for context menu actions
+
+        // Bind `this` for methods that are used as event listeners or callbacks
+        this.handleMessage = this.handleMessage.bind(this);
+        this.handleFullscreenChange = this.handleFullscreenChange.bind(this); // This is correct
+        this.handlePageUpdate = debounce(this.handlePageUpdate.bind(this), 250); // Debounce the handler
+    }
+    
+    /**
+     * Scrapes the page for episode details to create a user-friendly title.
+     * @returns {{url: string, title: string}} An object with the detected URL and a formatted title.
+     */
+    scrapePageDetails() {
+        // --- AI GUARD: YOUTUBE-SPECIFIC LOGIC ---
+        // This block now contains high-priority scraping logic specifically for a YouTube
+        // video watch page (`/watch`). It runs before the generic scrapers to provide a
+        // clean title from the DOM, preventing the less reliable generic scrapers from
+        // producing a messy title. This is the primary method for the on-page "Add" button.
+        if (window.location.hostname.includes('youtube.com')) {
+            // List of selectors to try in order of preference for title and channel.
+            const titleSelectors = [
+                'h1.ytd-watch-metadata yt-formatted-string.ytd-video-primary-info-renderer', // Standard video
+                '#title > h1 > yt-formatted-string', // Alternate standard video
+                '#title-text', // YouTube Shorts
+                'meta[property="og:title"]' // Fallback to OpenGraph meta tag
+            ];
+            const channelSelectors = [
+                '#owner-name a', // Standard video
+                '#channel-name a', // Alternate standard video
+                'ytd-channel-name a', // Another alternate
+                '.ytd-channel-name', // Shorts channel name
+                'meta[property="og:site_name"]' // Fallback to OpenGraph meta tag
+            ];
+
+            // Helper to find the first matching element and get its content.
+            const findFirst = (selectors, attribute = 'textContent') => {
+                for (const selector of selectors) {
+                    const el = document.querySelector(selector);
+                    if (el) return (el[attribute] || el.content || '').trim();
+                }
+                return null;
+            };
+
+            let videoTitle = findFirst(titleSelectors, 'content') || document.title;
+            const channelName = findFirst(channelSelectors);
+            // Clean up the title: remove notification counts like "(1) " and the " - YouTube" suffix.
+            videoTitle = videoTitle.replace(/^\(\d+\)\s*/, '').replace(/\s-\sYouTube$/, '').trim();
+
+            return { url: this.detectedUrl, title: channelName ? `${channelName} - ${videoTitle}` : videoTitle };
+        }
+        // --- END AI GUARD ---
+
+        let title = document.title;
+        let season = null;
+        let episode = null;
+        const matchedStrings = new Set(); // Store the exact text that was matched
+
+        // Regex patterns to find season and episode numbers
+        const patterns = [
+            /s(?:eason)?\s*(\d+)\s*e(?:pisode)?\s*(\d+(?:\.\d+)?)/i, // S01E01, S01E12.5
+            /(\d+)x(\d+(?:\.\d+)?)/i, // 1x01, 1x12.5
+            /(?:(\d+)(?:st|nd|rd|th)\s+season)|s(?:eason)?\.?\s*(\d+)/i, // 2nd season, season 2, s2, s.2
+            /e(?:p(?:isode)?)?\.?\s*(\d+(?:\.\d+)?)/i, // EP 01, Episode 1, e1, ep. 1, ep 12.5
+        ];
+
+        const findDetails = (text) => {
+            if (!text) return;
+            // Prioritize combined SxE patterns first
+            for (const pattern of [patterns[0], patterns[1]]) {
+                const match = text.match(pattern);
+                if (match && match.length === 3) {
+                    if (!season) { season = parseFloat(match[1]); matchedStrings.add(match[0]); }
+                    if (!episode) { episode = parseFloat(match[2]); matchedStrings.add(match[0]); }
+                    return; // Found both, we're done with this text
+                }
+            }
+            // If not found, look for season and episode independently
+            const seasonMatch = text.match(patterns[2]);
+            if (seasonMatch) {
+                if (!season && (seasonMatch[1] || seasonMatch[2])) {
+                    season = parseFloat(seasonMatch[1] || seasonMatch[2]); // Group 1 for "2nd", Group 2 for "s2"
+                    matchedStrings.add(seasonMatch[0]);
+                }
+            }
+            const episodeMatch = text.match(patterns[3]);
+            if (episodeMatch) {
+                if (!episode) { episode = parseFloat(episodeMatch[1]); matchedStrings.add(episodeMatch[0]); }
+            }
+        };
+
+        // --- Scraper Strategy ---
+
+        // STEP 1: Check the URL hash. This is the highest priority source as it's
+        // an unambiguous indicator of the current episode on sites like anikai.to.
+        const urlHash = window.location.hash;
+        if (urlHash && !episode) {
+            const hashMatch = urlHash.match(/ep(?:isode)?=?(\d+)/i);
+            if (hashMatch && hashMatch[1]) {
+                episode = parseFloat(hashMatch[1]);
+            }
+        }
+
+        // STEP 2: Look for an "active" or "selected" element in an episode list.
+        // This is the next most reliable source, as it's a strong visual cue.
+        if (!episode) {
+            findDetails(document.querySelector('[class*="active"] a, [class*="selected"] a, a[class*="active"], a[class*="selected"]')?.textContent);
+        }
+
+        // STEP 3: Find the cleanest possible "main title" from the page content.
+        // An <h1> is the best candidate, as it's usually cleaner than the document.title.
+        let mainAnimeTitle = '';
+        const h1Element = document.querySelector('h1');
+        if (h1Element) {
+            // Prioritize a link with a title attribute inside the h1, as it's often the cleanest.
+            const h1Link = h1Element.querySelector('a[title]');
+            if (h1Link && h1Link.title) {
+                mainAnimeTitle = h1Link.title.trim();
+            } else {
+                // Fallback: Clone the h1, remove screen-reader-only spans, then get text.
+                const h1Clone = h1Element.cloneNode(true);
+                h1Clone.querySelectorAll('.sr-only, [style*="display: none"], [style*="visibility: hidden"]').forEach(el => el.remove());
+                mainAnimeTitle = h1Clone.textContent.trim();
+            }
+        } else { // Fallback if no h1 is found at all.
+            const titleCandidate = document.querySelector('h2, a[title]'); // Check h2 or any link with a title
+            if (titleCandidate) mainAnimeTitle = (titleCandidate.title || titleCandidate.textContent).trim();
+        }
+
+        // STEP 4: Scan for season/episode numbers. We check both the document.title and the
+        // main title we found, as the information can be in different places.
+        findDetails(title);
+        findDetails(mainAnimeTitle);
+
+        // STEP 5: If details are still missing, perform a broader search on the page
+        // in other common heading and class-named elements.
+        if (!season || !episode) {
+            const candidateSelectors = [
+                'h1', 'h2', 'h3',
+                '[class*="episode"]', '[id*="episode"]'
+            ];
+            const candidates = document.querySelectorAll(candidateSelectors.join(', '));
+            for (const candidate of candidates) {
+                findDetails(candidate.textContent);
+                if (season && episode) break;
+            }
+        }
+
+        // STEP 6: Finalize the title.
+        // Prioritize the mainAnimeTitle from h1 if it exists, as it's the most reliable.
+        // Otherwise, fall back to the document.title.
+        let cleanTitle = mainAnimeTitle || title;
+
+        // Surgically remove the exact text that was matched for season/episode
+        // (e.g., "Season 2", "Ep. 01") to avoid leaving fragments.
+        for (const matchedString of matchedStrings) {
+            cleanTitle = cleanTitle.replace(new RegExp(matchedString.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+        }
+        
+        // Now, remove all words from the built-in and user-defined filter lists.
+        // This is done *after* choosing the title source to clean up both cases.
+        const junkRegex = new RegExp(`(^|\\s)(${this.scraperFilterWords.join('|')})(\\s|$)`, 'gi');
+        cleanTitle = cleanTitle.replace(junkRegex, ' ');
+        
+        // Final cleanup: remove leftover episode numbers, extra symbols, and whitespace.
+        if (episode) cleanTitle = cleanTitle.replace(new RegExp(`\\b${episode}\\b`, 'g'), '');
+        cleanTitle = cleanTitle.replace(/\s\.\d+\s/g, ' '); // Remove leftover decimals like " .5 "
+        // Only remove hyphens, pipes, or colons that are used as separators (surrounded by spaces).
+        // This preserves them when they are part of the actual title.
+        cleanTitle = cleanTitle.replace(/\s*[-|:]\s*$/, '').replace(/\s+/g, ' ').trim();
+
+        const episodePrefix = season ? `s${season}e${episode}` : (episode ? `e${episode}` : '');
+        return { url: this.detectedUrl, title: episodePrefix ? `${episodePrefix} - ${cleanTitle}`.trim() : cleanTitle };
+    }
+
+    /**
+     * Handles messages from the background script.
+     * @param {object} request - The message object.
+     * @param {object} sender - The sender of the message.
+     * @param {Function} sendResponse - Function to call to send a response.
+     */
+    handleMessage(request, sender, sendResponse) {
+        if (request.action === 'init_ui_state' && this.controllerHost) {
+            // The background script has sent the initial state. Apply it now.
+            // This is the single point of truth for whether the UI should be visible on load.
+            const { shouldBeMinimized } = request;
+            // We must apply the initial state (including AniList visibility) *before*
+            // setting the minimized state. This ensures the AniList panel's visibility
+            // is restored correctly even when the main UI starts as minimized.
+            this.applyInitialState();
+            this.setMinimizedState(shouldBeMinimized, false);
+        } else if (request.m3u8) {
+            this.detectedUrl = request.m3u8;
+            // Report the detected stream URL to the background script
+            chrome.runtime.sendMessage({ action: 'report_detected_url', url: this.detectedUrl });
+            // Call the global UI update function
+            // Update the button state, which will also update the status banner.
+            this.updateAddButtonState();
+        } else if (request.action === 'render_playlist') {
+            // The background has sent an updated list. Render it only if it
+            // matches the currently selected folder.
+            const currentFolderId = this.shadowRoot?.getElementById('folder-select')?.value;
+            if (currentFolderId === request.folderId) {
+                this.renderPlaylist(request.playlist);
+            } else if (request.fromContextMenu) {
+                // If the update came from a context menu action for a *different* folder,
+                // the user might switch to that folder later and expect to see the new item.
+                // To ensure this, we'll silently refresh the folder dropdowns and the playlist for the *new* folder.
+                this.updateFolderDropdowns();
+                this.updateAddButtonState(); // Re-check if the URL is in the newly updated list
+            }
+        } else if (request.foldersChanged) {
+            // The list of available folders has changed (e.g., a new one was created)
+            this.updateFolderDropdowns();
+        } else if (request.action === 'last_folder_changed') {
+            // The selected folder was changed in another context (e.g., the popup).
+            // We need to sync our dropdowns to reflect this change.
+            const fullSelect = this.shadowRoot?.getElementById('folder-select');
+            const compactSelect = this.shadowRoot?.getElementById('compact-folder-select');
+            if (fullSelect && compactSelect && request.folderId) {
+                // Check if the value is different to avoid redundant playlist refreshes.
+                if (fullSelect.value !== request.folderId) {
+                    fullSelect.value = request.folderId;
+                    compactSelect.value = request.folderId;
+                    this.refreshPlaylist(); // Refresh the playlist view for the new folder.
+                    this.updateAddButtonState(); // Re-check against the new folder's playlist
+                }
+            }
+        } else if (request.log) {
+            // Call the global UI update function
+            this.addLogEntry(request.log);
+        } else if (request.action === 'preferences_changed') {
+            // Global or another domain's preferences changed, re-fetch ours.
+            this.applyInitialState();
+        } else if (request.action === 'show_confirmation') {
+            // This is an async action that requires a response, so we must return true.
+            (async () => {
+                try {
+                    // Use a page-level confirmation modal that doesn't depend on the controller UI state.
+                    const confirmed = await this.showPageLevelConfirmation(request.message);
+                    sendResponse({ confirmed });
+                } catch (e) {
+                    // If something goes wrong, send a negative confirmation.
+                    sendResponse({ confirmed: false });
+                }
+            })();
+            return true; // Indicate async response.
+        } else if (request.action === 'scrape_and_get_details') {
+            // The background script is asking for the page title and URL.
+            const details = this.scrapePageDetails();
+            sendResponse(details);
+            return true; // Indicate async response.
+        } else if (request.action === 'set_minimized_state') {
+            // The background script (relaying from the popup) is telling us to show or hide the UI.
+            this.setMinimizedState(request.minimized);
+            sendResponse({ success: true }); // Acknowledge the command
+        } else if (request.action === 'ytdlp_update_confirm') {
+            // This is triggered by the background script when an update is recommended and the user preference is 'ask'.
+            (async () => {
+                const confirmed = await this.showPageLevelConfirmation(
+                    "YouTube playback failed. This is often caused by an outdated yt-dlp. Would you like to attempt to automatically update it now?"
+                );
+                if (confirmed) {
+                    // If the user confirms, send a message back to the background script to trigger the update.
+                    chrome.runtime.sendMessage({ action: 'user_confirmed_ytdlp_update' });
+                }
+            })();
+            // No response needed, so we don't return true.
+        } else if (request.action === 'get_details_for_last_right_click') {
+            // The background script is asking for the title of the item that was just right-clicked.
+            // This avoids a network request by scraping the current page.
+            const linkElement = this.lastRightClickedElement?.closest('a');
+            const url = linkElement ? linkElement.href : null;
+            let title = null;
+
+            // --- YouTube Thumbnail Scraping Logic ---
+            // For YouTube, try to find the title and channel directly from the thumbnail structure.
+            // This is more accurate than scraping the whole page when right-clicking on the homepage.
+            if (window.location.hostname.includes('youtube.com') && this.lastRightClickedElement) {
+                const videoContainer = this.lastRightClickedElement.closest('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer');
+                // New: Add selectors for Shorts and other modern layouts
+                const titleSelectors = ['#video-title', '#title-text', 'span#video-title'];
+                const channelSelectors = ['#channel-name .yt-formatted-string', '.ytd-channel-name .yt-formatted-string', '#byline-container .yt-formatted-string'];
+
+                if (videoContainer) {
+                    let videoTitle = null;
+                    for (const selector of titleSelectors) {
+                        const el = videoContainer.querySelector(selector);
+                        if (el) { videoTitle = el.textContent.trim(); break; }
+                    }
+                    let channelName = null;
+                    for (const selector of channelSelectors) {
+                        const el = videoContainer.querySelector(selector);
+                        if (el) { channelName = el.textContent.trim(); break; }
+                    }
+                    if (videoTitle) {
+                        title = channelName ? `${channelName} - ${videoTitle}` : videoTitle;
+                    }
+                }
+            }
+
+            // If thumbnail scraping fails or it's not YouTube, fall back to the main page scraper.
+            if (!title) {
+                title = this.scrapePageDetails().title;
+            }
+
+            sendResponse({ url: url, title: title, source: 'contextMenu' });
+            return true; // Indicate async response.
+            
+            // If no element or title is found, an empty response will be sent, and the background will use a fallback.
+        }
+    }
+
+    /**
+     * Creates the controller container and injects the UI's HTML into the DOM.
+     */
+    async createAndInjectUi() {
+        // Create the host element that will live in the main DOM.
+        // All styling and positioning will be applied to this host.
+        this.controllerHost = document.createElement('div');
+        this.controllerHost.id = 'm3u8-controller-host';
+        this.controllerHost.style.display = 'none'; // Start hidden, background script will tell us to show.
+
+        // The UI container now lives inside the shadow DOM.
+        const uiWrapper = document.createElement('div');
+        uiWrapper.id = 'm3u8-controller';
+        // Get the URL for the stylesheet, which is made available via web_accessible_resources.
+        const cssUrl = chrome.runtime.getURL('content.css');
+        uiWrapper.innerHTML = `
+        <link rel="stylesheet" type="text/css" href="${cssUrl}">
+        <div id="status-banner">
+            <span id="stream-status">No stream detected</span>
+        </div>
+
+        <div id="m3u8-header">
+            <div id="m3u8-url">
+                <button id="btn-toggle-minimize" title="Minimize UI">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                </button>
+                <button id="btn-toggle-anilist-left" title="Toggle AniList Releases" style="display: none;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg>
+                </button>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect width="18" height="18" x="3" y="3" rx="2" />
+                    <path d="M7 7v10" />
+                    <path d="M11 7v10" />
+                    <path d="M15 9l5 3-5 3V9z" fill="currentColor" stroke-width="0" />
+                </svg>
+                <span class="title-text">MPV Playlist Organizer</span>
+            </div>
+            <div id="ui-toggles">
+                <button id="btn-toggle-pin" title="Pin UI Position">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="12" x2="12" y1="17" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
+                    </svg>
+                </button>
+                <button id="btn-toggle-anilist-right" title="Toggle AniList Releases">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect><polyline points="17 2 12 7 7 2"></polyline>
+                    </svg>
+                </button>
+                <button id="btn-toggle-ui-mode" title="Switch to Compact UI">
+                    <svg class="icon-full-ui" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>
+                    </svg>
+                    <svg class="icon-compact-ui" style="display: none;" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <div id="full-ui-container">
+            <div id="controls-container">
+                <div id="top-controls">
+                    <select id="folder-select"><!-- Options populated dynamically --></select>
+                </div>
+
+                <div id="playback-controls">
+                    <button id="btn-play"><span class="emoji">▶️</span> Play</button>
+                    <button id="btn-play-new" title="Launch a new, separate MPV instance."><span class="emoji">➕</span> Play New</button>
+                    <button id="btn-close-mpv" title="Close MPV Instance">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                    </button>
+                </div>
+
+                <div id="list-controls">
+                    <button id="btn-add"><span class="emoji">📥</span> Add</button>
+                    <button id="btn-clear"><span class="emoji">🗑️</span> Clear</button>
+                </div>
+
+            </div>
+
+            <div id="playlist-container">
+                <p id="playlist-placeholder">Playlist is empty.</p>
+            </div>
+
+            <div id="log-section">
+                <div id="log-header">
+                    <span id="log-title">Communication Log</span>
+                    <div id="log-buttons">
+                        <button id="btn-filter-info" class="log-filter-btn active" title="Toggle Info Logs">Info</button>
+                        <button id="btn-filter-error" class="log-filter-btn active" title="Toggle Error Logs">Error</button>
+                        <button id="btn-clear-log" title="Clear Log">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trash-2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                        </button>
+                        <button id="btn-toggle-log" title="Hide Log">
+                            <svg class="log-toggle-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="log-container">
+                    <p id="log-placeholder">Logs will appear here...</p>
+                </div>
+            </div>
+
+        </div>
+
+        <div id="compact-ui-container" style="display: none;">
+            <div id="compact-controls">
+                <select id="compact-folder-select"><!-- Options populated dynamically --></select>
+                <div id="compact-item-count-container" title="Items in playlist">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="8" y1="6" x2="21" y2="6"></line>
+                        <line x1="8" y1="12" x2="21" y2="12"></line>
+                        <line x1="8" y1="18" x2="21" y2="18"></line>
+                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                    </svg>
+                    <span id="compact-item-count">0</span>
+                </div>
+                <button id="btn-compact-add" title="Add Current URL"><span class="emoji">📥</span></button>
+                <button id="btn-compact-play" title="Play List"><span class="emoji">▶️</span></button>
+                <button id="btn-compact-clear" title="Clear List"><span class="emoji">🗑️</span></button>
+                <button id="btn-compact-close-mpv" title="Close MPV Instance">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Confirmation Modal -->
+        <div id="confirmation-modal" style="display: none;">
+            <div class="modal-content">
+                <p id="modal-message"></p>
+                <div class="modal-actions">
+                    <button id="modal-confirm-btn">Confirm</button>
+                    <button id="modal-cancel-btn">Cancel</button>
+                </div>
+            </div>
+        </div>
+        `;
+        // Attach the shadow root for isolation.
+        this.shadowRoot = this.controllerHost.attachShadow({ mode: 'open' });
+        this.shadowRoot.appendChild(uiWrapper);
+
+        // Append the host to the body *after* the shadow DOM is populated
+        document.body.appendChild(this.controllerHost);
+
+        // --- Create Minimized Stub ---
+        this.minimizedHost = document.createElement('div');
+        this.minimizedHost.id = 'm3u8-minimized-host';
+        this.minimizedHost.style.display = 'none'; // Start hidden
+
+        const minimizedShadowRoot = this.minimizedHost.attachShadow({ mode: 'open' });
+        // The wrapper contains two sibling buttons. This prevents hover events
+        // from bubbling from the play button to the restore button.
+        minimizedShadowRoot.innerHTML = `
+            <link rel="stylesheet" type="text/css" href="${cssUrl}">
+            <div id="m3u8-minimized-wrapper">
+                <button id="m3u8-minimized-stub" title="Show MPV Controller">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 7v10" /><path d="M11 7v10" /><path d="M15 9l5 3-5 3V9z" fill="currentColor" stroke-width="0" /></svg>
+                </button>
+                <button id="m3u8-minimized-play-btn" title="Play Playlist" class="play-button">
+                    <span id="m3u8-minimized-item-count" class="play-button-count" style="display: none;">0</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                </button>
+            </div>
+        `;
+        document.body.appendChild(this.minimizedHost);
+
+        // --- Create AniList Panel ---
+        this.anilistPanelHost = document.createElement('div');
+        this.anilistPanelHost.id = 'anilist-panel-host';
+        this.anilistPanelHost.style.display = 'none'; // Start hidden
+
+        this.anilistShadowRoot = this.anilistPanelHost.attachShadow({ mode: 'open' });
+
+        const anilistPanelWrapper = document.createElement('div');
+        anilistPanelWrapper.id = 'anilist-panel-wrapper';
+        anilistPanelWrapper.innerHTML = `
+            <link rel="stylesheet" type="text/css" href="${cssUrl}">
+            <div class="anilist-panel-header">
+                <button id="btn-refresh-anilist" class="anilist-refresh-btn" title="Refresh Releases">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"/></svg>
+                </button>
+                <p class="anilist-release-delay-info">Note: There may be a 30 minute to 3 hour delay on release times.</p>
+                <button id="btn-close-anilist-panel" title="Close Panel">&times;</button>
+            </div>
+            <div id="anilist-releases-container">
+                <ul id="anilist-releases-list" class="anilist-releases-list">
+                    <!-- AniList items will be rendered here -->
+                </ul>
+            </div>
+            <div id="anilist-resize-handle" title="Resize Panel">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="20" y1="14" x2="14" y2="20"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg>
+            </div>
+        `;
+        this.anilistShadowRoot.appendChild(anilistPanelWrapper);
+        document.body.appendChild(this.anilistPanelHost);
+
+        // Inject styles for the host elements into the main document's head.
+        const hostStyle = document.createElement('style');
+        hostStyle.textContent = `
+            #m3u8-controller-host, #m3u8-minimized-host {
+                position: fixed; z-index: 2147483647;
+            }
+            #m3u8-minimized-host.top-left { top: 15px; left: 15px; }
+            #m3u8-minimized-host.top-right { top: 15px; right: 15px; }
+            #anilist-panel-host {
+                position: fixed;
+                width: 400px; /* <-- CHANGE THIS: Default width */
+                height: 600px; /* <-- CHANGE THIS: Default height */
+                z-index: 2147483646; /* Just below controller */
+            }
+            body.mpv-controller-dragging, body.mpv-controller-dragging * {
+                user-select: none; -webkit-user-select: none; cursor: grabbing !important;
+            }
+            body.mpv-anilist-dragging, body.mpv-anilist-dragging * {
+                user-select: none; -webkit-user-select: none; cursor: grabbing !important;
+            }
+            /* New: Add a cursor for resizing the anilist panel */
+            body.mpv-anilist-resizing, body.mpv-anilist-resizing * {
+                user-select: none; -webkit-user-select: none;
+                cursor: se-resize !important;
+            }
+        `;
+        document.head.appendChild(hostStyle);
+
+    }
+
+    switchUi(uiMode, saveState = true) {
+        const fullUiContainer = this.shadowRoot?.getElementById('full-ui-container');
+        const compactUiContainer = this.shadowRoot?.getElementById('compact-ui-container');
+        const toggleBtn = this.shadowRoot?.getElementById('btn-toggle-ui-mode');
+        const fullIcon = toggleBtn?.querySelector('.icon-full-ui');
+        const compactIcon = toggleBtn?.querySelector('.icon-compact-ui');
+
+        if (!fullUiContainer || !compactUiContainer || !toggleBtn || !fullIcon || !compactIcon) return;
+
+        this.currentUiMode = uiMode;
+        if (uiMode === 'full') {
+            fullUiContainer.style.display = 'flex';
+            compactUiContainer.style.display = 'none';
+            toggleBtn.title = 'Switch to Compact UI';
+            fullIcon.style.display = 'block';
+            compactIcon.style.display = 'none';
+        } else if (uiMode === 'compact') {
+            fullUiContainer.style.display = 'none';
+            compactUiContainer.style.display = 'flex';
+            toggleBtn.title = 'Switch to Full UI';
+            fullIcon.style.display = 'none';
+            compactIcon.style.display = 'block';
+        }
+        if (saveState) {
+            this.savePreference({ mode: uiMode });
+        }
+        this.refreshPlaylist();
+    }
+
+    /**
+     * Displays a page-level confirmation modal, independent of the controller UI.
+     * @param {string} message The message to display in the modal.
+     * @returns {Promise<boolean>} A promise that resolves to true if confirmed, false if cancelled.
+     */
+    showPageLevelConfirmation(message) {
+        return new Promise((resolve) => {
+            // Check if a modal already exists to prevent duplicates
+            if (document.getElementById('mpv-page-level-modal-host')) {
+                resolve(false);
+                return;
+            }
+
+            const modalHost = document.createElement('div');
+            modalHost.id = 'mpv-page-level-modal-host';
+            // The host itself needs a high z-index to appear over everything.
+            modalHost.style.position = 'fixed';
+            modalHost.style.top = '0';
+            modalHost.style.left = '0';
+            modalHost.style.width = '100%';
+            modalHost.style.height = '100%';
+            modalHost.style.zIndex = '2147483647';
+
+            const shadowRoot = modalHost.attachShadow({ mode: 'open' });
+
+            const style = document.createElement('style');
+            style.textContent = `
+                /* These variables are copied from the extension's theme for consistency */
+                :host {
+                    --surface-color: #1d1f23;
+                    --border-color: #33363b;
+                    --text-primary: #e1e1e1;
+                    --accent-primary: #5865f2;
+                    --accent-primary-hover: #4f5bda;
+                    --surface-hover-color: #2c2e33;
+                    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    --border-radius: 6px;
+                }
+                #page-level-confirmation-overlay {
+                    position: absolute;
+                    top: 0; left: 0; right: 0; bottom: 0;
+                    background-color: rgba(0, 0, 0, 0.8);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-family: var(--font-sans);
+                }
+                .modal-content {
+                    background-color: var(--surface-color);
+                    color: var(--text-primary);
+                    padding: 24px;
+                    border-radius: var(--border-radius);
+                    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+                    text-align: center;
+                    border: 1px solid var(--border-color);
+                    display: flex;
+                    flex-direction: column;
+                    gap: 20px;
+                    max-width: 400px;
+                    width: 90%;
+                }
+                p { margin: 0; font-size: 16px; line-height: 1.5; }
+                .modal-actions { display: flex; justify-content: center; gap: 12px; }
+                button {
+                    color: #fff; border: none; border-radius: var(--border-radius);
+                    padding: 10px 20px; font-size: 14px; font-weight: 600;
+                    cursor: pointer; transition: all 0.15s ease;
+                }
+                #page-level-modal-confirm-btn { background-color: var(--accent-primary); }
+                #page-level-modal-confirm-btn:hover { background-color: var(--accent-primary-hover); }
+                #page-level-modal-cancel-btn { background-color: var(--surface-hover-color); }
+                #page-level-modal-cancel-btn:hover { background-color: var(--border-color); }
+            `;
+
+            const modalWrapper = document.createElement('div');
+            modalWrapper.id = 'page-level-confirmation-overlay';
+            modalWrapper.innerHTML = `
+                <div class="modal-content">
+                    <p id="page-level-modal-message"></p>
+                    <div class="modal-actions">
+                        <button id="page-level-modal-confirm-btn">Confirm</button>
+                        <button id="page-level-modal-cancel-btn">Cancel</button>
+                    </div>
+                </div>
+            `;
+
+            shadowRoot.append(style, modalWrapper);
+            shadowRoot.getElementById('page-level-modal-message').textContent = message;
+            const confirmBtn = shadowRoot.getElementById('page-level-modal-confirm-btn');
+            const cancelBtn = shadowRoot.getElementById('page-level-modal-cancel-btn');
+
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    close(true);
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    close(false);
+                }
+            };
+
+            const close = (result) => {
+                window.removeEventListener('keydown', handleKeyDown, true);
+                document.body.removeChild(modalHost);
+                resolve(result);
+            };
+
+            confirmBtn.onclick = () => close(true);
+            cancelBtn.onclick = () => close(false);
+
+            // Add keydown listener to the window, using capture to get it before other listeners.
+            window.addEventListener('keydown', handleKeyDown, true);
+
+            document.body.appendChild(modalHost);
+            confirmBtn.focus(); // Set focus to the confirm button
+        });
+    }
+
+    /**
+     * Saves a UI preference. The background script will determine if it's
+     * a global or domain-specific setting based on the sender.
+     * @param {object} preference - The preference object to save (e.g., {pinned: true}).
+     */
+    savePreference(preference) {
+        chrome.runtime.sendMessage({
+            action: 'set_ui_preferences',
+            preferences: preference
+        });
+    }
+
+    /**
+     * Ensures the controller is within the visible viewport boundaries.
+     * This is crucial after window resizes or when showing the UI after it was hidden.
+     */
+    validateAndRepositionController() {
+        // We only care about repositioning if the host element exists.
+        if (!this.controllerHost) return;
+
+        // Use a small timeout. When an element's display changes from 'none' to 'block',
+        // its dimensions (offsetWidth/Height) are not immediately available in the same
+        // execution frame. The timeout pushes this logic to the next event loop tick,
+        // by which time the browser has calculated the layout.
+        setTimeout(() => {
+            // If the controller is hidden, don't do anything.
+            if (this.controllerHost.style.display === 'none') return;
+
+            const hostWidth = this.controllerHost.offsetWidth;
+            const hostHeight = this.controllerHost.offsetHeight;
+
+            // If dimensions are zero, it's likely not rendered yet. Abort.
+            if (hostWidth === 0 || hostHeight === 0) return;
+
+            const maxX = window.innerWidth - hostWidth;
+            const maxY = window.innerHeight - hostHeight;
+
+            const currentLeft = this.controllerHost.offsetLeft;
+            const currentTop = this.controllerHost.offsetTop;
+
+            // Clamp the values to be within the viewport.
+            const newLeft = Math.min(maxX, Math.max(0, currentLeft));
+            const newTop = Math.min(maxY, Math.max(0, currentTop));
+
+            // Only update and save if a change was necessary.
+            if (newLeft !== currentLeft || newTop !== currentTop) {
+                this.controllerHost.style.left = `${newLeft}px`;
+                this.controllerHost.style.top = `${newTop}px`;
+                this.controllerHost.style.right = 'auto'; // Ensure we are using left/top positioning
+                this.controllerHost.style.bottom = 'auto';
+
+            }
+            // If the user has manually positioned the anilist panel and disabled auto-snapping,
+            // we must NOT call updateAdaptiveElements(), as it can trigger a re-snap on page load.
+            // This is the definitive fix based on the observation that the panel behaves correctly
+            // when the main controller is minimized (because this function doesn't run).
+            if (!this.autoReattachAnilistPanel && this.isAnilistPanelManuallyPositioned) {
+                // We still need to validate the minimized stub's position.
+                this.validateAndRepositionMinimizedStub();
+            } else {
+                // Otherwise, run the full update.
+                setTimeout(() => {
+                    this.updateAdaptiveElements();
+                    this.validateAndRepositionMinimizedStub();
+                }, 10);
+            }
+        }, 10); // 10ms is a safe, small delay.
+    }
+
+    /**
+     * Ensures the AniList panel is within the visible viewport boundaries.
+     * This is called on initial load to prevent the panel from being "stuck" off-screen.
+     */
+    validateAndRepositionAnilistPanel() {
+        if (!this.anilistPanelHost || this.anilistPanelHost.style.display === 'none') return;
+
+        // Use a timeout to ensure dimensions are available after rendering.
+        setTimeout(() => {
+            const hostWidth = this.anilistPanelHost.offsetWidth;
+            const hostHeight = this.anilistPanelHost.offsetHeight;
+
+            if (hostWidth === 0 || hostHeight === 0) return;
+
+            const maxX = window.innerWidth - hostWidth;
+            const maxY = window.innerHeight - hostHeight;
+
+            const currentLeft = this.anilistPanelHost.offsetLeft;
+            const currentTop = this.anilistPanelHost.offsetTop;
+
+            // Clamp the values to be within the viewport.
+            const newLeft = Math.min(maxX, Math.max(0, currentLeft));
+            const newTop = Math.min(maxY, Math.max(0, currentTop));
+
+            // Only update the style if a change was necessary.
+            // We do NOT save this change, as it's a temporary correction. The user's
+            // intended off-screen position is preserved for when they move to a larger monitor.
+            if (newLeft !== currentLeft || newTop !== currentTop) {
+                this.anilistPanelHost.style.left = `${newLeft}px`;
+                this.anilistPanelHost.style.top = `${newTop}px`;
+                this.anilistPanelHost.style.right = 'auto';
+                this.anilistPanelHost.style.bottom = 'auto';
+            }
+        }, 20); // A small delay is sufficient.
+    }
+    /**
+     * Toggles the minimized state of the UI, showing a stub in the corner.
+     * @param {boolean} shouldBeMinimized - True to minimize, false to restore.
+     * @param {boolean} [savePref=true] - Whether to save the state to preferences.
+     * @param {object} [initialPrefs=null] - Optional preferences object to avoid re-fetching.
+     */
+    async setMinimizedState(shouldBeMinimized, savePref = true, initialPrefs = null) {
+        // Re-query hosts to ensure we have live references.
+        const controllerHost = document.getElementById('m3u8-controller-host');
+        const minimizedHost = document.getElementById('m3u8-minimized-host');
+        const anilistPanelHost = document.getElementById('anilist-panel-host');
+
+        if (!controllerHost || !minimizedHost || !anilistPanelHost) return;
+
+        // Update instance properties in case they were stale from a re-injection.
+        this.controllerHost = controllerHost;
+        this.minimizedHost = minimizedHost;
+        this.anilistPanelHost = anilistPanelHost;
+
+        let prefs = initialPrefs;
+        // Only fetch preferences if not provided and if we need them (either to save or to decide position when minimizing).
+        if (!prefs && (savePref || shouldBeMinimized)) {
+            const response = await chrome.runtime.sendMessage({ action: 'get_ui_preferences' });
+            if (response?.success && response.preferences) {
+                prefs = response.preferences;
+            }
+        }
+
+        if (shouldBeMinimized) {
+            this.controllerHost.style.display = 'none';
+
+            // Only show the minimized stub if the setting is enabled.
+            if (this.showMinimizedStub) {
+                // Determine which corner to attach to based on the main controller's last position.
+                const savedPosition = prefs?.minimizedStubPosition;
+                if (savedPosition && savedPosition.left && savedPosition.top) {
+                    this.minimizedHost.style.left = savedPosition.left;
+                    this.minimizedHost.style.top = savedPosition.top;
+                    this.minimizedHost.style.right = savedPosition.right;
+                    this.minimizedHost.style.bottom = savedPosition.bottom;
+                } else {
+                    // Calculate corner based on controller position if no saved position
+                    const rect = this.controllerHost.getBoundingClientRect();
+                    const controllerCenter = rect.left + (rect.width / 2);
+                    const screenCenter = window.innerWidth / 2;
+                    const isControllerOnLeft = controllerCenter < screenCenter;
+
+                    this.minimizedHost.classList.toggle('top-left', isControllerOnLeft);
+                    this.minimizedHost.classList.toggle('top-right', !isControllerOnLeft);
+                    // Clear explicit positioning if using class-based positioning
+                    this.minimizedHost.style.left = '';
+                    this.minimizedHost.style.top = '';
+                    this.minimizedHost.style.right = '';
+                    this.minimizedHost.style.bottom = '';
+                }
+                this.minimizedHost.style.display = 'block';
+            }
+
+            if (savePref) {
+                this.savePreference({ minimized: true });
+            }
+        } else { // Restore
+            this.minimizedHost.style.display = 'none';
+            this.controllerHost.style.display = 'block';
+
+            const prefsToSave = { minimized: false };
+
+            // If auto-reattach is enabled, reset the manual positioning flag
+            // so it snaps back to the controller on the next position update.
+            if (this.autoReattachAnilistPanel) {
+            }
+            this.validateAndRepositionController(); // Make sure it's on screen
+            if (savePref) {
+                this.savePreference(prefsToSave);
+            }
+        }
+    }
+
+    /**
+     * Ensures the minimized stub is within the visible viewport boundaries.
+     * This is called after window resizes.
+     */
+    validateAndRepositionMinimizedStub() {
+        if (!this.minimizedHost || this.minimizedHost.style.display === 'none') return;
+
+        setTimeout(() => {
+            const hostWidth = this.minimizedHost.offsetWidth;
+            const hostHeight = this.minimizedHost.offsetHeight;
+
+            if (hostWidth === 0 || hostHeight === 0) return;
+
+            const maxX = window.innerWidth - hostWidth;
+            const maxY = window.innerHeight - hostHeight;
+
+            const currentLeft = this.minimizedHost.offsetLeft;
+            const currentTop = this.minimizedHost.offsetTop;
+
+            const newLeft = Math.min(maxX, Math.max(0, currentLeft));
+            const newTop = Math.min(maxY, Math.max(0, currentTop));
+
+            if (newLeft !== currentLeft || newTop !== currentTop) {
+                this.minimizedHost.style.left = `${newLeft}px`;
+                this.minimizedHost.style.top = `${newTop}px`;
+                this.minimizedHost.style.right = 'auto';
+                this.minimizedHost.style.bottom = 'auto';
+
+                const newPosition = { left: this.minimizedHost.style.left, top: this.minimizedHost.style.top, right: this.minimizedHost.style.right, bottom: this.minimizedHost.style.bottom };
+                this.savePreference({ minimizedStubPosition: newPosition });
+            }
+        }, 10);
+    }
+    // --- UI State Management Functions ---
+    // These functions update the UI and, by default, save the state to storage.
+    // They can be called with `saveState = false` during initialization to prevent
+    // a redundant write operation.
+
+    setLogVisibility(isVisible, saveState = true) {
+        const logContainer = this.shadowRoot?.getElementById('log-container');
+        const toggleLogBtn = this.shadowRoot?.getElementById('btn-toggle-log');
+        if (!logContainer || !toggleLogBtn) return;
+
+        if (isVisible) { // If log should be visible
+            logContainer.classList.remove('log-hidden'); // Remove the hidden class
+            toggleLogBtn.classList.add('active');
+            toggleLogBtn.title = 'Hide Log';
+        } else { // If log should be hidden
+            logContainer.classList.add('log-hidden'); // Add the hidden class
+            toggleLogBtn.classList.remove('active');
+            toggleLogBtn.title = 'Show Log';
+        }
+        if (saveState) {
+            this.savePreference({ logVisible: isVisible });
+        }
+    }
+
+    setPinState(shouldBePinned, saveState = true) {
+        const togglePinBtn = this.shadowRoot?.getElementById('btn-toggle-pin');
+        const dragHandle = this.shadowRoot?.getElementById('status-banner');
+        if (!this.controllerHost || !togglePinBtn || !dragHandle) return;
+
+        this.isPinned = shouldBePinned; // Update instance state variable
+
+        if (shouldBePinned) {
+            this.controllerHost.classList.add('pinned');
+            togglePinBtn.classList.add('active-toggle');
+            togglePinBtn.title = 'Unpin UI (allows dragging)';
+            dragHandle.style.cursor = 'default';
+        } else {
+            this.controllerHost.classList.remove('pinned');
+            togglePinBtn.classList.remove('active-toggle');
+            togglePinBtn.title = 'Pin UI (locks at current position)';
+            dragHandle.style.cursor = 'grab';
+        }
+        if (saveState) {
+            this.savePreference({ pinned: shouldBePinned });
+        }
+    }
+
+    setLogFilters(newFilters, saveState = true) {
+        this.activeLogFilters = { ...this.activeLogFilters, ...newFilters };
+
+        const infoBtn = this.shadowRoot?.getElementById('btn-filter-info');
+        const errorBtn = this.shadowRoot?.getElementById('btn-filter-error');
+
+        if (infoBtn) infoBtn.classList.toggle('active', this.activeLogFilters.info);
+        if (errorBtn) errorBtn.classList.toggle('active', this.activeLogFilters.error);
+
+        this.applyLogFilters();
+
+        if (saveState) {
+            this.savePreference({ logFilters: this.activeLogFilters });
+        }
+    }
+
+    /**
+     * Iterates through existing log items and shows/hides them based on the
+     * current `this.activeLogFilters` state.
+     */
+    applyLogFilters() {
+        const logContainer = this.shadowRoot?.getElementById('log-container');
+        if (!logContainer) return;
+
+        const logItems = logContainer.querySelectorAll('.log-item');
+        logItems.forEach(item => {
+            const isError = item.classList.contains('log-item-error');
+            const type = isError ? 'error' : 'info';
+
+            if (this.activeLogFilters[type]) {
+                item.classList.remove('hidden-by-filter');
+            } else {
+                item.classList.add('hidden-by-filter');
+            }
+        });
+    }
+
+    updateAnilistPanelPosition() {
+        // Absolute Rule: If the panel has ever been manually positioned, do not snap it.
+        if (this.isAnilistPanelManuallyPositioned) {
+            return;
+        }
+        if (!this.anilistPanelHost || !this.controllerHost || this.anilistPanelHost.style.display === 'none') return;
+        const controllerRect = this.controllerHost.getBoundingClientRect();
+        const panelWidth = this.anilistPanelHost.offsetWidth; // Should be 380px from style
+        const gap = 10; // Gap between controller and panel
+
+        const controllerCenter = controllerRect.left + (controllerRect.width / 2);
+        const screenCenter = window.innerWidth / 2;
+
+        let newLeft;
+        if (controllerCenter < screenCenter) {
+            // Controller is on the left, so panel should be to its right.
+            newLeft = controllerRect.right + gap;
+        } else {
+            // Controller is on the right, so panel should be to its left.
+            newLeft = controllerRect.left - panelWidth - gap;
+        }
+
+        this.anilistPanelHost.style.top = `${controllerRect.top}px`;
+        this.anilistPanelHost.style.left = `${newLeft}px`;
+        this.anilistPanelHost.style.right = 'auto';
+        this.anilistPanelHost.style.bottom = 'auto';
+    }
+
+    updateAdaptiveElements() {
+        // If auto-reattach is disabled AND the panel has been manually moved,
+        // this function should do nothing. This prevents any other part of the code from accidentally snapping it.
+        if (!this.autoReattachAnilistPanel && this.isAnilistPanelManuallyPositioned) {
+            return;
+        }
+        if (!this.controllerHost || !this.shadowRoot) return;
+
+        const anilistBtnLeft = this.shadowRoot.getElementById('btn-toggle-anilist-left');
+        const anilistBtnRight = this.shadowRoot.getElementById('btn-toggle-anilist-right');
+        if (!anilistBtnLeft || !anilistBtnRight) return;
+
+        // Update the cursor on the AniList drag handle based on the lock state.
+        const anilistDragHandle = this.anilistShadowRoot?.querySelector('.anilist-panel-header');
+        if (anilistDragHandle) {
+            // If the panel is locked, use a default cursor. Otherwise, use 'grab'.
+            anilistDragHandle.style.cursor = this.isAnilistPanelLocked ? 'default' : 'grab';
+        }
+
+        // If the feature is disabled, hide both and exit.
+        if (!this.isAnilistEnabled || !this.showAnilistOnPage) {
+            anilistBtnLeft.style.display = 'none';
+            anilistBtnRight.style.display = 'none';
+            // Also ensure the panel is hidden if the setting is turned off
+            this.toggleAnilistPanel(false, false);
+            return;
+        }
+        const rect = this.controllerHost.getBoundingClientRect();
+        const controllerCenter = rect.left + (rect.width / 2);
+        const screenCenter = window.innerWidth / 2;
+
+        if (controllerCenter < screenCenter) {
+            // Controller is on the left half, so the "outer" button is on the right.
+            anilistBtnLeft.style.display = 'none';
+            anilistBtnRight.style.display = 'flex';
+        } else {
+            // Controller is on the right half, so the "outer" button is on the left.
+            anilistBtnLeft.style.display = 'flex';
+            anilistBtnRight.style.display = 'none';
+        }
+        // Also update the panel's position in case the controller was moved
+        // while the panel was hidden.
+        this.updateAnilistPanelPosition();
+    }
+    /**
+     * Finds all interactive UI elements and attaches their corresponding event listeners.
+     */
+    bindEventListeners() {
+        this._bindHeaderControls();
+        this._bindActionControls();
+        this._bindPlaylistControls();
+        this._bindLogControls();
+        this._bindDragAndDrop();
+        this._bindWindowEvents();
+        this._bindMinimizedControls();
+        this._bindAnilistPanelControls();
+        this._bindPlaylistDragAndDrop();
+        this._bindMinimizedDragAndDrop(); // New: Bind drag for minimized stub
+        this._bindAnilistDragAndDrop();
+        this._bindAnilistResize(); // New: Bind resize for AniList panel
+    }
+
+    /** Binds listeners for the main header (minimize, pin, UI mode, AniList). */
+    _bindHeaderControls() {
+        this.shadowRoot.getElementById('btn-toggle-minimize').addEventListener('click', () => this.setMinimizedState(true));
+
+        this.shadowRoot.getElementById('btn-toggle-pin').addEventListener('click', () => this.setPinState(!this.isPinned));
+
+        this.shadowRoot.getElementById('btn-toggle-ui-mode').addEventListener('click', () => {
+            const newMode = this.currentUiMode === 'full' ? 'compact' : 'full';
+            this.switchUi(newMode);
+        });
+
+        const anilistBtnLeft = this.shadowRoot.getElementById('btn-toggle-anilist-left');
+        const anilistBtnRight = this.shadowRoot.getElementById('btn-toggle-anilist-right');
+        const toggleAnilistHandler = () => this.toggleAnilistPanel();
+        anilistBtnLeft.addEventListener('click', toggleAnilistHandler);
+        anilistBtnRight.addEventListener('click', toggleAnilistHandler);
+    }
+
+    /**
+     * Toggles the visibility of the AniList side panel and syncs button states.
+     * @param {boolean} [forceState] - Optional. `true` to show, `false` to hide. Toggles if omitted.
+     * @param {boolean} [savePref=true] - Whether to save the visibility state.
+     * @param {object|null} [initialPosition=null] - The initial position from preferences, used on load.
+     */
+    toggleAnilistPanel(forceState, savePref = true, initialPosition = null) {
+        if (!this.shadowRoot || !this.anilistPanelHost) return;
+
+        const anilistBtnLeft = this.shadowRoot.getElementById('btn-toggle-anilist-left');
+        const anilistBtnRight = this.shadowRoot.getElementById('btn-toggle-anilist-right');
+
+        let shouldBeVisible;
+
+        // Master override. If the setting is off, it can never be visible.
+        // This check must happen before we determine the toggle state. It checks both the master and sub-setting.
+        if (!this.isAnilistEnabled || !this.showAnilistOnPage) {
+            shouldBeVisible = false;
+        }
+
+        if (typeof forceState === 'boolean') {
+            shouldBeVisible = forceState && this.isAnilistEnabled && this.showAnilistOnPage;
+        } else {
+            shouldBeVisible = this.anilistPanelHost.style.display === 'none';
+        }
+
+        if (shouldBeVisible) {
+            // This check is redundant due to the master override, but good for safety
+            if (!this.isAnilistEnabled || !this.showAnilistOnPage) return;
+
+            this.anilistPanelHost.style.display = 'block';
+
+            // If "Auto-reattach" is enabled, we force the panel to snap back to the controller
+            // by resetting its "manually positioned" state and clearing its saved position
+            // before updating its position.
+            if (this.forceReattachAnilistPanel) {
+                this.isAnilistPanelManuallyPositioned = false;
+                // Also clear the saved position from storage to prevent flickering on next preference load.
+                if (savePref) {
+                    this.savePreference({ anilistPanelPosition: null });
+                }
+            }
+
+            if (this.autoReattachAnilistPanel || !this.isAnilistPanelManuallyPositioned) {
+                this.updateAnilistPanelPosition();
+            }
+
+            this.fetchAniListReleases();
+            if (savePref) {
+                this.savePreference({ anilistPanelVisible: true });
+            }
+        } else {
+            this.anilistPanelHost.style.display = 'none';
+            if (anilistBtnLeft) anilistBtnLeft.classList.remove('active-toggle');
+            if (anilistBtnRight) anilistBtnRight.classList.remove('active-toggle');
+            if (savePref) {
+                // When toggling off, just save the visibility state. Do NOT clear the position.
+                this.savePreference({ anilistPanelVisible: false });
+            }
+        }
+    }
+
+    /** Binds listeners for the primary action buttons (Play, Add, Clear, etc.). */
+    _bindActionControls() {
+        const getCurrentFolderId = () => {
+            const folderSelect = this.shadowRoot.getElementById('folder-select');
+            const compactFolderSelect = this.shadowRoot.getElementById('compact-folder-select');
+            return this.currentUiMode === 'full' ? folderSelect.value : compactFolderSelect.value;
+        };
+
+        const handleAddClick = async () => {
+            await this.addDetectedUrlToFolder(getCurrentFolderId(), { isUiVisible: true });
+        };
+
+        const handlePlayClick = () => this.sendCommandToBackground('play', getCurrentFolderId());
+
+        const handleClearClick = async () => {
+            const folderId = getCurrentFolderId();
+            const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
+            if (prefsResponse?.preferences?.confirm_clear_playlist ?? true) {
+                const confirmed = await this.showPageLevelConfirmation(`Are you sure you want to clear the playlist in "${folderId}"?`);
+                if (!confirmed) return this.addLogEntry({ text: `[Content]: Clear action cancelled by user.`, type: 'info' });
+            }
+            this.sendCommandToBackground('clear', folderId);
+        };
+
+        const handleCloseMpvClick = async () => {
+            const [isRunning, prefsResponse] = await Promise.all([
+                this.isMpvRunningFromBackground(),
+                sendMessageAsync({ action: 'get_ui_preferences' })
+            ]);
+            if (!isRunning) return this.addLogEntry({ text: `[Content]: Close command ignored, MPV is not running.`, type: 'info' });
+            if (prefsResponse?.preferences?.confirm_close_mpv ?? true) {
+                const confirmed = await this.showPageLevelConfirmation('Are you sure you want to close MPV?');
+                if (!confirmed) return this.addLogEntry({ text: `[Content]: Close MPV action cancelled by user.`, type: 'info' });
+            }
+            this.sendCommandToBackground('close_mpv', getCurrentFolderId());
+        };
+
+        const handlePlayNewClick = async () => {
+            const folderId = getCurrentFolderId();
+            const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
+            if (prefsResponse?.preferences?.confirm_play_new ?? true) {
+                const confirmed = await this.showPageLevelConfirmation("Launching a new MPV instance while another is running may cause issues. Continue?");
+                if (!confirmed) return this.addLogEntry({ text: `[Content]: 'Play New' action cancelled by user.`, type: 'info' });
+            }
+            this.sendCommandToBackground('play_new_instance', folderId);
+        };
+
+        const actionMap = { add: handleAddClick, play: handlePlayClick, clear: handleClearClick, 'close-mpv': handleCloseMpvClick };
+        for (const [action, handler] of Object.entries(actionMap)) {
+            this.shadowRoot.getElementById(`btn-${action}`).addEventListener('click', handler);
+            this.shadowRoot.getElementById(`btn-compact-${action}`).addEventListener('click', handler);
+        }
+        this.shadowRoot.getElementById('btn-play-new').addEventListener('click', handlePlayNewClick);
+    }
+
+    /**
+     * A helper function to add the currently detected URL to a specified folder.
+     * This encapsulates the logic for checking duplicates and sending the 'add' command.
+     * @param {string} folderId The ID of the folder to add the URL to.
+     * @param {object} options - Additional options.
+     * @param {boolean} options.isUiVisible - Whether the full UI is visible, allowing for modals.
+     */
+    async addDetectedUrlToFolder(folderId, { isUiVisible = false } = {}) {
+        const { url: urlToAdd, title: scrapedTitle } = this.scrapePageDetails();
+        if (!urlToAdd) {
+            this.addLogEntry({ text: `[Content]: No stream/video detected to add.`, type: 'error' });
+            return 'error';
+        }
+
+        try {
+            // Scrape the details here and send them directly to the background script.
+            // This avoids the background script having to message back to get the details.
+            this.sendCommandToBackground('add', folderId, { data: { url: urlToAdd, title: scrapedTitle } });
+            return 'success';
+        } catch (error) {
+            this.addLogEntry({ text: `[Content]: Error checking for duplicates: ${error.message}`, type: 'error' });
+            return 'error';
+        }
+    }
+    /** Binds listeners related to the playlist (item removal, folder selection). */
+    _bindPlaylistControls() {
+        const folderSelect = this.shadowRoot.getElementById('folder-select');
+        const compactFolderSelect = this.shadowRoot.getElementById('compact-folder-select');
+
+        const handleFolderChange = (newFolderId) => {
+            folderSelect.value = newFolderId;
+            compactFolderSelect.value = newFolderId;
+            chrome.runtime.sendMessage({ action: 'set_last_folder_id', folderId: newFolderId });
+            this.refreshPlaylist();
+        };
+        folderSelect.addEventListener('change', () => handleFolderChange(folderSelect.value));
+        compactFolderSelect.addEventListener('change', () => handleFolderChange(compactFolderSelect.value));
+
+        this.shadowRoot.getElementById('playlist-container').addEventListener('click', (e) => {
+            const removeBtn = e.target.closest('.btn-remove-item');
+            const copyBtn = e.target.closest('.btn-copy-item');
+
+            if (removeBtn) {
+                const index = parseInt(removeBtn.dataset.index, 10);
+                const folderId = folderSelect.value; // Can get from either select
+                if (!isNaN(index)) this.sendCommandToBackground('remove_item', folderId, { data: { index } });
+            } else if (copyBtn) {
+                // The button now copies the URL.
+                const urlToCopy = copyBtn.dataset.url;
+                if (!urlToCopy) return;
+
+                navigator.clipboard.writeText(urlToCopy).then(() => {
+                    this.addLogEntry({ text: `[Content]: Copied URL to clipboard.`, type: 'info' });
+                }).catch(err => {
+                    this.addLogEntry({ text: `[Content]: Failed to copy URL: ${err}`, type: 'error' });
+                });
+            }
+        });
+
+        // New: Add double-click listener to copy the title.
+        this.shadowRoot.getElementById('playlist-container').addEventListener('dblclick', (e) => {
+            if (!this.enableDblclickCopy) return; // Check if the feature is enabled
+
+            const listItem = e.target.closest('.list-item');
+            if (listItem && listItem.dataset.title) {
+                const titleToCopy = listItem.dataset.title;
+                if (titleToCopy) {
+                    navigator.clipboard.writeText(titleToCopy).then(() => {
+                        this.addLogEntry({ text: `[Content]: Copied title to clipboard.`, type: 'info' });
+                        // Add a temporary class to the parent list item for visual feedback.
+                        if (listItem) {
+                            listItem.classList.add('title-copied');
+                            setTimeout(() => {
+                                listItem.classList.remove('title-copied');
+                            }, 1500); // Animation duration is 1.5s
+                        }
+                    }).catch(err => {
+                        this.addLogEntry({ text: `[Content]: Failed to copy title: ${err}`, type: 'error' });
+                    });
+                }
+            }
+        });
+
+    }
+
+    /** Binds listeners for playlist item drag-and-drop reordering.
+     * @private
+     */
+    _bindPlaylistDragAndDrop() {
+        const playlistContainer = this.shadowRoot.getElementById('playlist-container');
+        if (!playlistContainer) return;
+
+        let draggedItem = null;
+
+        playlistContainer.addEventListener('dragstart', (e) => {
+            if (e.target.classList.contains('list-item')) {
+                draggedItem = e.target;
+                // Add a class to the item being dragged for visual feedback
+                setTimeout(() => draggedItem.classList.add('dragging'), 0);
+
+                // Set the data for dragging outside the browser.
+                const url = e.target.dataset.url; // The full URL is stored in the data attribute.
+                if (url) {
+                    // Provide the URL in multiple formats for maximum compatibility.
+                    // 'text/x-moz-url' is a legacy but widely supported format that helps
+                    // browsers and applications correctly identify the data as a URL.
+                    e.dataTransfer.setData('text/x-moz-url', url);
+                    // The spec requires each URI to be followed by a CRLF.
+                    e.dataTransfer.setData('text/uri-list', url + '\r\n');
+                    // 'text/plain' is a fallback for simple text editors.
+                    e.dataTransfer.setData('text/plain', url);
+                }
+            }
+        });
+
+        playlistContainer.addEventListener('dragend', (e) => {
+            if (draggedItem) {
+                draggedItem.classList.remove('dragging');
+                draggedItem = null;
+            }
+        });
+
+        playlistContainer.addEventListener('dragover', (e) => {
+            e.preventDefault(); // This is necessary to allow a drop
+            
+            // Remove any existing drop indicators to prevent multiple lines
+            const existingIndicator = playlistContainer.querySelector('.drag-over');
+            if (existingIndicator) {
+                existingIndicator.classList.remove('drag-over');
+            }
+
+            const afterElement = this.getDragAfterElement(playlistContainer, e.clientY);
+            if (afterElement) {
+                // Add a class to the element we're about to insert before
+                afterElement.classList.add('drag-over');
+            }
+        });
+
+        playlistContainer.addEventListener('drop', (e) => {
+            e.preventDefault();
+            if (!draggedItem) return;
+
+            // Find the element that has the visual indicator. This is the most reliable target.
+            const dropTarget = playlistContainer.querySelector('.drag-over');
+            if (dropTarget) {
+                dropTarget.classList.remove('drag-over');
+            }
+            
+            // Perform the actual DOM move on drop
+            playlistContainer.insertBefore(draggedItem, dropTarget); // dropTarget can be null, which correctly appends to the end.
+            
+            const folderSelect = this.shadowRoot.getElementById('folder-select');
+            const folderId = folderSelect.value;
+            if (!folderId) return;
+            
+            const newOrder = [...playlistContainer.querySelectorAll('.list-item')].map(item => ({ url: item.dataset.url, title: item.dataset.title }));
+            this.sendCommandToBackground('set_playlist_order', folderId, { data: { order: newOrder } });
+        });
+    }
+
+    /**
+     * Helper function for drag-and-drop to find the element to insert before.
+     * @private
+     * @param {HTMLElement} container - The container of draggable elements.
+     * @param {number} y - The vertical coordinate of the mouse.
+     * @returns {HTMLElement|null} The element to insert before, or null to append at the end.
+     */
+    getDragAfterElement(container, y) {
+        // Get all draggable elements except the one currently being dragged
+        const draggableElements = [...container.querySelectorAll('.list-item:not(.dragging)')];
+
+        return draggableElements.reduce((closest, child) => {
+            const box = child.getBoundingClientRect();
+            // Calculate the offset from the center of the element
+            const offset = y - box.top - box.height / 2;
+            // We are looking for the element where the cursor is just above its center
+            if (offset < 0 && offset > closest.offset) {
+                return { offset: offset, element: child };
+            } else {
+                return closest;
+            }
+        }, { offset: Number.NEGATIVE_INFINITY }).element;
+    }
+    /**
+     * Binds listeners for the log panel (filtering, clearing, toggling visibility).
+     * @private
+     */
+    _bindLogControls() {
+        this.shadowRoot.getElementById('btn-toggle-log').addEventListener('click', () => {
+            const logContainer = this.shadowRoot.getElementById('log-container');
+            const isCurrentlyVisible = !logContainer.classList.contains('log-hidden');
+            this.setLogVisibility(!isCurrentlyVisible);
+        });
+
+        this.shadowRoot.getElementById('btn-clear-log').addEventListener('click', () => {
+            this.addLogEntry({ text: '[Content]: Log cleared.', type: 'info' }, true);
+        });
+
+        this.shadowRoot.getElementById('btn-filter-info').addEventListener('click', () => {
+            this.setLogFilters({ info: !this.activeLogFilters.info });
+        });
+
+        this.shadowRoot.getElementById('btn-filter-error').addEventListener('click', () => {
+            this.setLogFilters({ error: !this.activeLogFilters.error });
+        });
+    }
+
+    /**
+     * Binds listeners for the minimized stub.
+     * @private
+     */
+    _bindMinimizedControls() {
+        const minimizedHost = document.getElementById('m3u8-minimized-host');
+        if (minimizedHost && minimizedHost.shadowRoot) {
+            const restoreBtn = minimizedHost.shadowRoot.getElementById('m3u8-minimized-stub');
+            const playBtn = minimizedHost.shadowRoot.getElementById('m3u8-minimized-play-btn');
+
+            if (restoreBtn && playBtn) {
+                restoreBtn.addEventListener('click', async (e) => {
+                    // Prevent default behavior, especially if it's a right-click for dragging
+                    e.preventDefault();
+
+                    // If the button is green (stream detected), a left-click adds the URL.
+                    if (restoreBtn.classList.contains('stream-present') && e.button === 0) {
+                        try {
+                            const folderResponse = await sendMessageAsync({ action: 'get_last_folder_id' });
+                            if (folderResponse?.success && folderResponse.folderId) {
+                                // This helper now returns a status: 'success', 'duplicate', 'cancelled', or 'error'.
+                                const result = await this.addDetectedUrlToFolder(folderResponse.folderId, { isUiVisible: false });
+
+                                if (result === 'success') {
+                                    // On success, clear the state and revert the button to default.
+                                    // The button state will be updated to yellow ("in playlist") automatically
+                                    // by the 'render_playlist' message handler.
+                                    this.addLogEntry({ text: `[Content]: URL added to '${folderResponse.folderId}'.`, type: 'info' });
+                                    this.refreshPlaylist(); // Refresh count in popup
+                                } else if (result === 'duplicate' && minimizedStub) {
+                                    // On duplicate, flash yellow and then revert.
+                                    restoreBtn.classList.remove('stream-present');
+                                    restoreBtn.classList.add('url-duplicate');
+                                    setTimeout(() => {
+                                        restoreBtn.classList.remove('url-duplicate');
+                                        // Don't clear detectedUrl, so the user can try restoring the UI to add it again.
+                                    }, 1500);
+                                }
+                                // For 'cancelled' or 'error', we do nothing and let the log entry be the feedback.
+                            }
+                        } catch (error) {
+                            this.addLogEntry({ text: `[Content]: Error adding from minimized button: ${error.message}`, type: 'error' });
+                        }
+                    } else {
+                        // If no stream is detected, or it's not a left-click, the default action is to restore the UI.
+                        this.setMinimizedState(false);
+                    }
+                });
+            }
+
+            if (playBtn) { // This listener remains separate
+                playBtn.addEventListener('click', (e) => {
+                    // Get the last used folder and send a 'play' command.
+                    (async () => {
+                        try {
+                            const folderResponse = await sendMessageAsync({ action: 'get_last_folder_id' });
+                            if (folderResponse?.success && folderResponse.folderId) {
+                                this.sendCommandToBackground('play', folderResponse.folderId);
+                            }
+                        } catch (error) {
+                            this.addLogEntry({ text: `[Content]: Error playing from minimized button: ${error.message}`, type: 'error' });
+                        }
+                    })();
+                });
+            }
+        }
+    }
+
+    /**
+     * Binds listeners for controls inside the AniList panel itself.
+     * @private
+     */
+    _bindAnilistPanelControls() {
+        const closeBtn = this.anilistShadowRoot?.getElementById('btn-close-anilist-panel');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => this.toggleAnilistPanel(false));
+        }
+        const refreshBtn = this.anilistShadowRoot?.getElementById('btn-refresh-anilist');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => this.fetchAniListReleases(true));
+        }
+    }
+
+    /**
+     * Sets up the logic for making the AniList panel draggable by its header.
+     * @private
+     */
+    _bindAnilistDragAndDrop() {
+        const dragHandle = this.anilistShadowRoot?.querySelector('.anilist-panel-header');
+        if (!dragHandle) return;
+
+        let isAnilistDragging = false;
+        let offsetX, offsetY;
+
+        dragHandle.addEventListener('mousedown', (e) => {
+            // If the panel is locked, prevent the drag from starting.
+            if (this.isAnilistPanelLocked) {
+                return;
+            }
+
+            e.preventDefault();
+            isAnilistDragging = true;
+            document.body.classList.add('mpv-anilist-dragging');
+
+            const rect = this.anilistPanelHost.getBoundingClientRect();
+            offsetX = e.clientX - rect.left;
+            offsetY = e.clientY - rect.top;
+            this.anilistPanelHost.style.transition = 'none';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isAnilistDragging) return;
+
+            let newLeft = e.clientX - offsetX;
+            let newTop = e.clientY - offsetY;
+            // Subtract the panel's height from the window's dimensions to get the max coordinates.
+            // Add a small buffer (e.g., 5px) to maxY to prevent the panel from being perfectly
+            // flush with the bottom, which can cause the browser to push it up on resize.
+            const maxX = window.innerWidth - this.anilistPanelHost.offsetWidth;
+            const maxY = window.innerHeight - this.anilistPanelHost.offsetHeight - 5;
+
+            // Clamp the position to ensure the panel stays within the viewport.
+            // The top and left cannot be less than 0.
+            newLeft = Math.min(maxX, Math.max(0, newLeft));
+            newTop = Math.min(maxY, Math.max(0, newTop));
+
+            this.anilistPanelHost.style.left = `${newLeft}px`;
+            this.anilistPanelHost.style.top = `${newTop}px`;
+            this.anilistPanelHost.style.right = 'auto';
+            this.anilistPanelHost.style.bottom = 'auto';
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (!isAnilistDragging) return;
+            isAnilistDragging = false;
+            document.body.classList.remove('mpv-anilist-dragging');
+            this.anilistPanelHost.style.transition = '';
+            // Flag that the panel has been manually moved and save its position.
+            this.isAnilistPanelManuallyPositioned = true;
+            const newPosition = {
+                left: this.anilistPanelHost.style.left,
+                top: this.anilistPanelHost.style.top,
+                right: this.anilistPanelHost.style.right,
+                bottom: this.anilistPanelHost.style.bottom
+            };
+            // When the user manually moves the panel, we just save its new position.
+            // The "auto-reattach" logic is now handled when the panel is opened.
+            this.savePreference({ anilistPanelPosition: newPosition });
+        });
+    }
+
+    /**
+     * Sets up the logic for making the minimized stub draggable.
+     * @private
+     */
+    _bindMinimizedDragAndDrop() {
+        const dragHandle = this.minimizedHost?.shadowRoot?.getElementById('m3u8-minimized-stub');
+        if (!dragHandle || !this.minimizedHost) return;
+
+        let isDragging = false;
+        let offsetX, offsetY;
+
+        dragHandle.addEventListener('mousedown', (e) => {
+            // Only initiate drag on right-click (e.button === 2)
+            if (e.button !== 2) return;
+
+            e.preventDefault(); // Prevent default context menu from appearing
+            isDragging = true;
+            // Re-use the existing dragging class for cursor styling
+            document.body.classList.add('mpv-controller-dragging');
+
+            const rect = this.minimizedHost.getBoundingClientRect();
+            offsetX = e.clientX - rect.left;
+            offsetY = e.clientY - rect.top;
+
+            // Disable transitions during drag for smoothness
+            this.minimizedHost.style.transition = 'none';
+        });
+
+        // Explicitly prevent the context menu from showing on the drag handle.
+        dragHandle.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+
+            const newLeft = e.clientX - offsetX;
+            const newTop = e.clientY - offsetY;
+
+            const hostWidth = this.minimizedHost.offsetWidth;
+            const hostHeight = this.minimizedHost.offsetHeight;
+
+            const maxX = window.innerWidth - hostWidth;
+            const maxY = window.innerHeight - hostHeight;
+
+            this.minimizedHost.style.left = `${Math.min(maxX, Math.max(0, newLeft))}px`;
+            this.minimizedHost.style.top = `${Math.min(maxY, Math.max(0, newTop))}px`;
+            this.minimizedHost.style.right = 'auto'; // Ensure we are using left/top positioning
+            this.minimizedHost.style.bottom = 'auto';
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (!isDragging) return;
+            isDragging = false;
+            document.body.classList.remove('mpv-controller-dragging');
+            this.minimizedHost.style.transition = ''; // Re-enable transitions
+
+            const newPosition = { left: this.minimizedHost.style.left, top: this.minimizedHost.style.top, right: this.minimizedHost.style.right, bottom: this.minimizedHost.style.bottom };
+            this.savePreference({ minimizedStubPosition: newPosition });
+        });
+    }
+
+    /**
+     * Sets up the logic for making the AniList panel resizable.
+     * @private
+     */
+    _bindAnilistResize() {
+        const resizeHandle = this.anilistShadowRoot?.getElementById('anilist-resize-handle');
+        if (!resizeHandle || !this.anilistPanelHost) return;
+
+        let isResizing = false;
+        let startX, startY, startWidth, startHeight;
+
+        resizeHandle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isResizing = true;
+            document.body.classList.add('mpv-anilist-resizing'); // Use a new class for cursor styling
+
+            startX = e.clientX;
+            startY = e.clientY;
+            startWidth = this.anilistPanelHost.offsetWidth;
+            startHeight = this.anilistPanelHost.offsetHeight;
+
+            this.anilistPanelHost.style.transition = 'none';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+
+            const minWidth = 250;
+            const minHeight = 200;
+
+            // Get the panel's current position to calculate maximum dimensions.
+            const rect = this.anilistPanelHost.getBoundingClientRect();
+            const maxAllowedWidth = window.innerWidth - rect.left;
+            const maxAllowedHeight = window.innerHeight - rect.top;
+
+            // Calculate the new width, ensuring it's between the min and max allowed.
+            const newWidth = Math.min(maxAllowedWidth, Math.max(minWidth, startWidth + (e.clientX - startX)));
+
+            // Calculate the new height, ensuring it's between the min and max allowed.
+            const newHeight = Math.min(maxAllowedHeight, Math.max(minHeight, startHeight + (e.clientY - startY)));
+
+            this.anilistPanelHost.style.width = `${newWidth}px`;
+            this.anilistPanelHost.style.height = `${newHeight}px`;
+
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (!isResizing) return;
+            isResizing = false;
+            document.body.classList.remove('mpv-anilist-resizing');
+            this.anilistPanelHost.style.transition = '';
+
+            // Save the new size
+            const newSize = {
+                width: this.anilistPanelHost.style.width,
+                height: this.anilistPanelHost.style.height
+            };
+            this.savePreference({ anilistPanelSize: newSize });
+        });
+    }
+
+    /**
+     * Sets up the logic for making the controller draggable.
+     * @private
+     */
+    _bindDragAndDrop() {
+        if (!this.shadowRoot) return;
+        const dragHandle = this.shadowRoot.getElementById('status-banner');
+        let isDragging = false;
+        let offsetX, offsetY;
+        // Cache all dimensions on drag start to avoid reflows in the mousemove handler
+        let controllerWidth, controllerHeight, panelWidth;
+        // A flag to determine if the panel should follow for the duration of the drag,
+        // preventing state changes from interfering mid-drag.
+        let isPanelAttachedDuringDrag = false;
+
+        dragHandle.addEventListener('mousedown', (e) => {
+            if (this.isPinned) return;
+            e.preventDefault();
+            isDragging = true;
+            document.body.classList.add('mpv-controller-dragging');
+
+            // Use getBoundingClientRect for accurate initial position
+            const rect = this.controllerHost.getBoundingClientRect();
+            offsetX = e.clientX - rect.left;
+            offsetY = e.clientY - rect.top;
+            // Cache dimensions to avoid reading from the DOM during the drag
+            controllerWidth = rect.width;
+            controllerHeight = rect.height;
+            if (this.anilistPanelHost) {
+                panelWidth = this.anilistPanelHost.offsetWidth;
+            }
+
+            // At the start of the drag, determine if the panel should follow.
+            isPanelAttachedDuringDrag = !this.isAnilistPanelManuallyPositioned;
+
+            // Disable transitions during drag for smoothness
+            this.controllerHost.style.transition = 'none';
+            if (this.anilistPanelHost) this.anilistPanelHost.style.transition = 'none';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging || this.isPinned) return;
+
+            // --- Move Controller ---
+            let newLeft = e.clientX - offsetX;
+            let newTop = e.clientY - offsetY;
+            // Use cached dimensions for performance
+            const maxX = window.innerWidth - controllerWidth;
+            const maxY = window.innerHeight - controllerHeight;
+            newLeft = Math.min(maxX, Math.max(0, newLeft));
+            newTop = Math.min(maxY, Math.max(0, newTop));
+
+            this.controllerHost.style.left = `${newLeft}px`;
+            this.controllerHost.style.top = `${newTop}px`;
+            this.controllerHost.style.right = 'auto';
+            this.controllerHost.style.bottom = 'auto';
+
+            // --- Update Attached AniList Panel & Adaptive Buttons Simultaneously ---
+            // This entire block uses cached values to ensure a smooth, single-frame update.
+            const controllerCenter = newLeft + (controllerWidth / 2);
+            const screenCenter = window.innerWidth / 2;
+            const isControllerOnLeft = controllerCenter < screenCenter;
+
+            const anilistBtnLeft = this.shadowRoot.getElementById('btn-toggle-anilist-left');
+            const anilistBtnRight = this.shadowRoot.getElementById('btn-toggle-anilist-right');
+            if (anilistBtnLeft && anilistBtnRight) {
+                // Only show the buttons if the feature is enabled.
+                if (this.showAnilistReleases) {
+                    anilistBtnLeft.style.display = isControllerOnLeft ? 'none' : 'flex';
+                    anilistBtnRight.style.display = isControllerOnLeft ? 'flex' : 'none';
+                }
+            }
+
+            // Use the state captured on mousedown to decide if the panel should move.
+            if (this.anilistPanelHost && this.anilistPanelHost.style.display !== 'none' && isPanelAttachedDuringDrag) {
+                const gap = 10;
+                // If the panel has been manually positioned, we should not move it when the controller moves.
+                // The `isPanelAttachedDuringDrag` flag already checks this at the start of the drag.
+                // This ensures that if the user has unchecked "Snap Panel on Open" and moved the panel,
+                // it stays put when the main controller is dragged.
+                const panelLeft = isControllerOnLeft ? (newLeft + controllerWidth + gap) : (newLeft - panelWidth - gap);
+                this.anilistPanelHost.style.top = `${newTop}px`;
+                this.anilistPanelHost.style.left = `${panelLeft}px`;
+                this.anilistPanelHost.style.right = 'auto';
+                this.anilistPanelHost.style.bottom = 'auto';
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (!isDragging) return;
+            isDragging = false;
+            document.body.classList.remove('mpv-controller-dragging');
+            // Re-enable transitions for smooth placement
+            this.controllerHost.style.transition = '';
+            if (this.anilistPanelHost) this.anilistPanelHost.style.transition = '';
+
+            const newPosition = { left: this.controllerHost.style.left, top: this.controllerHost.style.top, right: this.controllerHost.style.right, bottom: this.controllerHost.style.bottom };
+            // When the user moves the controller, the pre-fullscreen position is no longer relevant.
+            // Clear it so the next fullscreen entry captures the new user-defined position.
+            this.preFullscreenPosition = null;
+            // Also clear the pre-resize position, as the user has defined a new "home" for the controller.
+            // This is the only place where the position should be saved.
+            if (this.preResizePosition) {
+                this.preResizePosition = null;
+            }
+            this.savePreference({ position: newPosition });
+        });
+    }
+
+    /**
+     * Binds listeners to the main window object (e.g., resize).
+     * @private
+     */
+    _bindWindowEvents() {
+        if (!this.controllerHost) return;
+        const debouncedReposition = debounce(() => {
+            // --- New Resize Logic ---
+            if (this.controllerHost.style.display === 'none') {
+                // If the main controller is hidden, just validate the minimized stub.
+                this.validateAndRepositionMinimizedStub();
+                return;
+            }
+
+            const hostWidth = this.controllerHost.offsetWidth;
+            const hostHeight = this.controllerHost.offsetHeight;
+            const currentLeft = this.controllerHost.offsetLeft;
+            const currentTop = this.controllerHost.offsetTop;
+
+            // Calculate the maximum allowed coordinates.
+            const maxX = window.innerWidth - hostWidth;
+            const maxY = window.innerHeight - hostHeight;
+
+            // Check if the controller is currently off-screen.
+            const isOffScreen = currentLeft > maxX || currentTop > maxY;
+
+            if (isOffScreen) {
+                // If the controller is off-screen and we haven't stored a pre-resize position yet,
+                // it means this resize is the one forcing it to move. Store its current position.
+                if (!this.preResizePosition) {
+                    this.preResizePosition = { left: `${currentLeft}px`, top: `${currentTop}px` };
+                }
+                // Now, force the controller back into the viewport.
+                this.validateAndRepositionController();
+            } else if (this.preResizePosition) {
+                // If the controller is on-screen AND we have a stored pre-resize position,
+                // it means the window has been made larger again.
+                const originalLeft = parseInt(this.preResizePosition.left, 10);
+                const originalTop = parseInt(this.preResizePosition.top, 10);
+                // Check if the original position is now back within the valid viewport. If so, restore it.
+                // We no longer save this automatically, preventing cross-tab interference.
+                // The position is only saved on an explicit user drag.
+                if (originalLeft <= maxX && originalTop <= maxY) this.preResizePosition = null;
+            }
+        }, 250);
+        window.addEventListener('resize', debouncedReposition);
+    }
+
+    /**
+     * Loads saved state from localStorage and applies it to the UI.
+     * @param {object|null} positionOverride - An optional position object to use instead of fetching from storage.
+     */
+    async applyInitialState(positionOverride = null) {
+        const response = await chrome.runtime.sendMessage({ action: 'get_ui_preferences' });
+        if (!this.shadowRoot || !this.controllerHost) return; // UI not ready
+
+        const prefs = response?.preferences;
+
+        // Use the position override if provided (from exiting fullscreen),
+        // otherwise use the position from saved preferences.
+        const position = positionOverride || prefs?.position;
+
+        const mode = prefs?.mode || 'full'; // This part remains the same
+        const logVisible = prefs?.logVisible ?? true;
+        const pinned = prefs?.pinned ?? false;
+        const logFilters = prefs?.logFilters ?? { info: true, error: true };
+        const showPlayNew = prefs?.show_play_new_button ?? false;
+        const anilistPosition = prefs?.anilistPanelPosition; 
+        const anilistVisible = prefs?.anilistPanelVisible ?? false;
+        const anilistImageHeight = prefs?.anilist_image_height;
+        const anilistSize = prefs?.anilistPanelSize;
+        // This must be set *before* toggleAnilistPanel is called.
+        this.autoReattachAnilistPanel = prefs?.autoReattachAnilistPanel ?? true;
+        this.forceReattachAnilistPanel = prefs?.forceReattachAnilistPanel ?? false; // New setting
+        this.isAnilistEnabled = prefs?.enable_anilist_integration ?? true; // Master toggle
+        this.isAnilistPanelLocked = prefs?.lockAnilistPanel ?? false;
+        const minimizedStubPosition = prefs?.minimizedStubPosition;
+        this.enableDblclickCopy = prefs?.enable_dblclick_copy ?? false; // New: Apply preference
+        // This setting controls the visibility of the on-page UI elements, but is overridden by the master toggle.
+        this.showAnilistOnPage = prefs?.show_anilist_releases ?? true;
+        this.showMinimizedStub = prefs?.show_minimized_stub ?? true;
+        this.showCopyTitleButton = prefs?.show_copy_title_button ?? false;
+        this.scraperFilterWords = prefs?.scraper_filter_words || ['watch', 'online', 'free', 'episode', 'season', 'full', 'hd', 'eng sub', 'subbed', 'dubbed', 'animepahe'];
+
+        // Restore AniList panel position first.
+        if (anilistPosition && anilistPosition.left && anilistPosition.top) {
+            this.anilistPanelHost.style.left = anilistPosition.left;
+            this.anilistPanelHost.style.top = anilistPosition.top;
+            this.anilistPanelHost.style.right = anilistPosition.right;
+            this.anilistPanelHost.style.bottom = anilistPosition.bottom;
+            this.isAnilistPanelManuallyPositioned = true;
+        } else {
+            this.isAnilistPanelManuallyPositioned = false;
+        }
+
+        // Restore AniList panel size
+        if (anilistSize && anilistSize.width && anilistSize.height) {
+            this.anilistPanelHost.style.width = anilistSize.width;
+            this.anilistPanelHost.style.height = anilistSize.height;
+        }
+ 
+        // New: Restore AniList image size
+        if (this.anilistPanelHost && anilistImageHeight) {
+            const baseWidth = 50;
+            const defaultHeight = 70; // The original default height for aspect ratio calculation
+            const effectiveHeight = Number(anilistImageHeight || defaultHeight);
+            const scalingFactor = effectiveHeight / defaultHeight;
+            const effectiveWidth = Math.round(baseWidth * scalingFactor);
+    
+            this.anilistPanelHost.style.setProperty('--anilist-item-width', `${effectiveWidth}px`);
+            this.anilistPanelHost.style.setProperty('--anilist-image-height', `${effectiveHeight}px`);
+        }
+
+        // Restore Minimized Stub position
+        if (minimizedStubPosition && minimizedStubPosition.left && minimizedStubPosition.top) {
+            this.minimizedHost.style.left = minimizedStubPosition.left;
+            this.minimizedHost.style.top = minimizedStubPosition.top;
+            this.minimizedHost.style.right = minimizedStubPosition.right;
+            this.minimizedHost.style.bottom = minimizedStubPosition.bottom;
+        }
+
+        // Restore AniList panel visibility, passing its initial position to prevent re-snapping on load.
+        // Only show the panel if the master toggle is also on.
+        const shouldShowAnilistPanel = this.isAnilistEnabled && this.showAnilistOnPage && anilistVisible;
+        this.toggleAnilistPanel(shouldShowAnilistPanel, false);
+        
+        // After applying the saved position, validate it to ensure it's on-screen.
+        this.validateAndRepositionAnilistPanel();
+
+        if (position) {
+            this.controllerHost.style.left = position.left;
+            this.controllerHost.style.top = position.top;
+            this.controllerHost.style.right = position.right;
+            this.controllerHost.style.bottom = position.bottom;
+        }
+
+        const playNewBtn = this.shadowRoot?.getElementById('btn-play-new');
+        const playbackControls = this.shadowRoot?.getElementById('playback-controls');
+        if (playNewBtn && playbackControls) {
+            playNewBtn.style.display = showPlayNew ? 'flex' : 'none';
+            playbackControls.style.gridTemplateColumns = showPlayNew ? '1fr 1fr auto' : '1fr auto';
+        }
+
+        let shouldBeMinimized;
+        if (typeof prefs?.minimized === 'boolean') {
+            shouldBeMinimized = prefs.minimized;
+        } else {
+            shouldBeMinimized = (prefs?.mode === 'minimized');
+        }
+
+        this.setMinimizedState(shouldBeMinimized, false, prefs); // Pass prefs to avoid re-fetching
+        this.switchUi(mode === 'minimized' ? 'full' : mode, false);
+        this.setLogVisibility(logVisible, false);
+        this.setPinState(pinned, false);
+        this.setLogFilters(logFilters, false);
+
+        // If the controller is being shown, validate its position to ensure it's on-screen.
+        // This must be called *after* setting the position.
+        if (!shouldBeMinimized) {
+            // Update the AniList drag handle cursor based on the newly applied lock preference.
+            const anilistDragHandle = this.anilistShadowRoot?.querySelector('.anilist-panel-header');
+            if (anilistDragHandle) {
+                // If the panel is locked, use a default cursor. Otherwise, use 'grab'.
+                anilistDragHandle.style.cursor = this.isAnilistPanelLocked ? 'default' : 'grab';
+            }
+            this.validateAndRepositionController();
+        }
+        this.updateAdaptiveElements();
+    }
+
+    // --- Main Initialization Orchestrator ---
+    async initializeMpvController() {
+        if (document.getElementById('m3u8-controller-host')) return;
+        // Create UI, but it remains hidden by default (display: none).
+        await this.createAndInjectUi();
+        this.bindEventListeners();
+        await this.updateFolderDropdowns();
+        chrome.runtime.sendMessage({ action: 'content_script_init' });
+        console.log("MPV Controller content script initialized and ready.");
+
+        // After initializing, check if we are in fullscreen mode and hide the UI if so.
+        // This handles cases where the UI is re-injected on a page that is already fullscreen.
+        if (document.fullscreenElement && this.controllerHost) {
+            this.controllerHost.style.display = 'none';
+        }
+    }
+
+    // --- Global UI Update Functions ---
+    // These functions are called by the message listener and find the UI elements each time.
+    // This makes them resilient to the UI being destroyed and recreated.
+
+    updateStatusBanner(text, isSuccess = false) {
+        const statusBanner = this.shadowRoot?.getElementById('status-banner');
+        const streamStatus = this.shadowRoot?.getElementById('stream-status');
+        if (!statusBanner || !streamStatus) return;
+
+        streamStatus.textContent = text;
+        statusBanner.classList.toggle("detected", isSuccess);
+    }
+
+    async updateAddButtonState(isPlaylist = false) {
+        const addBtn = this.shadowRoot?.getElementById('btn-add');
+        const compactAddBtn = this.shadowRoot?.getElementById('btn-compact-add');
+        const minimizedStub = this.minimizedHost?.shadowRoot?.getElementById('m3u8-minimized-stub');
+        const folderSelect = this.shadowRoot?.getElementById('folder-select');
+
+        // Reset button states, but preserve the detected state if a URL is present.
+        addBtn?.classList.remove('url-in-playlist');
+        compactAddBtn?.classList.remove('url-in-playlist');
+        minimizedStub?.classList.remove('url-in-playlist');
+
+        if (!this.detectedUrl) {
+            // Explicitly remove the 'stream-present' class if no URL is detected.
+            addBtn?.classList.remove('stream-present');
+            compactAddBtn?.classList.remove('stream-present');
+            minimizedStub?.classList.remove('stream-present');
+
+            this.updateStatusBanner('No stream/playlist detected', false);
+            if (minimizedStub) minimizedStub.title = 'Show MPV Controller';
+        } else {
+            this.updateStatusBanner(isPlaylist ? 'Playlist detected' : 'Stream/video detected', true);
+
+            const currentFolderId = folderSelect?.value;
+            if (!currentFolderId) return; // Can't check playlist if no folder is selected.
+
+            try {
+                const playlistObjects = await this.getPlaylistFromBackground(currentFolderId);
+                const isUrlInPlaylist = playlistObjects.some(item => item.url === this.detectedUrl);
+
+                // Set the green 'detected' state first.
+                addBtn?.classList.add('stream-present');
+                compactAddBtn?.classList.add('stream-present');
+                minimizedStub?.classList.add('stream-present');
+                if (minimizedStub) minimizedStub.title = 'Click to add URL to playlist';
+
+                if (isUrlInPlaylist) {
+                    // URL is already in the list, make buttons yellow.
+                    addBtn?.classList.remove('stream-present');
+                    compactAddBtn?.classList.remove('stream-present');
+                    minimizedStub?.classList.remove('stream-present');
+                    addBtn?.classList.add('url-in-playlist');
+                    compactAddBtn?.classList.add('url-in-playlist');
+                    minimizedStub?.classList.add('url-in-playlist');
+                    if (minimizedStub) minimizedStub.title = 'URL is already in this playlist';
+                }
+            } catch (error) {
+                // If there's an error checking the playlist, do nothing. The buttons will keep their default state.
+            }
+        }
+    }
+
+    addLogEntry(logObject, clear = false) {
+        const logContainer = this.shadowRoot?.getElementById('log-container');
+        if (!logContainer) return; // UI not present, do nothing.
+        const placeholder = this.shadowRoot.getElementById('log-placeholder');
+
+        if (clear) {
+            while (logContainer.firstChild) {
+                logContainer.removeChild(logContainer.firstChild);
+            }
+        }
+        if (placeholder) placeholder.remove();
+
+        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        const logEntry = document.createElement('div');
+        logEntry.className = 'log-item';
+        if (logObject.type === 'error') logEntry.classList.add('log-item-error');
+
+        // Apply filter immediately to the new log entry
+        const logType = logObject.type === 'error' ? 'error' : 'info';
+        if (!this.activeLogFilters[logType]) {
+            logEntry.classList.add('hidden-by-filter');
+        }
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'log-timestamp';
+        timeSpan.textContent = `[${timestamp}]`;
+
+        const textSpan = document.createElement('span');
+        textSpan.className = 'log-text';
+        textSpan.textContent = logObject.text;
+
+        logEntry.append(timeSpan, textSpan);
+
+        logContainer.appendChild(logEntry);
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    async updateFolderDropdowns() {
+        if (!this.shadowRoot) return;
+    
+        try {
+            const folderResponse = await sendMessageAsync({ action: 'get_all_folder_ids' });
+            if (!folderResponse ?.success) {
+                this.addLogEntry({ text: `[Content]: Failed to get folder list: ${folderResponse?.error || 'Unknown error'}`, type: 'error' });
+                return;
+            }
+    
+            const fullSelect = this.shadowRoot?.getElementById('folder-select');
+            const compactSelect = this.shadowRoot?.getElementById('compact-folder-select');
+            if (!fullSelect || !compactSelect) return;
+    
+            // Clear existing options and build new ones
+            fullSelect.innerHTML = '';
+            compactSelect.innerHTML = '';
+            const optionsFragment = document.createDocumentFragment();
+            folderResponse.folderIds.forEach(id => {
+                const option = document.createElement('option');
+                option.value = id;
+                option.textContent = id;
+                optionsFragment.appendChild(option);
+            });
+            fullSelect.appendChild(optionsFragment.cloneNode(true));
+            compactSelect.appendChild(optionsFragment);
+    
+            const lastFolderResponse = await sendMessageAsync({ action: 'get_last_folder_id' });
+            if (lastFolderResponse ?.success && lastFolderResponse.folderId) {
+                fullSelect.value = lastFolderResponse.folderId;
+                compactSelect.value = lastFolderResponse.folderId;
+            }
+    
+            // After the dropdowns are populated and the correct folder is selected,
+            // we must explicitly refresh the playlist for that folder. This will, in turn,
+            // call updateAddButtonState with the fresh playlist data, ensuring the UI is correct.
+            // This is the key to fixing the SPA navigation race condition.
+            this.refreshPlaylist(); // This also calls updateAddButtonState()
+
+        } catch (error) {
+            this.addLogEntry({ text: `[Content]: Error updating folders: ${error.message}`, type: 'error' });
+        }
+    }
+
+    refreshPlaylist() {
+        // The folder dropdowns are always kept in sync, so we can reliably get the
+        // current folder ID from the main dropdown without checking the UI mode.
+        const folderSelect = this.shadowRoot?.getElementById('folder-select');
+        if (!folderSelect || !folderSelect.value) {
+            return; // UI not ready or no folder selected.
+        }
+        const currentFolderId = folderSelect.value;
+        // Fetch the playlist and then render it. The render call will also update the button state.
+        this.sendCommandToBackground('get_playlist', currentFolderId); // This will trigger a 'render_playlist' message
+    }
+
+    renderPlaylist(playlist) {
+        if (!this.shadowRoot) return;
+        const fullContainer = this.shadowRoot?.getElementById('playlist-container');
+        const itemCountSpan = this.shadowRoot?.getElementById('compact-item-count');
+        const minimizedPlayBtn = this.minimizedHost?.shadowRoot?.getElementById('m3u8-minimized-play-btn');
+        const minimizedCountSpan = this.minimizedHost?.shadowRoot?.getElementById('m3u8-minimized-item-count');
+
+        // Update compact UI count
+        if (itemCountSpan) itemCountSpan.textContent = playlist?.length || 0;
+
+        // Update minimized UI count
+        if (minimizedPlayBtn && minimizedCountSpan) {
+            const count = playlist?.length || 0;
+            minimizedCountSpan.textContent = count; // Set the number (e.g., 0, 1, 11)
+            minimizedCountSpan.style.display = 'inline'; // Always show the counter span
+            minimizedPlayBtn.classList.add('with-counter'); // Always apply the counter layout
+        }
+
+        // Update full UI list
+        if (!fullContainer) return;
+
+        // Store the current scroll position before clearing the list
+        const scrollPosition = fullContainer.scrollTop;
+
+        while (fullContainer.firstChild) fullContainer.removeChild(fullContainer.firstChild);
+
+        if (playlist && playlist.length > 0) {
+            playlist.forEach((item, index) => {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'list-item';
+                itemDiv.draggable = true; // Make the item draggable
+                itemDiv.title = item.url; // Show full URL on hover
+                itemDiv.dataset.url = item.url; // Store URL for drag/drop and copy
+                itemDiv.dataset.title = item.title; // Store title for drag/drop
+
+                // --- Secure Element Creation ---
+                // Create elements programmatically and use .textContent to prevent XSS.
+                const indexSpan = document.createElement('span');
+                indexSpan.className = 'url-index';
+                indexSpan.textContent = `${index + 1}.`;
+                
+                const copyBtn = document.createElement('button');
+                if (this.showCopyTitleButton) {
+                    copyBtn.className = 'btn-copy-item';
+                    copyBtn.dataset.url = item.url; // The button now holds the URL
+                    copyBtn.title = 'Copy URL';
+                    copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+                }
+
+                const urlSpan = document.createElement('span');
+                urlSpan.className = 'url-text';
+                
+                // Split the title to highlight the main part.
+                // This assumes the format "eXX - Main Title Name".
+                const isYouTubeVideoUrl = item.url.includes('youtube.com/watch');
+                const isYouTubePlaylistUrl = item.url.includes('youtube.com/playlist');
+                const titleParts = item.title.split(' - ');
+
+                if (titleParts.length > 1 && /^(s\d+)?e\d+(\.\d+)?$/i.test(titleParts[0].trim())) {
+                    const episodePrefixSpan = document.createElement('span');
+                    episodePrefixSpan.textContent = titleParts.shift() + ' - '; // e.g., "e12.5 - "
+
+                    const mainTitleSpan = document.createElement('span');
+                    mainTitleSpan.className = 'main-title-highlight'; // This class will be styled green
+                    mainTitleSpan.textContent = titleParts.join(' - '); // The rest of the title
+                    urlSpan.append(episodePrefixSpan, mainTitleSpan);
+                } else if ((isYouTubeVideoUrl || isYouTubePlaylistUrl) && titleParts.length > 1) {
+                    // New: Handle YouTube titles in the format "Channel Name - Video Title"
+                    const channelPrefixSpan = document.createElement('span');
+                    channelPrefixSpan.textContent = titleParts.shift() + ' - '; // e.g., "The Rubin Report - "
+
+                    const videoTitleSpan = document.createElement('span');
+                    videoTitleSpan.className = 'main-title-highlight'; // Use the same green highlight class
+                    videoTitleSpan.textContent = titleParts.join(' - '); // The rest of the title
+                    urlSpan.append(channelPrefixSpan, videoTitleSpan);
+                } else {
+                    urlSpan.textContent = item.title; // Fallback for titles without the expected prefix
+                }
+                
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'btn-remove-item';
+                removeBtn.dataset.index = index;
+                removeBtn.title = 'Remove Item';
+                removeBtn.innerHTML = '&times;'; // Using innerHTML here is safe for a known HTML entity
+
+                // New order: Copy button first, then index, then title, then remove button.
+                if (this.showCopyTitleButton) {
+                    itemDiv.appendChild(copyBtn);
+                }
+                itemDiv.append(indexSpan, urlSpan, removeBtn);
+                fullContainer.appendChild(itemDiv);
+            });
+        } else {
+            const placeholder = document.createElement('p');
+            placeholder.id = 'playlist-placeholder';
+            placeholder.textContent = 'Playlist is empty.';
+            fullContainer.appendChild(placeholder);
+        }
+
+        // Crucially, after rendering the playlist, re-check the button state.
+        fullContainer.scrollTop = scrollPosition; // Restore the scroll position
+        this.updateAddButtonState();
+    }
+
+    /**
+     * Checks if MPV is running by querying the background script.
+     * @returns {Promise<boolean>} A promise that resolves to true if MPV is running, false otherwise.
+     */
+    async isMpvRunningFromBackground() {
+        return new Promise((resolve) => {
+            chrome.runtime.sendMessage({ action: 'is_mpv_running' }, (response) => {
+                if (chrome.runtime.lastError) {
+                    this.addLogEntry({ text: `[Content]: Error checking MPV status: ${chrome.runtime.lastError.message}`, type: 'error' });
+                    return resolve(false);
+                }
+                if (response?.success) {
+                    resolve(response.is_running);
+                } else {
+                    this.addLogEntry({ text: `[Content]: Failed to get MPV status: ${response?.error || 'Unknown error'}`, type: 'error' });
+                    resolve(false);
+                }
+            });
+        });
+    }
+
+    /**
+     * Retrieves the current playlist from the background script.
+     * @param {string} folderId - The ID of the folder to get the playlist for.
+     * @returns {Promise<Array<{url: string, title: string}>>} A promise that resolves with the array of playlist items.
+     */
+    async getPlaylistFromBackground(folderId) {
+        return new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage({ action: 'get_playlist', folderId }, (response) => {
+                if (chrome.runtime.lastError) {
+                    return reject(new Error(chrome.runtime.lastError.message));
+                }
+                if (response?.success) {
+                    resolve(response.list || []);
+                } else {
+                    reject(new Error(response?.error || 'Failed to get playlist.'));
+                }
+            });
+        });
+    }
+
+    /**
+     * Sends a command to the background script and handles the response.
+     * @param {string} action - The command to perform (e.g., 'add', 'list').
+     * @param {string} folderId - The ID of the folder to act upon.
+     * @param {object} data - Additional data for the action (e.g., {url: '...'} or {data: {index: 1}}).
+     */
+    sendCommandToBackground(action, folderId, data = {}) {
+        const payload = { action, folderId, ...data, tabId: this.tabId };
+
+        chrome.runtime.sendMessage(payload, (response) => {
+            if (chrome.runtime.lastError) {
+                this.addLogEntry({ text: `[Content]: Error sending '${action}': ${chrome.runtime.lastError.message}`, type: 'error' });
+                return;
+            }
+
+            if (response) {
+                // The 'get_playlist' command is the only one that returns a list to render.
+                if (action === 'get_playlist' && response.success) {
+                    this.renderPlaylist(response.list);
+                }
+                // Log success/info messages from the background script.
+                if (response.message && action !== 'get_playlist') {
+                    this.addLogEntry({ text: `[Background]: ${response.message}`, type: 'info' });
+                }
+                // Also log any error messages from the background script.
+                if (response.error) {
+                    this.addLogEntry({ text: `[Background]: ${response.error}`, type: 'error' });
+                }
+            }
+        });
+    }
+    async fetchAniListReleases(forceRefresh = false) {
+        if (!this.anilistShadowRoot) return;
+        const anilistContent = this.anilistShadowRoot.getElementById('anilist-releases-list');
+        if (!anilistContent) return;
+
+        anilistContent.innerHTML = '<div class="loading-spinner"></div>';
+        try {
+            const releases = await AniListRenderer.fetchReleases(forceRefresh);
+            AniListRenderer.render(anilistContent, releases);
+        } catch (error) {
+            const errorElement = document.createElement('li');
+            errorElement.className = 'anilist-error';
+            errorElement.textContent = `Error: ${error.message}`;
+            anilistContent.innerHTML = '';
+            anilistContent.appendChild(errorElement);
+        }
+    }
+
+    handleFullscreenChange() {
+        // Re-query the host from the DOM to ensure we have a live reference.
+        const controllerHost = document.getElementById('m3u8-controller-host');
+        const minimizedHost = document.getElementById('m3u8-minimized-host');
+
+        if (document.fullscreenElement) {
+            // --- Entering Fullscreen ---
+            // Store the current position if it hasn't been stored already.
+            if (controllerHost && !this.preFullscreenPosition) {
+                this.preFullscreenPosition = {
+                    left: controllerHost.style.left,
+                    top: controllerHost.style.top,
+                    right: controllerHost.style.right,
+                    bottom: controllerHost.style.bottom,
+                };
+            }
+            // Always hide both UI elements when entering fullscreen.
+            if (controllerHost) controllerHost.style.display = 'none';
+            if (minimizedHost) minimizedHost.style.display = 'none';
+        } else {
+            // --- Exiting Fullscreen ---
+            // Restore the UI using the pre-fullscreen position if it exists.
+            // This bypasses fetching from storage, preserving the original position.
+            if (this.preFullscreenPosition) {
+                this.applyInitialState(this.preFullscreenPosition);
+                this.preFullscreenPosition = null; // Reset after use
+            }
+        }
+    }
+
+    /**
+     * Checks if the current page is a YouTube video or playlist page and updates the detected URL.
+     */
+    checkForYouTubeURL() {
+        const YOUTUBE_VIDEO_REGEX = /^https?:\/\/((www|music)\.)?youtube\.com\/watch\?v=([a-zA-Z0-9_-]+)/;
+        const YOUTUBE_PLAYLIST_REGEX = /^https?:\/\/((www|music)\.)?youtube\.com\/playlist\?list=([a-zA-Z0-9_-]+)/;
+        const currentUrl = window.location.href;
+
+        let isPlaylist = false;
+
+        if (YOUTUBE_PLAYLIST_REGEX.test(currentUrl)) {
+            this.detectedUrl = currentUrl;
+            isPlaylist = true;
+        } else if (YOUTUBE_VIDEO_REGEX.test(currentUrl)) {
+            this.detectedUrl = currentUrl;
+        } else {
+            // Not a YT video or playlist page, do nothing with this.detectedUrl
+            return;
+        }
+
+        // Report to background and update UI state.
+        chrome.runtime.sendMessage({ action: 'report_detected_url', url: this.detectedUrl });
+        this.updateAddButtonState(isPlaylist);
+    }
+
+    // --- Robustness for Single-Page Applications ---
+    // This function handles all updates needed after a potential page navigation on an SPA.
+    handlePageUpdate() {
+        // If the host element is gone, the SPA has likely removed it. Re-inject.
+        // This is the most critical check for SPA navigation.
+        if (!document.getElementById('m3u8-controller-host')) {
+            console.log("MPV Controller host has been removed from the DOM. Re-injecting UI.");
+            this.teardownAndReinitialize();
+            return;
+        }
+
+        const urlChanged = window.location.href !== this.lastUrl;
+
+        // Only clear the detected URL if the page has actually navigated.
+        // This prevents a detected M3U8 stream from being cleared by the timer.
+        if (urlChanged) {
+            this.detectedUrl = null;
+        }
+
+        // Always check if the current page is a YouTube video. This fixes detection on page load/reload.
+        // We only do this if a stream hasn't already been detected, to avoid overwriting an m3u8.
+        if (!this.detectedUrl) {
+            this.checkForYouTubeURL();
+        }
+
+        // Always update the button state to reflect the current status of detectedUrl.
+        this.updateAddButtonState(/^https?:\/\/((www|music)\.)?youtube\.com\/playlist\?list=/.test(this.detectedUrl));
+
+        // Only proceed with the more expensive folder/playlist updates if the URL has actually changed.
+        if (urlChanged) {
+            this.lastUrl = window.location.href;
+            // Report the new state to the background script and refresh the UI.
+            sendMessageAsync({ action: 'report_detected_url', url: this.detectedUrl });
+            this.updateFolderDropdowns();
+        }
+    }
+
+    /**
+     * Safely tears down and re-initializes the controller.
+     * This is used when the UI is removed from the DOM by an SPA.
+     */
+    teardownAndReinitialize() {
+        // Prevent multiple teardowns from running at once.
+        if (this.isTearingDown) return;
+        this.isTearingDown = true;
+
+        // Call the full teardown method to ensure everything is cleaned up
+        this.teardown();
+
+        // Re-run the global initialization function after a short delay to ensure the DOM is clean.
+        setTimeout(() => {
+            startInitialization();
+        }, 100);
+    }
+    /**
+     * Tears down the controller, removing its UI and listeners to allow for re-initialization.
+     */
+    teardown() {
+        // Stop any ongoing processes like the heartbeat.
+        if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = null;
+
+        // Remove UI host elements from the DOM.
+        this.controllerHost?.remove();
+        this.minimizedHost?.remove();
+        this.anilistPanelHost?.remove();
+
+        // Remove the global message listener to prevent duplicates on re-init.
+        chrome.runtime.onMessage.removeListener(this.handleMessage);
+
+        // Remove other global listeners
+        document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+        window.mpvControllerInitialized = false;
+    }
+
+    /**
+     * Starts a periodic check to ensure the background script is still alive.
+     * If the connection is lost (e.g., extension reloaded), it triggers a self-reload.
+     */
+    startHeartbeat() {
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+        }
+
+        this.heartbeatInterval = setInterval(async () => {
+            try {
+                // Sending a message to the background script. If it throws an error,
+                // it means the background script is gone (e.g., extension was reloaded).
+                const response = await sendMessageAsync({ action: 'heartbeat' });
+                if (!response?.success) throw new Error("Invalid heartbeat response.");
+            } catch (e) {
+                // The background script is unresponsive.
+                console.warn("MPV Controller: Heartbeat failed. Background script may have been reloaded. Refreshing content script.");
+
+                // Stop the heartbeat to prevent an infinite loop of reloads.
+                if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+
+                // Instead of reloading the page, tear down and re-initialize the controller.
+                this.teardownAndReinitialize();
+            }
+        }, 15000); // Check every 15 seconds.
+    }
+
+    /**
+     * Main entry point. Initializes the UI and sets up observers/timers to handle
+     * dynamic page changes on Single-Page Applications.
+     */
+    init() {
+        if (window.mpvControllerInitialized) return;
+        window.mpvControllerInitialized = true;
+
+        this.tabId = null; // Will be set by background script
+        document.addEventListener('fullscreenchange', this.handleFullscreenChange);
+
+        // New: Listen for right-clicks to capture the target element.
+        // We use the 'capture' phase to ensure our listener runs before any other
+        // that might stop the event's propagation.
+        document.addEventListener('mousedown', (event) => {
+            if (event.button === 2) { // Right-click
+                 this.lastRightClickedElement = event.target;
+            }
+        }, true);
+
+       
+        // This block contains scraping logic specifically for a YouTube video watch page (`/watch`).
+        // It is intentionally placed here to act as a high-priority scraper that runs before
+        // the generic title scrapers. This logic is now handled inside the scrapePageDetails function.
+        // DO NOT move or generalize this code. Its purpose is to provide a clean title
+        // for YouTube video pages, which have a predictable structure, preventing the less
+        // reliable generic scrapers from running and producing a messy title.
+        const isYouTubeVideoPage = window.location.hostname.includes('youtube.com') && window.location.pathname === '/watch';
+        // --- END AI GUARD ---
+
+        // --- SPA Handling using MutationObserver ---
+        const observer = new MutationObserver(() => this.handlePageUpdate());
+        observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+
+        // Also, poll the URL periodically. This is more reliable for SPA navigations. This interval is cleared in teardown().
+        this.pageUpdateInterval = setInterval(this.handlePageUpdate, 500);
+        this.initializeMpvController();
+
+        // Start the heartbeat to detect extension reloads.
+        this.startHeartbeat();
+    }
+
+}
+(function () {
+  'use strict';
+
+  // Check if this is the special scanner window. If so, do not inject any UI.
+  // This is identified by a URL parameter added by the background script.
+  try {
+    if (new URL(window.location.href).searchParams.get('mpv_playlist_scanner') === 'true') {
+      // The scanner window doesn't need a controller UI, but it still needs to
+      // listen for messages from the background script (e.g., to perform a scrape).
+      const controller = new MpvController();
+      chrome.runtime.onMessage.addListener(controller.handleMessage);
+      return; // Abort UI injection.
+    }
+  } catch (e) { /* Ignore invalid URLs */ }
+
+  const startInitialization = () => {
+    // Create a single, authoritative instance of the controller.
+    const controller = new MpvController();
+    // Expose the controller instance to the window for debugging from the console.
+    // Get tabId for this content script
+    sendMessageAsync({ action: 'get_tab_id' }).then(response => {
+        if (response && response.tabId) controller.tabId = response.tabId;
+    });
+
+    // Initialize the controller.
+    controller.init();
+
+    // Attach the message listener to the single controller instance.
+    chrome.runtime.onMessage.addListener(controller.handleMessage);
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startInitialization);
+  } else {
+    startInitialization();
+  }
+})();

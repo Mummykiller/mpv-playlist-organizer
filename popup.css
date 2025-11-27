@@ -1,0 +1,962 @@
+:root {
+    /* Default values for AniList image size */
+    /* This is now the base width of the item container, controlled by the slider */
+    --anilist-item-width: 50px;
+    --anilist-image-height: 70px;
+    /* Default values for AniList text size, adjusted by JS */
+    --anilist-title-font-size: 16px;
+    --anilist-info-font-size: 14px;
+
+    /* Slick, Modern & Dark Palette */
+    --bg-primary: #111214;
+    --bg-secondary: #1d1f23;
+    --bg-tertiary: #2c2e33;
+    --border-primary: #33363b;
+    --text-primary: #e1e1e1;
+    --text-secondary: #9e9e9e;
+    --accent-primary: #5865f2;
+    --accent-primary-hover: #4f5bda;
+    --accent-danger: #ed4245;
+    --accent-danger-hover: #da3739;
+    --accent-success: #57F287;
+    --border-hover: #5865f2;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
+    --radius: 6px;
+    --transition-speed: 0.15s;
+}
+
+html {
+    background-color: transparent;
+}
+
+body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    width: 400px; /* Increased width to allow more space for content */
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    border-radius: var(--radius);
+    /* Removed overflow-y: auto to allow the popup to naturally expand and rely on browser's scrollbar if content exceeds screen height */
+    box-sizing: border-box;
+}
+
+h1 {
+    font-size: 18px; /* Slightly larger for prominence */
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+    text-align: center;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-primary);
+}
+h1 + .control-group { margin-top: 16px; } /* Add space after header */
+
+.control-group {
+    display: flex;
+    gap: 8px;
+}
+
+input, select {
+    flex-grow: 1;
+    box-sizing: border-box;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    color: var(--text-primary);
+    border-radius: var(--radius);
+    padding: 10px;
+    font-size: 14px;
+    transition: all var(--transition-speed) ease;
+    min-width: 0; /* Allows the input to shrink below its default minimum size in a flex container */
+}
+
+select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239e9e9e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+textarea {
+    flex-grow: 1;
+    box-sizing: border-box;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    color: var(--text-primary);
+    border-radius: var(--radius);
+    padding: 10px;
+    font-size: 13px; /* Slightly smaller for code-like text */
+    font-family: var(--font-mono); /* Use a monospace font */
+    transition: all var(--transition-speed) ease;
+    resize: vertical; /* Allow vertical resize */
+    min-height: 40px;
+}
+
+textarea:hover {
+    background-color: var(--bg-tertiary);
+    border-color: #555;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+textarea:focus-visible {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.3);
+}
+
+textarea::placeholder {
+    color: var(--text-secondary);
+    font-family: var(--font-sans); /* Placeholder can be sans-serif */
+}
+
+input:hover, select:hover {
+    background-color: var(--bg-tertiary);
+    border-color: #555;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Subtle lift on hover */
+}
+
+input:focus-visible, select:focus-visible {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.3); /* Softer focus ring */
+}
+
+input::placeholder {
+    color: var(--text-secondary);
+}
+
+button {
+    color: #fff;
+    flex-shrink: 0;
+    border: none;
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-speed) ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Subtle shadow for depth */
+}
+
+button:disabled {
+    background-color: #33363b;
+    cursor: not-allowed;
+}
+#btn-create-folder,
+#btn-rename-folder,
+#mini-folder-management-controls #btn-mini-create-folder,
+#mini-folder-management-controls #btn-mini-rename-folder {
+    background-color: var(--accent-primary);
+    color: white; /* Ensure good contrast */
+}
+#btn-create-folder:hover,
+#btn-rename-folder:hover,
+#mini-folder-management-controls #btn-mini-create-folder:hover,
+#mini-folder-management-controls #btn-mini-rename-folder:hover {
+    background-color: var(--accent-primary-hover);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
+}
+
+#btn-remove-folder,
+#mini-folder-management-controls #btn-mini-remove-folder {
+    background-color: var(--accent-danger);
+    color: white; /* Ensure good contrast */
+}
+#btn-remove-folder:hover,
+#mini-folder-management-controls #btn-mini-remove-folder:hover {
+    background-color: var(--accent-danger-hover);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+#btn-rename-folder, #btn-remove-folder,
+#mini-folder-management-controls #btn-mini-rename-folder,
+#mini-folder-management-controls #btn-mini-remove-folder {
+    flex: 1; /* Make them fill the available space */
+}
+
+.custom-geometry-input {
+    width: 60px; /* Make them small */
+    text-align: center;
+    flex-grow: 0; /* Prevent these specific inputs from growing */
+}
+
+.custom-geometry-container {
+    /* This group should appear below the main dropdown, so we adjust its top margin */
+    justify-content: flex-end; /* Align to the right side */
+}
+
+.custom-geometry-separator {
+    color: var(--text-secondary);
+    font-weight: 600;
+    align-self: center; /* Vertically center the 'x' */
+}
+
+/* New styles for the image size slider */
+#anilist-image-height-slider {
+    flex-grow: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 8px;
+    background: var(--bg-secondary);
+    outline: none;
+    border-radius: 4px;
+    border: 1px solid var(--border-primary);
+    /* This makes the slider thumb appear to go all the way to the end */
+    margin: 0 -9px;
+}
+#anilist-image-height-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    background: var(--accent-primary);
+    cursor: pointer;
+    border-radius: 50%;
+}
+
+.current-value-display {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-secondary);
+    background-color: var(--bg-secondary);
+    padding: 0 8px;
+    border-radius: 4px;
+    align-self: center;
+    margin-left: 8px;
+}
+
+.icon-button {
+    padding: 6px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    color: var(--text-secondary);
+}
+
+.icon-button:hover {
+    background-color: var(--bg-tertiary);
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+}
+
+#btn-show-on-page-controller {
+    margin-top: 12px;
+    background-color: var(--accent-success);
+    color: var(--bg-primary);
+    flex: initial; /* Override flex: 1 from .secondary-action class */
+}
+#btn-show-on-page-controller:hover {
+    background-color: #45a062;
+    box-shadow: 0 4px 12px rgba(87, 242, 135, 0.3);
+    transform: translateY(-2px); /* Lift effect */
+}
+
+#btn-hide-on-page-controller {
+    margin-top: 16px;
+    background-color: var(--accent-primary);
+    flex: initial;
+}
+#btn-hide-on-page-controller:hover {
+    background-color: var(--accent-primary-hover);
+    box-shadow: 0 4px 12px rgba(88, 101, 242, 0.4);
+    transform: translateY(-2px);
+}
+
+#status-message {
+    font-size: 13px;
+    text-align: center;
+    padding-bottom: 4px;
+    min-height: 1.2em;
+    transition: color 0.2s ease;
+}
+
+/* --- Styles for the Mini Controller View --- */
+#mini-controller-view {
+    /* This is set to flex in popup.js when active */
+    flex-direction: column;
+    gap: 12px; /* A bit less gap for a tighter look */
+}
+
+#mini-controller-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: space-between; /* Distribute buttons evenly */
+}
+
+#mini-controller-actions button {
+    flex-grow: 1; /* Make buttons take up equal space */
+    padding: 10px; /* Larger padding for better touch targets */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-primary); /* Add a border for definition */
+    transition: all var(--transition-speed) ease; /* Add smooth transitions */
+}
+
+#mini-controller-actions button:hover {
+    background-color: var(--surface-hover-color);
+    border-color: var(--accent-primary); /* Highlight on hover */
+}
+
+#mini-controller-actions button:active {
+    transform: scale(0.96);
+    transition-duration: 0.05s;
+}
+
+/* Specific colors for key actions */
+/* Play button matches the main UI's primary action color */
+#mini-controller-actions #btn-mini-play {
+    background-color: var(--accent-primary);
+}
+#mini-controller-actions #btn-mini-play:hover {
+    background-color: var(--accent-primary-hover);
+}
+
+/* Add button turns green when a URL is detected, providing clear feedback */
+#mini-controller-actions #btn-mini-add.url-detected {
+    background-color: var(--accent-success);
+}
+#mini-controller-actions #btn-mini-add.url-detected:hover {
+    background-color: #45a062; /* A slightly darker green */
+}
+
+/* New: Style for when the URL is already in the playlist */
+#mini-controller-actions #btn-mini-add.url-in-playlist {
+    background-color: #f9a825; /* A noticeable yellow */
+}
+#mini-controller-actions #btn-mini-add.url-in-playlist:hover {
+    background-color: #f59f00; /* A slightly darker yellow */
+}
+
+/* Clear and Close buttons use the danger color for destructive actions */
+#mini-controller-actions #btn-mini-clear,
+#mini-controller-actions #btn-mini-close-mpv {
+    background-color: var(--accent-danger);
+}
+#mini-controller-actions #btn-mini-clear:hover,
+#mini-controller-actions #btn-mini-close-mpv:hover {
+    background-color: var(--accent-danger-hover);
+}
+
+#mini-item-count-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background-color: var(--bg-secondary);
+    padding: 10px; /* Symmetrical padding to align with select box */
+    border-radius: var(--radius);
+    border: 1px solid var(--border-primary);
+    color: var(--text-secondary);
+}
+
+/* Style for the secondary action button */
+.secondary-action {
+    background-color: var(--accent-primary);
+    border: none;
+    color: white; /* Ensure best contrast */
+    font-weight: 600;
+    /* Use flex: 1 to make buttons share space equally in their flex container. */
+    flex: 1;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.secondary-action:hover {
+    background-color: var(--accent-primary-hover);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
+}
+
+/* Additional styles for folder management in mini-controller */
+#mini-folder-management-controls {
+    display: none; /* Hidden by default */
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    background-color: var(--bg-secondary);
+    border-radius: var(--radius);
+    border: 1px solid var(--border-primary);
+}
+
+#mini-status-placeholder, #full-status-placeholder {
+    /* Reserve space for the status message to prevent layout shifts */
+    min-height: calc(1.2em + 8px);
+}
+
+/* --- Confirmation Modal --- */
+#popup-confirmation-modal {
+    position: fixed; /* Cover the entire popup viewport */
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.8); /* Darker overlay for popups */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 16px; /* Match body padding */
+    box-sizing: border-box;
+}
+
+#popup-confirmation-modal .modal-content {
+    background-color: var(--bg-secondary);
+    padding: 20px;
+    border-radius: var(--radius);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    text-align: center;
+    border: 1px solid var(--border-primary);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%; /* Take up available width within padding */
+}
+
+#popup-confirmation-modal #popup-modal-message {
+    margin: 0;
+    font-size: 14px;
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+
+#popup-confirmation-modal .modal-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+}
+
+#popup-confirmation-modal .modal-actions button {
+    background-color: var(--accent-danger);
+}
+#popup-confirmation-modal .modal-actions button:hover {
+    background-color: var(--accent-danger-hover);
+}
+#popup-confirmation-modal .modal-actions #popup-modal-cancel-btn {
+    background-color: var(--bg-tertiary);
+}
+#popup-confirmation-modal .modal-actions #popup-modal-cancel-btn:hover {
+    background-color: var(--bg-tertiary);
+}
+
+/* --- Settings Controls --- */
+.settings-label {
+    white-space: nowrap;
+    align-self: center;
+    color: var(--text-secondary);
+    font-weight: 500; /* Use normal weight for a cleaner look */
+    font-size: 15px; /* Increase font size for better readability */
+    flex-basis: 150px; /* Adjust basis to accommodate larger font */
+    flex-shrink: 0;
+    flex-grow: 0; /* Prevent labels from growing and taking up extra space */
+}
+.list-item .btn-copy-item {
+    flex-shrink: 0;
+    margin-right: 6px;
+}
+
+/* New styles for stacked controls */
+.stacked-control {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px; /* A bit more space between label and inputs */
+}
+
+/* When a label is inside a stacked control, it shouldn't have a fixed width */
+.stacked-control > .settings-label {
+    flex-basis: auto;
+}
+
+.input-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%; /* Make the group take full width */
+}
+
+.settings-input {
+    text-align: center;
+    flex-grow: 1;
+}
+
+.settings-checkbox {
+    flex-grow: 0; /* Don't stretch */
+    margin-right: auto; /* Push to the left side of the available space */
+    align-self: center;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent-primary); /* Style the checkbox color */
+}
+
+/* --- Generic Modals (Export, Import, Rename) --- */
+#export-filename-modal,
+#import-selection-modal,
+#rename-folder-modal {
+    position: fixed; /* Cover the entire popup viewport */
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 16px;
+    box-sizing: border-box;
+}
+
+#export-filename-modal .modal-content,
+#import-selection-modal .modal-content,
+#rename-folder-modal .modal-content {
+    background-color: var(--bg-secondary);
+    padding: 20px;
+    border-radius: var(--radius);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    text-align: center;
+    border: 1px solid var(--border-primary);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%; /* Take up available width within padding */
+}
+
+#export-filename-modal .modal-content p,
+#import-selection-modal .modal-content p,
+#rename-folder-modal .modal-content p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+
+#export-filename-modal .modal-actions,
+#import-selection-modal .modal-actions,
+#rename-folder-modal .modal-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+}
+
+#export-filename-modal #export-save-btn,
+#import-selection-modal #import-confirm-btn,
+#rename-folder-modal #rename-save-btn {
+    background-color: var(--accent-primary);
+}
+#export-filename-modal #export-save-btn:hover,
+#import-selection-modal #import-confirm-btn:hover,
+#rename-folder-modal #rename-save-btn:hover {
+    background-color: var(--accent-primary-hover);
+}
+#export-filename-modal #export-cancel-btn,
+#import-selection-modal #import-cancel-btn,
+#rename-folder-modal #rename-cancel-btn {
+    background-color: var(--bg-tertiary);
+}
+#export-filename-modal #export-cancel-btn:hover,
+#import-selection-modal #import-cancel-btn:hover,
+#rename-folder-modal #rename-cancel-btn:hover {
+    background-color: #44484e; /* Slightly darker tertiary */
+}
+
+/* --- Reorder Controls --- */
+.reorder-toggle-btn {
+    padding: 8px;
+    background-color: var(--surface-color);
+    flex-shrink: 0;
+}
+.reorder-toggle-btn:hover {
+    background-color: var(--bg-tertiary);
+}
+.reorder-toggle-btn.active {
+    background-color: var(--accent-primary);
+    color: white;
+    flex: 1; /* Make the button take full width when active */
+}
+.reorder-toggle-btn.active:hover {
+    background-color: var(--accent-primary-hover);
+}
+
+.reorder-container {
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius);
+    padding: 8px;
+    background-color: var(--bg-secondary);
+    max-height: 150px;
+    overflow-y: auto;
+    margin-top: 8px;
+}
+
+.reorder-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.reorder-item {
+    display: flex;
+    align-items: center;
+    padding: 8px;
+    background-color: var(--bg-tertiary);
+    border-radius: 4px;
+    cursor: grab;
+    border: 1px solid var(--border-primary);
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.reorder-item:active { cursor: grabbing; }
+.reorder-item.dragging { opacity: 0.5; background: #4f5bda; }
+
+/* New: Visual indicator for drop position */
+.reorder-item.drag-over {
+    border-top: 2px solid var(--accent-primary);
+}
+
+.reorder-item .drag-handle {
+    margin-right: 8px;
+    color: var(--text-secondary);
+    pointer-events: none; /* Make sure the icon doesn't interfere with drag events */
+}
+
+/* --- Settings Sections (Collapsible) --- */
+.settings-section {
+    margin-top: 8px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius);
+    overflow: hidden; /* To keep border-radius on children */
+    transition: all var(--transition-speed) ease;
+}
+
+.settings-section[open] {
+    background-color: var(--bg-primary);
+    border-color: var(--accent-primary);
+}
+
+.settings-section summary {
+    padding: 10px 12px;
+    font-weight: 600; /* Use medium weight instead of bold */
+    font-size: 16px; /* Make section headers slightly larger */
+    color: var(--text-primary);
+    cursor: pointer;
+    list-style: none; /* Remove default marker */
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background-color var(--transition-speed) ease;
+}
+
+.settings-section summary:hover {
+    background-color: var(--bg-tertiary);
+}
+
+.settings-section summary::-webkit-details-marker {
+    display: none; /* Hide default marker in Webkit */
+}
+
+.settings-section summary::after {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid var(--text-secondary);
+    transition: transform var(--transition-speed) ease;
+    transform-origin: center;
+}
+
+.settings-section[open] > summary::after {
+    transform: rotate(180deg);
+}
+
+.settings-section-content {
+    padding: 12px;
+    border-top: 1px solid var(--border-primary);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.settings-placeholder {
+    display: flex;
+    flex-direction: column;
+    gap: 8px; /* Matches the gap between settings sections */
+    margin-top: 8px; /* Matches the margin-top of the first settings section */
+}
+
+/* --- AniList Releases Section --- */
+.anilist-releases-section {
+    margin-top: 12px; /* Add some space above */
+}
+
+.anilist-releases-section > summary {
+    /* Make it look like a full-width button */
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    color: var(--text-primary);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-speed) ease;
+    list-style: none; /* Remove default marker */
+    display: flex;
+    justify-content: center; /* Center text */
+    align-items: center; /* This will be overridden by space-between if the refresh button is present */
+    position: relative; /* For positioning the arrow */
+}
+
+.anilist-releases-section > summary:hover {
+    background-color: var(--bg-tertiary);
+    border-color: var(--accent-primary);
+}
+
+.anilist-releases-section > summary {
+    /* This ensures the title and refresh button are spaced out */
+    justify-content: space-between;
+}
+
+.anilist-releases-section > summary::-webkit-details-marker {
+    display: none; /* Hide default marker in Webkit */
+}
+
+/* Add an arrow indicator */
+.anilist-releases-section > summary::after {
+    content: '';
+    /* position: absolute; */ /* No longer needed with flexbox layout */
+    right: 16px;
+    transition: transform var(--transition-speed) ease;
+    transform-origin: center;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid var(--text-secondary);
+}
+
+.anilist-releases-section[open] > summary::after {
+    transform: rotate(180deg);
+}
+
+.anilist-releases-section[open] > summary {
+    /* When open, change the style slightly to connect to the content */
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    background-color: var(--bg-tertiary);
+    border-color: var(--accent-primary);
+}
+
+.anilist-release-delay-info {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+    margin: 0 0 8px 0;
+    padding: 0 4px; /* Align with list items (container has 2px padding) */
+}
+
+.anilist-releases-section > #anilist-releases-content {
+    /* This container holds the scrollable list */
+    max-height: 470px; /* Give it a max height to make it scrollable */
+    overflow-y: auto;
+    /* Add 2px horizontal padding. Items inside have 8px, matching the 10px on the note above. */
+    padding: 0 8px;
+    margin: 0 0 8px 0; /* Keep bottom margin for spacing, remove side margins. */
+}
+
+/* --- Custom Scrollbar for AniList Section --- */
+.anilist-releases-section > #anilist-releases-content::-webkit-scrollbar {
+    width: 10px; /* Set the width of the scrollbar */
+}
+
+.anilist-releases-section > #anilist-releases-content::-webkit-scrollbar-track {
+    /* This is the background of the scrollbar */
+    background: var(--bg-primary); /* Make it dark to match the main background */
+    border-radius: var(--radius);
+}
+
+.anilist-releases-section > #anilist-releases-content::-webkit-scrollbar-thumb {
+    /* This is the draggable handle */
+    background-color: var(--bg-tertiary); /* A visible but dark color */
+    border-radius: var(--radius);
+    border: 2px solid var(--bg-color); /* Creates padding around the thumb */
+}
+
+.anilist-releases-list {
+    list-style: none;
+    padding: 0 0 8px 0; /* Reset left/right/top padding, keep bottom */
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.anilist-release-item {
+    display: flex;
+    align-items: flex-start; /* Align items to the top */
+    gap: 8px;
+    padding: 6px;
+    background-color: var(--bg-tertiary);
+    border-radius: var(--radius);
+    text-decoration: none; /* Remove underline from the anchor tag */
+}
+
+.anilist-release-item:hover {
+    background-color: var(--bg-secondary);
+}
+
+.release-cover-image {
+    width: var(--anilist-item-width);
+    height: var(--anilist-image-height);
+    border-radius: 4px;
+    object-fit: cover;
+}
+
+.release-details {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between; /* Push title to top, info to bottom */
+    overflow: hidden; /* Prevent long titles from breaking layout */
+    align-self: stretch; /* Make this container fill the item's height */
+    flex-grow: 1; /* Allow this container to fill the available space */
+}
+
+.release-title {
+    font-size: var(--anilist-title-font-size);
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: normal; /* Allow wrapping */
+    overflow-wrap: break-word; /* Break long words if necessary */
+    line-height: 1.3; /* Add some line spacing for readability */
+}
+
+.release-bottom-info {
+    display: flex;
+    flex-direction: column; /* Stack items vertically */
+    align-items: flex-start; /* Align items to the left */
+    gap: 2px; /* Reduce gap for stacked items */
+}
+
+.release-episode-info {
+    font-size: var(--anilist-info-font-size);
+    color: var(--text-secondary);
+}
+
+.release-airing-time {
+    font-size: var(--anilist-info-font-size);
+    font-weight: 600;
+    color: var(--accent-success);
+}
+
+.loading-spinner {
+    border: 4px solid var(--surface-hover-color);
+    border-top: 4px solid var(--accent-primary);
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    animation: spin 1s linear infinite;
+    margin: 20px auto;
+}
+
+/* --- Styles for AniList Release Item Details --- */
+.release-bottom-info {
+    display: flex;
+    flex-direction: column; /* Stack items vertically */
+    align-items: flex-start; /* Align items to the left */
+    gap: 2px; /* Reduce gap for stacked items */
+}
+
+.release-episode-info {
+    font-size: var(--anilist-info-font-size);
+    color: var(--text-secondary);
+}
+
+.release-airing-time {
+    font-size: var(--anilist-info-font-size);
+    font-weight: 600;
+    color: var(--accent-success);
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* --- AniList Refresh Button --- */
+.anilist-refresh-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-speed) ease;
+    box-shadow: none;
+}
+
+.anilist-refresh-btn:hover {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+/* --- Scraper Filter Settings --- */
+.filter-list-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius);
+    min-height: 34px;
+    margin-top: 4px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.filter-list-container.readonly {
+    background-color: var(--bg-primary);
+    border-style: dashed;
+    border-color: var(--border-primary);
+}
+
+.filter-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background-color: var(--accent-primary);
+    color: white;
+    padding: 4px 10px;
+    border-radius: 16px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-speed) ease;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+.filter-pill:hover {
+    background-color: var(--accent-danger);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.filter-pill.readonly {
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: default;
+    box-shadow: none;
+}
+
+.setting-item > small {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
