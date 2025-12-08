@@ -1,0 +1,171 @@
+/**
+ * Manages all data persistence and migration logic for the extension.
+ * It uses a single unified object in chrome.storage.local.
+ */
+export class StorageManager {
+    constructor(storageKey, broadcastLog) {
+        this.STORAGE_KEY = storageKey;
+        this.initPromise = null;
+        this.broadcastLog = broadcastLog; // Dependency for logging during migrations
+    }
+
+    /**
+     * Initializes the storage manager, running all necessary data migrations.
+     * This must be called once at startup before other methods are used.
+     * @returns {Promise<void>}
+     */
+    initialize() {
+        if (this.initPromise) {
+            return this.initPromise;
+        }
+        this.initPromise = (async () => {
+            await this._migrateStorageToOneObject();
+            await this._runDataMigrations();
+        })();
+        return this.initPromise;
+    }
+
+    _getDefaultData() {
+        return {
+            folders: { 'Default': { playlist: [] } },
+            folderOrder: ['Default'],
+            settings: {
+                last_used_folder_id: 'Default',
+                ui_preferences: {
+                    global: {
+                        minimized: false, mode: 'full', logVisible: true, pinned: false,
+                        position: { top: '10px', left: 'auto', right: '10px', bottom: 'auto' },
+                        launch_geometry: '', custom_geometry_width: '', custom_geometry_height: '',
+                        custom_mpv_flags: '', show_play_new_button: false, duplicate_url_behavior: 'ask', one_click_add: false,
+                        stream_scanner_timeout: 60, confirm_remove_folder: true, confirm_clear_playlist: true,
+                        confirm_close_mpv: true, confirm_play_new: true, clear_on_completion: false,
+                        autofocus_new_folder: false,
+                        anilistPanelVisible: false,
+                        enable_dblclick_copy: false,
+                        anilistPanelPosition: null,
+                        anilistPanelSize: null,
+                        anilist_cache: null,
+                        autoReattachAnilistPanel: true,
+                        anilist_image_height: 126,
+                        lockAnilistPanel: false,
+                        minimizedStubPosition: { top: '15px', left: '15px', right: 'auto', bottom: 'auto' },
+                        show_anilist_releases: true,
+                        show_minimized_stub: true,
+                        dependencyStatus: {
+                            mpv: { found: null, path: null, error: null },
+                            ytdlp: { found: null, path: null, version: null, error: null }
+                        }
+                    },
+                    domains: {}
+                }
+            }
+        };
+    }
+
+    async get() {
+        const data = await chrome.storage.local.get(this.STORAGE_KEY);
+        return data[this.STORAGE_KEY] || this._getDefaultData();
+    }
+
+    async set(data) {
+        await chrome.storage.local.set({ [this.STORAGE_KEY]: data });
+    }
+
+    async _runDataMigrations() {
+        const data = await chrome.storage.local.get(this.STORAGE_KEY);
+        let storedValue = data[this.STORAGE_KEY];
+        let needsUpdate = false;
+    
+        if (!storedValue) {
+            storedValue = this._getDefaultData();
+            needsUpdate = true;
+        } else {
+            if (!storedValue.settings) {
+                storedValue.settings = {};
+                needsUpdate = true;
+            }
+            if (!storedValue.settings.ui_preferences) {
+                storedValue.settings.ui_preferences = { global: {}, domains: {} };
+                needsUpdate = true;
+            }
+            if (typeof storedValue.settings.ui_preferences.global === 'undefined') {
+                needsUpdate = true;
+                const oldPrefs = storedValue.settings.ui_preferences || {};
+                storedValue.settings.ui_preferences = { global: oldPrefs, domains: {} };
+            }
+
+            const globalPrefs = storedValue.settings.ui_preferences.global;
+
+            if (storedValue.settings.global_ui_state) {
+                needsUpdate = true;
+                globalPrefs.minimized = storedValue.settings.global_ui_state.minimized ?? false;
+                delete storedValue.settings.global_ui_state;
+            }
+
+            if (typeof globalPrefs.confirm_destructive_actions !== 'undefined') {
+                needsUpdate = true;
+                const oldVal = globalPrefs.confirm_destructive_actions;
+                globalPrefs.confirm_remove_folder = globalPrefs.confirm_remove_folder ?? oldVal;
+                globalPrefs.confirm_clear_playlist = globalPrefs.confirm_clear_playlist ?? oldVal;
+                globalPrefs.confirm_close_mpv = globalPrefs.confirm_close_mpv ?? oldVal;
+                delete globalPrefs.confirm_destructive_actions;
+            }
+
+            const defaultGlobalPrefs = this._getDefaultData().settings.ui_preferences.global;
+            storedValue.settings.ui_preferences.global = { ...defaultGlobalPrefs, ...globalPrefs };
+
+            if (!storedValue.settings.ui_preferences.global.dependencyStatus) {
+                storedValue.settings.ui_preferences.global.dependencyStatus = this._getDefaultData().settings.ui_preferences.global.dependencyStatus;
+                needsUpdate = true;
+            }
+        }
+    
+        if (storedValue.folders) {
+            for (const folderId in storedValue.folders) {
+                const folder = storedValue.folders[folderId];
+                if (folder.playlist && folder.playlist.length > 0 && typeof folder.playlist[0] === 'string') {
+                    this.broadcastLog({ text: `[Background]: Migrating playlist for folder '${folderId}' to new format.`, type: 'info' });
+                    folder.playlist = folder.playlist.map(url => ({ url: url, title: url }));
+                    needsUpdate = true;
+                }
+            }
+        }
+
+        if (needsUpdate) {
+            await this.set(storedValue);
+            this.broadcastLog({ text: `[Background]: Data structure updated to latest version.`, type: 'info' });
+        }
+    }
+
+    async _migrateStorageToOneObject() {
+        const oldFolderIdsResult = await chrome.storage.local.get('folder_ids');
+        if (oldFolderIdsResult.folder_ids) {
+            console.log("Old storage format detected. Migrating to unified object...");
+            const newData = this._getDefaultData();
+            newData.folders = {};
+            newData.folderOrder = [];
+            const keysToRemove = ['folder_ids'];
+
+            for (const folderId of oldFolderIdsResult.folder_ids) {
+                const folderKey = `folder_${folderId}`;
+                const folderDataResult = await chrome.storage.local.get(folderKey);
+                const storedValue = folderDataResult[folderKey];
+                let playlist = Array.isArray(storedValue) ? storedValue : (storedValue?.playlist || storedValue?.urls || []);
+                if (playlist.length > 0 && typeof playlist[0] === 'string') {
+                    playlist = playlist.map(url => ({ url: url, title: url }));
+                }
+                newData.folders[folderId] = { playlist };
+                newData.folderOrder.push(folderId);
+                keysToRemove.push(folderKey);
+            }
+
+            const lastFolder = await chrome.storage.local.get('last_used_folder_id');
+            newData.settings.last_used_folder_id = lastFolder.last_used_folder_id || 'Default';
+            keysToRemove.push('last_used_folder_id');
+
+            await this.set(newData);
+            await chrome.storage.local.remove(keysToRemove);
+            console.log("Storage migration complete. Old keys removed.");
+        }
+    }
+}

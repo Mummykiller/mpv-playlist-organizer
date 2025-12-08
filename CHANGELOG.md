@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Began foundational refactoring of the service worker (`background.js`).
+- Created `storageManager.js` to isolate all `chrome.storage` interactions and data migration logic.
+- Created `nativeConnection.js` to encapsulate all native messaging port management and communication logic.
+
 ### Changed
 - Simplified the right-click "Add to MPV Folder" context menu. It is now a single-level list of folders instead of a nested menu for a cleaner experience.
 - The context menu now intelligently places the most recently used folder at the top of the list for quick access, removing the separate "Add to current" option.
