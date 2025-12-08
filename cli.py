@@ -1,0 +1,75 @@
+import argparse
+import sys
+import logging
+
+# --- Injected Dependencies ---
+file_io = None
+mpv_session = None
+
+def inject_dependencies(deps):
+    """Injects dependencies from the main native_host script."""
+    global file_io, mpv_session
+    file_io = deps['file_io']
+    mpv_session = deps['mpv_session']
+
+def _cli_list_folders(args):
+    """CLI command to list all available folders and their item counts."""
+    folders_data = file_io.get_all_folders_from_file()
+    if not folders_data:
+        print("No folders found. Please add an item in the extension first to create the data file.")
+        return
+
+    print("Available folders:")
+    for folder_id, folder_info in sorted(folders_data.items()):
+        playlist = folder_info.get("playlist", [])
+        item_count = len(playlist)
+        print(f"  - {folder_id} ({item_count} item{'s' if item_count != 1 else ''})")
+
+def _cli_play_folder(args):
+    """CLI command to play a specific folder."""
+    folder_id = args.folder_id
+    folders_data = file_io.get_all_folders_from_file()
+    folder_info = folders_data.get(folder_id)
+
+    if not folders_data:
+         print(f"Error: Data file not found or is empty. Please add an item in the extension first to create it.", file=sys.stderr)
+         sys.exit(1)
+
+    if folder_info is None:
+        print(f"Error: Folder '{folder_id}' not found.", file=sys.stderr)
+        if folders_data:
+            print("\nAvailable folders are:")
+            for available_folder_id in sorted(folders_data.keys()):
+                print(f"  - {available_folder_id}")
+        sys.exit(1)
+    
+    playlist_items = folder_info.get("playlist", [])
+    playlist_urls = [item['url'] for item in playlist_items if isinstance(item, dict) and 'url' in item]
+
+    if not playlist_urls:
+        print(f"Playlist for folder '{folder_id}' is empty. Nothing to play.")
+        sys.exit(0)
+
+    print(f"Starting mpv for folder '{folder_id}' with {len(playlist_urls)} item(s)...")
+    mpv_session.start(playlist_urls, folder_id)
+
+def handle_cli():
+    """Handles command-line invocation using argparse for a more robust CLI."""
+    if len(sys.argv) < 2 or sys.argv[1] not in ['play', 'list', '-h', '--help']:
+        return False
+
+    logging.info(f"Native host started in CLI mode with args: {sys.argv}")
+    parser = argparse.ArgumentParser(description="Command-line interface for MPV Playlist Organizer.")
+    subparsers = parser.add_subparsers(dest='command', required=True, help='Available commands')
+
+    play_parser = subparsers.add_parser('play', help='Play a playlist from a specified folder.')
+    play_parser.add_argument('folder_id', help='The name of the folder to play.')
+    play_parser.set_defaults(func=_cli_play_folder)
+
+    list_parser = subparsers.add_parser('list', help='List all available folders and their item counts.')
+    list_parser.set_defaults(func=_cli_list_folders)
+
+    args = parser.parse_args()
+    args.func(args)
+    
+    return True

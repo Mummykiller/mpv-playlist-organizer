@@ -138,6 +138,21 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             return this.activeMode === 'mini';
         }
 
+        /**
+         * Determines the initial UI mode based on tab state and user preferences,
+         * then activates it.
+         * @param {boolean} isHttp - Whether the current tab is on an HTTP/S page.
+         * @param {object} uiState - The saved UI state for the current tab.
+         * @param {object} prefs - The user's global preferences.
+         */
+        determineAndSetInitialMode(isHttp, uiState, prefs) {
+            let showMiniView = false;
+            if (isHttp) {
+                showMiniView = uiState?.minimized ?? (prefs?.mode === 'minimized');
+            }
+            this.setMode(showMiniView ? 'mini' : 'full');
+        }
+
         // --- Getters for Active Elements ---
         // These getters return the element from the currently active view, simplifying event handlers.
         get folderSelect() {
@@ -1275,15 +1290,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
                 miniAddBtn.classList.add('stream-present');
             }
 
-            // Determine which view to show.
-            // Prioritize the tab's current state (uiState.minimized) if it exists.
-            // Otherwise, fall back to the user's default preference (prefs.mode).
-            let showMiniView = false;
-            if (isHttp) {
-                showMiniView = uiState?.minimized ?? (prefs?.mode === 'minimized');
-            }
-
-            uiManager.setMode(showMiniView ? 'mini' : 'full');
+            uiManager.determineAndSetInitialMode(isHttp, uiState, prefs);
 
             // Populate UI with data
             populateFolderDropdowns();
@@ -1293,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             renderBuiltInFilterList(); // Render the static built-in filters
             updateRemoveButtonState();
 
-            if (showMiniView) {
+            if (uiManager.isMiniView()) {
                 updateItemCount(miniFolderSelect.value);
                 showOnPageControllerBtn.style.display = 'block';
                 hideOnPageControllerBtn.style.display = 'none';
@@ -1302,9 +1309,9 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
                 if (prefs?.autofocus_new_folder) {
                     newFolderNameInput.focus();
                 }
+                // Hide the 'hide' button if the full view is active, show it otherwise.
+                hideOnPageControllerBtn.style.display = 'block';
             }
-            // Hide the 'hide' button if the mini view is active, show it otherwise.
-            hideOnPageControllerBtn.style.display = showMiniView ? 'none' : 'block';
 
         } catch (error) {
             // Fallback to the full management view on any error

@@ -22,17 +22,17 @@ This phase focuses on breaking down the largest files and establishing a baselin
             - [x] `nativeConnection.js`: Manage the persistent connection to the native host, including `requestPromises`, `requestIdCounter`, and connection state.
             - [x] `contextMenu.js`: Handle creation and updates for all context menus.
             - [x] `playlistManager.js`: Contain logic for adding, removing, clearing, and reordering playlist items.
-            - [ ] `messageRouter.js`: The main entry point for `onMessage`, responsible for delegating actions to other services.
+            - [x] `messageRouter.js`: The main entry point for `onMessage`, responsible for delegating actions to other services.
         - **Benefit:** Simplifies the main service worker file, making it easier to trace logic and add new features.
 
     - **2. Deconstruct `native_host.py`:**
         - **Goal:** Separate concerns within the Python host.
         - **Modules:**
             - [x] `mpv_session.py`: Isolate the `MpvSessionManager` class and all MPV process/IPC logic.
-            - [ ] `file_io.py`: Handle all interactions with the filesystem (`folders.json`, `config.json`, exports).
-            - [ ] `services.py`: Contain business logic for AniList caching, yt-dlp updates, and dependency checks.
-            - [ ] `cli.py`: House the `argparse` setup and all CLI command handlers.
-            - [ ] `native_host.py` (main): Becomes the lightweight entry point, handling the native messaging loop and delegating to other modules.
+            - [x] `file_io.py`: Handle all interactions with the filesystem (`folders.json`, `config.json`, exports).
+            - [x] `services.py`: Contain business logic for AniList caching, yt-dlp updates, and dependency checks.
+            - [x] `cli.py`: House the `argparse` setup and all CLI command handlers.
+            - [x] `native_host.py` (main): Becomes the lightweight entry point, handling the native messaging loop and delegating to other modules.
         - **Benefit:** Improves testability of individual components (e.g., testing `MpvSessionManager` without the messaging layer).
 
     - **3. Refactor `content.js` (`MpvController`):**
