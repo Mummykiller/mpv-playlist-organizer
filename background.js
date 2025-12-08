@@ -687,100 +687,98 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // On install, ensure the default 'Default' folder exists and set up context menus.
 chrome.runtime.onInstalled.addListener(async () => {
     // Initialize the storage which runs all necessary migrations.
-    // This must complete before we try to update menus or sync data.
     await storage.initialize();
 
-    await updateContextMenus(storage); // Create the context menus for pages.
-    await syncDataToNativeHostFile(); // Sync data on first install/update.
-    await _checkDependenciesAndStore(); // Perform initial dependency check
+    await updateContextMenus(storage);
+    await syncDataToNativeHostFile();
+    await _checkDependenciesAndStore();
     console.log("MPV Handler extension installed and initialized.");
 });
 
 // --- Rate Limiting for oEmbed ---
 let lastOEmbedRequestTime = 0;
 
-// --- Context Menu Click Handler ---
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-    const { menuItemId } = info;
+/**
+ * Handles adding a YouTube URL from the context menu, using oEmbed for title scraping.
+ * @param {string} folderId - The target folder ID.
+ * @param {string} urlToAdd - The YouTube URL.
+ * @param {chrome.tabs.Tab} tab - The originating tab.
+ */
+async function _handleYouTubeContextMenuAdd(folderId, urlToAdd, tab) {
+    const now = Date.now();
+    const minInterval = 1000; // 1 request per second
+    const elapsed = now - lastOEmbedRequestTime;
+    const delay = Math.max(0, minInterval - elapsed);
+    lastOEmbedRequestTime = now + delay;
 
-    let folderId = null;
-    // Determine the folderId based on which context menu item was clicked.
-    if (typeof menuItemId === 'string' && menuItemId.startsWith('add-to-folder-')) {
-        folderId = menuItemId.substring('add-to-folder-'.length);
-    // New: Handle the new playlist context menu item.
-    } else if (typeof menuItemId === 'string' && menuItemId.startsWith('add-playlist-to-folder-')) {
-        folderId = menuItemId.substring('add-playlist-to-folder-'.length);
-    } else if (menuItemId === 'add-to-last-used-folder') {
-        // If the one-click-add item was clicked, get the last used folder from storage.
-        const data = await storage.get();
-        folderId = data.settings.last_used_folder_id;
-    }
+    setTimeout(async () => {
+        broadcastLog({ text: `[Background]: YouTube URL detected. Scraping title via oEmbed...`, type: 'info' });
+        try {
+            const oEmbedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(urlToAdd)}&format=json`;
+            const response = await fetch(oEmbedUrl);
+            if (!response.ok) throw new Error(`oEmbed request failed: ${response.status}`);
+            
+            const videoDetails = await response.json();
+            const isPlaylist = urlToAdd.includes('/playlist?list=');
+            const itemTitle = videoDetails.title || (isPlaylist ? "YouTube Playlist" : "YouTube Video");
+            const finalTitle = videoDetails.author_name ? `${videoDetails.author_name} - ${itemTitle}` : itemTitle;
 
-    // If we successfully determined a folderId, proceed to add the URL.
-    if (folderId) {
-        // This block is now common for both types of context menu clicks.
-        
-        // Determine the URL from the context info, preferring the most specific source.
-        const urlToAdd = info.linkUrl || info.srcUrl || info.pageUrl;
-        if (!urlToAdd) return;
-
-        const isYouTubeVideoUrl = /^https?:\/\/((www|music)\.)?youtube\.com\/watch\?v=([a-zA-Z0-9_-]+)/.test(urlToAdd);
-        const isYouTubePlaylistUrl = /^https?:\/\/((www|music)\.)?youtube\.com\/playlist\?list=([a-zA-Z0-9_-]+)/.test(urlToAdd);
-
-        if (isYouTubeVideoUrl || isYouTubePlaylistUrl) {
-            // --- Rate Limiting Logic ---
-            const now = Date.now();
-            const minInterval = 1000; // 1 request per second
-            const elapsed = now - lastOEmbedRequestTime;
-            const delay = Math.max(0, minInterval - elapsed);
-
-            // Set the time for the *next* allowed request.
-            lastOEmbedRequestTime = now + delay;
-
-            setTimeout(async () => {
-                broadcastLog({ text: `[Background]: YouTube URL detected. Scraping title via oEmbed...`, type: 'info' });
-                try {
-                    // Use YouTube's oEmbed endpoint for a reliable and lightweight way to get video details.
-                    const oEmbedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(urlToAdd)}&format=json`;
-                    const response = await fetch(oEmbedUrl);
-                    if (!response.ok) {
-                        throw new Error(`YouTube oEmbed request failed with status: ${response.status} ${response.statusText}`);
-                    }
-                    const videoDetails = await response.json();
-                    
-                    const itemTitle = videoDetails.title || (isYouTubePlaylistUrl ? "YouTube Playlist" : "YouTube Video");
-                    const channelName = videoDetails.author_name || null;
-                    const finalTitle = channelName ? `${channelName} - ${itemTitle}` : itemTitle;
-
-                    await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, finalTitle, tab);
-                } catch (e) {
-                    broadcastLog({ text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Adding with basic title.`, type: 'error' });
-                    // Fallback to adding with a very basic title if the scrape fails.
-                    await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, isYouTubePlaylistUrl ? "YouTube Playlist" : "YouTube Video", tab);
-                }
-            }, delay);
-        } else {
-            // --- Default Behavior for Other Sites ---
-            // Use the scanner window to find streams and get the title.
-            broadcastLog({ text: `[Background]: URL detected from context menu. Scanning for stream and title...`, type: 'info' });
-            try {
-                const scanResult = await findM3u8InUrl(urlToAdd, tab);
-                const { url: streamUrl, title, scannerTab } = scanResult;
-
-                if (streamUrl) {
-                    await playlistManager.handleAddFromContextMenu(folderId, streamUrl, title, tab);
-                } else {
-                    broadcastLog({ text: `[Background]: Scanner did not detect a video stream. Add action cancelled.`, type: 'info' });
-                }
-                if (scannerTab && scannerTab.windowId) {
-                    chrome.windows.remove(scannerTab.windowId).catch(() => {});
-                }
-            } catch (error) {
-                const errorMessage = `[Background]: Scanner failed for '${urlToAdd}'. Adding original URL as fallback. Error: ${error.message}`;
-                broadcastLog({ text: errorMessage, type: 'info' });
-                await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, urlToAdd, tab); // Fallback to adding the URL as its own title
-            }
+            await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, finalTitle, tab);
+        } catch (e) {
+            broadcastLog({ text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Adding with basic title.`, type: 'error' });
+            await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, "YouTube Content", tab);
         }
+    }, delay);
+}
+
+/**
+ * Handles adding a non-YouTube URL from the context menu, using the stream scanner.
+ * @param {string} folderId - The target folder ID.
+ * @param {string} urlToAdd - The URL of the page to scan.
+ * @param {chrome.tabs.Tab} tab - The originating tab.
+ */
+async function _handleGenericContextMenuAdd(folderId, urlToAdd, tab) {
+    broadcastLog({ text: `[Background]: URL detected. Scanning for stream and title...`, type: 'info' });
+    try {
+        const scanResult = await findM3u8InUrl(urlToAdd, tab);
+        if (scanResult.url) {
+            await playlistManager.handleAddFromContextMenu(folderId, scanResult.url, scanResult.title, tab);
+        } else {
+            broadcastLog({ text: `[Background]: Scanner did not detect a video stream.`, type: 'info' });
+        }
+        if (scanResult.scannerTab?.windowId) {
+            chrome.windows.remove(scanResult.scannerTab.windowId).catch(() => {});
+        }
+    } catch (error) {
+        broadcastLog({ text: `[Background]: Scanner failed for '${urlToAdd}'. Adding original URL as fallback. Error: ${error.message}`, type: 'info' });
+        await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, urlToAdd, tab);
+    }
+}
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+    const { menuItemId, linkUrl, srcUrl, pageUrl } = info;
+    const urlToAdd = linkUrl || srcUrl || pageUrl;
+    if (!urlToAdd) return;
+
+    const getFolderId = async () => {
+        if (menuItemId.startsWith('add-to-folder-')) return menuItemId.substring('add-to-folder-'.length);
+        if (menuItemId.startsWith('add-playlist-to-folder-')) return menuItemId.substring('add-playlist-to-folder-'.length);
+        if (menuItemId === 'add-to-last-used-folder') {
+            const data = await storage.get();
+            return data.settings.last_used_folder_id;
+        }
+        return null;
+    };
+
+    const folderId = await getFolderId();
+    if (!folderId) return;
+
+    const isYouTubeUrl = /youtube\.com\/(watch|playlist)/.test(urlToAdd);
+
+    if (isYouTubeUrl) {
+        _handleYouTubeContextMenuAdd(folderId, urlToAdd, tab);
+    } else {
+        _handleGenericContextMenuAdd(folderId, urlToAdd, tab);
     }
 });
 
@@ -923,47 +921,38 @@ async function findM3u8InUrl(url, originalTab) {
 
 chrome.webRequest.onBeforeRequest.addListener(
     (details) => {
-        // Optimization: Quick string check before more expensive operations.
-        if (!details.url.includes('.m3u8')) {
-            return;
-        }
-
         // Optimization: Ignore requests originating from our own extension to prevent loops.
         if (details.initiator && details.initiator.startsWith(`chrome-extension://${chrome.runtime.id}`)) {
             return;
         }
 
-        // At the onBeforeRequest stage, we only have the URL.
-        // We check if the URL's path ends with .m3u8.
-        // This is much faster than waiting for response headers.
+        // Check if the URL's path ends with .m3u8.
         try {
             const url = new URL(details.url);
             if (!url.pathname.endsWith('.m3u8')) return;
         } catch (e) {
             return; // Invalid URL, ignore.
         }
-            // Avoid sending the same URL repeatedly for the same tab.
-            if (lastDetectedUrls[details.tabId] === details.url) {
-                return;
-            }
-            lastDetectedUrls[details.tabId] = details.url;
 
-            // Check if a scanner window is waiting for this URL.
-            if (m3u8DetectionPromises[details.tabId]) {
-                m3u8DetectionPromises[details.tabId].resolve(details.url);
-                return;
-            }
+        // Avoid sending the same URL repeatedly for the same tab.
+        if (lastDetectedUrls[details.tabId] === details.url) {
+            return;
+        }
+        lastDetectedUrls[details.tabId] = details.url;
 
-            console.log(`[Background]: Detected M3U8 stream: ${details.url} in tab ${details.tabId}`);
+        // Check if a scanner window is waiting for this URL.
+        if (m3u8DetectionPromises[details.tabId]) {
+            m3u8DetectionPromises[details.tabId].resolve(details.url);
+            return;
+        }
 
-            // Send the detected URL to the content script of the tab where the request originated.
-            chrome.tabs.sendMessage(details.tabId, { m3u8: details.url })
-                .catch(error => {
-                    // This error is expected if the content script isn't on the page.
-                    if (!error.message.includes('Receiving end does not exist')) {
-                        console.error(`[Background]: Error sending M3U8 URL to tab ${details.tabId}:`, error);
-                    }
-                });
+        // Send the detected URL to the content script of the tab where the request originated.
+        chrome.tabs.sendMessage(details.tabId, { m3u8: details.url })
+            .catch(error => {
+                if (!error.message.includes('Receiving end does not exist')) {
+                    console.error(`[Background]: Error sending M3U8 URL to tab ${details.tabId}:`, error);
+                }
+            });
     },
     {
         urls: ["<all_urls>"],

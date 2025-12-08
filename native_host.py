@@ -4,46 +4,50 @@ import os
 import traceback
 from datetime import datetime
 
+# --- Standalone Function for Failsafe Path ---
+# This is intentionally self-contained to avoid import errors if dependencies are missing.
+def _get_failsafe_data_dir():
+    """A simple, dependency-free function to get the user data directory path."""
+    app_name = "MPVPlaylistOrganizer"
+    system = sys.platform
+    if system.startswith("win"):
+        return os.path.join(os.environ.get('APPDATA', ''), app_name)
+    elif system.startswith("darwin"):
+        return os.path.join(os.path.expanduser('~/Library/Application Support'), app_name)
+    else: # Linux and other Unix-like systems
+        xdg_data_home = os.getenv('XDG_DATA_HOME')
+        if xdg_data_home:
+            return os.path.join(xdg_data_home, app_name)
+        else:
+            return os.path.join(os.path.expanduser('~/.local/share'), app_name)
+
 # --- Failsafe Crash Handler ---
 # This block is added to catch any startup errors and log them to a file.
 FAILSAFE_LOG_PATH = None
 try:
-    # This logic is duplicated from get_user_data_dir to be completely standalone.
-    app_name = "MPVPlaylistOrganizer"
-    system = sys.platform
-    if system.startswith("win"):
-        data_dir_path = os.path.join(os.environ['APPDATA'], app_name)
-    elif system.startswith("darwin"):
-        data_dir_path = os.path.join(os.path.expanduser('~/Library/Application Support'), app_name)
-    else:
-        xdg_data_home = os.getenv('XDG_DATA_HOME')
-        if xdg_data_home:
-            data_dir_path = os.path.join(xdg_data_home, app_name)
-        else:
-            data_dir_path = os.path.join(os.path.expanduser('~/.local/share'), app_name)
-    
+    data_dir_path = _get_failsafe_data_dir()
     os.makedirs(data_dir_path, exist_ok=True)
     FAILSAFE_LOG_PATH = os.path.join(data_dir_path, "native_host_crash.log")
 except Exception:
     # If creating the data directory fails, fall back to the script's directory.
     FAILSAFE_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "native_host_crash.log")
+    # As a last resort, try to use the main log file name in the same fallback directory.
+    LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "native_host.log")
 
 try:
     # --- Windows pythonw.exe Guard ---
-    # If this script is started with pythonw.exe, sys.stdin will be None,
-    # which breaks native messaging. This guard detects that case and re-launches
-    # the script using the standard python.exe interpreter.
+    # If this script is started with pythonw.exe, sys.stdin will be None, which breaks
+    # native messaging. This guard re-launches with python.exe, which has the necessary streams.
     if sys.platform == "win32" and sys.executable.endswith("pythonw.exe"):
         import subprocess
-        # Re-launch with python.exe in a new console window for debugging.
-        # The DETACHED_PROCESS flag is removed, and CREATE_NEW_CONSOLE is added.
+        # Re-launch with python.exe. CREATE_NO_WINDOW prevents a console from flashing.
         si = subprocess.STARTUPINFO()
-        si.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        si.wShowWindow = subprocess.SW_SHOW
+        si.dwFlags = subprocess.STARTF_USESTDHANDLES
+        creation_flags = subprocess.CREATE_NO_WINDOW
         # Use sys.argv[0] which is more reliable than __file__ in some contexts
         script_path = os.path.abspath(sys.argv[0])
         
-        subprocess.Popen([sys.executable.replace("pythonw.exe", "python.exe"), script_path] + sys.argv[1:], creationflags=subprocess.CREATE_NEW_CONSOLE)
+        subprocess.Popen([sys.executable.replace("pythonw.exe", "python.exe"), script_path] + sys.argv[1:], creationflags=creation_flags, startupinfo=si)
         sys.exit(0)
 
     import json
@@ -60,6 +64,9 @@ try:
     import platform
     # socket is only used on non-windows platforms for IPC
     from mpv_session import MpvSessionManager
+    import file_io
+    import cli
+    import services
     if platform.system() != "Windows":
         import socket
 
@@ -67,31 +74,14 @@ try:
     # --- Function to get the appropriate user data directory ---
     def get_user_data_dir():
         """Returns a platform-specific, user-writable directory for app data."""
-        app_name = "MPVPlaylistOrganizer"
-        system = platform.system()
-        if system == "Windows":
-            # %APPDATA%\MPVPlaylistOrganizer
-            return os.path.join(os.environ['APPDATA'], app_name)
-        elif system == "Darwin": # macOS
-            # ~/Library/Application Support/MPVPlaylistOrganizer
-            return os.path.join(os.path.expanduser('~/Library/Application Support'), app_name)
-        else: # Linux and other Unix-like systems
-            # ~/.local/share/MPVPlaylistOrganizer
-            return os.path.join(os.path.expanduser('~/.local/share'), app_name)
+        return file_io.get_user_data_dir()
 
     # --- Configuration ---
-    # Determine the script's directory. sys.argv[0] is more reliable than __file__
-    # when the script is executed in different ways (e.g., via a batch file).
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-
-    DATA_DIR = get_user_data_dir() # Use user-specific data directory
+    DATA_DIR = file_io.DATA_DIR
     LOG_FILE = os.path.join(DATA_DIR, "native_host.log")
     MAX_LOG_LINES = 200
-    FOLDERS_FILE = os.path.join(DATA_DIR, "folders.json")
     SESSION_FILE = os.path.join(DATA_DIR, "session.json")
-    EXPORT_DIR = os.path.join(DATA_DIR, "exported")
     ANILIST_CACHE_FILE = os.path.join(DATA_DIR, "anilist_cache.json")
-    CONFIG_FILE = os.path.join(DATA_DIR, "config.json") # For Windows mpv_path
 
     class TrimmingFileHandler(logging.FileHandler):
         """
@@ -136,370 +126,7 @@ try:
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
-
-    def _write_export_file(filename, data):
-        """Helper to write data to a file in the export directory."""
-        try:
-            os.makedirs(EXPORT_DIR, exist_ok=True)
-
-            # Sanitize filename to prevent path traversal (e.g., '../malicious.txt').
-            # os.path.basename strips any directory parts.
-            safe_basename = os.path.basename(filename)
-
-            # Ensure the filename ends with .json
-            if not safe_basename.lower().endswith('.json'):
-                final_filename = f"{safe_basename}.json"
-            else:
-                final_filename = safe_basename
-
-            filepath = os.path.join(EXPORT_DIR, final_filename)
-
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
-
-            logging.info(f"Data exported to {filepath}")
-            return {"success": True, "message": f"Data exported to '{final_filename}' in the 'exported' folder."}
-        except Exception as e:
-            error_msg = f"Failed to export data: {e}"
-            logging.error(error_msg)
-            return {"success": False, "error": error_msg}
-
-    def _get_ytdlp_version(path_to_exe):
-        """Runs 'yt-dlp --version' and returns the output."""
-        try:
-            # Use a short timeout to prevent hanging if yt-dlp is unresponsive.
-            result = subprocess.run(
-                [path_to_exe, '--version'],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=10,
-                encoding='utf-8',
-                errors='ignore'
-            )
-            return result.stdout.strip()
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
-            error_msg = f"Could not get yt-dlp version: {e}"
-            logging.error(error_msg)
-            send_message({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
-            return None
-
-    def update_ytdlp():
-        """
-        Downloads the latest yt-dlp binary and replaces the existing one.
-        """
-        send_message({"log": {"text": "[yt-dlp]: Starting manual update process...", "type": "info"}})
-        try:
-            system = platform.system()
-            if system == "Windows":
-                exe_name = "yt-dlp.exe"
-            elif system == "Linux":
-                exe_name = "yt-dlp"
-            elif system == "Darwin": # macOS
-                exe_name = "yt-dlp"
-            else:
-                return {"success": False, "error": f"Unsupported OS for update: {system}"}
-
-            send_message({"log": {"text": f"[Native Host]: Searching for '{exe_name}' in PATH...", "type": "info"}})
-            current_path = shutil.which(exe_name)
-            if not current_path:
-                error_msg = f"'{exe_name}' not found in your system's PATH. Cannot update."
-                send_message({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
-                return {"success": False, "error": error_msg}
-
-            send_message({"log": {"text": f"[yt-dlp]: Found at '{current_path}'.", "type": "info"}})
-
-            # Get version before update
-            version_before = _get_ytdlp_version(current_path)
-            if version_before:
-                send_message({"log": {"text": f"[yt-dlp]: Current version: {version_before}", "type": "info"}})
-            send_message({"log": {"text": "[yt-dlp]: Preparing update command...", "type": "info"}})
-
-            # Use the built-in updater `yt-dlp -U`. This is more robust than manual replacement.
-            command = [current_path, '-U']
-            popen_kwargs = {
-                'stdout': subprocess.PIPE,
-                'stderr': subprocess.STDOUT, # Redirect stderr to stdout
-                'universal_newlines': True,
-                'encoding': 'utf-8',
-                'errors': 'ignore'
-            }
-            if system == "Windows":
-                popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-
-            # On Linux, updating yt-dlp in a system directory (e.g., /usr/local/bin) requires sudo.
-            # We use a graphical sudo tool to ask for the user's password.
-            if system == "Linux" and not os.access(current_path, os.W_OK):
-                send_message({"log": {"text": "[yt-dlp]: Write access denied. Attempting to run with administrator privileges...", "type": "info"}})
-                
-                # Find a graphical sudo tool
-                if shutil.which("pkexec"):
-                    command = ["pkexec"] + command
-                elif shutil.which("gksu"):
-                    command = ["gksu"] + command
-                elif shutil.which("kdesu"):
-                    command = ["kdesu"] + command
-                else:
-                    error_msg = (
-                        "No graphical sudo tool (pkexec, gksu, kdesu) found. "
-                        f"You need administrator privileges to update yt-dlp in its current location ('{current_path}').\n\n"
-                        "Please open a terminal and run the following command:\n"
-                        f"sudo '{current_path}' -U\n"
-                        "(You may be asked for your password.)"
-                    )
-                    send_message({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
-                    return {"success": False, "error": error_msg}
-                
-                send_message({"log": {"text": "[yt-dlp]: Please enter your password in the dialog to update yt-dlp.", "type": "info"}})
-
-            send_message({"log": {"text": f"[yt-dlp]: Executing: {' '.join(command)}", "type": "info"}})
-            process = subprocess.Popen(command, **popen_kwargs)
-
-            # Stream the output line by line to the extension log
-            for line in iter(process.stdout.readline, ''):
-                send_message({"log": {"text": f"[yt-dlp]: {line.strip()}", "type": "info"}})
-            
-            process.stdout.close()
-            return_code = process.wait()
-
-            if return_code != 0:
-                # Check for specific error codes or conditions
-                if return_code == 126 or return_code == 127: # pkexec authentication cancelled by user
-                    error_msg = f"Update cancelled. You may have closed the password dialog. (code: {return_code})"
-                else:
-                    error_msg = f"yt-dlp update process failed with exit code {return_code}. You may need to run it with administrator privileges."
-                
-                send_message({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
-                return {"success": False, "error": error_msg}
-            
-            # If update command succeeded, verify by checking version again
-            send_message({"log": {"text": "[yt-dlp]: Update command finished. Verifying new version...", "type": "info"}})
-            version_after = _get_ytdlp_version(current_path)
-            if not version_after:
-                return {"success": False, "error": "Could not verify yt-dlp version after update."}
-
-            send_message({"log": {"text": f"[yt-dlp]: New version: {version_after}", "type": "info"}})
-
-            if version_after != version_before:
-                success_msg = f"Successfully updated yt-dlp from {version_before} to {version_after}."
-                send_message({"log": {"text": f"[yt-dlp]: {success_msg}", "type": "info"}})
-                return {"success": True, "message": success_msg}
-            else:
-                # This can happen if yt-dlp was already up to date.
-                success_msg = f"yt-dlp is already at the latest version ({version_after})."
-                send_message({"log": {"text": f"[yt-dlp]: {success_msg}", "type": "info"}})
-                return {"success": True, "message": success_msg}
-
-        except Exception as e:
-            error_msg = f"An unexpected error occurred during yt-dlp update: {e}"
-            send_message({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
-            return {"success": False, "error": error_msg}
-
-    def _check_mpv_and_ytdlp_status():
-        """
-        Checks for the presence and version of mpv and yt-dlp executables.
-        Returns a dictionary with their status.
-        """
-        mpv_status = {"found": False, "path": None, "error": None}
-        ytdlp_status = {"found": False, "path": None, "version": None, "error": None}
-
-        system = platform.system()
-
-        # --- Check MPV ---
-        mpv_exe_name = "mpv.exe" if system == "Windows" else "mpv"
-        mpv_path = get_mpv_executable() # This considers the config file for Windows
-        
-        # If get_mpv_executable returns a specific path (not just the name), check that.
-        # Otherwise, rely on shutil.which to find it in PATH.
-        if os.path.isabs(mpv_path) and os.path.exists(mpv_path):
-            mpv_status["found"] = True
-            mpv_status["path"] = mpv_path
-        else:
-            found_mpv_in_path = shutil.which(mpv_exe_name)
-            if found_mpv_in_path:
-                mpv_status["found"] = True
-                mpv_status["path"] = found_mpv_in_path
-            else:
-                mpv_status["error"] = f"'{mpv_exe_name}' not found in system PATH."
-                if system == "Windows" and mpv_path != mpv_exe_name:
-                    mpv_status["error"] += f" Also not found at configured path: '{mpv_path}'."
-
-
-        # --- Check yt-dlp ---
-        ytdlp_exe_name = "yt-dlp.exe" if system == "Windows" else "yt-dlp"
-        ytdlp_path = shutil.which(ytdlp_exe_name)
-
-        if ytdlp_path:
-            ytdlp_status["found"] = True
-            ytdlp_status["path"] = ytdlp_path
-            ytdlp_version = _get_ytdlp_version(ytdlp_path)
-            if ytdlp_version:
-                ytdlp_status["version"] = ytdlp_version
-            else:
-                ytdlp_status["error"] = "Could not retrieve yt-dlp version."
-        else:
-            ytdlp_status["error"] = f"'{ytdlp_exe_name}' not found in system PATH."
-
-        logging.info(f"Dependency check: MPV={mpv_status['found']} ({mpv_status['path']}), YTDLP={ytdlp_status['found']} ({ytdlp_status['path']}, {ytdlp_status['version']})")
-
-        return {"success": True, "mpv": mpv_status, "ytdlp": ytdlp_status}
-
-    def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabled):
-        """
-        Handles fetching AniList releases with a file-based caching mechanism.
-        The native host is now the single source of truth for the cache.
-        """
-        CACHE_DURATION_S = 30 * 60  # 30 minutes
-        now = time.time()
-
-        # If the user has disabled caching entirely, bypass all cache logic.
-        # Fetch directly from the API and do not write to the cache file.
-        if is_cache_disabled:
-            logging.info("AniList cache is disabled by user setting. Fetching directly from API.")
-            send_message({"log": {"text": "[AniList]: Cache disabled. Fetching new data from API.", "type": "info"}})
-            # The delete_cache flag is handled separately below, but we go straight to fetching.
-            return _fetch_from_anilist_script(is_ping=False, is_cache_disabled=True)
-
-        # If the user has 'disable cache' checked, the extension will tell us to delete it.
-        if delete_cache and os.path.exists(ANILIST_CACHE_FILE):
-            try:
-                os.remove(ANILIST_CACHE_FILE)
-                logging.info("Deleted anilist_cache.json as requested by user setting.")
-                send_message({"log": {"text": "[AniList]: Cache file deleted due to 'Disable Cache' setting.", "type": "info"}})
-            except OSError as e:
-                logging.error(f"Failed to delete anilist_cache.json: {e}")
-                send_message({"log": {"text": f"[AniList]: Failed to delete cache file: {e}", "type": "error"}})
-
-        # If the user forces a refresh, skip all cache checks.
-        if force_refresh:
-            logging.info("Forcing a full refresh of AniList data as requested by user.")
-            send_message({"log": {"text": "[AniList]: Manual refresh requested. Fetching new data from API.", "type": "info"}})
-            return _fetch_from_anilist_script(is_ping=False, is_cache_disabled=is_cache_disabled)
-
-        # --- Step 1: Read from cache file ---
-        cache = None
-        if os.path.exists(ANILIST_CACHE_FILE):
-            try:
-                with open(ANILIST_CACHE_FILE, 'r', encoding='utf-8') as f:
-                    cache = json.load(f)
-            except (json.JSONDecodeError, IOError) as e:
-                error_msg = f"Could not read or parse anilist_cache.json: {e}. Will perform a full fetch."
-                logging.warning(error_msg)
-                send_message({"log": {"text": f"[Native Host]: {error_msg}", "type": "error"}})
-                cache = None
-
-        # --- Step 2: Check if cache is fresh ---
-        if cache and 'timestamp' in cache and 'data' in cache:
-            is_expired_by_timer = (now - cache['timestamp'] > CACHE_DURATION_S)
-
-            # New check: Invalidate cache if the day has changed since the last cache write.
-            # This handles the edge case where the last release of a day has passed,
-            # `next_airing_at` is null, and we enter a new day.
-            is_new_day = False
-            if 'timestamp' in cache:
-                from datetime import datetime
-                cache_date = datetime.fromtimestamp(cache['timestamp']).date()
-                is_new_day = datetime.fromtimestamp(now).date() != cache_date
-            
-            next_airing_at = cache['data'].get('next_airing_at')
-            is_expired_by_release = False
-            if next_airing_at and now > next_airing_at:
-                is_expired_by_release = True
-                logging.info("AniList cache is stale because a new episode has aired.")
-                send_message({"log": {"text": "[AniList]: A new episode has aired. Refreshing data...", "type": "info"}})
-
-            if is_new_day:
-                logging.info("AniList cache is from a previous day. Forcing refresh.")
-                send_message({"log": {"text": "[AniList]: New day detected. Refreshing data...", "type": "info"}})
-
-
-            # If not expired by either condition, serve from cache.
-            if not is_expired_by_timer and not is_expired_by_release and not is_new_day:
-                logging.info("Serving AniList data from fresh local file cache.")
-                send_message({"log": {"text": "[AniList]: Loaded from local file (cache is fresh).", "type": "info"}})
-                return {"success": True, "output": json.dumps(cache['data'])}
-
-
-        # --- Step 3: Cache is stale. Perform a lightweight "ping" to check for changes before a full fetch. ---
-        if cache and 'data' in cache and 'total' in cache['data']:
-            logging.info("AniList file cache is stale. Pinging API for release timestamps...")
-            send_message({"log": {"text": "[AniList]: Cache is stale. Pinging for changes...", "type": "info"}})
-            
-            # is_ping=True now makes a request for the list of 'airingAt' timestamps.
-            ping_response = _fetch_from_anilist_script(is_ping=True, is_cache_disabled=is_cache_disabled)
-            
-            if ping_response['success']:
-                try:
-                    ping_data = json.loads(ping_response['output'])
-                    ping_airing_ats = ping_data.get('airingAt_list', [])
-                    
-                    # Get the pre-sorted list of timestamps from the cache.
-                    cached_airing_ats = cache.get('sorted_airing_ats', [])
-
-                    # If the list of timestamps from the ping matches our cached list, we assume no changes.
-                    if sorted(ping_airing_ats) == cached_airing_ats:
-                        logging.info("No change in release timestamps detected via ping. Serving from local file and updating timestamp.")
-                        send_message({"log": {"text": "[AniList]: Loaded from local file (no new releases found).", "type": "info"}})
-                        
-                        # Update the timestamp of the existing cache to make it fresh again.
-                        cache['timestamp'] = now
-                        with open(ANILIST_CACHE_FILE, 'w', encoding='utf-8') as f:
-                            json.dump(cache, f, indent=4)
-                        
-                        # Serve the old data, since it's still valid. This avoids a full fetch.
-                        return {"success": True, "output": json.dumps(cache['data'])}
-                except (json.JSONDecodeError, KeyError) as e:
-                    logging.warning(f"Failed to process ping response: {e}. Proceeding with full fetch.")
-            elif not ping_response['success']:
-                # If the ping itself fails, we should also proceed to a full fetch as a fallback.
-                logging.warning(f"AniList ping failed. Proceeding with full fetch.")
-
-        # --- Step 4: Perform a full fetch ---
-        logging.info("Performing a full fetch of AniList data.")
-        send_message({"log": {"text": "[AniList]: Fetching new data from AniList API...", "type": "info"}})
-        # We need to store the raw schedules to be able to compare airingAt timestamps later.
-        full_fetch_response = _fetch_from_anilist_script(is_ping=False, is_cache_disabled=is_cache_disabled)
-        if full_fetch_response['success']:
-            # Only write to the cache if it's not disabled.
-            if not is_cache_disabled:
-                try:
-                    full_data = json.loads(full_fetch_response['output'])
-                    # Pre-sort and store the list of timestamps for efficient future comparisons.
-                    # The full_data from anilist_releases.py contains the 'releases' list, and each release has an 'airingAt_utc' timestamp.
-                    # We need to extract these timestamps for the ping comparison.
-                    # The anilist_releases.py script was already providing the full schedule, so we just need to process it.
-                    # The `full_data` object contains a `raw_schedules_for_cache` key with the raw data.
-                    sorted_ats = sorted([s['airingAt'] for s in full_data.get('raw_schedules_for_cache', [])])
-
-                    new_cache = {"timestamp": now, "data": full_data, "sorted_airing_ats": sorted_ats}
-                    with open(ANILIST_CACHE_FILE, 'w', encoding='utf-8') as f:
-                        json.dump(new_cache, f, indent=4)
-                    logging.info("AniList file cache updated with new data.")
-                except (json.JSONDecodeError, IOError) as e:
-                    logging.error(f"Failed to write new AniList cache file: {e}")
-
-        return full_fetch_response # Return the result of the fetch
-
-    def _fetch_from_anilist_script(is_ping, is_cache_disabled=False):
-        """Helper function to execute the anilist_releases.py script."""
-        try:
-            # Use sys.executable to ensure we're using the same Python interpreter that's running the host
-            script_path = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), 'anilist_releases.py')
-            script_args = [sys.executable, script_path]
-            if is_ping:
-                script_args.append('--ping')
-            result = subprocess.run(script_args, capture_output=True, text=True, check=True, encoding='utf-8')
-            return {"success": True, "output": result.stdout}
-        except subprocess.CalledProcessError as e:
-            # Log the actual error from the script for better debugging
-            logging.error(f"Error running anilist_releases.py: {e.stderr}")
-            send_message({"log": {"text": f"[AniList]: Script failed: {e.stderr}", "type": "error"}})
-            return {"success": False, "error": f"Error fetching AniList releases: {e.stderr}"}
-        except FileNotFoundError:
-            error_msg = "anilist_releases.py not found in the script directory."
-            logging.error(error_msg)
-            send_message({"log": {"text": f"[AniList]: {error_msg}", "type": "error"}})
-            return {"success": False, "error": error_msg}
+    SCRIPT_DIR = file_io.SCRIPT_DIR
 
 
     def log_stream(stream, log_level, owner_folder_id):
@@ -550,46 +177,6 @@ try:
         sys.stdout.buffer.write(encoded_content)
         sys.stdout.buffer.flush()
 
-    def get_ipc_path():
-        """Generates a unique, platform-specific path for the mpv IPC socket/pipe."""
-        pid = os.getpid()
-        # Use a temporary directory that's user-specific and secure.
-        # This is better than the global /tmp on Linux.
-        temp_dir = os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")
-        os.makedirs(temp_dir, exist_ok=True)
-
-        if platform.system() == "Windows":
-            # Named pipes on Windows have a specific format.
-            return f"\\\\.\\pipe\\mpv-ipc-{pid}"
-        else:
-            # Use the secure, user-specific temporary directory for Unix sockets.
-            return os.path.join(temp_dir, f"mpv-socket-{pid}")
-
-
-    def get_mpv_executable():
-        """Gets the path to the mpv executable based on OS and config."""
-        current_platform = platform.system()
-        mpv_default_name = "mpv.exe" if current_platform == "Windows" else "mpv"
-
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                configured_mpv_path = config.get("mpv_path")
-                if configured_mpv_path:
-                    # If an absolute path is configured, use it directly.
-                    # Otherwise, it might be just "mpv" or "mpv.exe", so rely on shutil.which later.
-                    if os.path.isabs(configured_mpv_path) and os.path.exists(configured_mpv_path):
-                        return configured_mpv_path
-                    else:
-                        # If it's a relative path or just a name, return it for shutil.which lookup.
-                        return configured_mpv_path
-            except (IOError, json.JSONDecodeError) as e:
-                logging.warning(f"Could not read or parse config.json for mpv path: {e}. Falling back to default.")
-        
-        # Fallback: if no config or unreadable, use platform default name
-        return mpv_default_name
-
     def is_process_alive(pid, ipc_path):
         """Checks if an MPV process is responsive at the given IPC path."""
         if not pid or not ipc_path:
@@ -601,13 +188,14 @@ try:
             try:
                 # Check if the process ID exists. This throws OSError if not.
                 os.kill(pid, 0)
+                time.sleep(0.05) # Small delay to allow OS to clean up pipes if process just died.
                 # Try to connect to the named pipe. This will fail if MPV is hung or has closed the pipe.
                 # We open and immediately close it.
                 pipe = open(ipc_path, 'w')
                 pipe.close()
                 is_alive = True # Both checks passed.
             except (OSError, IOError):
-                # Either the PID doesn't exist or the pipe is not available.
+                # Either the PID doesn't exist, we don't have permission, or the pipe is not available.
                 is_alive = False
         else: # Linux/macOS
             try:
@@ -667,75 +255,30 @@ try:
             logging.error(f"An unexpected error occurred during IPC command: {e}")
             raise
 
-    def get_all_folders_from_file(): # Modified to handle new structure
-        """Reads all folders data from folders.json, ensuring new format."""
-        if not os.path.exists(FOLDERS_FILE):
-            # If the main folders file doesn't exist, try to copy it from the project directory
-            # as a one-time fallback. This helps with fresh installations where the user
-            # data directory is new but a default `folders.json` exists in the source.
-            source_folders_file = os.path.join(SCRIPT_DIR, "data", "folders.json")
-            if os.path.exists(source_folders_file):
-                try:
-                    logging.info(f"No folders file found in {DATA_DIR}. Copying default from {source_folders_file}.")
-                    shutil.copy2(source_folders_file, FOLDERS_FILE)
-                except Exception as e:
-                    logging.error(f"Failed to copy default folders.json: {e}")
-                    return {} # Return empty if copy fails
-            else:
-                return {} # Return empty if no source file to copy
+    def get_ipc_path():
+        """Generates a unique, platform-specific path for the mpv IPC socket/pipe."""
+        pid = os.getpid()
+        temp_dir = os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")
+        os.makedirs(temp_dir, exist_ok=True)
 
-        try:
-            with open(FOLDERS_FILE, 'r', encoding='utf-8') as f:
-                # Handle empty or malformed file
-                content = f.read()
-                if not content:
-                    return {}
-                raw_folders = json.loads(content)
-            
-            converted_folders = {}
-            needs_resave = False
-            for folder_id, folder_content in raw_folders.items():
-                if isinstance(folder_content, dict) and "playlist" in folder_content:
-                    playlist = folder_content.get("playlist", [])
-                    # New: Migrate string playlists within the new format
-                    if playlist and isinstance(playlist[0], str):
-                         needs_resave = True
-                         playlist = [{"url": url, "title": url} for url in playlist]
-                    converted_folders[folder_id] = {"playlist": playlist}
-                elif isinstance(folder_content, list):
-                    # Old format: a raw list of URLs
-                    logging.info(f"Converting old format (list) for folder '{folder_id}' to new format.")
-                    converted_folders[folder_id] = {"playlist": [{"url": url, "title": url} for url in folder_content]}
-                    needs_resave = True
-                elif isinstance(folder_content, dict) and "urls" in folder_content:
-                    # Old format: a dict with a 'urls' key
-                    logging.info(f"Converting old format (dict with 'urls') for folder '{folder_id}' to new format.")
-                    converted_folders[folder_id] = {"playlist": [{"url": url, "title": url} for url in folder_content.get("urls", [])]}
-                    needs_resave = True
-                else:
-                    logging.warning(f"Skipping malformed folder data for '{folder_id}' during load: {folder_content}")
-            
-            if needs_resave:
-                logging.info("Resaving folders file after converting old data formats.")
-                with open(FOLDERS_FILE, 'w') as f:
-                    json.dump(converted_folders, f, indent=4)
+        if platform.system() == "Windows":
+            return f"\\\\.\\pipe\\mpv-ipc-{pid}"
+        else:
+            return os.path.join(temp_dir, f"mpv-socket-{pid}")
 
-            return converted_folders
-        except Exception as e:
-            logging.error(f"Failed to read or process folders from file: {e}")
-            return {}
     # --- Global Instance ---
     # A single instance of the session manager to handle the MPV state.
     mpv_session = MpvSessionManager(session_file_path=SESSION_FILE, dependencies={
         'is_process_alive': is_process_alive,
         'send_ipc_command': send_ipc_command,
-        'get_all_folders_from_file': get_all_folders_from_file,
-        'get_mpv_executable': get_mpv_executable,
+        'get_all_folders_from_file': file_io.get_all_folders_from_file,
+        'get_mpv_executable': file_io.get_mpv_executable,
         'get_ipc_path': get_ipc_path,
         'log_stream': log_stream,
         'send_message': send_message,
         'SCRIPT_DIR': SCRIPT_DIR
     })
+
 
     def cleanup_ipc_socket():
         """Remove the IPC socket file on exit, if it exists (non-Windows)."""
@@ -756,98 +299,10 @@ try:
                 except OSError as e:
                      logging.warning(f"Error removing IPC directory {ipc_dir}: {e}")
 
-    def _cli_list_folders(args):
-        """CLI command to list all available folders and their item counts."""
-        folders_data = get_all_folders_from_file()
-        if not folders_data:
-            print("No folders found. Please add an item in the extension first to create the data file.")
-            logging.warning("CLI 'list' command: No folders found or data file missing.")
-            return
-
-        print("Available folders:")
-        # List folders alphabetically for consistent output.
-        for folder_id, folder_info in sorted(folders_data.items()):
-            playlist = folder_info.get("playlist", [])
-            item_count = len(playlist)
-            print(f"  - {folder_id} ({item_count} item{'s' if item_count != 1 else ''})")
-
-    def _cli_play_folder(args):
-        """CLI command to play a specific folder."""
-        folder_id = args.folder_id
-        folders_data = get_all_folders_from_file()
-        folder_info = folders_data.get(folder_id)
-
-        if not folders_data:
-             print(f"Error: Data file not found or is empty. Please add an item in the extension first to create it.", file=sys.stderr)
-             logging.error(f"CLI Error: Data file not found or empty.")
-             sys.exit(1)
-
-        if folder_info is None or not isinstance(folder_info, dict) or "playlist" not in folder_info:
-            print(f"Error: Folder '{folder_id}' not found.", file=sys.stderr)
-            logging.error(f"CLI Error: Folder '{folder_id}' not found.")
-            # Be helpful and list available folders.
-            if folders_data:
-                print("\nAvailable folders are:")
-                for available_folder_id in sorted(folders_data.keys()):
-                    print(f"  - {available_folder_id}")
-            sys.exit(1)
-        
-        # The playlist items can be strings or dicts, but mpv just needs the URLs.
-        playlist_items = folder_info.get("playlist", [])
-        playlist_urls = [item['url'] if isinstance(item, dict) else item for item in playlist_items]
-
-        if not playlist_urls:
-            print(f"Playlist for folder '{folder_id}' is empty. Nothing to play.")
-            logging.info(f"CLI: Playlist for '{folder_id}' is empty. Aborting.")
-            sys.exit(0)
-
-        logging.info(f"Found folder '{folder_id}' with {len(playlist_urls)} item(s). Starting mpv...")
-        print(f"Starting mpv for folder '{folder_id}' with {len(playlist_urls)} item(s)...")
-        mpv_session.start(playlist_urls, folder_id)
-
-
-    def handle_cli():
-        """Handles command-line invocation using argparse for a more robust CLI."""
-        # The browser will call the script with an origin argument, not a valid command.
-        # We can distinguish a CLI call by checking if the first argument is one of our commands.
-        if len(sys.argv) < 2 or sys.argv[1] not in ['play', 'list', '-h', '--help']:
-            return False # Not a CLI call, proceed to browser messaging mode.
-
-        logging.info(f"Native host started in CLI mode with args: {sys.argv}")
-
-        parser = argparse.ArgumentParser(
-            description="Command-line interface for MPV Playlist Organizer.",
-            formatter_class=argparse.RawTextHelpFormatter # For better help text formatting
-        )
-        subparsers = parser.add_subparsers(dest='command', required=True, help='Available commands')
-
-        # --- Play Command ---
-        play_parser = subparsers.add_parser('play', help='Play a playlist from a specified folder.')
-        play_parser.add_argument('folder_id', help='The name of the folder to play.')
-        play_parser.set_defaults(func=_cli_play_folder)
-
-        # --- List Command ---
-        list_parser = subparsers.add_parser('list', help='List all available folders and their item counts.')
-        list_parser.set_defaults(func=_cli_list_folders)
-
-        try:
-            args = parser.parse_args()
-            args.func(args)
-        except SystemExit:
-            # Argparse calls sys.exit() on --help or errors, which is fine. We just pass.
-            pass
-        except Exception as e:
-            # This will catch errors from the command functions (e.g., file not found).
-            print(f"An unexpected CLI error occurred: {e}", file=sys.stderr)
-            logging.error(f"Unexpected CLI Error: {e}", exc_info=True)
-            sys.exit(1)
-        
-        return True # Indicates that a CLI command was successfully handled.
-
     def launch_unmanaged_mpv(playlist, geometry, custom_width, custom_height, custom_mpv_flags):
         """Launches a new, unmanaged instance of MPV."""
         logging.info("Launching a new, unmanaged MPV instance.")
-        mpv_exe = get_mpv_executable()
+        mpv_exe = file_io.get_mpv_executable()
         # This instance will not have a persistent IPC server, so it's fire-and-forget.
         # We don't need to generate a unique IPC path.
         
@@ -951,32 +406,20 @@ try:
                 elif command == 'export_data':
                     data_to_export = message.get('data')
                     if data_to_export is not None:
-                        try:
-                            with open(FOLDERS_FILE, 'w') as f:
-                                json.dump(data_to_export, f, indent=4)
-                            logging.info(f"Data exported to {FOLDERS_FILE}")
-                            response = {"success": True, "message": "Data successfully synced to file."}
-                        except Exception as e:
-                            error_msg = f"Failed to write to {FOLDERS_FILE}: {e}"
-                            logging.error(error_msg)
-                            response = {"success": False, "error": error_msg}
+                        response = file_io.write_folders_file(data_to_export)
                     else:
                         response = {"success": False, "error": "No data provided for export."}
                 
                 elif command == 'export_playlists':
                     data_to_export = message.get('data')
                     custom_filename = message.get('filename')
-                    if data_to_export is not None and custom_filename:
-                        response = _write_export_file(custom_filename, data_to_export)
-                    elif not custom_filename:
-                        response = {"success": False, "error": "No filename provided for export."}
-                    else:
-                        response = {"success": False, "error": "No data provided for export."}
+                    if not data_to_export: response = {"success": False, "error": "No data provided for export."}
+                    elif not custom_filename: response = {"success": False, "error": "No filename provided for export."}
+                    else: response = file_io.write_export_file(custom_filename, data_to_export)
 
                 elif command == 'export_all_playlists_separately':
                     folders_to_export = message.get('data')
-                    if not folders_to_export:
-                        response = {"success": False, "error": "No folder data provided for export."}
+                    if not folders_to_export: response = {"success": False, "error": "No folder data provided for export."}
                     else:
                         exported_count = 0
                         for folder_id, folder_data in folders_to_export.items():
@@ -987,7 +430,7 @@ try:
 
                             # Sanitize folder_id to create a safe filename
                             safe_filename_base = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in folder_id).rstrip()
-                            result = _write_export_file(safe_filename_base, playlist)
+                            result = file_io.write_export_file(safe_filename_base, playlist)
                             if result["success"]:
                                 exported_count += 1
                         
@@ -995,23 +438,14 @@ try:
                         response = {"success": True, "message": f"Successfully exported {exported_count} playlists to separate files."}
 
                 elif command == 'list_import_files':
-                    try:
-                        if not os.path.isdir(EXPORT_DIR):
-                            response = {"success": True, "files": []}
-                        else:
-                            files = sorted([f for f in os.listdir(EXPORT_DIR) if f.endswith('.json')], reverse=True)
-                            response = {"success": True, "files": files}
-                    except Exception as e:
-                        error_msg = f"Failed to list import files: {e}"
-                        logging.error(error_msg)
-                        response = {"success": False, "error": error_msg}
+                    response = file_io.list_import_files()
 
                 elif command == 'import_from_file':
                     filename = message.get('filename')
                     if filename:
                         try:
-                            filepath = os.path.abspath(os.path.join(EXPORT_DIR, filename))
-                            if not filepath.startswith(os.path.abspath(EXPORT_DIR)):
+                            filepath = os.path.abspath(os.path.join(file_io.EXPORT_DIR, filename))
+                            if not filepath.startswith(os.path.abspath(file_io.EXPORT_DIR)):
                                 logging.error(f"Security violation: Attempted to access file outside of export directory: {filepath}")
                                 response = {"success": False, "error": "Access denied."}
                             else:
@@ -1023,9 +457,8 @@ try:
 
                 elif command == 'open_export_folder':
                     try:
-                        # Ensure the directory exists before trying to open it.
-                        os.makedirs(EXPORT_DIR, exist_ok=True)
-                        abs_path = os.path.abspath(EXPORT_DIR)
+                        os.makedirs(file_io.EXPORT_DIR, exist_ok=True)
+                        abs_path = os.path.abspath(file_io.EXPORT_DIR)
 
                         system = platform.system()
                         if system == "Windows":
@@ -1054,14 +487,15 @@ try:
                     force_refresh = message.get('force', False)
                     delete_cache = message.get('delete_cache', False)
                     is_cache_disabled = message.get('is_cache_disabled', False)
-                    # The new function handles all caching and fetching logic.
-                    response = get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabled)
+                    response = services.get_anilist_releases_with_cache(
+                        force_refresh, delete_cache, is_cache_disabled, ANILIST_CACHE_FILE, SCRIPT_DIR, send_message
+                    )
 
                 elif command == 'run_ytdlp_update':
-                    response = update_ytdlp()
+                    response = services.update_ytdlp(send_message)
 
                 elif command == 'check_dependencies':
-                    response = _check_mpv_and_ytdlp_status()
+                    response = services.check_mpv_and_ytdlp_status(file_io.get_mpv_executable, send_message)
 
                 else:
                     response = {"success": False, "error": "Unknown command"}
@@ -1089,15 +523,26 @@ try:
     if __name__ == '__main__':
         # handle_cli() will parse arguments and execute the command if it's a CLI call.
         # It returns True if it was a CLI call, and False otherwise.
-        if not handle_cli():
-            # Otherwise, assume native messaging mode for the browser.
-            main()
+        try:
+            if not cli.handle_cli():
+                # If it wasn't a CLI call, start the main message loop for the browser.
+                main()
+        except SystemExit:
+            # Argparse calls sys.exit() on --help or on input errors. This is normal.
+            pass
+        except Exception as cli_error:
+            # Catch any other unexpected errors during CLI execution.
+            logging.error(f"An unexpected CLI error occurred: {cli_error}", exc_info=True)
+            print(f"Error: {cli_error}", file=sys.stderr)
+            sys.exit(1)
 
 except Exception as e:
     # This is the failsafe block that catches any error during script initialization or execution.
-    if FAILSAFE_LOG_PATH:
+    # Use the main LOG_FILE path if it was defined, otherwise use the crash-specific path.
+    log_path_to_use = 'LOG_FILE' in locals() and LOG_FILE or FAILSAFE_LOG_PATH
+    if log_path_to_use:
         try:
-            with open(FAILSAFE_LOG_PATH, "a", encoding="utf-8") as f:
+            with open(log_path_to_use, "a", encoding="utf-8") as f:
                 f.write(f"---\n--- Native Host Crashed ---\n")
                 f.write(f"Timestamp: {datetime.now().isoformat()}\n")
                 f.write(f"Error: {str(e)}\n\n")
