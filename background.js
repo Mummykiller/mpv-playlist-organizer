@@ -1,5 +1,8 @@
+// --- Module Imports ---
+import { StorageManager } from './storageManager.js';
+import { callNativeHost, injectDependencies as injectNativeConnectionDependencies } from './nativeConnection.js';
+
 // --- Constants ---
-const NATIVE_HOST_NAME = 'com.mpv_playlist_organizer.handler';
 const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;
 
 // --- Debounce Utility ---
@@ -37,182 +40,7 @@ const sendMessageAsync = (payload) => new Promise((resolve, reject) => {
     });
 });
 
-class StorageManager {
-    constructor(storageKey) {
-        this.STORAGE_KEY = storageKey;
-        this.initPromise = null;
-    }
-
-    /**
-     * Initializes the storage manager, running all necessary data migrations.
-     * This must be called once at startup before other methods are used.
-     * @returns {Promise<void>}
-     */
-    initialize() {
-        if (this.initPromise) {
-            return this.initPromise;
-        }
-        this.initPromise = (async () => {
-            await this._migrateStorageToOneObject();
-            await this._runDataMigrations();
-        })();
-        return this.initPromise;
-    }
-
-    _getDefaultData() {
-        return {
-            folders: { 'Default': { playlist: [] } },
-            folderOrder: ['Default'],
-            settings: {
-                last_used_folder_id: 'Default',
-                ui_preferences: {
-                    global: {
-                        minimized: false, mode: 'full', logVisible: true, pinned: false,
-                        position: { top: '10px', left: 'auto', right: '10px', bottom: 'auto' },
-                        launch_geometry: '', custom_geometry_width: '', custom_geometry_height: '',
-                        custom_mpv_flags: '', show_play_new_button: false, duplicate_url_behavior: 'ask', one_click_add: false,
-                        stream_scanner_timeout: 60, confirm_remove_folder: true, confirm_clear_playlist: true,
-                        confirm_close_mpv: true, confirm_play_new: true, clear_on_completion: false,
-                        autofocus_new_folder: false, // Added in a previous step
-                        anilistPanelVisible: false,
-                        enable_dblclick_copy: false, // New preference, disabled by default
-                        anilistPanelPosition: null,
-                        anilistPanelSize: null, // { width: '388px', height: '500px' }
-                        anilist_cache: null,
-                        autoReattachAnilistPanel: true,
-                        anilist_image_height: 126, // New: Default cover image height
-                        lockAnilistPanel: false, // New setting for the hard lock
-                        minimizedStubPosition: { top: '15px', left: '15px', right: 'auto', bottom: 'auto' }, // Default to top-left corner
-                        show_anilist_releases: true,
-                        show_minimized_stub: true,
-                        // New: Dependency Status for MPV and yt-dlp
-                        dependencyStatus: {
-                            mpv: { found: null, path: null, error: null },
-                            ytdlp: { found: null, path: null, version: null, error: null }
-                        }
-                    },
-                    domains: {}
-                }
-            }
-        };
-    }
-
-    async get() {
-        const data = await chrome.storage.local.get(this.STORAGE_KEY);
-        return data[this.STORAGE_KEY] || this._getDefaultData();
-    }
-
-    async set(data) {
-        await chrome.storage.local.set({ [this.STORAGE_KEY]: data });
-    }
-
-    async _runDataMigrations() {
-        const data = await chrome.storage.local.get(this.STORAGE_KEY);
-        let storedValue = data[this.STORAGE_KEY];
-        let needsUpdate = false;
-    
-        if (!storedValue) {
-            storedValue = this._getDefaultData();
-            needsUpdate = true;
-        } else {
-            if (!storedValue.settings) {
-                storedValue.settings = {};
-                needsUpdate = true;
-            }
-            if (!storedValue.settings.ui_preferences) {
-                storedValue.settings.ui_preferences = { global: {}, domains: {} };
-                needsUpdate = true;
-            }
-            if (typeof storedValue.settings.ui_preferences.global === 'undefined') {
-                needsUpdate = true;
-                const oldPrefs = storedValue.settings.ui_preferences || {};
-                storedValue.settings.ui_preferences = { global: oldPrefs, domains: {} };
-            }
-
-            const globalPrefs = storedValue.settings.ui_preferences.global;
-
-            if (storedValue.settings.global_ui_state) {
-                needsUpdate = true;
-                globalPrefs.minimized = storedValue.settings.global_ui_state.minimized ?? false;
-                delete storedValue.settings.global_ui_state;
-            }
-
-            if (typeof globalPrefs.confirm_destructive_actions !== 'undefined') {
-                needsUpdate = true;
-                const oldVal = globalPrefs.confirm_destructive_actions;
-                globalPrefs.confirm_remove_folder = globalPrefs.confirm_remove_folder ?? oldVal;
-                globalPrefs.confirm_clear_playlist = globalPrefs.confirm_clear_playlist ?? oldVal;
-                globalPrefs.confirm_close_mpv = globalPrefs.confirm_close_mpv ?? oldVal;
-                delete globalPrefs.confirm_destructive_actions;
-            }
-
-            const defaultGlobalPrefs = this._getDefaultData().settings.ui_preferences.global;
-            storedValue.settings.ui_preferences.global = { ...defaultGlobalPrefs, ...globalPrefs };
-
-            // New Migration: Ensure dependencyStatus is initialized
-            if (!storedValue.settings.ui_preferences.global.dependencyStatus) {
-                storedValue.settings.ui_preferences.global.dependencyStatus = this._getDefaultData().settings.ui_preferences.global.dependencyStatus;
-                needsUpdate = true;
-            }
-        }
-    
-        // New Migration: Convert string playlists to object playlists {url, title}
-        if (storedValue.folders) {
-            for (const folderId in storedValue.folders) {
-                const folder = storedValue.folders[folderId];
-                if (folder.playlist && folder.playlist.length > 0 && typeof folder.playlist[0] === 'string') {
-                    broadcastLog({ text: `[Background]: Migrating playlist for folder '${folderId}' to new format.`, type: 'info' });
-                    folder.playlist = folder.playlist.map(url => ({
-                        url: url,
-                        // Use the URL as a fallback title for old entries.
-                        title: url 
-                    }));
-                    needsUpdate = true;
-                }
-            }
-        }
-
-        if (needsUpdate) {
-            await this.set(storedValue);
-            broadcastLog({ text: `[Background]: Data structure updated to latest version.`, type: 'info' });
-        }
-    }
-
-    async _migrateStorageToOneObject() {
-        const oldFolderIdsResult = await chrome.storage.local.get('folder_ids');
-        if (oldFolderIdsResult.folder_ids) {
-            console.log("Old storage format detected. Migrating to unified object...");
-            const newData = this._getDefaultData(); // Start with a default structure
-            newData.folders = {}; // Clear default folder
-            newData.folderOrder = [];
-            const keysToRemove = ['folder_ids'];
-
-            for (const folderId of oldFolderIdsResult.folder_ids) {
-                const folderKey = `folder_${folderId}`;
-                const folderDataResult = await chrome.storage.local.get(folderKey);
-                const storedValue = folderDataResult[folderKey];
-                let playlist = Array.isArray(storedValue) ? storedValue : (storedValue?.playlist || storedValue?.urls || []);
-                // Also migrate during this step if we find old string-based playlists
-                if (playlist.length > 0 && typeof playlist[0] === 'string') {
-                    playlist = playlist.map(url => ({ url: url, title: url }));
-                }
-                newData.folders[folderId] = { playlist };
-                newData.folderOrder.push(folderId);
-                keysToRemove.push(folderKey);
-            }
-
-            const lastFolder = await chrome.storage.local.get('last_used_folder_id');
-            newData.settings.last_used_folder_id = lastFolder.last_used_folder_id || 'Default';
-            keysToRemove.push('last_used_folder_id');
-
-            await this.set(newData);
-            await chrome.storage.local.remove(keysToRemove);
-            console.log("Storage migration complete. Old keys removed.");
-        }
-    }
-}
-
-const storage = new StorageManager('mpv_organizer_data');
+const storage = new StorageManager('mpv_organizer_data', broadcastLog);
 
 // --- Messaging Helper ---
 
@@ -246,145 +74,7 @@ function broadcastLog(logObject) {
 
 // --- Native Host Communication (using a persistent connection) ---
 
-const ConnectionStatus = {
-    DISCONNECTED: 'DISCONNECTED',
-    CONNECTING: 'CONNECTING',
-    CONNECTED: 'CONNECTED',
-};
-
 let tabUiState = {}; // Tracks the minimized state of the UI for each tab
-let nativePort = null;
-let connectionStatus = ConnectionStatus.DISCONNECTED;
-let requestPromises = {}; // Stores { resolve, reject } for ongoing requests
-let requestIdCounter = 0; // Simple counter for unique request IDs
-let connectionPromise = null; // A promise that resolves when connection is established
-
-/**
- * Establishes a persistent connection to the native host.
- * This function is designed to be called only once while a connection is being attempted.
- * @returns {Promise<void>} A promise that resolves when the connection is successful or rejects if it fails.
- */
-function connectToNativeHost() {
-    if (connectionPromise) {
-        return connectionPromise;
-    }
-
-    connectionStatus = ConnectionStatus.CONNECTING;
-    broadcastLog({ text: `[Background]: Establishing connection to native host...`, type: 'info' });
-
-    connectionPromise = new Promise((resolve, reject) => {
-        nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
-
-        const onDisconnect = () => {
-            const errorMessage = chrome.runtime.lastError ? chrome.runtime.lastError.message : "Native host disconnected.";
-            console.error("Native host disconnected:", errorMessage);
-            broadcastLog({ text: `[Background]: Native host disconnected. It may need to be re-installed. Error: ${errorMessage}`, type: 'error' });
-
-            // Reject all pending promises
-            for (const id in requestPromises) {
-                requestPromises[id].reject(new Error(`Native host disconnected: ${errorMessage}`));
-            }
-
-            nativePort = null;
-            connectionStatus = ConnectionStatus.DISCONNECTED;
-            requestPromises = {};
-            connectionPromise = null; // Allow for a new connection attempt
-            reject(new Error(errorMessage)); // Reject the connection promise itself
-        };
-
-        nativePort.onDisconnect.addListener(onDisconnect);
-
-        nativePort.onMessage.addListener((response) => {
-            const { request_id, ...responseData } = response;
-            if (request_id && requestPromises[request_id]) {
-                requestPromises[request_id].resolve(responseData);
-                delete requestPromises[request_id];
-            } else if (responseData.action === 'mpv_exited') {
-                // Handle unsolicited messages from the native host
-                handleMpvExited(responseData);
-            } else if (responseData.log) {
-                // Handle unsolicited log messages from the native host
-                broadcastLog(responseData.log);
-            } else {
-            // New: Handle session restoration status on connect
-            if (responseData.action === 'session_restored' && responseData.result) {
-                if (responseData.result.was_stale) {
-                    handleMpvExited(responseData.result);
-                }
-                return; // This is not a response to a request, so we're done.
-            }
-                console.warn("Received message from native host without a matching request ID:", response);
-            }
-        });
-
-        // If we reach here without onDisconnect being called immediately, the connection is likely established.
-        connectionStatus = ConnectionStatus.CONNECTED;
-        broadcastLog({ text: `[Background]: Successfully connected to native host.`, type: 'info' });
-        resolve();
-    });
-
-    return connectionPromise;
-}
-
-async function handleMpvExited(data) {
-    const { folderId, returnCode } = data;
-    if (!folderId) return;
-    
-    broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' has ended with exit code ${returnCode}.`, type: 'info' });
-
-    const storageData = await storage.get();
-    const shouldClear = storageData.settings.ui_preferences.global.clear_on_completion ?? false;
-
-    if (shouldClear) {
-        // The custom exit code from our on_completion.lua script is 99.
-        // This is the only case where we should auto-clear the playlist.
-        if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
-            broadcastLog({ text: `[Background]: Playlist finished. Auto-clearing playlist for folder '${folderId}' as per settings.`, type: 'info' });
-            await handleClear({ folderId: folderId });
-        } else {
-            broadcastLog({ text: `[Background]: MPV exited without finishing the playlist (code: ${returnCode}). Playlist for '${folderId}' will not be cleared.`, type: 'info' });
-        }
-    }
-}
-
-/**
- * Sends a message to the native host, handling connection logic automatically.
- * @param {object} message - The message to send to the native host.
- * @returns {Promise<object>} A promise that resolves with the native host's response.
- */
-async function callNativeHost(message) {
-    return new Promise((resolve, reject) => {
-        const ensureConnectedAndSend = async () => {
-            await connectToNativeHost();
-
-            const requestId = `req_${requestIdCounter++}`;
-            requestPromises[requestId] = { resolve, reject };
-            const messageToSend = { ...message, request_id: requestId };
-
-            try {
-                nativePort.postMessage(messageToSend);
-            } catch (e) {
-                const errorMessage = `Failed to send message to native host. It may have disconnected. Error: ${e.message}`;
-                reject(new Error(errorMessage));
-                delete requestPromises[requestId];
-            }
-        };
-
-        ensureConnectedAndSend().catch(reject);
-    }).then(response => {
-        // This part runs after the promise from the native host resolves. Log the outcome.
-        const logType = response.success ? 'info' : 'error';
-        const logMessage = response.message || response.error || 'Received response from native host.';
-        broadcastLog({ text: `[Native Host]: ${logMessage}`, type: logType });
-        return response;
-    }).catch(error => {
-        const errorMessage = `Could not communicate with native host. It might be disconnected or not installed. Error: ${error.message}`;
-        console.error(errorMessage);
-        broadcastLog({ text: `[Background]: ${errorMessage}`, type: 'error' });
-        return { success: false, error: errorMessage };
-    });
-}
-
 
 /**
  * Gathers all folder data from chrome.storage.local and sends it to the
@@ -409,6 +99,29 @@ async function syncDataToNativeHostFile() {
 // A 1-second delay is reasonable. If multiple changes happen in quick succession,
 // it will only sync once after the user is done.
 const debouncedSyncToNativeHostFile = debounce(syncDataToNativeHostFile, 1000);
+
+async function handleMpvExited(data) {
+    const { folderId, returnCode } = data;
+    if (!folderId) return;
+    
+    broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' has ended with exit code ${returnCode}.`, type: 'info' });
+
+    const storageData = await storage.get();
+    const shouldClear = storageData.settings.ui_preferences.global.clear_on_completion ?? false;
+
+    if (shouldClear) {
+        // The custom exit code from our on_completion.lua script is 99.
+        // This is the only case where we should auto-clear the playlist.
+        if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
+            broadcastLog({ text: `[Background]: Playlist finished. Auto-clearing playlist for folder '${folderId}' as per settings.`, type: 'info' });
+            await handleClear({ folderId: folderId });
+        } else {
+            broadcastLog({ text: `[Background]: MPV exited without finishing the playlist (code: ${returnCode}). Playlist for '${folderId}' will not be cleared.`, type: 'info' });
+        }
+    }
+}
+
+injectNativeConnectionDependencies({ broadcastLog, handleMpvExited });
 
 /**
  * Checks MPV and yt-dlp dependencies via the native host and stores the results.

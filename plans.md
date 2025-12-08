@@ -18,10 +18,10 @@ This phase focuses on breaking down the largest files and establishing a baselin
     - **1. Deconstruct `background.js` (Service Worker):**
         - **Goal:** Isolate core functionalities into distinct modules.
         - **Modules:**
-            - `storageManager.js`: Encapsulate the existing `StorageManager` class and all data migration logic.
-            - `nativeConnection.js`: Manage the persistent connection to the native host, including `requestPromises`, `requestIdCounter`, and connection state.
-            - `contextMenu.js`: Handle creation and updates for all context menus.
-            - `playlistManager.js`: Contain logic for adding, removing, clearing, and reordering playlist items.
+            - [x] `storageManager.js`: Encapsulate the existing `StorageManager` class and all data migration logic.
+            - [x] `nativeConnection.js`: Manage the persistent connection to the native host, including `requestPromises`, `requestIdCounter`, and connection state.
+            - [ ] `contextMenu.js`: Handle creation and updates for all context menus.
+            - [ ] `playlistManager.js`: Contain logic for adding, removing, clearing, and reordering playlist items.
             - `messageRouter.js`: The main entry point for `onMessage`, responsible for delegating actions to other services.
         - **Benefit:** Simplifies the main service worker file, making it easier to trace logic and add new features.
 
