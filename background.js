@@ -1,6 +1,8 @@
 // --- Module Imports ---
 import { StorageManager } from './storageManager.js';
 import { callNativeHost, injectDependencies as injectNativeConnectionDependencies } from './nativeConnection.js';
+import { updateContextMenus } from './contextMenu.js';
+import * as playlistManager from './playlistManager.js';
 
 // --- Constants ---
 const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;
@@ -122,6 +124,7 @@ async function handleMpvExited(data) {
 }
 
 injectNativeConnectionDependencies({ broadcastLog, handleMpvExited });
+playlistManager.injectDependencies({ storage, broadcastToTabs, broadcastLog, debouncedSyncToNativeHostFile, sendMessageAsync });
 
 /**
  * Checks MPV and yt-dlp dependencies via the native host and stores the results.
@@ -148,71 +151,6 @@ async function _checkDependenciesAndStore() {
 
 // --- Context Menu Management ---
 
-/**
- * Creates or updates the context menus for adding URLs to folders.
- */
-async function updateContextMenus() {
-  await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
-  const data = await storage.get();
-  const folderIds = data.folderOrder || Object.keys(data.folders);
-  const oneClickAdd = data.settings.ui_preferences.global.one_click_add ?? false;
-  const contexts = ["link", "video", "audio", "page"];
-
-  if (folderIds.length === 0) {
-    chrome.contextMenus.create({
-      id: "no-queues",
-      title: "No MPV folders available",
-      enabled: false,
-      contexts: contexts,
-    });
-    return;
-  }
-
-  const lastUsedFolderId = data.settings.last_used_folder_id;
-
-  // --- Create a single parent menu item ---
-  const parentId = "add-to-mpv-parent";
-  chrome.contextMenus.create({
-    id: parentId,
-    title: "Add to MPV Folder",
-    contexts: contexts,
-  });
-
-  // --- Reorder folders to place the last used one at the top ---
-  // This replaces the explicit "Add to current" option.
-  let orderedFolderIds = [...folderIds]; // Create a mutable copy
-  if (lastUsedFolderId && orderedFolderIds.includes(lastUsedFolderId)) {
-      // Remove the last used folder from its current position
-      orderedFolderIds = orderedFolderIds.filter(id => id !== lastUsedFolderId);
-      // Add it to the beginning of the array
-      orderedFolderIds.unshift(lastUsedFolderId);
-  }
-  // --- Create a separate parent for YouTube playlists ---
-    chrome.contextMenus.create({
-        id: 'add-youtube-playlist-parent',
-        title: 'Add Playlist to MPV Folder',
-        contexts: ['link'],
-        targetUrlPatterns: ["*://*.youtube.com/playlist?list=*"]
-    });
-
-  // --- Add all folders as sub-items ---
-  orderedFolderIds.forEach((id) => {
-    // Add to the main "Add to MPV Folder" menu
-    chrome.contextMenus.create({
-      id: `add-to-folder-${id}`,
-      parentId: parentId,
-      title: id,
-      contexts: contexts,
-    });
-    // Add to the "Add Playlist to MPV Folder" menu
-    chrome.contextMenus.create({
-      id: `add-playlist-to-folder-${id}`,
-      parentId: "add-youtube-playlist-parent",
-      title: id,
-      contexts: ["link"],
-    });
-  });
-}
 // --- Main Message Listener ---
 
 async function handleContentScriptInit(request, sender) {
@@ -287,38 +225,10 @@ async function handleSetLastFolderId(request) {
         data.settings.last_used_folder_id = request.folderId;
         await storage.set(data);
         broadcastToTabs({ action: 'last_folder_changed', folderId: request.folderId });
-        updateContextMenus(); // Rebuild context menus to reflect the new "current" folder.
+        await updateContextMenus(storage); // Rebuild context menus to reflect the new "current" folder.
         return { success: true };
     }
     return { success: false, error: 'No folderId provided.' };
-}
-
-async function handleGetLastFolderId() {
-    const data = await storage.get();
-    const folderId = data.settings.last_used_folder_id || Object.keys(data.folders)[0];
-    return { success: true, folderId };
-}
-
-async function handleSetMinimizedState(request, sender) {
-    const { minimized } = request;
-    if (typeof minimized !== 'boolean') {
-        return { success: false, error: 'Invalid minimized state provided.' };
-    }
-
-    // Find the currently active tab to apply the state to.
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!activeTab || !activeTab.id) {
-        return { success: false, error: 'Could not find an active tab.' };
-    }
-
-    try {
-        // Send a message directly to the content script of the active tab.
-        await chrome.tabs.sendMessage(activeTab.id, { action: 'set_minimized_state', minimized });
-        return { success: true };
-    } catch (error) {
-        // This error is expected if the content script isn't on the page.
-        return { success: false, error: 'Controller not available on this page.' };
-    }
 }
 
 async function handleGetUiPreferences(request, sender) {
@@ -373,7 +283,7 @@ async function handleCreateFolder(request) {
     data.folderOrder.push(request.folderId);
     data.folders[request.folderId] = { playlist: [] };
     await storage.set(data);
-    updateContextMenus();
+    await updateContextMenus(storage);
     broadcastToTabs({ foldersChanged: true });
     debouncedSyncToNativeHostFile();
     return { success: true, message: `Folder "${request.folderId}" created.` };
@@ -406,7 +316,7 @@ async function handleRemoveFolder(request) {
     }
     await storage.set(data);
 
-    updateContextMenus();
+    await updateContextMenus(storage);
     broadcastToTabs({ foldersChanged: true });
     debouncedSyncToNativeHostFile();
     return { success: true, message: `Folder "${folderIdToRemove}" removed.` };
@@ -436,7 +346,7 @@ async function handleRenameFolder(request) {
     }
 
     await storage.set(data);
-    updateContextMenus();
+    await updateContextMenus(storage);
     broadcastToTabs({ foldersChanged: true });
     debouncedSyncToNativeHostFile();
     return { success: true, message: `Folder renamed to "${newFolderId}".` };
@@ -526,7 +436,7 @@ async function handleImportFromFile(request) {
         await storage.set(localData);
 
         // Update UI and sync data to the native host's file
-        updateContextMenus();
+        await updateContextMenus(storage);
         broadcastToTabs({ foldersChanged: true });
         debouncedSyncToNativeHostFile();
         return { success: true, message: `Imported '${filename}' as new folder '${newFolderId}' with ${combinedPlaylist.length} URL(s).` };
@@ -537,135 +447,6 @@ async function handleImportFromFile(request) {
 
 async function handleIsMpvRunning(request) {
     return callNativeHost({ action: 'is_mpv_running' });
-}
-
-async function handlePlay(request) {
-    const data = await storage.get();
-    const globalPrefs = data.settings.ui_preferences.global;
-    const playlist = data.folders[request.folderId]?.playlist;
-    // Extract just the URLs for MPV
-    const urlPlaylist = playlist?.map(item => item.url) || [];
-
-    if (!playlist || playlist.length === 0) {
-        const message = `Playlist in folder '${request.folderId}' is empty. Nothing to play.`;
-        broadcastLog({ text: `[Background]: ${message}`, type: 'error' });
-        return { success: false, error: message };
-    }
-    return callNativeHost({
-        action: 'play',
-        folderId: request.folderId,
-        playlist: urlPlaylist,
-        geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
-        custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
-        custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
-        custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
-        clear_on_completion: globalPrefs.clear_on_completion ?? false
-    });
-}
-
-async function handlePlayNewInstance(request) {
-    const data = await storage.get();
-    const globalPrefs = data.settings.ui_preferences.global;
-    const playlist = data.folders[request.folderId]?.playlist;
-    // Extract just the URLs for MPV
-    const urlPlaylist = playlist?.map(item => item.url) || [];
-
-    if (!playlist || playlist.length === 0) {
-        const message = `Playlist in folder '${request.folderId}' is empty. Nothing to play.`;
-        broadcastLog({ text: `[Background]: ${message}`, type: 'error' });
-        return { success: false, error: message };
-    }
-    // This calls a new action on the native host
-    return callNativeHost({
-        action: 'play_new_instance',
-        playlist: urlPlaylist,
-        geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
-        custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
-        custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
-        custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
-        clear_on_completion: globalPrefs.clear_on_completion ?? false
-    });
-}
-
-async function handleCloseMpv(request) {
-    return callNativeHost({ action: 'close_mpv' });
-}
-
-async function handleAdd(request, sender) {
-    // The 'add' action now triggers the scraping process.
-    // It expects a tabId from the sender (popup or context menu).
-    const tabId = request.tabId || sender.tab?.id;
-    const folderId = request.folderId;
-
-    if (!tabId || !folderId) {
-        return { success: false, error: 'Missing tabId or folderId for add action.' };
-    }
-
-    try {
-        // Ask the content script to scrape the page details.
-        const scrapedDetails = await chrome.tabs.sendMessage(tabId, { action: 'scrape_and_get_details' });
-
-        if (!scrapedDetails || !scrapedDetails.url) {
-            return { success: false, error: 'No stream/video detected on the page to add.' };
-        }
-
-        // Use the dedicated 'addUrlToFolder' function to handle adding the new item.
-        // The 'originalTab' can come from the request object (from the popup) or the sender (from the content script).
-        return await addUrlToFolder(folderId, scrapedDetails.url, scrapedDetails.title, request.tab || sender.tab, sender); // Pass the sender to identify the source
-    } catch (e) {
-        return { success: false, error: `Could not communicate with content script: ${e.message}` };
-    }
-}
-
-async function handleGetPlaylist(request) {
-    const data = await storage.get();
-    const folder = data.folders[request.folderId] || { playlist: [] };
-    return { success: true, list: folder.playlist };
-}
-
-async function handleClear(request) {
-    const data = await storage.get();
-    data.folders[request.folderId].playlist = [];
-    await storage.set(data);
-    // It's possible for this to be called when no content scripts are available
-    // (e.g., after an extension reload). We wrap this in a try/catch to
-    // prevent "Receiving end does not exist" errors from being uncaught.
-    try {
-        await broadcastToTabs({ action: 'render_playlist', folderId: request.folderId, playlist: [] });
-    } catch (e) { /* Suppress errors, as UI update is not critical here */ }
-    debouncedSyncToNativeHostFile();
-    return { success: true, message: `Playlist in folder ${request.folderId} cleared` };
-}
-
-async function handleRemoveItem(request) {
-    const data = await storage.get();
-    const playlist = data.folders[request.folderId].playlist;
-    const indexToRemove = request.data?.index;
-    if (typeof indexToRemove === 'number' && indexToRemove >= 0 && indexToRemove < playlist.length) {
-        playlist.splice(indexToRemove, 1);
-        await storage.set(data);
-        broadcastToTabs({ action: 'render_playlist', folderId: request.folderId, playlist: playlist });
-        debouncedSyncToNativeHostFile();
-        return { success: true, message: 'Item removed.' };
-    }
-    return { success: false, error: 'Invalid item index.' };
-}
-
-async function handleSetPlaylistOrder(request) {
-    const { folderId, data: { order } } = request;
-    if (!folderId || !Array.isArray(order)) {
-        return { success: false, error: 'Invalid data for setting playlist order.' };
-    }
-
-    const storageData = await storage.get();
-    if (!storageData.folders[folderId]) {
-        return { success: false, error: `Folder '${folderId}' not found.` };
-    }
-
-    storageData.folders[folderId].playlist = order;
-    await storage.set(storageData);
-    debouncedSyncToNativeHostFile(); // Persist the change to folders.json
-    return { success: true, message: `Playlist order for '${folderId}' updated.` };
 }
 
 async function handleExportFolderPlaylist(request) {
@@ -759,10 +540,29 @@ const actionHandlers = {
     'get_ui_state_for_tab': handleGetUiStateForTab,
     'report_detected_url': handleReportDetectedUrl,
     'set_last_folder_id': handleSetLastFolderId,
-    'get_last_folder_id': handleGetLastFolderId,
+    'get_last_folder_id': async () => {
+        const data = await storage.get();
+        const folderId = data.settings.last_used_folder_id || Object.keys(data.folders)[0];
+        return { success: true, folderId };
+    },
     'get_ui_preferences': handleGetUiPreferences,
     'set_ui_preferences': handleSetUiPreferences,
-    'set_minimized_state': handleSetMinimizedState,
+    'set_minimized_state': async (request) => {
+        const { minimized } = request;
+        if (typeof minimized !== 'boolean') {
+            return { success: false, error: 'Invalid minimized state provided.' };
+        }
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!activeTab || !activeTab.id) {
+            return { success: false, error: 'Could not find an active tab.' };
+        }
+        try {
+            await chrome.tabs.sendMessage(activeTab.id, { action: 'set_minimized_state', minimized });
+            return { success: true };
+        } catch (error) {
+            return { success: false, error: 'Controller not available on this page.' };
+        }
+    },
     // Folder Management
     'create_folder': handleCreateFolder,
     'get_all_folder_ids': handleGetAllFolderIds,
@@ -770,15 +570,46 @@ const actionHandlers = {
     'rename_folder': handleRenameFolder,
     'set_folder_order': handleSetFolderOrder,
     // MPV and Playlist Actions
-    'is_mpv_running': handleIsMpvRunning,
-    'play': handlePlay,
-    'play_new_instance': handlePlayNewInstance,
-    'close_mpv': handleCloseMpv,
-    'add': handleAdd,
-    'get_playlist': handleGetPlaylist,
-    'clear': handleClear,
-    'remove_item': handleRemoveItem,
-    'set_playlist_order': handleSetPlaylistOrder,
+    'is_mpv_running': () => callNativeHost({ action: 'is_mpv_running' }),
+    'play': async (request) => {
+        const data = await storage.get();
+        const globalPrefs = data.settings.ui_preferences.global;
+        const playlist = data.folders[request.folderId]?.playlist;
+        const urlPlaylist = playlist?.map(item => item.url) || [];
+        if (!urlPlaylist.length) {
+            return { success: false, error: `Playlist in folder '${request.folderId}' is empty.` };
+        }
+        return callNativeHost({
+            action: 'play', folderId: request.folderId, playlist: urlPlaylist,
+            geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
+            custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
+            custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
+            custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
+            clear_on_completion: globalPrefs.clear_on_completion ?? false
+        });
+    },
+    'play_new_instance': async (request) => {
+        const data = await storage.get();
+        const globalPrefs = data.settings.ui_preferences.global;
+        const playlist = data.folders[request.folderId]?.playlist;
+        const urlPlaylist = playlist?.map(item => item.url) || [];
+        if (!urlPlaylist.length) {
+            return { success: false, error: `Playlist in folder '${request.folderId}' is empty.` };
+        }
+        return callNativeHost({
+            action: 'play_new_instance', playlist: urlPlaylist,
+            geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
+            custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
+            custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
+            custom_mpv_flags: globalPrefs.custom_mpv_flags || ''
+        });
+    },
+    'close_mpv': () => callNativeHost({ action: 'close_mpv' }),
+    'add': playlistManager.handleAdd,
+    'get_playlist': playlistManager.handleGetPlaylist,
+    'clear': playlistManager.handleClear,
+    'remove_item': playlistManager.handleRemoveItem,
+    'set_playlist_order': playlistManager.handleSetPlaylistOrder,
     // Import/Export
     'export_all_playlists_separately': async () => {
         const data = await storage.get();
@@ -859,7 +690,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     // This must complete before we try to update menus or sync data.
     await storage.initialize();
 
-    await updateContextMenus(); // Create the context menus for pages.
+    await updateContextMenus(storage); // Create the context menus for pages.
     await syncDataToNativeHostFile(); // Sync data on first install/update.
     await _checkDependenciesAndStore(); // Perform initial dependency check
     console.log("MPV Handler extension installed and initialized.");
@@ -921,11 +752,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
                     const channelName = videoDetails.author_name || null;
                     const finalTitle = channelName ? `${channelName} - ${itemTitle}` : itemTitle;
 
-                    await addUrlToFolder(folderId, urlToAdd, finalTitle, tab);
+                    await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, finalTitle, tab);
                 } catch (e) {
                     broadcastLog({ text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Adding with basic title.`, type: 'error' });
                     // Fallback to adding with a very basic title if the scrape fails.
-                    await addUrlToFolder(folderId, urlToAdd, isYouTubePlaylistUrl ? "YouTube Playlist" : "YouTube Video", tab);
+                    await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, isYouTubePlaylistUrl ? "YouTube Playlist" : "YouTube Video", tab);
                 }
             }, delay);
         } else {
@@ -937,7 +768,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
                 const { url: streamUrl, title, scannerTab } = scanResult;
 
                 if (streamUrl) {
-                    await addUrlToFolder(folderId, streamUrl, title, tab);
+                    await playlistManager.handleAddFromContextMenu(folderId, streamUrl, title, tab);
                 } else {
                     broadcastLog({ text: `[Background]: Scanner did not detect a video stream. Add action cancelled.`, type: 'info' });
                 }
@@ -947,7 +778,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             } catch (error) {
                 const errorMessage = `[Background]: Scanner failed for '${urlToAdd}'. Adding original URL as fallback. Error: ${error.message}`;
                 broadcastLog({ text: errorMessage, type: 'info' });
-                await addUrlToFolder(folderId, urlToAdd, urlToAdd, tab); // Fallback to adding the URL as its own title
+                await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, urlToAdd, tab); // Fallback to adding the URL as its own title
             }
         }
     }
@@ -961,106 +792,6 @@ const lastDetectedUrls = {};
 // A map to hold promises for M3U8 detection in temporary tabs.
 // The key is the tabId, and the value is { resolve, reject }.
 let m3u8DetectionPromises = {};
-
-/**
- * A helper function to encapsulate the logic of adding an item to a folder's playlist.
- * @param {string} folderId The ID of the folder to add to.
- * @param {string} url The URL to add.
- * @param {string} title The scraped title for the entry.
- * @param {chrome.tabs.Tab} originalTab The tab where the context menu was clicked.
- * @param {chrome.runtime.MessageSender} sender The sender of the original message.
- */
-async function addUrlToFolder(folderId, url, title, originalTab = null, sender = null) {
-    /**
-     * Normalizes a YouTube URL by removing the 't' (timestamp) parameter.
-     * This allows for more accurate duplicate detection.
-     * @param {string} ytUrl The YouTube URL to normalize.
-     * @returns {string} The normalized URL, or the original if not a YouTube video URL.
-     */
-    function normalizeYouTubeUrlForCheck(ytUrl) {
-        try {
-            const urlObj = new URL(ytUrl);
-            if (urlObj.hostname.includes('youtube.com') && urlObj.pathname === '/watch') {
-                urlObj.searchParams.delete('t');
-                return urlObj.toString();
-            }
-        } catch (e) {
-            // Not a valid URL, return original
-        }
-        return ytUrl;
-    }
-
-    try {
-        const data = await storage.get();
-        const playlist = data.folders[folderId]?.playlist || [];
-        const duplicateBehavior = data.settings.ui_preferences.global.duplicate_url_behavior || 'ask';
-        const normalizedUrl = normalizeYouTubeUrlForCheck(url);
-        const isDuplicate = playlist.some(item => normalizeYouTubeUrlForCheck(item.url) === normalizedUrl);
-
-        if (isDuplicate) {
-            if (duplicateBehavior === 'never') {
-                const logMessage = `[Background]: URL already in folder '${folderId}'. "Never Add" is on.`;
-                broadcastLog({ text: logMessage, type: 'info' });
-                return { success: true, message: logMessage }; // Stop here
-            }
-            if (duplicateBehavior === 'ask') {
-                // We need to ask the user. We can't do it from the background script directly.
-                const isFromPopup = sender?.url?.startsWith('chrome-extension://');
-
-                if (isFromPopup) {
-                    const response = await sendMessageAsync({
-                        action: 'show_popup_confirmation',
-                        message: `This URL is already in the playlist for "${folderId}". Add it again?`
-                    });
-                    if (!response || !response.confirmed) {
-                        const logMessage = `[Background]: Add action cancelled by user for folder '${folderId}'.`;
-                        broadcastLog({ text: logMessage, type: 'info' });
-                        return { success: true, message: logMessage };
-                    }
-                } else if (originalTab && originalTab.id) {
-                    try {
-                        const response = await chrome.tabs.sendMessage(originalTab.id, {
-                            action: 'show_confirmation',
-                            message: `This URL is already in the playlist for "${folderId}". Add it again?`
-                        });
-
-                        if (!response || !response.confirmed) {
-                            const logMessage = `[Background]: Add action cancelled by user for folder '${folderId}'.`;
-                            broadcastLog({ text: logMessage, type: 'info' });
-                            return { success: true, message: logMessage };
-                        }
-                        // If confirmed, proceed to add.
-                    } catch (e) {
-                        // This might happen if the content script isn't injected or the tab was closed.
-                        // In this case, we can't ask, so we'll log and add it as a fallback.
-                        const logMessage = `[Background]: Could not ask for confirmation on tab ${originalTab.id}. Adding duplicate URL to '${folderId}'. Reason: ${e.message}`;
-                        broadcastLog({ text: logMessage, type: 'info' });
-                    }
-                } else {
-                    // No original tab to ask, so just add it.
-                    const logMessage = `[Background]: Duplicate URL detected for folder '${folderId}'. Adding anyway as no UI is available to ask for confirmation.`;
-                    broadcastLog({ text: logMessage, type: 'info' });
-                }
-            }
-        }
-
-        data.folders[folderId].playlist.push({ url, title });
-        await storage.set(data);
-        debouncedSyncToNativeHostFile();
-
-        // Notify content scripts to re-render their lists
-        broadcastToTabs({ action: 'render_playlist', folderId: folderId, playlist: data.folders[folderId].playlist, fromContextMenu: true });
-
-        const logMessage = `[Background]: Added "${title}" to folder '${folderId}'.`;
-        broadcastLog({ text: logMessage, type: 'info' });
-        return { success: true, message: logMessage };
-
-    } catch (e) {
-        const logMessage = `[Background]: Error adding to folder '${folderId}': ${e.message}`;
-        broadcastLog({ text: logMessage, type: 'error' });
-        return { success: false, error: logMessage };
-    }
-}
 
 /**
  * Creates a new popup window for the user to interact with to trigger stream detection.

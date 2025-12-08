@@ -1378,8 +1378,8 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
     async function fetchAniListReleases(forceRefresh = false) {
         anilistReleasesContent.innerHTML = '<div class="loading-spinner"></div>';
         try {
-            const releases = await window.AniListRenderer.fetchReleases(forceRefresh);
-            window.AniListRenderer.render(anilistReleasesContent, releases);
+            const releases = await AniListRenderer.fetchReleases(forceRefresh);
+            AniListRenderer.render(anilistReleasesContent, releases);
             // After a refresh, if the section is open, scroll to the bottom to ensure
             // the new content is visible. This fixes the issue in the mini-view.
             if (anilistReleasesSection.open) {
