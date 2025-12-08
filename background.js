@@ -439,59 +439,42 @@ async function _checkDependenciesAndStore() {
  * Creates or updates the context menus for adding URLs to folders.
  */
 async function updateContextMenus() {
-    await new Promise(resolve => chrome.contextMenus.removeAll(resolve));
-    const data = await storage.get();    
-    const folderIds = data.folderOrder || Object.keys(data.folders);
-    const oneClickAdd = data.settings.ui_preferences.global.one_click_add ?? false;
-    const contexts = ['link', 'video', 'audio', 'page'];
+  await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
+  const data = await storage.get();
+  const folderIds = data.folderOrder || Object.keys(data.folders);
+  const oneClickAdd = data.settings.ui_preferences.global.one_click_add ?? false;
+  const contexts = ["link", "video", "audio", "page"];
 
-    if (folderIds.length === 0) {
-        chrome.contextMenus.create({
-            id: 'no-queues',
-            title: 'No MPV folders available',
-            enabled: false,
-            contexts: contexts
-        });
-        return;
-    }
-
-    // Special, cleaner case for a single folder
-    if (folderIds.length === 1) {
-        const singleFolderId = folderIds[0];
-        chrome.contextMenus.create({
-            id: `add-to-folder-${singleFolderId}`,
-            title: `Add to MPV Folder: "${singleFolderId}"`,
-            contexts: contexts
-        });
-        return;
-    }
-
-    // --- Logic for multiple folders ---
-    const lastUsedFolderId = data.settings.last_used_folder_id;
-    if (oneClickAdd && lastUsedFolderId && data.folders[lastUsedFolderId]) {
-        chrome.contextMenus.create({
-            id: 'add-to-last-used-folder',
-            title: `Add to current: "${lastUsedFolderId}"`,
-            contexts: contexts
-        });
-    }
-
+  if (folderIds.length === 0) {
     chrome.contextMenus.create({
-        id: 'add-to-mpv-parent',
-        title: 'Add to MPV Folder',
-        contexts: contexts
+      id: "no-queues",
+      title: "No MPV folders available",
+      enabled: false,
+      contexts: contexts,
     });
+    return;
+  }
 
-    // --- New: Reorder folders to place the last used one at the top ---
-    let orderedFolderIds = [...folderIds]; // Create a mutable copy
-    if (lastUsedFolderId && orderedFolderIds.includes(lastUsedFolderId)) {
-        // Remove the last used folder from its current position
-        orderedFolderIds = orderedFolderIds.filter(id => id !== lastUsedFolderId);
-        // Add it to the beginning of the array
-        orderedFolderIds.unshift(lastUsedFolderId);
-    }
+  const lastUsedFolderId = data.settings.last_used_folder_id;
 
-    // New: Add a specific context menu for YouTube playlist links.
+  // --- Create a single parent menu item ---
+  const parentId = "add-to-mpv-parent";
+  chrome.contextMenus.create({
+    id: parentId,
+    title: "Add to MPV Folder",
+    contexts: contexts,
+  });
+
+  // --- Reorder folders to place the last used one at the top ---
+  // This replaces the explicit "Add to current" option.
+  let orderedFolderIds = [...folderIds]; // Create a mutable copy
+  if (lastUsedFolderId && orderedFolderIds.includes(lastUsedFolderId)) {
+      // Remove the last used folder from its current position
+      orderedFolderIds = orderedFolderIds.filter(id => id !== lastUsedFolderId);
+      // Add it to the beginning of the array
+      orderedFolderIds.unshift(lastUsedFolderId);
+  }
+  // --- Create a separate parent for YouTube playlists ---
     chrome.contextMenus.create({
         id: 'add-youtube-playlist-parent',
         title: 'Add Playlist to MPV Folder',
@@ -499,21 +482,23 @@ async function updateContextMenus() {
         targetUrlPatterns: ["*://*.youtube.com/playlist?list=*"]
     });
 
-    orderedFolderIds.forEach(id => {
-        chrome.contextMenus.create({
-            id: `add-to-folder-${id}`,
-            parentId: 'add-to-mpv-parent',
-            title: id, // Just the folder name is cleaner
-            contexts: contexts
-        });
-        // New: Add sub-menus for the playlist item.
-        chrome.contextMenus.create({
-            id: `add-playlist-to-folder-${id}`,
-            parentId: 'add-youtube-playlist-parent',
-            title: id,
-            contexts: ['link']
-        });
+  // --- Add all folders as sub-items ---
+  orderedFolderIds.forEach((id) => {
+    // Add to the main "Add to MPV Folder" menu
+    chrome.contextMenus.create({
+      id: `add-to-folder-${id}`,
+      parentId: parentId,
+      title: id,
+      contexts: contexts,
     });
+    // Add to the "Add Playlist to MPV Folder" menu
+    chrome.contextMenus.create({
+      id: `add-playlist-to-folder-${id}`,
+      parentId: "add-youtube-playlist-parent",
+      title: id,
+      contexts: ["link"],
+    });
+  });
 }
 // --- Main Message Listener ---
 

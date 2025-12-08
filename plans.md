@@ -1,82 +1,115 @@
 # Project Improvement Plan
 
 ## Current Status
-- A local Git repository has been successfully initialized for the project.
-- Initial project files have been committed to version control.
-- Git user.name is set to "Shinku" locally.
+The project is a functional browser extension with a native host component for managing and playing media in MPV. It includes features like playlist management, on-page UI controls, AniList integration, and a Python-based installer. The current codebase is largely monolithic, presenting opportunities for significant architectural improvements.
 
-## Areas for Improvement
+## High-Level Objectives
+1.  **Improve Modularity & Separation of Concerns:** Deconstruct monolithic files into smaller, single-responsibility modules to enhance readability, testability, and maintainability.
+2.  **Enhance Code Quality & Consistency:** Introduce automated tooling and standardized practices to ensure the codebase is robust, predictable, and easy to navigate.
+3.  **Strengthen Robustness & User Experience:** Improve error handling, cross-platform consistency, and UI feedback to create a more reliable and intuitive user experience.
+4.  **Establish a Test & Deployment Strategy:** Implement a testing framework and CI/CD pipeline to automate quality checks and streamline the release process.
 
-### 1. Git Configuration
-- **Objective:** Ensure consistent Git identity across all projects and prepare for remote repositories.
+---
+
+### Phase 1: Foundational Refactoring & Code Quality
+This phase focuses on breaking down the largest files and establishing a baseline for code quality.
+
 - **Action Items:**
-    - [ ] Globally configure `user.name` and `user.email` for future projects. (Currently, it's only set locally for this project, or might default to global if already set).
-    - [ ] Consider setting up a remote repository (e.g., GitHub, GitLab) for collaboration and backup, if applicable.
+    - **1. Deconstruct `background.js` (Service Worker):**
+        - **Goal:** Isolate core functionalities into distinct modules.
+        - **Modules:**
+            - `storageManager.js`: Encapsulate the existing `StorageManager` class and all data migration logic.
+            - `nativeConnection.js`: Manage the persistent connection to the native host, including `requestPromises`, `requestIdCounter`, and connection state.
+            - `contextMenu.js`: Handle creation and updates for all context menus.
+            - `playlistManager.js`: Contain logic for adding, removing, clearing, and reordering playlist items.
+            - `messageRouter.js`: The main entry point for `onMessage`, responsible for delegating actions to other services.
+        - **Benefit:** Simplifies the main service worker file, making it easier to trace logic and add new features.
 
-### 2. Modularity and Architecture
-- **Objective:** Improve the project's overall structure, reduce complexity, enhance reusability, and enforce separation of concerns.
-- **Action Items:**
-    - [ ] **Refactor `background.js` (Service Worker):**
-        - Break down the monolithic `background.js` into smaller, specialized modules (e.g., `storageService.js`, `nativeMessagingService.js`, `contextMenuManager.js`, `streamScannerBackground.js`, `playlistManagerBackground.js`).
-        - Encapsulate `requestPromises` and `requestIdCounter` into a dedicated native messaging module.
-        - Create a `config.js` or `constants.js` for centralizing magic numbers and intervals.
-    - [ ] **Refactor `content.js` (Content Script):**
-        - Break down the large `MpvController` class into more focused classes/modules (e.g., `UIManager`, `PlaylistUI`, `AniListUI`, `LogUI`, `Scraper`, `PreferenceManagerClient`).
-        - Extract generic utility functions (e.g., `debounce`, `sendMessageAsync`, draggable/resizable logic) into a `utils.js` module.
-        - Centralize modal creation and management logic into a dedicated `ModalService` or component factory.
-    - [ ] **Refactor `native_host.py` (Native Host):**
-        - Break down `native_host.py` into smaller Python modules (e.g., `mpvManager.py`, `fileManager.py`, `anilistService.py`, `ytdlpUpdater.py`, `nativeMessenger.py`, `cliHandler.py`).
-        - Encapsulate global variables within a configuration object or pass them explicitly.
-    - [ ] **Centralize Shared Styles:** Create a single, shared CSS file or use a CSS-in-JS approach for common variables and base styling used by both `content.css` and `popup.css` to reduce redundancy.
-    - [ ] **View Management in `popup.js`:** Implement a more explicit view-switching mechanism (e.g., a simple router or state manager) rather than relying solely on `display: none` for the different popup views.
+    - **2. Deconstruct `native_host.py`:**
+        - **Goal:** Separate concerns within the Python host.
+        - **Modules:**
+            - `mpv_session.py`: Isolate the `MpvSessionManager` class and all MPV process/IPC logic.
+            - `file_io.py`: Handle all interactions with the filesystem (`folders.json`, `config.json`, exports).
+            - `services.py`: Contain business logic for AniList caching, yt-dlp updates, and dependency checks.
+            - `cli.py`: House the `argparse` setup and all CLI command handlers.
+            - `native_host.py` (main): Becomes the lightweight entry point, handling the native messaging loop and delegating to other modules.
+        - **Benefit:** Improves testability of individual components (e.g., testing `MpvSessionManager` without the messaging layer).
 
-### 3. Code Quality and Maintainability
-- **Objective:** Enhance code reliability, readability, and ease of maintenance.
-- **Action Items:**
-    - [ ] **Implement Unit Tests:** Develop unit tests for critical functions and modules across the entire project (e.g., `StorageManager` in `background.js`, `MpvSessionManager` in `native_host.py`, `scrapePageDetails` in `content.js`, AniList caching logic).
-    - [ ] **Code Linting and Formatting:** Introduce linters (ESLint for JavaScript, Black/Flake8 for Python) and formatters (Prettier for JavaScript) to enforce consistent coding style and catch common errors.
-    - [ ] **Error Handling & User Feedback:**
-        - Provide more prominent UI notifications for critical issues like native host disconnections (beyond just logging).
-        - Refine silent error catching (`.catch(() => {})`) in JavaScript to ensure no legitimate issues are inadvertently hidden.
-        - Enhance `native_host.py`'s error feedback for `mpv_path` configuration and `yt-dlp` updates.
-        - Implement more structured error objects/enums instead of magic strings for communication between modules (e.g., `addUrlToFolder` return values).
-    - [ ] **Remove Redundancy:** Eliminate duplicated code blocks, especially in CSS files and event listener setups (e.g., drag-and-drop logic).
-    - [ ] **Comprehensive Documentation:**
-        - **Inline Documentation:** Add comprehensive JSDoc (for JavaScript) and Python docstrings to all functions, classes, and complex logic, explaining *what* they do, *why*, and their parameters/return values.
-        - **README Enhancement:** Expand `README.md` with detailed setup instructions, usage guides, troubleshooting, and a developer-focused section.
+    - **3. Refactor `content.js` (`MpvController`):**
+        - **Goal:** Break down the massive `MpvController` class.
+        - **Modules/Classes:**
+            - `UIManager.js`: Manage the lifecycle of the controller, stub, and AniList panel hosts (creation, injection, teardown).
+            - `Draggable.js` / `Resizable.js`: Abstract the drag/resize logic into reusable utility classes that can be applied to any element.
+            - `PlaylistUI.js`: Handle rendering and event binding specifically for the playlist view.
+            - `AniListUI.js`: Manage the AniList panel's state, rendering, and event binding.
+            - `PageScraper.js`: Centralize all page scraping logic, including the YouTube-specific rules.
+        - **Benefit:** Makes the UI logic more component-oriented and easier to debug.
 
-### 4. Build and Deployment Automation
-- **Objective:** Streamline the process of building, testing, and deploying the extension.
-- **Action Items:**
-    - [ ] **CI/CD Pipeline:** Set up a Continuous Integration/Continuous Deployment (CI/CD) pipeline (e.g., using GitHub Actions, GitLab CI) to automate testing, linting, and potentially packaging/deployment of the extension.
+    - **4. Introduce Code Quality Tooling:**
+        - **Goal:** Enforce a consistent and high-quality coding standard.
+        - **Actions:**
+            - [ ] **JavaScript:** Integrate **ESLint** (for error checking) and **Prettier** (for formatting). Configure them to run on commit or as part of a CI pipeline.
+            - [ ] **Python:** Integrate **Black** (for formatting) and **Flake8** or **Ruff** (for linting).
+        - **Benefit:** Automates code style, reduces trivial review comments, and catches common bugs early.
 
-### 5. Performance Optimization
-- **Objective:** Improve the responsiveness and efficiency of the browser extension and native host.
-- **Action Items:**
-    - [ ] **Profile Performance:** Use browser developer tools and Python profiling tools to identify and address bottlenecks in `background.js`, `content.js`, and `native_host.py`.
-    - [ ] **Optimize Data Handling:** Review data serialization/deserialization and storage mechanisms for efficiency.
-    - [ ] **Playlist Rendering:** For large playlists, consider implementing a diffing algorithm or virtualized list for `renderPlaylist` in `content.js` and `popup.js` to improve UI responsiveness.
-    - [ ] **DOM Queries:** Cache frequently accessed DOM elements in `content.js` and `popup.js` to reduce repeated queries.
-    - [ ] **`MutationObserver` Tuning:** Fine-tune `MutationObserver` parameters and `setInterval` polling frequency in `content.js` to reduce resource consumption on complex SPA pages.
+---
 
-### 6. Security Enhancements
-- **Objective:** Ensure the extension operates with the minimal necessary permissions and robust safeguards.
-- **Action Items:**
-    - [ ] **Review `manifest.json` Permissions:** Investigate if `<all_urls>` permission can be narrowed down for `webRequest` or other features without breaking core functionality.
-    - [ ] **Firefox `allowed_origins`:** For `moz-extension://*`, consider dynamically adding the specific Firefox extension ID if possible, for stricter security.
+### Phase 2: Testing, CI/CD, and Documentation
+With a more modular structure, this phase focuses on building a safety net and improving developer onboarding.
 
-### 7. Cross-Platform Consistency & Robustness
-- **Objective:** Improve the installer and native host's behavior across different operating systems.
-- **Action Items:**
-    - [ ] **`Installer.py` Error Handling:** Add explicit `messagebox.showerror` for critical failures (e.g., `mpv.exe` not found and user cancels).
-    - [ ] **`native_host.py` IPC on Windows:** Investigate options for bidirectional IPC on Windows (e.g., using `pywin32`) to improve robustness of `is_process_alive` and other IPC-reliant features.
-    - [ ] **`config.json` for Unix-like Systems:** Consider creating `config.json` (for `mpv_path`) on Linux/macOS as well, potentially allowing manual configuration, to align with Windows behavior and provide more explicit control.
-    - [ ] **`yt-dlp` Update (Linux):** Provide clearer fallback instructions for manual updates if graphical sudo tools are unavailable or fail.
+ - **Action Items:**
+    - **1. Implement Unit & Integration Testing:**
+        - **Goal:** Verify the correctness of core logic.
+        - **JavaScript:** Use a framework like **Jest** or **Vitest**.
+            - **Targets:** `storageManager.js` migrations, `PageScraper.js` logic for various URLs, utility functions.
+        - **Python:** Use the built-in **`unittest`** or **`pytest`**.
+            - **Targets:** `MpvSessionManager` state transitions, AniList caching logic, file I/O helpers.
+        - **Benefit:** Catches regressions and validates complex logic in isolation.
 
-### 8. User Experience & UI Refinements
-- **Objective:** Improve the usability, clarity, and visual feedback of the extension.
+    - **2. Set Up CI/CD Pipeline:**
+        - **Goal:** Automate quality checks and build processes.
+        - **Actions:**
+            - [ ] Use **GitHub Actions** or a similar service.
+            - [ ] Create a workflow that runs on every push/pull request to:
+                - Install dependencies (JS & Python).
+                - Run linters and formatters.
+                - Execute all unit tests.
+            - [ ] Add a separate workflow for creating a packaged `.zip` file for release.
+        - **Benefit:** Ensures that no broken code is merged and simplifies the release process.
+
+    - **3. Enhance Documentation:**
+        - **Goal:** Make the project easy to understand, use, and contribute to.
+        - **Actions:**
+            - [ ] **Code Docs:** Add comprehensive JSDoc/Python docstrings to all public functions and classes, explaining their purpose, parameters, and return values.
+            - [ ] **`README.md`:** Overhaul the README with:
+                - Clear, step-by-step installation instructions for all OSes.
+                - Detailed usage guide for all features.
+                - A "Developer Guide" section explaining the project structure, build process, and how to contribute.
+                - A comprehensive troubleshooting section for common issues (e.g., native host connection errors).
+
+---
+
+### Phase 3: Performance, UX, and Security Hardening
+This phase focuses on refining the user-facing aspects of the extension and addressing potential performance and security issues.
+
 - **Action Items:**
-    - [ ] **AniList UI Feedback:** Implement more explicit loading indicators and error messages within the AniList panel (both on-page and popup).
-    - [ ] **"Add" Button State Clarity:** Enhance visual distinctions for "stream present", "URL in playlist", and "duplicate detected" states for the "Add" button across all UI contexts.
-    - [ ] **Placeholder Images:** Implement fallback placeholder images for `anilist_renderer.js` when `cover_image` URLs are broken.
-    - [ ] **UI Notifications:** Consider implementing a temporary, non-intrusive UI notification system (e.g., toast messages) for general status updates or less critical errors, complementing the log.
+    - **1. Performance Optimization:**
+        - **Goal:** Ensure the extension is fast and resource-efficient.
+        - **Actions:**
+            - [ ] **Playlist Rendering:** For `content.js` and `popup.js`, investigate virtual scrolling or list diffing for very large playlists to prevent UI lag.
+            - [ ] **DOM Interaction:** Cache frequently accessed DOM elements in UI modules to reduce redundant queries.
+            - [ ] **Observer Tuning:** Fine-tune `MutationObserver` in `content.js` to observe more specific targets/attributes, reducing its impact on SPA performance.
+
+    - **2. User Experience (UX) Refinements:**
+        - **Goal:** Make the UI more intuitive and informative.
+        - **Actions:**
+            - [ ] **Unified UI Components:** Create shared, reusable UI components (e.g., for modals, buttons) to ensure consistency between the popup and the on-page controller.
+            - [ ] **Toast Notifications:** Implement a non-intrusive "toast" notification system for success messages (e.g., "URL Added") and non-critical errors, reducing reliance on the log panel.
+            - [ ] **Installer GUI:** Improve `Installer.py` to automatically detect the extension ID (if installed) and provide more explicit feedback on success/failure.
+
+    - **3. Security & Robustness:**
+        - **Goal:** Harden the extension against potential issues.
+        - **Actions:**
+            - [ ] **Permissions Review:** Re-evaluate the `host_permissions` in `manifest.json`. Determine if `<all_urls>` is strictly necessary or if it can be narrowed to more specific patterns.
+            - **Windows IPC:** Investigate using a library like `pywin32` in `native_host.py` to enable bidirectional IPC on Windows. This would make `is_process_alive` more reliable and allow for features like getting the current playback time.
+            - **Error Handling:** Replace generic `try...catch (e)` blocks with more specific error handling that provides actionable feedback to the user.
