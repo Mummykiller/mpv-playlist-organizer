@@ -2,6 +2,8 @@
 import sys
 import os
 
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+
 # --- Windows Console Hiding Logic ---
 # This block checks if the script is running on Windows with the standard 'python.exe'
 # interpreter. If so, it re-launches itself using 'pythonw.exe' (the windowless version)
@@ -235,7 +237,7 @@ class HostManagerApp:
         wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.bat")
         with open(wrapper_path, 'w') as f:
             # %~dp0 expands to the directory of the .bat file, making the path relative.
-            f.write(f'@echo off\n"{python_executable}" "%~dp0{SCRIPT_NAME}" %*')
+            f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\n"{python_executable}" "%~dp0{SCRIPT_NAME}" %*')
         self.log(f"Created wrapper script: run_native_host.bat")
 
         # Create Manifest
@@ -297,9 +299,23 @@ class HostManagerApp:
         except Exception as e:
             self.log(f"Could not make script executable: {e}")
         
+        # Create a shell wrapper for Linux/macOS to set the environment variable
+        wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.sh")
+        python_executable = sys.executable # Use the same python that's running the installer
+        with open(wrapper_path, 'w') as f:
+            f.write("#!/bin/sh\n")
+            f.write("# This wrapper ensures __pycache__ directories are not created.\n")
+            f.write("export PYTHONDONTWRITEBYTECODE=1\n")
+            # Use dirname "$0" to find the script's directory, making it portable
+            f.write(f'"{python_executable}" "$(dirname "$0")/{SCRIPT_NAME}" "$@"')
+        
+        # Make the wrapper executable
+        os.chmod(wrapper_path, 0o755)
+        self.log(f"Created executable wrapper script: run_native_host.sh")
+
         # Generate manifest
         chrome_manifest = {
-            "name": HOST_NAME, "description": HOST_DESCRIPTION, "path": script_path,
+            "name": HOST_NAME, "description": HOST_DESCRIPTION, "path": wrapper_path,
             "type": "stdio", "allowed_origins": [f"chrome-extension://{extension_id}/", "moz-extension://*"]
         }
 
