@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Created `PlaylistUI.js` to manage all playlist rendering and event handling.
 - Implemented cross-platform solution for `__pycache__` issue by modifying `Installer.py` to generate `run_native_host.sh` for Linux/macOS, similar to `run_native_host.bat` for Windows.
 - Created `Draggable.js` to handle the drag of the on screen.
+- Created `AniListUI.js` to encapsulate all logic for the AniList side panel, including state management, event handling, and positioning.
 
 ### Fixed
 - Resolved issue where AniList releases were not rendering in `popup.js` due to incorrect static method calls.
@@ -29,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a bug in `background.js` that prevented `.m3u8` stream detection on most sites.
 - Fixed a bug in `content.js` that prevented the extension from loading on pages.
 - Corrected a `NameError` in `native_host.py` caused by an incorrect dependency injection order for the `cli.py` module.
+- Fixed an issue where the "Lock Panel Position" setting for the AniList panel was not being applied, allowing the panel to be dragged even when locked.
+- Corrected the "Force Re-attach" setting for the AniList panel to properly reset after being used, ensuring it acts as a one-time trigger.
 
 ### Changed
 - Simplified the right-click "Add to MPV Folder" context menu. It is now a single-level list of folders instead of a nested menu for a cleaner experience.
@@ -42,4 +45,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored `content.js` to delegate all playlist functionality to the new `PlaylistUI.js` class.
 - Refactored `popup.js` to better centralize UI mode logic within `UIModeManager`.
 - Refactored `content.js` to delegate UI creation and teardown to `UIManager.js`.
+- Refactored `content.js` to delegate all AniList-related functionality to the new `AniListUI.js` class, significantly cleaning up the main controller.
 - Unified YouTube title scraping by making the on-page "Add" button use the same oEmbed API as the right-click context menu, ensuring consistent titles.

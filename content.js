@@ -33,15 +33,12 @@ class MpvController {
         this.detectedUrl = null;
         this.uiManager = new UIManager();
         this.playlistUI = null; // Will be initialized after UI is created
+        this.anilistUI = null; // Will be initialized after UI is created
         this.pageScraper = new PageScraper();
         this.currentUiMode = 'full';
         this.isPinned = false;
         this.lastUrl = window.location.href;
         this.activeLogFilters = { info: true, error: true };
-        this.isAnilistPanelManuallyPositioned = false;
-        this.autoReattachAnilistPanel = true; // Default value
-        this.isAnilistPanelLocked = false; // New state for the hard lock
-        this.forceReattachAnilistPanel = false; // New state for the force re-attach setting
         this.preFullscreenPosition = null; // New: Store position before fullscreen
         this.showAnilistReleases = true; // Default value
         this.preResizePosition = null; // New: Store position before a resize forces a move
@@ -118,28 +115,28 @@ class MpvController {
             const changedPrefs = request.preferences; // This will now contain the specific preferences that changed
 
             // If the change is only UI position/size related, update directly without full re-initialization
-            if (changedPrefs.position || changedPrefs.anilistPanelPosition || changedPrefs.anilistPanelSize || changedPrefs.minimizedStubPosition || changedPrefs.anilistPanelVisible !== undefined || changedPrefs.showMinimizedStub !== undefined) {
+            if (changedPrefs.position || changedPrefs.anilistPanelPosition || changedPrefs.anilistPanelSize || changedPrefs.minimizedStubPosition || changedPrefs.anilistPanelVisible !== undefined || changedPrefs.showMinimizedStub !== undefined || changedPrefs.lockAnilistPanel !== undefined) {
                 // Apply specific position/size changes directly to the UI manager's elements
                 if (changedPrefs.position && this.uiManager.controllerHost) {
                     this.uiManager.controllerHost.style.left = changedPrefs.position.left;
                     this.uiManager.controllerHost.style.top = changedPrefs.position.top;
                     this.uiManager.controllerHost.style.right = changedPrefs.position.right;
                     this.uiManager.controllerHost.style.bottom = changedPrefs.position.bottom;
-                    this.preFullscreenPosition = null; // Clear this as the position has been updated by user interaction
-                    this.preResizePosition = null; // Clear this as the position has been updated by user interaction
+                    this.preFullscreenPosition = null;
+                    this.preResizePosition = null;
                     this.validateAndRepositionController(); // Ensure it's on screen
                 }
-                if (changedPrefs.anilistPanelPosition && this.uiManager.anilistPanelHost) {
-                    this.uiManager.anilistPanelHost.style.left = changedPrefs.anilistPanelPosition.left;
-                    this.uiManager.anilistPanelHost.style.top = changedPrefs.anilistPanelPosition.top;
-                    this.uiManager.anilistPanelHost.style.right = changedPrefs.anilistPanelPosition.right;
-                    this.uiManager.anilistPanelHost.style.bottom = changedPrefs.anilistPanelPosition.bottom;
-                    this.isAnilistPanelManuallyPositioned = true; // Flag it as manually positioned
-                    this.validateAndRepositionAnilistPanel();
+                if (changedPrefs.anilistPanelPosition && this.anilistUI?.panelHost) {
+                    this.anilistUI.panelHost.style.left = changedPrefs.anilistPanelPosition.left;
+                    this.anilistUI.panelHost.style.top = changedPrefs.anilistPanelPosition.top;
+                    this.anilistUI.panelHost.style.right = changedPrefs.anilistPanelPosition.right;
+                    this.anilistUI.panelHost.style.bottom = changedPrefs.anilistPanelPosition.bottom;
+                    this.anilistUI.isManuallyPositioned = true;
+                    this.anilistUI.validatePosition();
                 }
-                if (changedPrefs.anilistPanelSize && this.uiManager.anilistPanelHost) {
-                    this.uiManager.anilistPanelHost.style.width = changedPrefs.anilistPanelSize.width;
-                    this.uiManager.anilistPanelHost.style.height = changedPrefs.anilistPanelSize.height;
+                if (changedPrefs.anilistPanelSize && this.anilistUI?.panelHost) {
+                    this.anilistUI.panelHost.style.width = changedPrefs.anilistPanelSize.width;
+                    this.anilistUI.panelHost.style.height = changedPrefs.anilistPanelSize.height;
                 }
                 if (changedPrefs.minimizedStubPosition && this.uiManager.minimizedHost) {
                     this.uiManager.minimizedHost.style.left = changedPrefs.minimizedStubPosition.left;
@@ -149,8 +146,22 @@ class MpvController {
                     this.validateAndRepositionMinimizedStub();
                 }
                 // Handle show/hide anilist panel explicitly
-                if (changedPrefs.anilistPanelVisible !== undefined) {
-                    this.toggleAnilistPanel(changedPrefs.anilistPanelVisible, false);
+                if (changedPrefs.anilistPanelVisible !== undefined && this.anilistUI) {
+                    this.anilistUI.toggleVisibility(changedPrefs.anilistPanelVisible, false);
+                }
+                if (changedPrefs.lockAnilistPanel !== undefined && this.anilistUI) {
+                    this.anilistUI.isLocked = changedPrefs.lockAnilistPanel;
+                    this.anilistUI.updateDynamicStyles();
+                }
+                if (changedPrefs.forceReattachAnilistPanel !== undefined && this.anilistUI) {
+                    this.anilistUI.forceReattach = changedPrefs.forceReattachAnilistPanel;
+                    // If the panel is currently visible and forceReattach is true, trigger a visibility toggle
+                    // to ensure the re-attachment logic runs.
+                    if (this.anilistUI.forceReattach && this.anilistUI.panelHost.style.display !== 'none') {
+                        // Force visible, but don't save visibility state (as it's already handled by the preference change)
+                        // The toggleVisibility method itself will handle resetting forceReattach in storage.
+                        this.anilistUI.toggleVisibility(true, false);
+                    }
                 }
                 // Handle show/hide minimized stub explicitly
                 if (changedPrefs.showMinimizedStub !== undefined) {
@@ -442,11 +453,11 @@ class MpvController {
             const currentLeft = this.controllerHost.offsetLeft;
             const currentTop = this.controllerHost.offsetTop;
 
-            // Clamp the values to be within the viewport.
+            // Clamp the values
             const newLeft = Math.min(maxX, Math.max(0, currentLeft));
             const newTop = Math.min(maxY, Math.max(0, currentTop));
 
-            // Only update and save if a change was necessary.
+            // Only update if a change was necessary.
             if (newLeft !== currentLeft || newTop !== currentTop) {
                 this.controllerHost.style.left = `${newLeft}px`;
                 this.controllerHost.style.top = `${newTop}px`;
@@ -454,15 +465,13 @@ class MpvController {
                 this.controllerHost.style.bottom = 'auto';
 
             }
-            // If the user has manually positioned the anilist panel and disabled auto-snapping,
-            // we must NOT call updateAdaptiveElements(), as it can trigger a re-snap on page load.
-            // This is the definitive fix based on the observation that the panel behaves correctly
-            // when the main controller is minimized (because this function doesn't run).
-            if (!this.autoReattachAnilistPanel && this.isAnilistPanelManuallyPositioned) {
-                // We still need to validate the minimized stub's position.
+
+            if (this.anilistUI && !this.anilistUI.autoReattach && this.anilistUI.isManuallyPositioned) {
+                // If AniList panel is manually positioned, don't snap it.
+                // Just validate the stub.
                 this.validateAndRepositionMinimizedStub();
             } else {
-                // Otherwise, run the full update.
+                // Otherwise, run the full adaptive update.
                 setTimeout(() => {
                     this.updateAdaptiveElements();
                     this.validateAndRepositionMinimizedStub();
@@ -471,41 +480,6 @@ class MpvController {
         }, 10); // 10ms is a safe, small delay.
     }
 
-    /**
-     * Ensures the AniList panel is within the visible viewport boundaries.
-     * This is called on initial load to prevent the panel from being "stuck" off-screen.
-     */
-    validateAndRepositionAnilistPanel() {
-        if (!this.anilistPanelHost || this.anilistPanelHost.style.display === 'none') return;
-
-        // Use a timeout to ensure dimensions are available after rendering.
-        setTimeout(() => {
-            const hostWidth = this.anilistPanelHost.offsetWidth;
-            const hostHeight = this.anilistPanelHost.offsetHeight;
-
-            if (hostWidth === 0 || hostHeight === 0) return;
-
-            const maxX = window.innerWidth - hostWidth;
-            const maxY = window.innerHeight - hostHeight;
-
-            const currentLeft = this.anilistPanelHost.offsetLeft;
-            const currentTop = this.anilistPanelHost.offsetTop;
-
-            // Clamp the values to be within the viewport.
-            const newLeft = Math.min(maxX, Math.max(0, currentLeft));
-            const newTop = Math.min(maxY, Math.max(0, currentTop));
-
-            // Only update the style if a change was necessary.
-            // We do NOT save this change, as it's a temporary correction. The user's
-            // intended off-screen position is preserved for when they move to a larger monitor.
-            if (newLeft !== currentLeft || newTop !== currentTop) {
-                this.anilistPanelHost.style.left = `${newLeft}px`;
-                this.anilistPanelHost.style.top = `${newTop}px`;
-                this.anilistPanelHost.style.right = 'auto';
-                this.anilistPanelHost.style.bottom = 'auto';
-            }
-        }, 20); // A small delay is sufficient.
-    }
     /**
      * Toggles the minimized state of the UI, showing a stub in the corner.
      * @param {boolean} shouldBeMinimized - True to minimize, false to restore.
@@ -699,77 +673,33 @@ class MpvController {
         });
     }
 
-    updateAnilistPanelPosition() {
-        // Absolute Rule: If the panel has ever been manually positioned, do not snap it.
-        if (this.isAnilistPanelManuallyPositioned) {
-            return;
-        }
-        if (!this.uiManager.anilistPanelHost || !this.uiManager.controllerHost || this.uiManager.anilistPanelHost.style.display === 'none') return;
-        const controllerRect = this.uiManager.controllerHost.getBoundingClientRect();
-        const panelWidth = this.uiManager.anilistPanelHost.offsetWidth; // Should be 380px from style
-        const gap = 10; // Gap between controller and panel
-
-        const controllerCenter = controllerRect.left + (controllerRect.width / 2);
-        const screenCenter = window.innerWidth / 2;
-
-        let newLeft;
-        if (controllerCenter < screenCenter) {
-            // Controller is on the left, so panel should be to its right.
-            newLeft = controllerRect.right + gap;
-        } else {
-            // Controller is on the right, so panel should be to its left.
-            newLeft = controllerRect.left - panelWidth - gap;
-        }
-
-        this.uiManager.anilistPanelHost.style.top = `${controllerRect.top}px`;
-        this.uiManager.anilistPanelHost.style.left = `${newLeft}px`;
-        this.uiManager.anilistPanelHost.style.right = 'auto';
-        this.uiManager.anilistPanelHost.style.bottom = 'auto';
-    }
-
     updateAdaptiveElements() {
-        // If auto-reattach is disabled AND the panel has been manually moved,
-        // this function should do nothing. This prevents any other part of the code from accidentally snapping it.
-        if (!this.autoReattachAnilistPanel && this.isAnilistPanelManuallyPositioned) {
-            return;
-        }
+        if (this.anilistUI && !this.anilistUI.autoReattach && this.anilistUI.isManuallyPositioned) return;
         if (!this.uiManager.controllerHost || !this.uiManager.shadowRoot) return;
 
         const anilistBtnLeft = this.uiManager.shadowRoot.getElementById('btn-toggle-anilist-left');
         const anilistBtnRight = this.uiManager.shadowRoot.getElementById('btn-toggle-anilist-right');
         if (!anilistBtnLeft || !anilistBtnRight) return;
 
-        // Update the cursor on the AniList drag handle based on the lock state.
-        const anilistDragHandle = this.uiManager.anilistShadowRoot?.querySelector('.anilist-panel-header');
-        if (anilistDragHandle) {
-            // If the panel is locked, use a default cursor. Otherwise, use 'grab'.
-            anilistDragHandle.style.cursor = this.isAnilistPanelLocked ? 'default' : 'grab';
-        }
-
-        // If the feature is disabled, hide both and exit.
-        if (!this.isAnilistEnabled || !this.showAnilistOnPage) {
+        if (!this.anilistUI?.isEnabled || !this.anilistUI?.showOnPage) {
             anilistBtnLeft.style.display = 'none';
             anilistBtnRight.style.display = 'none';
-            // Also ensure the panel is hidden if the setting is turned off
-            this.toggleAnilistPanel(false, false);
+            this.anilistUI?.toggleVisibility(false, false);
             return;
         }
+
         const rect = this.uiManager.controllerHost.getBoundingClientRect();
         const controllerCenter = rect.left + (rect.width / 2);
         const screenCenter = window.innerWidth / 2;
 
         if (controllerCenter < screenCenter) {
-            // Controller is on the left half, so the "outer" button is on the right.
             anilistBtnLeft.style.display = 'none';
             anilistBtnRight.style.display = 'flex';
         } else {
-            // Controller is on the right half, so the "outer" button is on the left.
             anilistBtnLeft.style.display = 'flex';
             anilistBtnRight.style.display = 'none';
         }
-        // Also update the panel's position in case the controller was moved
-        // while the panel was hidden.
-        this.updateAnilistPanelPosition();
+        this.anilistUI?.snapToController();
     }
     /**
      * Finds all interactive UI elements and attaches their corresponding event listeners.
@@ -780,7 +710,6 @@ class MpvController {
         this._bindLogControls();
         this._bindWindowEvents();
         this._bindMinimizedControls();
-        this._bindAnilistPanelControls();
         this._initializeDraggables(); // New centralized method
     }
 
@@ -795,76 +724,6 @@ class MpvController {
             this.switchUi(newMode);
         });
 
-        const anilistBtnLeft = this.uiManager.shadowRoot.getElementById('btn-toggle-anilist-left');
-        const anilistBtnRight = this.uiManager.shadowRoot.getElementById('btn-toggle-anilist-right');
-        const toggleAnilistHandler = () => this.toggleAnilistPanel();
-        anilistBtnLeft.addEventListener('click', toggleAnilistHandler);
-        anilistBtnRight.addEventListener('click', toggleAnilistHandler);
-    }
-
-    /**
-     * Toggles the visibility of the AniList side panel and syncs button states.
-     * @param {boolean} [forceState] - Optional. `true` to show, `false` to hide. Toggles if omitted.
-     * @param {boolean} [savePref=true] - Whether to save the visibility state.
-     * @param {object|null} [initialPosition=null] - The initial position from preferences, used on load.
-     */
-    toggleAnilistPanel(forceState, savePref = true, initialPosition = null) {
-        if (!this.uiManager.shadowRoot || !this.uiManager.anilistPanelHost) return;
-
-        const anilistBtnLeft = this.uiManager.shadowRoot.getElementById('btn-toggle-anilist-left');
-        const anilistBtnRight = this.uiManager.shadowRoot.getElementById('btn-toggle-anilist-right');
-
-        let shouldBeVisible;
-
-        // Master override. If the setting is off, it can never be visible.
-        // This check must happen before we determine the toggle state. It checks both the master and sub-setting.
-        if (!this.isAnilistEnabled || !this.showAnilistOnPage) {
-            shouldBeVisible = false;
-        }
-
-        if (typeof forceState === 'boolean') {
-            shouldBeVisible = forceState && this.isAnilistEnabled && this.showAnilistOnPage;
-        } else {
-            shouldBeVisible = this.uiManager.anilistPanelHost.style.display === 'none';
-        }
-
-        if (shouldBeVisible) {
-            // This check is redundant due to the master override, but good for safety
-            if (!this.isAnilistEnabled || !this.showAnilistOnPage) return;
-
-            this.uiManager.anilistPanelHost.style.display = 'block';
-
-            // If "Auto-reattach" is enabled, we force the panel to snap back to the controller
-            // by resetting its "manually positioned" state and clearing its saved position
-            // before updating its position.
-            if (this.forceReattachAnilistPanel && savePref) {
-                this.isAnilistPanelManuallyPositioned = false;
-                // Also clear the saved position from storage to prevent flickering on next preference load.
-                // Also, turn off the "force" setting so it only happens once.
-                this.savePreference({
-                    anilistPanelPosition: null,
-                    forceReattachAnilistPanel: false
-                });
-                this.forceReattachAnilistPanel = false; // Update local state immediately
-            }
-
-            if (this.autoReattachAnilistPanel || !this.isAnilistPanelManuallyPositioned) {
-                this.updateAnilistPanelPosition();
-            }
-
-            this.fetchAniListReleases();
-            if (savePref) {
-                this.savePreference({ anilistPanelVisible: true });
-            }
-        } else {
-            this.uiManager.anilistPanelHost.style.display = 'none';
-            if (anilistBtnLeft) anilistBtnLeft.classList.remove('active-toggle');
-            if (anilistBtnRight) anilistBtnRight.classList.remove('active-toggle');
-            if (savePref) {
-                // When toggling off, just save the visibility state. Do NOT clear the position.
-                this.savePreference({ anilistPanelVisible: false });
-            }
-        }
     }
 
     /** Binds listeners for the primary action buttons (Play, Add, Clear, etc.). */
@@ -1046,21 +905,6 @@ class MpvController {
     }
 
     /**
-     * Binds listeners for controls inside the AniList panel itself.
-     * @private
-     */
-    _bindAnilistPanelControls() {
-        const closeBtn = this.uiManager.anilistShadowRoot?.getElementById('btn-close-anilist-panel');
-        if (closeBtn) {
-            closeBtn.addEventListener('click', () => this.toggleAnilistPanel(false));
-        }
-        const refreshBtn = this.uiManager.anilistShadowRoot?.getElementById('btn-refresh-anilist');
-        if (refreshBtn) {
-            refreshBtn.addEventListener('click', () => this.fetchAniListReleases(true));
-        }
-    }
-
-    /**
      * Initializes all draggable UI components using the Draggable utility class.
      * @private
      */
@@ -1071,15 +915,8 @@ class MpvController {
             new Draggable(this.uiManager.controllerHost, controllerHandle, {
                 onDragStart: () => !this.isPinned,
                 onDragMove: (e, { newLeft, newTop }) => {
-                    if (this.uiManager.anilistPanelHost?.style.display !== 'none' && !this.isAnilistPanelManuallyPositioned) {
-                        const controllerWidth = this.uiManager.controllerHost.offsetWidth;
-                        const panelWidth = this.uiManager.anilistPanelHost.offsetWidth;
-                        const gap = 10;
-                        const isControllerOnLeft = (newLeft + controllerWidth / 2) < (window.innerWidth / 2);
-                        const panelLeft = isControllerOnLeft ? (newLeft + controllerWidth + gap) : (newLeft - panelWidth - gap);
-                        this.uiManager.anilistPanelHost.style.top = `${newTop}px`;
-                        this.uiManager.anilistPanelHost.style.left = `${panelLeft}px`;
-                    }
+                    // Snap the anilist panel while dragging the controller
+                    this.anilistUI?.snapToController();
                     this.updateAdaptiveElements();
                 },
                 onDragEnd: () => {
@@ -1109,36 +946,6 @@ class MpvController {
                         bottom: this.uiManager.minimizedHost.style.bottom
                     };
                     this.savePreference({ minimizedStubPosition: newPosition });
-                }
-            });
-        }
-
-        // 3. AniList Panel
-        const anilistHandle = this.uiManager.anilistShadowRoot?.querySelector('.anilist-panel-header');
-        if (this.uiManager.anilistPanelHost && anilistHandle) {
-            new Draggable(this.uiManager.anilistPanelHost, anilistHandle, {
-                onDragStart: () => !this.isAnilistPanelLocked,
-                onDragEnd: () => {
-                    this.isAnilistPanelManuallyPositioned = true;
-                    const newPosition = {
-                        left: this.uiManager.anilistPanelHost.style.left,
-                        top: this.uiManager.anilistPanelHost.style.top,
-                        right: this.uiManager.anilistPanelHost.style.right,
-                        bottom: this.uiManager.anilistPanelHost.style.bottom
-                    };
-                    this.savePreference({ anilistPanelPosition: newPosition });
-                }
-            });
-        }
-
-        // 4. AniList Panel Resizing
-        const anilistResizeHandle = this.uiManager.anilistShadowRoot?.getElementById('anilist-resize-handle');
-        if (this.uiManager.anilistPanelHost && anilistResizeHandle) {
-            new Resizable(this.uiManager.anilistPanelHost, anilistResizeHandle, {
-                minWidth: 250,
-                minHeight: 200,
-                onResizeEnd: (newSize) => {
-                    this.savePreference({ anilistPanelSize: newSize });
                 }
             });
         }
@@ -1174,15 +981,15 @@ class MpvController {
                 // If the controller is off-screen and we haven't stored a pre-resize position yet,
                 // it means this resize is the one forcing it to move. Store its current position.
                 if (!this.preResizePosition) {
-                    this.preResizePosition = { left: `${currentLeft}px`, top: `${currentTop}px` };
+                this.preResizePosition = { left: `${currentLeft}px`, top: `${currentTop}px`, right: 'auto', bottom: 'auto' };
                 }
                 // Now, force the controller back into the viewport.
                 this.validateAndRepositionController();
             } else if (this.preResizePosition) {
                 // If the controller is on-screen AND we have a stored pre-resize position,
                 // it means the window has been made larger again.
-                const originalLeft = parseInt(this.preResizePosition.left, 10);
-                const originalTop = parseInt(this.preResizePosition.top, 10);
+            const originalLeft = parseInt(this.preResizePosition.left, 10) || 0;
+            const originalTop = parseInt(this.preResizePosition.top, 10) || 0;
                 // Check if the original position is now back within the valid viewport. If so, restore it.
                 // We no longer save this automatically, preventing cross-tab interference.
                 // The position is only saved on an explicit user drag.
@@ -1212,14 +1019,13 @@ class MpvController {
         const logFilters = prefs?.logFilters ?? { info: true, error: true };
         const showPlayNew = prefs?.show_play_new_button ?? false;
         const anilistPosition = prefs?.anilistPanelPosition; 
-        const anilistVisible = prefs?.anilistPanelVisible ?? false;
         const anilistImageHeight = prefs?.anilist_image_height;
         const anilistSize = prefs?.anilistPanelSize;
-        // This must be set *before* toggleAnilistPanel is called.
-        this.autoReattachAnilistPanel = prefs?.autoReattachAnilistPanel ?? true;
-        this.forceReattachAnilistPanel = prefs?.forceReattachAnilistPanel ?? false; // New setting
-        this.isAnilistEnabled = prefs?.enable_anilist_integration ?? true; // Master toggle
-        this.isAnilistPanelLocked = prefs?.lockAnilistPanel ?? false;
+        this.anilistUI.autoReattach = prefs?.autoReattachAnilistPanel ?? true;
+        this.anilistUI.forceReattach = prefs?.forceReattachAnilistPanel ?? false;
+        this.anilistUI.isEnabled = prefs?.enable_anilist_integration ?? true;
+        this.anilistUI.isLocked = prefs?.lockAnilistPanel ?? false;
+        this.anilistUI.updateDynamicStyles(); // Apply lock style
         const minimizedStubPosition = prefs?.minimizedStubPosition;
         this.enableDblclickCopy = prefs?.enable_dblclick_copy ?? false; // New: Apply preference
         // This setting controls the visibility of the on-page UI elements, but is overridden by the master toggle.
@@ -1227,38 +1033,39 @@ class MpvController {
         this.showMinimizedStub = prefs?.show_minimized_stub ?? true;
         this.showCopyTitleButton = prefs?.show_copy_title_button ?? false;
         this.pageScraper.updateFilterWords(prefs?.scraper_filter_words || ['watch', 'online', 'free', 'episode', 'season', 'full', 'hd', 'eng sub', 'subbed', 'dubbed', 'animepahe']);
+        this.anilistUI.showOnPage = prefs?.show_anilist_releases ?? true;
 
         // Restore AniList panel position first.
-        if (anilistPosition && anilistPosition.left && anilistPosition.top) {
-            this.uiManager.anilistPanelHost.style.left = anilistPosition.left;
-            this.uiManager.anilistPanelHost.style.top = anilistPosition.top;
-            this.uiManager.anilistPanelHost.style.right = anilistPosition.right;
-            this.uiManager.anilistPanelHost.style.bottom = anilistPosition.bottom;
-            this.isAnilistPanelManuallyPositioned = true;
+        if (this.anilistUI.panelHost && anilistPosition?.left && anilistPosition?.top) {
+            this.anilistUI.panelHost.style.left = anilistPosition.left;
+            this.anilistUI.panelHost.style.top = anilistPosition.top;
+            this.anilistUI.panelHost.style.right = anilistPosition.right;
+            this.anilistUI.panelHost.style.bottom = anilistPosition.bottom;
+            this.anilistUI.isManuallyPositioned = true;
         } else {
-            this.isAnilistPanelManuallyPositioned = false;
+            this.anilistUI.isManuallyPositioned = false;
         }
 
         // Restore AniList panel size
-        if (anilistSize && anilistSize.width && anilistSize.height) {
-            this.uiManager.anilistPanelHost.style.width = anilistSize.width;
-            this.uiManager.anilistPanelHost.style.height = anilistSize.height;
+        if (this.anilistUI.panelHost && anilistSize?.width && anilistSize?.height) {
+            this.anilistUI.panelHost.style.width = anilistSize.width;
+            this.anilistUI.panelHost.style.height = anilistSize.height;
         }
  
         // New: Restore AniList image size
-        if (this.uiManager.anilistPanelHost && anilistImageHeight) {
+        if (this.anilistUI.panelHost && anilistImageHeight) {
             const baseWidth = 50;
             const defaultHeight = 70; // The original default height for aspect ratio calculation
             const effectiveHeight = Number(anilistImageHeight || defaultHeight);
             const scalingFactor = effectiveHeight / defaultHeight;
             const effectiveWidth = Math.round(baseWidth * scalingFactor);
     
-            this.uiManager.anilistPanelHost.style.setProperty('--anilist-item-width', `${effectiveWidth}px`);
-            this.uiManager.anilistPanelHost.style.setProperty('--anilist-image-height', `${effectiveHeight}px`);
+            this.anilistUI.panelHost.style.setProperty('--anilist-item-width', `${effectiveWidth}px`);
+            this.anilistUI.panelHost.style.setProperty('--anilist-image-height', `${effectiveHeight}px`);
         }
 
         // Restore Minimized Stub position
-        if (minimizedStubPosition && minimizedStubPosition.left && minimizedStubPosition.top) {
+        if (minimizedStubPosition?.left && minimizedStubPosition?.top) {
             this.uiManager.minimizedHost.style.left = minimizedStubPosition.left;
             this.uiManager.minimizedHost.style.top = minimizedStubPosition.top;
             this.uiManager.minimizedHost.style.right = minimizedStubPosition.right;
@@ -1267,11 +1074,11 @@ class MpvController {
 
         // Restore AniList panel visibility, passing its initial position to prevent re-snapping on load.
         // Only show the panel if the master toggle is also on.
-        const shouldShowAnilistPanel = this.isAnilistEnabled && this.showAnilistOnPage && anilistVisible;
-        this.toggleAnilistPanel(shouldShowAnilistPanel, false);
+        const anilistVisible = prefs?.anilistPanelVisible ?? false;
+        this.anilistUI.toggleVisibility(anilistVisible, false);
         
         // After applying the saved position, validate it to ensure it's on-screen.
-        this.validateAndRepositionAnilistPanel();
+        this.anilistUI.validatePosition();
 
         if (position) {
             this.uiManager.controllerHost.style.left = position.left;
@@ -1303,12 +1110,6 @@ class MpvController {
         // If the controller is being shown, validate its position to ensure it's on-screen.
         // This must be called *after* setting the position.
         if (!shouldBeMinimized) {
-            // Update the AniList drag handle cursor based on the newly applied lock preference
-            const anilistDragHandle = this.uiManager.anilistShadowRoot?.querySelector('.anilist-panel-header');
-            if (anilistDragHandle) {
-                // If the panel is locked, use a default cursor. Otherwise, use 'grab'.
-                anilistDragHandle.style.cursor = this.isAnilistPanelLocked ? 'default' : 'grab';
-            }
             this.validateAndRepositionController();
         }
         this.updateAdaptiveElements();
@@ -1321,7 +1122,9 @@ class MpvController {
         this.uiManager.createAndInjectUi();
         // Now that the UI is created, we can initialize the PlaylistUI manager.
         this.playlistUI = new PlaylistUI(this, this.uiManager);
+        this.anilistUI = new AniListUI(this, this.uiManager);
         this.playlistUI.bindEvents();
+        this.anilistUI.bindEvents();
         this.bindEventListeners();
         await this.updateFolderDropdowns();
         chrome.runtime.sendMessage({ action: 'content_script_init' });
@@ -1564,23 +1367,6 @@ class MpvController {
             }
         });
     }
-    async fetchAniListReleases(forceRefresh = false) {
-        if (!this.uiManager.anilistShadowRoot) return;
-        const anilistContent = this.uiManager.anilistShadowRoot.getElementById('anilist-releases-list');
-        if (!anilistContent) return;
-
-        anilistContent.innerHTML = '<div class="loading-spinner"></div>';
-        try {
-            const releases = await AniListRenderer.fetchReleases(forceRefresh);
-            AniListRenderer.render(anilistContent, releases);
-        } catch (error) {
-            const errorElement = document.createElement('li');
-            errorElement.className = 'anilist-error';
-            errorElement.textContent = `Error: ${error.message}`;
-            anilistContent.innerHTML = '';
-            anilistContent.appendChild(errorElement);
-        }
-    }
 
     handleFullscreenChange() {
         // Re-query the host from the DOM to ensure we have a live reference.
@@ -1768,6 +1554,7 @@ class MpvController {
   // Check if this is the special scanner window. If so, do not inject any UI.
   // This is identified by a URL parameter added by the background script.
   try {
+    // This must be included in the final script.
     if (new URL(window.location.href).searchParams.get('mpv_playlist_scanner') === 'true') {
       // The scanner window doesn't need a controller UI, but it still needs to
       // listen for messages from the background script (e.g., to perform a scrape).

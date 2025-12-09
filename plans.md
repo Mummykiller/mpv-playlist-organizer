@@ -41,7 +41,7 @@ This phase focuses on breaking down the largest files and establishing a baselin
             - [x] `UIManager.js`: Manage the lifecycle of the controller, stub, and AniList panel hosts (creation, injection, teardown).
             - [x] `Draggable.js` / [x] `Resizable.js`: Abstract the drag/resize logic into reusable utility classes that can be applied to any element.
             - [ ] `PlaylistUI.js`: Handle rendering and event binding specifically for the playlist view.
-            - [ ] `AniListUI.js`: Manage the AniList panel's state, rendering, and event binding.
+            - [x] `AniListUI.js`: Manage the AniList panel's state, rendering, and event binding.
             - [x] `PageScraper.js`: Centralize all page scraping logic, including the YouTube-specific rules.
         - **Benefit:** Makes the UI logic more component-oriented and easier to debug.
 
