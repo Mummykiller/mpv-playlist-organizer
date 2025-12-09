@@ -79,6 +79,12 @@ class OptionsManager {
         document.getElementById('shared-anilist-section').style.display = (enableAnilist && (prefs.show_anilist_releases ?? true)) ? 'block' : 'none';
 
         this._updateAnilistImageSize(prefs.anilist_image_height || 126);
+
+        // The "force re-attach" is a one-time action, so it should always appear unchecked.
+        // The background script sets it to false after use. This ensures the UI reflects that.
+        const forceReattachCheckbox = document.getElementById('force-reattach-anilist-checkbox');
+        if (forceReattachCheckbox) forceReattachCheckbox.checked = false;
+
         this._renderScraperFilterList(prefs.scraper_filter_words || []);
         this._renderBuiltInFilterList();
     }
