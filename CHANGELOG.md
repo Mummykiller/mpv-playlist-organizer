@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Created `playlistManager.js` to centralize all playlist-related actions (add, remove, clear, reorder).
 - Created `mpv_session.py`, `file_io.py`, `services.py`, and `cli.py` to fully modularize the native host logic.
 - Created `UIManager.js` to manage the lifecycle of all UI elements injected into web pages.
+- Created `Resizable.js` to abstract UI resizing logic.
+- Created `PlaylistUI.js` to manage all playlist rendering and event handling.
 - Implemented cross-platform solution for `__pycache__` issue by modifying `Installer.py` to generate `run_native_host.sh` for Linux/macOS, similar to `run_native_host.bat` for Windows.
 - Created `Draggable.js` to handle the drag of the on screen.
 
@@ -35,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `native_host.py` is now a fully modularized, lightweight entry point that coordinates between the browser and other Python modules.
 - Improved robustness of `native_host.py` with better failsafe logging and CLI error handling.
 - Refactored `background.js` context menu handler for improved clarity.
-- Refactored `content.js` to use `Draggable.js`
+- Refactored `content.js` to use `Draggable.js` for all draggable components.
+- Refactored `content.js` to use `Resizable.js` for the AniList panel.
+- Refactored `content.js` to delegate all playlist functionality to the new `PlaylistUI.js` class.
 - Refactored `popup.js` to better centralize UI mode logic within `UIModeManager`.
 - Refactored `content.js` to delegate UI creation and teardown to `UIManager.js`.
+- Unified YouTube title scraping by making the on-page "Add" button use the same oEmbed API as the right-click context menu, ensuring consistent titles.
