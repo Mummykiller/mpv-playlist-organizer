@@ -32,6 +32,7 @@ class MpvController {
         // --- State ---
         this.detectedUrl = null;
         this.uiManager = new UIManager();
+        this.playlistUI = null; // Will be initialized after UI is created
         this.pageScraper = new PageScraper();
         this.currentUiMode = 'full';
         this.isPinned = false;
@@ -85,7 +86,7 @@ class MpvController {
             // matches the currently selected folder.
             const currentFolderId = this.uiManager.shadowRoot?.getElementById('folder-select')?.value;
             if (currentFolderId === request.folderId) {
-                this.renderPlaylist(request.playlist);
+                this.playlistUI?.render(request.playlist);
             } else if (request.fromContextMenu) {
                 // If the update came from a context menu action for a *different* folder,
                 // the user might switch to that folder later and expect to see the new item.
@@ -776,14 +777,11 @@ class MpvController {
     bindEventListeners() {
         this._bindHeaderControls();
         this._bindActionControls();
-        this._bindPlaylistControls();
         this._bindLogControls();
         this._bindWindowEvents();
         this._bindMinimizedControls();
         this._bindAnilistPanelControls();
-        this._bindPlaylistDragAndDrop();
         this._initializeDraggables(); // New centralized method
-        this._bindAnilistResize(); // New: Bind resize for AniList panel
     }
 
     /** Binds listeners for the main header (minimize, pin, UI mode, AniList). */
@@ -932,180 +930,28 @@ class MpvController {
      * @param {boolean} options.isUiVisible - Whether the full UI is visible, allowing for modals.
      */
     async addDetectedUrlToFolder(folderId, { isUiVisible = false } = {}) {
-        const { url: urlToAdd, title: scrapedTitle } = this.pageScraper.scrapePageDetails(this.detectedUrl);
+        const urlToAdd = this.detectedUrl;
         if (!urlToAdd) {
             this.addLogEntry({ text: `[Content]: No stream/video detected to add.`, type: 'error' });
             return 'error';
         }
-
+    
+        const isYouTubeUrl = /youtube\.com\/(watch|playlist)/.test(urlToAdd);
+    
         try {
-            // Scrape the details here and send them directly to the background script.
-            // This avoids the background script having to message back to get the details.
-            this.sendCommandToBackground('add', folderId, { data: { url: urlToAdd, title: scrapedTitle } });
+            if (isYouTubeUrl) {
+                // For YouTube, delegate to the background script to use the oEmbed API for a consistent title.
+                this.sendCommandToBackground('add_youtube_url_with_oembed', folderId, { data: { url: urlToAdd } });
+            } else {
+                // For other sites, scrape the title from the page and send it.
+                const { title: scrapedTitle } = this.pageScraper.scrapePageDetails(urlToAdd);
+                this.sendCommandToBackground('add', folderId, { data: { url: urlToAdd, title: scrapedTitle } });
+            }
             return 'success';
         } catch (error) {
             this.addLogEntry({ text: `[Content]: Error checking for duplicates: ${error.message}`, type: 'error' });
             return 'error';
         }
-    }
-    /** Binds listeners related to the playlist (item removal, folder selection). */
-    _bindPlaylistControls() {
-        const folderSelect = this.uiManager.shadowRoot.getElementById('folder-select');
-        const compactFolderSelect = this.uiManager.shadowRoot.getElementById('compact-folder-select');
-
-        const handleFolderChange = (newFolderId) => {
-            folderSelect.value = newFolderId;
-            compactFolderSelect.value = newFolderId;
-            chrome.runtime.sendMessage({ action: 'set_last_folder_id', folderId: newFolderId });
-            this.refreshPlaylist();
-        };
-        folderSelect.addEventListener('change', () => handleFolderChange(folderSelect.value));
-        compactFolderSelect.addEventListener('change', () => handleFolderChange(compactFolderSelect.value));
-
-        this.uiManager.shadowRoot.getElementById('playlist-container').addEventListener('click', (e) => {
-            const removeBtn = e.target.closest('.btn-remove-item');
-            const copyBtn = e.target.closest('.btn-copy-item');
-
-            if (removeBtn) {
-                const index = parseInt(removeBtn.dataset.index, 10);
-                const folderId = folderSelect.value; // Can get from either select
-                if (!isNaN(index)) this.sendCommandToBackground('remove_item', folderId, { data: { index } });
-            } else if (copyBtn) {
-                // The button now copies the URL.
-                const urlToCopy = copyBtn.dataset.url;
-                if (!urlToCopy) return;
-
-                navigator.clipboard.writeText(urlToCopy).then(() => {
-                    this.addLogEntry({ text: `[Content]: Copied URL to clipboard.`, type: 'info' });
-                }).catch(err => {
-                    this.addLogEntry({ text: `[Content]: Failed to copy URL: ${err}`, type: 'error' });
-                });
-            }
-        });
-
-        // New: Add double-click listener to copy the title.
-        this.uiManager.shadowRoot.getElementById('playlist-container').addEventListener('dblclick', (e) => {
-            if (!this.enableDblclickCopy) return; // Check if the feature is enabled
-
-            const listItem = e.target.closest('.list-item');
-            if (listItem && listItem.dataset.title) {
-                const titleToCopy = listItem.dataset.title;
-                if (titleToCopy) {
-                    navigator.clipboard.writeText(titleToCopy).then(() => {
-                        this.addLogEntry({ text: `[Content]: Copied title to clipboard.`, type: 'info' });
-                        // Add a temporary class to the parent list item for visual feedback.
-                        if (listItem) {
-                            listItem.classList.add('title-copied');
-                            setTimeout(() => {
-                                listItem.classList.remove('title-copied');
-                            }, 1500); // Animation duration is 1.5s
-                        }
-                    }).catch(err => {
-                        this.addLogEntry({ text: `[Content]: Failed to copy title: ${err}`, type: 'error' });
-                    });
-                }
-            }
-        });
-
-    }
-
-    /** Binds listeners for playlist item drag-and-drop reordering.
-     * @private
-     */
-    _bindPlaylistDragAndDrop() {
-        const playlistContainer = this.uiManager.shadowRoot.getElementById('playlist-container');
-        if (!playlistContainer) return;
-
-        let draggedItem = null;
-
-        playlistContainer.addEventListener('dragstart', (e) => {
-            if (e.target.classList.contains('list-item')) {
-                draggedItem = e.target;
-                // Add a class to the item being dragged for visual feedback
-                setTimeout(() => draggedItem.classList.add('dragging'), 0);
-
-                // Set the data for dragging outside the browser.
-                const url = e.target.dataset.url; // The full URL is stored in the data attribute.
-                if (url) {
-                    // Provide the URL in multiple formats for maximum compatibility.
-                    // 'text/x-moz-url' is a legacy but widely supported format that helps
-                    // browsers and applications correctly identify the data as a URL.
-                    e.dataTransfer.setData('text/x-moz-url', url);
-                    // The spec requires each URI to be followed by a CRLF.
-                    e.dataTransfer.setData('text/uri-list', url + '\r\n');
-                    // 'text/plain' is a fallback for simple text editors.
-                    e.dataTransfer.setData('text/plain', url);
-                }
-            }
-        });
-
-        playlistContainer.addEventListener('dragend', (e) => {
-            if (draggedItem) {
-                draggedItem.classList.remove('dragging');
-                draggedItem = null;
-            }
-        });
-
-        playlistContainer.addEventListener('dragover', (e) => {
-            e.preventDefault(); // This is necessary to allow a drop
-            
-            // Remove any existing drop indicators to prevent multiple lines
-            const existingIndicator = playlistContainer.querySelector('.drag-over');
-            if (existingIndicator) {
-                existingIndicator.classList.remove('drag-over');
-            }
-
-            const afterElement = this.getDragAfterElement(playlistContainer, e.clientY);
-            if (afterElement) {
-                // Add a class to the element we're about to insert before
-                afterElement.classList.add('drag-over');
-            }
-        });
-
-        playlistContainer.addEventListener('drop', (e) => {
-            e.preventDefault();
-            if (!draggedItem) return;
-
-            // Find the element that has the visual indicator. This is the most reliable target.
-            const dropTarget = playlistContainer.querySelector('.drag-over');
-            if (dropTarget) {
-                dropTarget.classList.remove('drag-over');
-            }
-            
-            // Perform the actual DOM move on drop
-            playlistContainer.insertBefore(draggedItem, dropTarget); // dropTarget can be null, which correctly appends to the end.
-            
-            const folderSelect = this.uiManager.shadowRoot.getElementById('folder-select');
-            const folderId = folderSelect.value;
-            if (!folderId) return;
-            
-            const newOrder = [...playlistContainer.querySelectorAll('.list-item')].map(item => ({ url: item.dataset.url, title: item.dataset.title }));
-            this.sendCommandToBackground('set_playlist_order', folderId, { data: { order: newOrder } });
-        });
-    }
-
-    /**
-     * Helper function for drag-and-drop to find the element to insert before.
-     * @private
-     * @param {HTMLElement} container - The container of draggable elements.
-     * @param {number} y - The vertical coordinate of the mouse.
-     * @returns {HTMLElement|null} The element to insert before, or null to append at the end.
-     */
-    getDragAfterElement(container, y) {
-        // Get all draggable elements except the one currently being dragged
-        const draggableElements = [...container.querySelectorAll('.list-item:not(.dragging)')];
-
-        return draggableElements.reduce((closest, child) => {
-            const box = child.getBoundingClientRect();
-            // Calculate the offset from the center of the element
-            const offset = y - box.top - box.height / 2;
-            // We are looking for the element where the cursor is just above its center
-            if (offset < 0 && offset > closest.offset) {
-                return { offset: offset, element: child };
-            } else {
-                return closest;
-            }
-        }, { offset: Number.NEGATIVE_INFINITY }).element;
     }
     /**
      * Binds listeners for the log panel (filtering, clearing, toggling visibility).
@@ -1215,67 +1061,6 @@ class MpvController {
     }
 
     /**
-     * Sets up the logic for making the AniList panel resizable.
-     * @private
-     */
-    _bindAnilistResize() {
-        const resizeHandle = this.uiManager.anilistShadowRoot?.getElementById('anilist-resize-handle');
-        if (!resizeHandle || !this.uiManager.anilistPanelHost) return;
-
-        let isResizing = false;
-        let startX, startY, startWidth, startHeight;
-
-        resizeHandle.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            isResizing = true;
-            document.body.classList.add('mpv-anilist-resizing'); // Use a new class for cursor styling
-
-            startX = e.clientX;
-            startY = e.clientY;
-            startWidth = this.uiManager.anilistPanelHost.offsetWidth;
-            startHeight = this.uiManager.anilistPanelHost.offsetHeight;
-
-            this.uiManager.anilistPanelHost.style.transition = 'none';
-        });
-
-        document.addEventListener('mousemove', (e) => {
-            if (!isResizing) return;
-
-            const minWidth = 250;
-            const minHeight = 200;
-
-            // Get the panel's current position to calculate maximum dimensions.
-            const rect = this.uiManager.anilistPanelHost.getBoundingClientRect();
-            const maxAllowedWidth = window.innerWidth - rect.left;
-            const maxAllowedHeight = window.innerHeight - rect.top;
-
-            // Calculate the new width, ensuring it's between the min and max allowed.
-            const newWidth = Math.min(maxAllowedWidth, Math.max(minWidth, startWidth + (e.clientX - startX)));
-
-            // Calculate the new height, ensuring it's between the min and max allowed.
-            const newHeight = Math.min(maxAllowedHeight, Math.max(minHeight, startHeight + (e.clientY - startY)));
-
-            this.uiManager.anilistPanelHost.style.width = `${newWidth}px`;
-            this.uiManager.anilistPanelHost.style.height = `${newHeight}px`;
-
-        });
-
-        document.addEventListener('mouseup', () => {
-            if (!isResizing) return;
-            isResizing = false;
-            document.body.classList.remove('mpv-anilist-resizing');
-            this.uiManager.anilistPanelHost.style.transition = '';
-
-            // Save the new size
-            const newSize = {
-                width: this.uiManager.anilistPanelHost.style.width,
-                height: this.uiManager.anilistPanelHost.style.height
-            };
-            this.savePreference({ anilistPanelSize: newSize });
-        });
-    }
-
-    /**
      * Initializes all draggable UI components using the Draggable utility class.
      * @private
      */
@@ -1342,6 +1127,18 @@ class MpvController {
                         bottom: this.uiManager.anilistPanelHost.style.bottom
                     };
                     this.savePreference({ anilistPanelPosition: newPosition });
+                }
+            });
+        }
+
+        // 4. AniList Panel Resizing
+        const anilistResizeHandle = this.uiManager.anilistShadowRoot?.getElementById('anilist-resize-handle');
+        if (this.uiManager.anilistPanelHost && anilistResizeHandle) {
+            new Resizable(this.uiManager.anilistPanelHost, anilistResizeHandle, {
+                minWidth: 250,
+                minHeight: 200,
+                onResizeEnd: (newSize) => {
+                    this.savePreference({ anilistPanelSize: newSize });
                 }
             });
         }
@@ -1522,6 +1319,9 @@ class MpvController {
         if (document.getElementById('m3u8-controller-host')) return;
         // Create UI, but it remains hidden by default (display: none).
         this.uiManager.createAndInjectUi();
+        // Now that the UI is created, we can initialize the PlaylistUI manager.
+        this.playlistUI = new PlaylistUI(this, this.uiManager);
+        this.playlistUI.bindEvents();
         this.bindEventListeners();
         await this.updateFolderDropdowns();
         chrome.runtime.sendMessage({ action: 'content_script_init' });
@@ -1692,110 +1492,6 @@ class MpvController {
         this.sendCommandToBackground('get_playlist', currentFolderId); // This will trigger a 'render_playlist' message
     }
 
-    renderPlaylist(playlist) {
-        if (!this.uiManager.shadowRoot) return;
-        const fullContainer = this.uiManager.shadowRoot?.getElementById('playlist-container');
-        const itemCountSpan = this.uiManager.shadowRoot?.getElementById('compact-item-count');
-        const minimizedPlayBtn = this.uiManager.minimizedHost?.shadowRoot?.getElementById('m3u8-minimized-play-btn');
-        const minimizedCountSpan = this.uiManager.minimizedHost?.shadowRoot?.getElementById('m3u8-minimized-item-count');
-
-        // Update compact UI count
-        if (itemCountSpan) itemCountSpan.textContent = playlist?.length || 0;
-
-        // Update minimized UI count
-        if (minimizedPlayBtn && minimizedCountSpan) {
-            const count = playlist?.length || 0;
-            minimizedCountSpan.textContent = count; // Set the number (e.g., 0, 1, 11)
-            minimizedCountSpan.style.display = 'inline'; // Always show the counter span
-            minimizedPlayBtn.classList.add('with-counter'); // Always apply the counter layout
-        }
-
-        // Update full UI list
-        if (!fullContainer) return;
-
-        // Store the current scroll position before clearing the list
-        const scrollPosition = fullContainer.scrollTop;
-
-        while (fullContainer.firstChild) fullContainer.removeChild(fullContainer.firstChild);
-
-        if (playlist && playlist.length > 0) {
-            playlist.forEach((item, index) => {
-                const itemDiv = document.createElement('div');
-                itemDiv.className = 'list-item';
-                itemDiv.draggable = true; // Make the item draggable
-                itemDiv.title = item.url; // Show full URL on hover
-                itemDiv.dataset.url = item.url; // Store URL for drag/drop and copy
-                itemDiv.dataset.title = item.title; // Store title for drag/drop
-
-                // --- Secure Element Creation ---
-                // Create elements programmatically and use .textContent to prevent XSS.
-                const indexSpan = document.createElement('span');
-                indexSpan.className = 'url-index';
-                indexSpan.textContent = `${index + 1}.`;
-                
-                const copyBtn = document.createElement('button');
-                if (this.showCopyTitleButton) {
-                    copyBtn.className = 'btn-copy-item';
-                    copyBtn.dataset.url = item.url; // The button now holds the URL
-                    copyBtn.title = 'Copy URL';
-                    copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-                }
-
-                const urlSpan = document.createElement('span');
-                urlSpan.className = 'url-text';
-                
-                // Split the title to highlight the main part.
-                // This assumes the format "eXX - Main Title Name".
-                const isYouTubeVideoUrl = item.url.includes('youtube.com/watch');
-                const isYouTubePlaylistUrl = item.url.includes('youtube.com/playlist');
-                const titleParts = item.title.split(' - ');
-
-                if (titleParts.length > 1 && /^(s\d+)?e\d+(\.\d+)?$/i.test(titleParts[0].trim())) {
-                    const episodePrefixSpan = document.createElement('span');
-                    episodePrefixSpan.textContent = titleParts.shift() + ' - '; // e.g., "e12.5 - "
-
-                    const mainTitleSpan = document.createElement('span');
-                    mainTitleSpan.className = 'main-title-highlight'; // This class will be styled green
-                    mainTitleSpan.textContent = titleParts.join(' - '); // The rest of the title
-                    urlSpan.append(episodePrefixSpan, mainTitleSpan);
-                } else if ((isYouTubeVideoUrl || isYouTubePlaylistUrl) && titleParts.length > 1) {
-                    // New: Handle YouTube titles in the format "Channel Name - Video Title"
-                    const channelPrefixSpan = document.createElement('span');
-                    channelPrefixSpan.textContent = titleParts.shift() + ' - '; // e.g., "The Rubin Report - "
-
-                    const videoTitleSpan = document.createElement('span');
-                    videoTitleSpan.className = 'main-title-highlight'; // Use the same green highlight class
-                    videoTitleSpan.textContent = titleParts.join(' - '); // The rest of the title
-                    urlSpan.append(channelPrefixSpan, videoTitleSpan);
-                } else {
-                    urlSpan.textContent = item.title; // Fallback for titles without the expected prefix
-                }
-                
-                const removeBtn = document.createElement('button');
-                removeBtn.className = 'btn-remove-item';
-                removeBtn.dataset.index = index;
-                removeBtn.title = 'Remove Item';
-                removeBtn.innerHTML = '&times;'; // Using innerHTML here is safe for a known HTML entity
-
-                // New order: Copy button first, then index, then title, then remove button.
-                if (this.showCopyTitleButton) {
-                    itemDiv.appendChild(copyBtn);
-                }
-                itemDiv.append(indexSpan, urlSpan, removeBtn);
-                fullContainer.appendChild(itemDiv);
-            });
-        } else {
-            const placeholder = document.createElement('p');
-            placeholder.id = 'playlist-placeholder';
-            placeholder.textContent = 'Playlist is empty.';
-            fullContainer.appendChild(placeholder);
-        }
-
-        // Crucially, after rendering the playlist, re-check the button state.
-        fullContainer.scrollTop = scrollPosition; // Restore the scroll position
-        this.updateAddButtonState();
-    }
-
     /**
      * Checks if MPV is running by querying the background script.
      * @returns {Promise<boolean>} A promise that resolves to true if MPV is running, false otherwise.
@@ -1855,7 +1551,7 @@ class MpvController {
             if (response) {
                 // The 'get_playlist' command is the only one that returns a list to render.
                 if (action === 'get_playlist' && response.success) {
-                    this.renderPlaylist(response.list);
+                    this.playlistUI?.render(response.list);
                 }
                 // Log success/info messages from the background script.
                 if (response.message && action !== 'get_playlist') {

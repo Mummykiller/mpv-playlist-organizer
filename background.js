@@ -572,6 +572,11 @@ const actionHandlers = {
     // MPV and Playlist Actions
     'is_mpv_running': () => callNativeHost({ action: 'is_mpv_running' }),
     'play': async (request) => {
+        // Before playing, check for stale sessions. This ensures that if a user clicks
+        // play and an old MPV process is lingering, it gets cleaned up first.
+        // We don't need to wait for the result, just trigger the check.
+        callNativeHost({ action: 'check_for_stale_session', folderId: request.folderId });
+
         const data = await storage.get();
         const globalPrefs = data.settings.ui_preferences.global;
         const playlist = data.folders[request.folderId]?.playlist;
@@ -606,6 +611,11 @@ const actionHandlers = {
     },
     'close_mpv': () => callNativeHost({ action: 'close_mpv' }),
     'add': playlistManager.handleAdd,
+    'add_youtube_url_with_oembed': async (request, sender) => {
+        const { folderId, data: { url } } = request;
+        // Reuse the same logic as the context menu for consistency.
+        return _handleYouTubeContextMenuAdd(folderId, url, sender.tab);
+    },
     'get_playlist': playlistManager.handleGetPlaylist,
     'clear': playlistManager.handleClear,
     'remove_item': playlistManager.handleRemoveItem,
