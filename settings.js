@@ -1,0 +1,260 @@
+/**
+ * Manages the settings UI, including loading, saving, and event handling for all preferences.
+ */
+class OptionsManager {
+    /**
+     * @param {object} dependencies - An object containing functions and elements this manager depends on.
+     * @param {Function} dependencies.sendMessageAsync - The promise-based function to send messages to the background script.
+     * @param {Function} dependencies.showStatus - The function to display status messages to the user.
+     * @param {Function} dependencies.fetchAniListReleases - The function to refresh AniList data.
+     */
+    constructor(dependencies) {
+        this.sendMessageAsync = dependencies.sendMessageAsync;
+        this.showStatus = dependencies.showStatus;
+        this.fetchAniListReleases = dependencies.fetchAniListReleases;
+
+        this.preferenceMappings = [
+            { key: 'launch_geometry', elementId: 'geometry-select', type: 'select' },
+            { key: 'custom_geometry_width', elementId: 'custom-width', type: 'input' },
+            { key: 'custom_geometry_height', elementId: 'custom-height', type: 'input' },
+            { key: 'custom_mpv_flags', elementId: 'custom-mpv-flags', type: 'textarea' },
+            { key: 'show_play_new_button', elementId: 'show-play-new-button-checkbox', type: 'checkbox' },
+            { key: 'duplicate_url_behavior', elementId: 'duplicate-behavior-select', type: 'select' },
+            { key: 'one_click_add', elementId: 'one-click-add-checkbox', type: 'checkbox' },
+            { key: 'stream_scanner_timeout', elementId: 'scanner-timeout-input', type: 'input', transform: Number },
+            { key: 'confirm_remove_folder', elementId: 'confirm-remove-folder-checkbox', type: 'checkbox' },
+            { key: 'confirm_clear_playlist', elementId: 'confirm-clear-playlist-checkbox', type: 'checkbox' },
+            { key: 'confirm_close_mpv', elementId: 'confirm-close-mpv-checkbox', type: 'checkbox' },
+            { key: 'confirm_play_new', elementId: 'confirm-play-new-checkbox', type: 'checkbox' },
+            { key: 'clear_on_completion', elementId: 'clear-on-completion-checkbox', type: 'checkbox' },
+            { key: 'autofocus_new_folder', elementId: 'autofocus-new-folder-checkbox', type: 'checkbox' },
+            { key: 'enable_dblclick_copy', elementId: 'enable-dblclick-copy-checkbox', type: 'checkbox' },
+            { key: 'show_copy_title_button', elementId: 'show-copy-title-button-checkbox', type: 'checkbox' },
+            { key: 'autoReattachAnilistPanel', elementId: 'auto-reattach-anilist-checkbox', type: 'checkbox' },
+            { key: 'forceReattachAnilistPanel', elementId: 'force-reattach-anilist-checkbox', type: 'checkbox' },
+            { key: 'lockAnilistPanel', elementId: 'lock-anilist-panel-checkbox', type: 'checkbox' },
+            { key: 'enable_anilist_integration', elementId: 'enable-anilist-integration-checkbox', type: 'checkbox' },
+            { key: 'show_anilist_releases', elementId: 'show-anilist-releases-checkbox', type: 'checkbox' },
+            { key: 'disable_anilist_cache', elementId: 'disable-anilist-cache-checkbox', type: 'checkbox' },
+            { key: 'anilist_image_height', elementId: 'anilist-image-height-slider', type: 'slider', transform: Number },
+            { key: 'show_minimized_stub', elementId: 'show-minimized-stub-checkbox', type: 'checkbox' },
+            { key: 'ytdlp_update_behavior', elementId: 'ytdlp-update-behavior-select', type: 'select' },
+            { key: 'mode', elementId: 'default-ui-mode-select', type: 'select' }
+        ];
+
+        this.debouncedSaveAllPreferences = this._debounce(this.saveAllPreferences.bind(this), 400);
+    }
+
+    _debounce(func, wait) {
+        let timeout;
+        return (...args) => {
+            const later = () => {
+                clearTimeout(timeout);
+                func.apply(this, args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    updateAllPreferencesUI(prefs) {
+        const isCustom = prefs.launch_geometry === 'custom';
+
+        this.preferenceMappings.forEach(mapping => {
+            const el = document.getElementById(mapping.elementId);
+            if (el) {
+                const value = prefs[mapping.key];
+                if (mapping.type === 'checkbox') {
+                    el.checked = !!value;
+                } else { // select, input, textarea, slider
+                    el.value = value !== undefined ? value : '';
+                }
+            }
+        });
+
+        // Handle special UI logic that depends on preferences
+        document.getElementById('custom-geometry-container').style.display = isCustom ? 'flex' : 'none';
+        const enableAnilist = prefs.enable_anilist_integration ?? true;
+        document.getElementById('anilist-options-container').style.display = enableAnilist ? 'flex' : 'none';
+        document.getElementById('shared-anilist-section').style.display = (enableAnilist && (prefs.show_anilist_releases ?? true)) ? 'block' : 'none';
+
+        this._updateAnilistImageSize(prefs.anilist_image_height || 126);
+        this._renderScraperFilterList(prefs.scraper_filter_words || []);
+        this._renderBuiltInFilterList();
+    }
+
+    saveAllPreferences() {
+        const preferences = {};
+
+        this.preferenceMappings.forEach(mapping => {
+            const el = document.getElementById(mapping.elementId);
+            if (el) {
+                let value;
+                if (mapping.type === 'checkbox') {
+                    value = el.checked;
+                } else {
+                    value = el.value;
+                }
+                preferences[mapping.key] = mapping.transform ? mapping.transform(value) : (typeof value === 'string' ? value.trim() : value);
+            }
+        });
+
+        preferences.stream_scanner_timeout = Number(preferences.stream_scanner_timeout) || 60;
+
+        this.sendMessageAsync({ action: 'set_ui_preferences', preferences: preferences }).then(response => {
+            if (!response?.success) {
+                this.showStatus('Failed to save settings.', true);
+            }
+        });
+    }
+
+    _updateAnilistImageSize(height) {
+        const baseWidth = 50;
+        const defaultHeight = 70;
+        const effectiveHeight = Number(height || defaultHeight);
+        const scalingFactor = effectiveHeight / defaultHeight;
+        const effectiveWidth = Math.round(baseWidth * scalingFactor);
+
+        document.documentElement.style.setProperty('--anilist-item-width', `${effectiveWidth}px`);
+        document.documentElement.style.setProperty('--anilist-image-height', `${effectiveHeight}px`);
+        document.getElementById('anilist-image-size-current').textContent = `${effectiveHeight}px`;
+    }
+
+    _renderScraperFilterList(words = []) {
+        const container = document.getElementById('scraper-filter-list-container');
+        if (!container) return;
+        container.innerHTML = '';
+        words.forEach(word => {
+            const pill = document.createElement('div');
+            pill.className = 'filter-pill';
+            pill.textContent = word;
+            pill.dataset.word = word;
+            pill.title = 'Click to remove';
+            container.appendChild(pill);
+        });
+    }
+
+    _renderBuiltInFilterList() {
+        const container = document.getElementById('scraper-builtin-filter-list-container');
+        if (!container) return;
+        const builtInWords = ['watch', 'online', 'free', 'full', 'hd', 'eng sub', 'subbed', 'dubbed', 'animepahe'];
+        container.innerHTML = '';
+        builtInWords.forEach(word => {
+            const pill = document.createElement('div');
+            pill.className = 'filter-pill readonly';
+            pill.textContent = word;
+            pill.title = 'This is a built-in filter and cannot be removed.';
+            container.appendChild(pill);
+        });
+    }
+
+    async _addScraperFilterWord() {
+        const input = document.getElementById('scraper-filter-input');
+        if (!input) return;
+        const newWord = input.value.trim().toLowerCase();
+        if (!newWord) return;
+
+        const response = await this.sendMessageAsync({ action: 'get_ui_preferences' });
+        const currentWords = response?.preferences?.scraper_filter_words || [];
+
+        if (!currentWords.includes(newWord)) {
+            const newWords = [...currentWords, newWord];
+            await this.sendMessageAsync({ action: 'set_ui_preferences', preferences: { scraper_filter_words: newWords } });
+            this._renderScraperFilterList(newWords);
+        }
+        input.value = '';
+    }
+
+    async _removeScraperFilterWord(wordToRemove) {
+        const response = await this.sendMessageAsync({ action: 'get_ui_preferences' });
+        const currentWords = response?.preferences?.scraper_filter_words || [];
+        const newWords = currentWords.filter(word => word !== wordToRemove);
+        await this.sendMessageAsync({ action: 'set_ui_preferences', preferences: { scraper_filter_words: newWords } });
+        this._renderScraperFilterList(newWords);
+    }
+
+    initializeEventListeners() {
+        // --- Generic Listeners ---
+        this.preferenceMappings.forEach(mapping => {
+            const control = document.getElementById(mapping.elementId);
+            if (control) {
+                const eventType = (mapping.type === 'textarea' || mapping.type === 'input' || mapping.type === 'slider') ? 'input' : 'change';
+                control.addEventListener(eventType, this.debouncedSaveAllPreferences);
+            }
+        });
+
+        // --- Special-cased Listeners ---
+        const geometrySelect = document.getElementById('geometry-select');
+        if (geometrySelect) {
+            geometrySelect.addEventListener('change', () => {
+                document.getElementById('custom-geometry-container').style.display = geometrySelect.value === 'custom' ? 'flex' : 'none';
+                this.debouncedSaveAllPreferences();
+            });
+        }
+
+        const anilistSlider = document.getElementById('anilist-image-height-slider');
+        if (anilistSlider) {
+            anilistSlider.addEventListener('input', () => this._updateAnilistImageSize(anilistSlider.value));
+        }
+
+        const anilistEnableCheck = document.getElementById('enable-anilist-integration-checkbox');
+        if (anilistEnableCheck) {
+            anilistEnableCheck.addEventListener('change', () => {
+                const isEnabled = anilistEnableCheck.checked;
+                document.getElementById('anilist-options-container').style.display = isEnabled ? 'flex' : 'none';
+                const showReleases = document.getElementById('show-anilist-releases-checkbox').checked;
+                document.getElementById('shared-anilist-section').style.display = isEnabled && showReleases ? 'block' : 'none';
+                if (isEnabled && document.getElementById('shared-anilist-section').open) {
+                    this.fetchAniListReleases(true);
+                }
+            });
+        }
+
+        const anilistShowCheck = document.getElementById('show-anilist-releases-checkbox');
+        if (anilistShowCheck) {
+            anilistShowCheck.addEventListener('change', () => {
+                const isVisible = anilistShowCheck.checked;
+                document.getElementById('shared-anilist-section').style.display = isVisible ? 'block' : 'none';
+                if (isVisible && document.getElementById('shared-anilist-section').open) {
+                    this.fetchAniListReleases(true);
+                }
+            });
+        }
+
+        const anilistCacheCheck = document.getElementById('disable-anilist-cache-checkbox');
+        if (anilistCacheCheck) {
+            anilistCacheCheck.addEventListener('change', () => {
+                if (document.getElementById('shared-anilist-section').open) {
+                    this.fetchAniListReleases(true);
+                }
+            });
+        }
+
+        const manualYtdlpBtn = document.getElementById('btn-manual-ytdlp-update');
+        if (manualYtdlpBtn) {
+            manualYtdlpBtn.addEventListener('click', () => {
+                this.showStatus('Starting yt-dlp update...');
+                this.sendMessageAsync({ action: 'manual_ytdlp_update' });
+            });
+        }
+
+        const scraperInput = document.getElementById('scraper-filter-input');
+        if (scraperInput) {
+            scraperInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this._addScraperFilterWord();
+                }
+            });
+        }
+
+        const scraperList = document.getElementById('scraper-filter-list-container');
+        if (scraperList) {
+            scraperList.addEventListener('click', (e) => {
+                if (e.target.classList.contains('filter-pill')) {
+                    this._removeScraperFilterWord(e.target.dataset.word);
+                }
+            });
+        }
+    }
+}

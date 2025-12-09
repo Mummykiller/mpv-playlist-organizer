@@ -1,5 +1,8 @@
 document.addEventListener('DOMContentLoaded', async () => { // This line is intentionally kept for the diff
 
+    // IMPORTANT: You must include settings.js in your popup.html before this script, like so:
+    // <script src="settings.js"></script>
+
     /**
      * Creates a debounced function that delays invoking `func` until after `wait`
      * milliseconds have elapsed since the last time the debounced function was
@@ -194,37 +197,6 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
     const removeFolderBtn = document.getElementById('btn-remove-folder');
     const customGeometryContainer = document.getElementById('custom-geometry-container');
     const customWidthInput = document.getElementById('custom-width');
-    const customHeightInput = document.getElementById('custom-height');
-    const geometrySelect = document.getElementById('geometry-select');
-    const customMpvFlagsTextarea = document.getElementById('custom-mpv-flags');
-    const showPlayNewButtonCheckbox = document.getElementById('show-play-new-button-checkbox');
-    const duplicateBehaviorSelect = document.getElementById('duplicate-behavior-select');
-    const oneClickAddCheckbox = document.getElementById('one-click-add-checkbox');
-    const defaultUiModeSelect = document.getElementById('default-ui-mode-select'); // This was already here, which is great!
-    const scannerTimeoutInput = document.getElementById('scanner-timeout-input');
-    const confirmRemoveFolderCheckbox = document.getElementById('confirm-remove-folder-checkbox');
-    const confirmClearPlaylistCheckbox = document.getElementById('confirm-clear-playlist-checkbox');
-    const confirmCloseMpvCheckbox = document.getElementById('confirm-close-mpv-checkbox');
-    const confirmPlayNewCheckbox = document.getElementById('confirm-play-new-checkbox');
-    const clearOnCompletionCheckbox = document.getElementById('clear-on-completion-checkbox');
-    const autofocusNewFolderCheckbox = document.getElementById('autofocus-new-folder-checkbox');
-    const enableDblclickCopyCheckbox = document.getElementById('enable-dblclick-copy-checkbox'); // New element
-    const lockAnilistPanelCheckbox = document.getElementById('lock-anilist-panel-checkbox');
-    const showCopyTitleButtonCheckbox = document.getElementById('show-copy-title-button-checkbox');
-    const autoReattachAnilistCheckbox = document.getElementById('auto-reattach-anilist-checkbox');
-    const forceReattachAnilistCheckbox = document.getElementById('force-reattach-anilist-checkbox'); // New checkbox
-    const showAnilistReleasesCheckbox = document.getElementById('show-anilist-releases-checkbox');
-    const enableAnilistIntegrationCheckbox = document.getElementById('enable-anilist-integration-checkbox');
-    const anilistOptionsContainer = document.getElementById('anilist-options-container');
-    const disableAnilistCacheCheckbox = document.getElementById('disable-anilist-cache-checkbox');
-    const anilistImageHeightSlider = document.getElementById('anilist-image-height-slider');
-    const anilistImageSizeCurrent = document.getElementById('anilist-image-size-current');
-    const showMinimizedStubCheckbox = document.getElementById('show-minimized-stub-checkbox');
-    const ytdlpUpdateBehaviorSelect = document.getElementById('ytdlp-update-behavior-select'); // This was correct
-    const manualYtdlpUpdateBtn = document.getElementById('btn-manual-ytdlp-update');
-    const scraperFilterInput = document.getElementById('scraper-filter-input');
-    const scraperFilterListContainer = document.getElementById('scraper-filter-list-container');
-    const scraperBuiltinFilterListContainer = document.getElementById('scraper-builtin-filter-list-container');
 
     // Mini Controller View Elements
     const miniFolderSelect = document.getElementById('mini-folder-select');
@@ -821,89 +793,6 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
         });
     }
 
-    /**
-     * Updates the CSS variables for AniList image sizes.
-     * Also updates the current value display and calculates relative font sizes.
-     * @param {string|number} height The height in pixels.
-     */
-    function updateAnilistImageSize(height) {
-        const baseWidth = 50; // The width at the default slider value of 126px height
-        const defaultHeight = 70;
-        const effectiveHeight = Number(height || defaultHeight);
-        const scalingFactor = effectiveHeight / defaultHeight;
-        const effectiveWidth = Math.round(baseWidth * scalingFactor);
-
-        document.documentElement.style.setProperty('--anilist-item-width', `${effectiveWidth}px`); // This controls the image width
-        document.documentElement.style.setProperty('--anilist-image-height', `${effectiveHeight}px`); // This controls the image height
-
-        anilistImageSizeCurrent.textContent = `${effectiveHeight}px`;
-    }
-
-    /**
-     * Renders the list of scraper filter words as interactive "pills".
-     * @param {string[]} words - The array of filter words.
-     */
-    function renderScraperFilterList(words = []) {
-        if (!scraperFilterListContainer) return;
-        scraperFilterListContainer.innerHTML = ''; // Clear existing pills
-
-        words.forEach(word => {
-            const pill = document.createElement('div');
-            pill.className = 'filter-pill';
-            pill.textContent = word;
-            pill.dataset.word = word;
-            pill.title = 'Click to remove';
-            scraperFilterListContainer.appendChild(pill);
-        });
-    }
-
-    /**
-     * Renders the list of built-in scraper filter words as read-only "pills".
-     */
-    function renderBuiltInFilterList() {
-        if (!scraperBuiltinFilterListContainer) return;
-        
-        // This list should match the default list in background.js for consistency.
-        const builtInWords = ['watch', 'online', 'free', 'full', 'hd', 'eng sub', 'subbed', 'dubbed', 'animepahe'];
-        scraperBuiltinFilterListContainer.innerHTML = '';
-
-        builtInWords.forEach(word => {
-            const pill = document.createElement('div');
-            pill.className = 'filter-pill readonly';
-            pill.textContent = word;
-            pill.title = 'This is a built-in filter and cannot be removed.';
-            scraperBuiltinFilterListContainer.appendChild(pill);
-        });
-    }
-
-
-    /**
-     * Adds a new word to the scraper filter list.
-     */
-    async function addScraperFilterWord() {
-        if (!scraperFilterInput) return;
-        const newWord = scraperFilterInput.value.trim().toLowerCase();
-        if (!newWord) return;
-
-        const response = await sendMessageAsync({ action: 'get_ui_preferences' });
-        const currentWords = response?.preferences?.scraper_filter_words || [];
-
-        if (!currentWords.includes(newWord)) {
-            const newWords = [...currentWords, newWord];
-            await sendMessageAsync({ action: 'set_ui_preferences', preferences: { scraper_filter_words: newWords } });
-            renderScraperFilterList(newWords);
-        }
-        scraperFilterInput.value = ''; // Clear input
-    }
-
-    async function removeScraperFilterWord(wordToRemove) {
-        const response = await sendMessageAsync({ action: 'get_ui_preferences' });
-        const currentWords = response?.preferences?.scraper_filter_words || [];
-        const newWords = currentWords.filter(word => word !== wordToRemove);
-        await sendMessageAsync({ action: 'set_ui_preferences', preferences: { scraper_filter_words: newWords } });
-        renderScraperFilterList(newWords);
-    }
-
     // Consolidate event listeners for similar actions
     [exportDataBtn, miniExportDataBtn].forEach(btn => btn.addEventListener('click', handleExport));
     [exportAllDataBtn, miniExportAllDataBtn].forEach(btn => btn.addEventListener('click', handleExportAll));
@@ -925,235 +814,11 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
     [toggleReorderBtn, miniToggleReorderBtn].forEach(btn => btn.addEventListener('click', toggleReorderMode));
 
     importCancelBtn.addEventListener('click', () => { importSelectionModal.style.display = 'none'; });
-
-    // --- Preferences & Settings Logic (Refactored) ---
-
-    function updateAllPreferencesUI(prefs) {
-        const isCustom = prefs.launch_geometry === 'custom';
-
-        // Update shared controls
-        geometrySelect.value = prefs.launch_geometry || '';
-        customWidthInput.value = prefs.custom_geometry_width || '';
-        customHeightInput.value = prefs.custom_geometry_height || '';
-        customMpvFlagsTextarea.value = prefs.custom_mpv_flags || '';
-
-        // Show/hide custom input containers
-        customGeometryContainer.style.display = isCustom ? 'flex' : 'none';
-
-        showPlayNewButtonCheckbox.checked = prefs.show_play_new_button ?? false;
-
-        // --- NEW SETTINGS ---
-        duplicateBehaviorSelect.value = prefs.duplicate_url_behavior || 'ask';
-
-        oneClickAddCheckbox.checked = prefs.one_click_add ?? false;
-
-        scannerTimeoutInput.value = prefs.stream_scanner_timeout;
-
-        confirmRemoveFolderCheckbox.checked = prefs.confirm_remove_folder ?? true;
-
-        confirmClearPlaylistCheckbox.checked = prefs.confirm_clear_playlist ?? true;
-
-        confirmCloseMpvCheckbox.checked = prefs.confirm_close_mpv ?? true;
-
-        confirmPlayNewCheckbox.checked = prefs.confirm_play_new ?? true;
-
-        clearOnCompletionCheckbox.checked = prefs.clear_on_completion ?? false;
-
-        autofocusNewFolderCheckbox.checked = prefs.autofocus_new_folder ?? false;
-
-        enableDblclickCopyCheckbox.checked = prefs.enable_dblclick_copy ?? false;
-
-        showCopyTitleButtonCheckbox.checked = prefs.show_copy_title_button ?? false;
-
-        // This is the checkbox that controls the behavior.
-        // It's located in the "UI & Behavior" settings section in the popup.
-        autoReattachAnilistCheckbox.checked = prefs.autoReattachAnilistPanel ?? true;
-
-        // New: Force re-attach setting
-        forceReattachAnilistCheckbox.checked = prefs.forceReattachAnilistPanel ?? false;
-
-        lockAnilistPanelCheckbox.checked = prefs.lockAnilistPanel ?? false;
-
-        // New: Master AniList Toggle
-        const enableAnilist = prefs.enable_anilist_integration ?? true;
-        enableAnilistIntegrationCheckbox.checked = enableAnilist;
-        anilistOptionsContainer.style.display = enableAnilist ? 'flex' : 'none';
-
-        const showAnilist = prefs.show_anilist_releases ?? true;
-        showAnilistReleasesCheckbox.checked = showAnilist;
-        sharedAnilistSection.style.display = enableAnilist && showAnilist ? 'block' : 'none';
-
-        const disableAnilistCache = prefs.disable_anilist_cache ?? false;
-        disableAnilistCacheCheckbox.checked = disableAnilistCache;
-
-        // New: AniList Image Size
-        const imageHeight = prefs.anilist_image_height || 126;
-        anilistImageHeightSlider.value = imageHeight;
-        updateAnilistImageSize(imageHeight);
-
-        const showMinimizedStub = prefs.show_minimized_stub ?? true;
-        showMinimizedStubCheckbox.checked = showMinimizedStub;
-
-        const ytdlpUpdateBehavior = prefs.ytdlp_update_behavior || 'manual'; // This was correct
-        ytdlpUpdateBehaviorSelect.value = ytdlpUpdateBehavior; // This was correct
-
-        // New: Scraper filter words
-        const scraperWords = prefs.scraper_filter_words || [];
-        renderScraperFilterList(scraperWords);
-
-        // Set the value of the dropdown to reflect the saved preference.
-        // The UI mode itself is determined once during initialization.
-        defaultUiModeSelect.value = prefs.mode || 'full';
-
-        // Ensure the new setting is also updated
-        const newDefaultUiModeSelect = document.getElementById('default-ui-mode-select');
-        if (newDefaultUiModeSelect) newDefaultUiModeSelect.value = prefs.mode || 'full';
-    }
-
-    function saveAllPreferences() {
-        const preferences = {
-            launch_geometry: geometrySelect.value,
-            custom_geometry_width: customWidthInput.value.trim(),
-            custom_geometry_height: customHeightInput.value.trim(),
-            custom_mpv_flags: customMpvFlagsTextarea.value.trim(),
-            show_play_new_button: showPlayNewButtonCheckbox.checked,
-            duplicate_url_behavior: duplicateBehaviorSelect.value,
-            one_click_add: oneClickAddCheckbox.checked,
-            mode: defaultUiModeSelect.value,
-            // Ensure the timeout is saved as a number, with a fallback to the default.
-            stream_scanner_timeout: Number(scannerTimeoutInput.value) || 60,
-            confirm_remove_folder: confirmRemoveFolderCheckbox.checked,
-            confirm_clear_playlist: confirmClearPlaylistCheckbox.checked,
-            confirm_close_mpv: confirmCloseMpvCheckbox.checked,
-            confirm_play_new: confirmPlayNewCheckbox.checked,
-            clear_on_completion: clearOnCompletionCheckbox.checked,
-            autofocus_new_folder: autofocusNewFolderCheckbox.checked,
-            enable_dblclick_copy: enableDblclickCopyCheckbox.checked,
-            show_copy_title_button: showCopyTitleButtonCheckbox.checked,
-            autoReattachAnilistPanel: autoReattachAnilistCheckbox.checked,
-            forceReattachAnilistPanel: forceReattachAnilistCheckbox.checked, // New setting
-            lockAnilistPanel: lockAnilistPanelCheckbox.checked,
-            enable_anilist_integration: enableAnilistIntegrationCheckbox.checked,
-            show_anilist_releases: showAnilistReleasesCheckbox.checked,
-            disable_anilist_cache: disableAnilistCacheCheckbox.checked,
-            anilist_image_height: anilistImageHeightSlider.value,
-            show_minimized_stub: showMinimizedStubCheckbox.checked,
-            ytdlp_update_behavior: ytdlpUpdateBehaviorSelect.value
-        };
-        // Scraper words are now saved directly via their own event handlers, not here.
-
-        sendMessageAsync({ action: 'set_ui_preferences', preferences: preferences }).then(response => {
-            if (response?.success) {
-                // The save was successful. Re-fetch the preferences to ensure the UI
-                // is in sync with the authoritative state from the background script.
-                // This prevents race conditions and ensures consistency.
-                sendMessageAsync({ action: 'get_ui_preferences' }).then(res => {
-                    if (res?.success) updateAllPreferencesUI(res.preferences);
-                });
-            } else {
-                showStatus('Failed to save settings.', true);
-            }
-        });
-    }
-
-    const debouncedSaveAllPreferences = debounce(saveAllPreferences, 400);
-
-    /**
-     * Handles changes to the geometry dropdown, providing immediate UI feedback
-     * by showing/hiding the custom input fields before saving.
-     */
-    function handleGeometryChange() {
-        const isCustom = geometrySelect.value === 'custom';
-        customGeometryContainer.style.display = isCustom ? 'flex' : 'none';
-        debouncedSaveAllPreferences();
-    }
-
-    geometrySelect.addEventListener('change', handleGeometryChange);
-
-    // Add listeners to all other preference controls in a loop to reduce repetition.
-    const preferenceControls = [
-        customWidthInput, customHeightInput,
-        customMpvFlagsTextarea,
-        showPlayNewButtonCheckbox,
-        duplicateBehaviorSelect,
-        oneClickAddCheckbox, // This was missing the new select, but it's already in the HTML.
-        defaultUiModeSelect,
-        scannerTimeoutInput,
-        confirmRemoveFolderCheckbox,
-        confirmClearPlaylistCheckbox,
-        confirmCloseMpvCheckbox,
-        confirmPlayNewCheckbox,
-        clearOnCompletionCheckbox,
-        autofocusNewFolderCheckbox,
-        enableDblclickCopyCheckbox,
-        showCopyTitleButtonCheckbox,
-        autoReattachAnilistCheckbox,
-        forceReattachAnilistCheckbox, // New checkbox
-        lockAnilistPanelCheckbox,
-        enableAnilistIntegrationCheckbox,
-        showAnilistReleasesCheckbox,
-        disableAnilistCacheCheckbox,
-        anilistImageHeightSlider,
-        showMinimizedStubCheckbox,
-        ytdlpUpdateBehaviorSelect
-    ];
-
-    manualYtdlpUpdateBtn.addEventListener('click', () => {
-        showStatus('Starting yt-dlp update...');
-        sendMessageAsync({ action: 'manual_ytdlp_update' });
-    });
-
-    // New listeners for the interactive scraper filter list
-    if (scraperFilterInput) {
-        scraperFilterInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                addScraperFilterWord();
-            }
-        });
-    }
-    if (scraperFilterListContainer) {
-        scraperFilterListContainer.addEventListener('click', (e) => {
-            if (e.target.classList.contains('filter-pill')) {
-                removeScraperFilterWord(e.target.dataset.word);
-            }
-        });
-    }
-
-    preferenceControls.forEach(control => {
-        if (!control) return; // Safety check: if an element is missing, skip it.
-        const eventType = (control.tagName === 'TEXTAREA' || control.type === 'text' || control.type === 'number') ? 'input' : 'change';
-        control.addEventListener(eventType, debouncedSaveAllPreferences);
-    });
-
-    // Add a separate 'input' listener for the anilist slider for live UI updates.
-    // This updates the UI instantly without waiting for the debounced save.
-    anilistImageHeightSlider.addEventListener('input', () => {
-        updateAnilistImageSize(anilistImageHeightSlider.value);
-    });
-
-    // AniList Settings Event Listeners
-    enableAnilistIntegrationCheckbox.addEventListener('change', () => {
-        const isEnabled = enableAnilistIntegrationCheckbox.checked;
-        anilistOptionsContainer.style.display = isEnabled ? 'flex' : 'none';
-        // If integration is enabled and the section is currently open, force a refresh.
-        if (isEnabled && sharedAnilistSection.open) {
-            fetchAniListReleases(true);
-        } else if (!isEnabled) {
-            // If disabled, ensure the section is closed and hidden.
-            sharedAnilistSection.open = false;
-            sharedAnilistSection.style.display = 'none';
-        }
-        debouncedSaveAllPreferences();
-    });
-
-    showAnilistReleasesCheckbox.addEventListener('change', () => {
-        const isVisible = showAnilistReleasesCheckbox.checked;
-        sharedAnilistSection.style.display = isVisible ? 'block' : 'none';
-        if (isVisible && sharedAnilistSection.open) {
-            fetchAniListReleases(true);
-        }
-        debouncedSaveAllPreferences();
+    
+    const optionsManager = new OptionsManager({
+        sendMessageAsync,
+        showStatus,
+        fetchAniListReleases
     });
 
     importConfirmBtn.addEventListener('click', () => {
@@ -1174,15 +839,6 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
         const newFolderId = miniFolderSelect.value;
         updateItemCount(newFolderId);
         sendMessageAsync({ action: 'set_last_folder_id', folderId: newFolderId });
-    });
-
-    disableAnilistCacheCheckbox.addEventListener('change', () => {
-        // If the cache setting changes and the AniList section is open, force a refresh.
-        // This ensures the cache bypass/deletion takes effect immediately.
-        if (sharedAnilistSection.open) {
-            fetchAniListReleases(true);
-        }
-        debouncedSaveAllPreferences();
     });
 
     // --- Mini Controller Logic (Refactored for Clarity) ---
@@ -1295,9 +951,8 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             // Populate UI with data
             populateFolderDropdowns();
             if (prefs) {
-                updateAllPreferencesUI(prefs);
+                optionsManager.updateAllPreferencesUI(prefs);
             }
-            renderBuiltInFilterList(); // Render the static built-in filters
             updateRemoveButtonState();
 
             if (uiManager.isMiniView()) {
@@ -1360,9 +1015,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
         // If preferences changed in another context (e.g., dragging the anilist panel), update our UI.
         if (request.action === 'preferences_changed') {
             sendMessageAsync({ action: 'get_ui_preferences' }).then(response => {
-                if (response?.success && response.preferences) {
-                    updateAllPreferencesUI(response.preferences);
-                }
+                if (response?.success && response.preferences) optionsManager.updateAllPreferencesUI(response.preferences);
             });
         }
 
@@ -1431,5 +1084,6 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
     });
 
     // Start the initialization process
+    optionsManager.initializeEventListeners();
     initializePopup();
 });

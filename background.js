@@ -703,13 +703,14 @@ let lastOEmbedRequestTime = 0;
  * @param {string} folderId - The target folder ID.
  * @param {string} urlToAdd - The YouTube URL.
  * @param {chrome.tabs.Tab} tab - The originating tab.
+ * @param {boolean} [skipConfirmation=false] - Whether to skip confirmation prompts.
  */
-async function _handleYouTubeContextMenuAdd(folderId, urlToAdd, tab) {
+async function _handleYouTubeContextMenuAdd(folderId, urlToAdd, tab, skipConfirmation = false) {
     const now = Date.now();
     const minInterval = 1000; // 1 request per second
     const elapsed = now - lastOEmbedRequestTime;
     const delay = Math.max(0, minInterval - elapsed);
-    lastOEmbedRequestTime = now + delay;
+    lastOEmbedRequestTime = now + delay; // Update for the next request
 
     setTimeout(async () => {
         broadcastLog({ text: `[Background]: YouTube URL detected. Scraping title via oEmbed...`, type: 'info' });
@@ -723,10 +724,10 @@ async function _handleYouTubeContextMenuAdd(folderId, urlToAdd, tab) {
             const itemTitle = videoDetails.title || (isPlaylist ? "YouTube Playlist" : "YouTube Video");
             const finalTitle = videoDetails.author_name ? `${videoDetails.author_name} - ${itemTitle}` : itemTitle;
 
-            await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, finalTitle, tab);
+            await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, finalTitle, tab, skipConfirmation);
         } catch (e) {
             broadcastLog({ text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Adding with basic title.`, type: 'error' });
-            await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, "YouTube Content", tab);
+            await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, "YouTube Content", tab, skipConfirmation);
         }
     }, delay);
 }
@@ -736,13 +737,14 @@ async function _handleYouTubeContextMenuAdd(folderId, urlToAdd, tab) {
  * @param {string} folderId - The target folder ID.
  * @param {string} urlToAdd - The URL of the page to scan.
  * @param {chrome.tabs.Tab} tab - The originating tab.
+ * @param {boolean} [skipConfirmation=false] - Whether to skip confirmation prompts.
  */
-async function _handleGenericContextMenuAdd(folderId, urlToAdd, tab) {
+async function _handleGenericContextMenuAdd(folderId, urlToAdd, tab, skipConfirmation = false) {
     broadcastLog({ text: `[Background]: URL detected. Scanning for stream and title...`, type: 'info' });
     try {
         const scanResult = await findM3u8InUrl(urlToAdd, tab);
         if (scanResult.url) {
-            await playlistManager.handleAddFromContextMenu(folderId, scanResult.url, scanResult.title, tab);
+            await playlistManager.handleAddFromContextMenu(folderId, scanResult.url, scanResult.title, tab, skipConfirmation);
         } else {
             broadcastLog({ text: `[Background]: Scanner did not detect a video stream.`, type: 'info' });
         }
@@ -751,7 +753,7 @@ async function _handleGenericContextMenuAdd(folderId, urlToAdd, tab) {
         }
     } catch (error) {
         broadcastLog({ text: `[Background]: Scanner failed for '${urlToAdd}'. Adding original URL as fallback. Error: ${error.message}`, type: 'info' });
-        await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, urlToAdd, tab);
+        await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, urlToAdd, tab, skipConfirmation);
     }
 }
 
@@ -767,6 +769,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             const data = await storage.get();
             return data.settings.last_used_folder_id;
         }
+        if (menuItemId === 'one-click-add-to-last-used-folder') return (await storage.get()).settings.last_used_folder_id;
         return null;
     };
 
@@ -774,11 +777,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (!folderId) return;
 
     const isYouTubeUrl = /youtube\.com\/(watch|playlist)/.test(urlToAdd);
+    const skipConfirmation = (menuItemId === 'one-click-add-to-last-used-folder');
 
     if (isYouTubeUrl) {
-        _handleYouTubeContextMenuAdd(folderId, urlToAdd, tab);
+        _handleYouTubeContextMenuAdd(folderId, urlToAdd, tab, skipConfirmation);
     } else {
-        _handleGenericContextMenuAdd(folderId, urlToAdd, tab);
+        _handleGenericContextMenuAdd(folderId, urlToAdd, tab, skipConfirmation);
     }
 });
 
