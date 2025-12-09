@@ -22,7 +22,7 @@ This phase focuses on breaking down the largest files and establishing a baselin
             - [x] `nativeConnection.js`: Manage the persistent connection to the native host, including `requestPromises`, `requestIdCounter`, and connection state.
             - [x] `contextMenu.js`: Handle creation and updates for all context menus.
             - [x] `playlistManager.js`: Contain logic for adding, removing, clearing, and reordering playlist items.
-            - [x] `messageRouter.js`: The main entry point for `onMessage`, responsible for delegating actions to other services.
+            - [x] `messageRouter.js`: The main entry point for `onMessage` (the `actionHandlers` map in `background.js`) is responsible for delegating actions to other services.
         - **Benefit:** Simplifies the main service worker file, making it easier to trace logic and add new features.
 
     - **2. Deconstruct `native_host.py`:**
@@ -38,7 +38,7 @@ This phase focuses on breaking down the largest files and establishing a baselin
     - **3. Refactor `content.js` (`MpvController`):**
         - **Goal:** Break down the massive `MpvController` class.
         - **Modules/Classes:**
-            - `UIManager.js`: Manage the lifecycle of the controller, stub, and AniList panel hosts (creation, injection, teardown).
+            - [x] `UIManager.js`: Manage the lifecycle of the controller, stub, and AniList panel hosts (creation, injection, teardown).
             - `Draggable.js` / `Resizable.js`: Abstract the drag/resize logic into reusable utility classes that can be applied to any element.
             - `PlaylistUI.js`: Handle rendering and event binding specifically for the playlist view.
             - `AniListUI.js`: Manage the AniList panel's state, rendering, and event binding.
