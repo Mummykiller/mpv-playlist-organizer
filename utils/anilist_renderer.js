@@ -88,8 +88,3 @@ class AniListRenderer {
         container.appendChild(list);
     }
 }
-
-// Make the class available in both module and classic script environments.
-if (typeof window !== 'undefined') {
-    window.AniListRenderer = AniListRenderer;
-}

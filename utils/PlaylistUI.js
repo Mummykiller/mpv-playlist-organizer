@@ -234,7 +234,3 @@ class PlaylistUI {
         }
     }
 }
-
-if (typeof window !== 'undefined') {
-    window.PlaylistUI = PlaylistUI;
-}
