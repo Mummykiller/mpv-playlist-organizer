@@ -1,8 +1,8 @@
 // --- Module Imports ---
-import { StorageManager } from './storageManager.js';
-import { callNativeHost, injectDependencies as injectNativeConnectionDependencies } from './nativeConnection.js';
-import { updateContextMenus } from './contextMenu.js';
-import * as playlistManager from './playlistManager.js';
+import { StorageManager } from './utils/storageManager.js';
+import { callNativeHost, injectDependencies as injectNativeConnectionDependencies } from './utils/nativeConnection.js';
+import { updateContextMenus } from './utils/contextMenu.js';
+import * as playlistManager from './utils/playlistManager.js';
 
 // --- Constants ---
 const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;

@@ -1,3 +1,5 @@
+
+
 /**
  * @class AniListUI
  * Manages the state, rendering, and event handling for the AniList side panel.
