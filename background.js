@@ -111,20 +111,30 @@ async function handleMpvExited(data) {
     const storageData = await storage.get();
     const shouldClear = storageData.settings.ui_preferences.global.clear_on_completion ?? false;
 
+    broadcastLog({ text: `[Background]: 'Clear on Completion' setting is ${shouldClear ? 'ENABLED' : 'DISABLED'}.`, type: 'info' });
+
     if (shouldClear) {
-        // The custom exit code from our on_completion.lua script is 99.
-        // This is the only case where we should auto-clear the playlist.
-        if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
-            broadcastLog({ text: `[Background]: Playlist finished. Auto-clearing playlist for folder '${folderId}' as per settings.`, type: 'info' });
-            await handleClear({ folderId: folderId });
+        // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion.
+        // An exit code of 0 typically indicates a normal exit (e.g., user closed MPV).
+        // If 'Clear on Completion' is enabled, we treat both as a signal to clear.
+        if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE || returnCode === 0) {
+            const completionType = returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE ? 'naturally completed' : 'closed normally';
+            broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' ${completionType}. Auto-clearing playlist as per settings.`, type: 'info' });
+            await playlistManager.handleClear({ folderId: folderId });
         } else {
-            broadcastLog({ text: `[Background]: MPV exited without finishing the playlist (code: ${returnCode}). Playlist for '${folderId}' will not be cleared.`, type: 'info' });
+            broadcastLog({ text: `[Background]: MPV exited with unexpected code ${returnCode}. Playlist for '${folderId}' will not be cleared.`, type: 'error' });
+            // Only suggest script loading issue if it's not a normal exit (0) or natural completion (99)
+            if (returnCode !== 0 && returnCode !== MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
+                broadcastLog({ text: `[Background]: This may indicate an issue with the 'on_completion.lua' script or an MPV crash.`, type: 'error' });
+            }
         }
+    } else {
+        broadcastLog({ text: `[Background]: Playlist for '${folderId}' will not be cleared because the setting is disabled.`, type: 'info' });
     }
 }
 
 injectNativeConnectionDependencies({ broadcastLog, handleMpvExited });
-playlistManager.injectDependencies({ storage, broadcastToTabs, broadcastLog, debouncedSyncToNativeHostFile, sendMessageAsync });
+playlistManager.injectDependencies({ storage, broadcastToTabs, broadcastLog, debouncedSyncToNativeHostFile, sendMessageAsync, findM3u8InUrl, callNativeHost });
 
 /**
  * Checks MPV and yt-dlp dependencies via the native host and stores the results.
@@ -572,11 +582,6 @@ const actionHandlers = {
     // MPV and Playlist Actions
     'is_mpv_running': () => callNativeHost({ action: 'is_mpv_running' }),
     'play': async (request) => {
-        // Before playing, check for stale sessions. This ensures that if a user clicks
-        // play and an old MPV process is lingering, it gets cleaned up first.
-        // We don't need to wait for the result, just trigger the check.
-        callNativeHost({ action: 'check_for_stale_session', folderId: request.folderId });
-
         const data = await storage.get();
         const globalPrefs = data.settings.ui_preferences.global;
         const playlist = data.folders[request.folderId]?.playlist;
@@ -611,11 +616,6 @@ const actionHandlers = {
     },
     'close_mpv': () => callNativeHost({ action: 'close_mpv' }),
     'add': playlistManager.handleAdd,
-    'add_youtube_url_with_oembed': async (request, sender) => {
-        const { folderId, data: { url } } = request;
-        // Reuse the same logic as the context menu for consistency.
-        return _handleYouTubeContextMenuAdd(folderId, url, sender.tab);
-    },
     'get_playlist': playlistManager.handleGetPlaylist,
     'clear': playlistManager.handleClear,
     'remove_item': playlistManager.handleRemoveItem,
@@ -705,68 +705,6 @@ chrome.runtime.onInstalled.addListener(async () => {
     console.log("MPV Handler extension installed and initialized.");
 });
 
-// --- Rate Limiting for oEmbed ---
-let lastOEmbedRequestTime = 0;
-
-/**
- * Handles adding a YouTube URL from the context menu, using oEmbed for title scraping.
- * @param {string} folderId - The target folder ID.
- * @param {string} urlToAdd - The YouTube URL.
- * @param {chrome.tabs.Tab} tab - The originating tab.
- * @param {boolean} [skipConfirmation=false] - Whether to skip confirmation prompts.
- */
-async function _handleYouTubeContextMenuAdd(folderId, urlToAdd, tab, skipConfirmation = false) {
-    const now = Date.now();
-    const minInterval = 1000; // 1 request per second
-    const elapsed = now - lastOEmbedRequestTime;
-    const delay = Math.max(0, minInterval - elapsed);
-    lastOEmbedRequestTime = now + delay; // Update for the next request
-
-    setTimeout(async () => {
-        broadcastLog({ text: `[Background]: YouTube URL detected. Scraping title via oEmbed...`, type: 'info' });
-        try {
-            const oEmbedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(urlToAdd)}&format=json`;
-            const response = await fetch(oEmbedUrl);
-            if (!response.ok) throw new Error(`oEmbed request failed: ${response.status}`);
-            
-            const videoDetails = await response.json();
-            const isPlaylist = urlToAdd.includes('/playlist?list=');
-            const itemTitle = videoDetails.title || (isPlaylist ? "YouTube Playlist" : "YouTube Video");
-            const finalTitle = videoDetails.author_name ? `${videoDetails.author_name} - ${itemTitle}` : itemTitle;
-
-            await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, finalTitle, tab, skipConfirmation);
-        } catch (e) {
-            broadcastLog({ text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Adding with basic title.`, type: 'error' });
-            await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, "YouTube Content", tab, skipConfirmation);
-        }
-    }, delay);
-}
-
-/**
- * Handles adding a non-YouTube URL from the context menu, using the stream scanner.
- * @param {string} folderId - The target folder ID.
- * @param {string} urlToAdd - The URL of the page to scan.
- * @param {chrome.tabs.Tab} tab - The originating tab.
- * @param {boolean} [skipConfirmation=false] - Whether to skip confirmation prompts.
- */
-async function _handleGenericContextMenuAdd(folderId, urlToAdd, tab, skipConfirmation = false) {
-    broadcastLog({ text: `[Background]: URL detected. Scanning for stream and title...`, type: 'info' });
-    try {
-        const scanResult = await findM3u8InUrl(urlToAdd, tab);
-        if (scanResult.url) {
-            await playlistManager.handleAddFromContextMenu(folderId, scanResult.url, scanResult.title, tab, skipConfirmation);
-        } else {
-            broadcastLog({ text: `[Background]: Scanner did not detect a video stream.`, type: 'info' });
-        }
-        if (scanResult.scannerTab?.windowId) {
-            chrome.windows.remove(scanResult.scannerTab.windowId).catch(() => {});
-        }
-    } catch (error) {
-        broadcastLog({ text: `[Background]: Scanner failed for '${urlToAdd}'. Adding original URL as fallback. Error: ${error.message}`, type: 'info' });
-        await playlistManager.handleAddFromContextMenu(folderId, urlToAdd, urlToAdd, tab, skipConfirmation);
-    }
-}
-
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     const { menuItemId, linkUrl, srcUrl, pageUrl } = info;
     const urlToAdd = linkUrl || srcUrl || pageUrl;
@@ -786,14 +724,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     const folderId = await getFolderId();
     if (!folderId) return;
 
-    const isYouTubeUrl = /youtube\.com\/(watch|playlist)/.test(urlToAdd);
-    const skipConfirmation = (menuItemId === 'one-click-add-to-last-used-folder');
-
-    if (isYouTubeUrl) {
-        _handleYouTubeContextMenuAdd(folderId, urlToAdd, tab, skipConfirmation);
-    } else {
-        _handleGenericContextMenuAdd(folderId, urlToAdd, tab, skipConfirmation);
-    }
+    // The context menu now uses the exact same centralized handler as the on-page button.
+    playlistManager.handleAddFromContextMenu(folderId, urlToAdd, null, tab);
 });
 
 // --- M3U8 Stream Detection ---

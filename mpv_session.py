@@ -130,18 +130,22 @@ class MpvSessionManager:
         logging.info("Starting a new MPV instance.")
         mpv_exe = self.get_mpv_executable()
         ipc_path = self.get_ipc_path()
+        
         on_completion_script_path = os.path.join(self.SCRIPT_DIR, "on_completion.lua")
-
+        logging.info(f"Checking for on_completion.lua at: {on_completion_script_path}")
         try:
             mpv_args = [
                 mpv_exe, '--force-window=yes', '--save-position-on-quit', '--write-filename-in-watch-later-config',
                 f'--input-ipc-server={ipc_path}',
             ]
 
-            if os.path.exists(on_completion_script_path):
-                mpv_args.append(f'--script={on_completion_script_path}')
-            else:
-                logging.warning(f"Completion script not found at {on_completion_script_path}. 'Clear on Completion' may not work as expected.")
+            if clear_on_completion:
+                logging.info("'Clear on Completion' is enabled for this session.")
+                if os.path.exists(on_completion_script_path):
+                    logging.info(f"on_completion.lua found. Adding --script={on_completion_script_path} to MPV arguments.")
+                    mpv_args.append(f'--script={on_completion_script_path}')
+                else:
+                    logging.warning(f"Completion script not found at {on_completion_script_path}. 'Clear on Completion' may not work as expected.")
 
             if start_paused:
                 logging.info("Applying --pause flag.")
