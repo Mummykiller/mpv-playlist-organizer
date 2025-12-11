@@ -1,13 +1,14 @@
 /**
  * Manages all playlist-related actions like adding, removing, clearing, and reordering.
  */
-
 // --- Injected Dependencies ---
 let storage;
 let broadcastToTabs;
 let broadcastLog;
 let debouncedSyncToNativeHostFile;
 let sendMessageAsync; // For asking confirmation from other contexts
+let findM3u8InUrl; // For the stream scanner
+let callNativeHost; // For oEmbed via native host
 
 /**
  * Injects dependencies from the main background script.
@@ -19,6 +20,8 @@ export function injectDependencies(deps) {
     broadcastLog = deps.broadcastLog;
     debouncedSyncToNativeHostFile = deps.debouncedSyncToNativeHostFile;
     sendMessageAsync = deps.sendMessageAsync;
+    findM3u8InUrl = deps.findM3u8InUrl;
+    callNativeHost = deps.callNativeHost;
 }
 
 /**
@@ -115,24 +118,85 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
     }
 }
 
+/**
+ * Centralized function to scrape details for a URL and add it to a folder.
+ * This handles YouTube oEmbed, the generic stream scanner, and adding the final result.
+ * @param {string} folderId The ID of the folder to add to.
+ * @param {string} urlToAdd The initial URL (can be a page URL or direct video URL).
+ * @param {chrome.tabs.Tab} tab The originating tab, used for confirmations and scanner focus.
+ * @param {chrome.runtime.MessageSender} sender The sender of the message.
+ */
+async function _scrapeAndAddUrl(folderId, urlToAdd, tab, sender) {
+    const isYouTubeUrl = /youtube\.com\/(watch|playlist)/.test(urlToAdd);
+
+    if (isYouTubeUrl) {
+        broadcastLog({ text: `[Background]: YouTube URL detected. Scraping title via oEmbed...`, type: 'info' });
+        try {
+            // Use a simple fetch for oEmbed as it's more direct than going through the native host.
+            const oEmbedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(urlToAdd)}&format=json`;
+            const response = await fetch(oEmbedUrl);
+            if (!response.ok) throw new Error(`oEmbed request failed: ${response.status}`);
+
+            const videoDetails = await response.json();
+            const isPlaylist = urlToAdd.includes('/playlist?list=');
+            const itemTitle = videoDetails.title || (isPlaylist ? "YouTube Playlist" : "YouTube Video");
+            const finalTitle = videoDetails.author_name ? `${videoDetails.author_name} - ${itemTitle}` : itemTitle;
+
+            return await addUrlToFolder(folderId, urlToAdd, finalTitle, tab, sender);
+        } catch (e) {
+            broadcastLog({ text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Falling back to stream scanner.`, type: 'info' });
+            // If oEmbed fails, don't just give up. Fall back to the robust stream scanner
+            // which can use PageScraper.js as a final attempt to get a good title.
+            return await _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, true); // Pass a flag to skip the YouTube check
+        }
+    } else {
+        // For all other sites, use the robust stream scanner.
+        broadcastLog({ text: `[Background]: Non-YouTube URL detected. Scanning for stream and title...`, type: 'info' });
+        let scanResult;
+        try {
+            // The findM3u8InUrl function now handles everything: opening the scanner,
+            // waiting for a stream, and scraping the title as a fallback.
+            scanResult = await findM3u8InUrl(urlToAdd, tab);
+
+            if (scanResult.url) {
+                return await addUrlToFolder(folderId, scanResult.url, scanResult.title, tab, sender);
+            } else {
+                const message = `[Background]: Scanner did not detect a video stream on '${urlToAdd}'. Nothing added.`;
+                broadcastLog({ text: message, type: 'info' });
+                return { success: false, error: message };
+            }
+        } catch (error) {
+            const message = `[Background]: Scanner failed for '${urlToAdd}'. Adding original URL as fallback. Error: ${error.message}`;
+            broadcastLog({ text: message, type: 'info' });
+            // Fallback: add the original page URL with a basic title.
+            return await addUrlToFolder(folderId, urlToAdd, urlToAdd, tab, sender);
+        } finally {
+            // Ensure the scanner window is always closed.
+            if (scanResult?.scannerTab?.windowId) {
+                chrome.windows.remove(scanResult.scannerTab.windowId).catch(() => {});
+            }
+        }
+    }
+}
+
 export async function handleAdd(request, sender) {
     const tabId = request.tabId || sender.tab?.id;
     const folderId = request.folderId;
+    const tab = sender.tab; // Only trust the sender's tab object
 
     if (!tabId || !folderId) {
         return { success: false, error: 'Missing tabId or folderId for add action.' };
     }
 
-    try {
-        const scrapedDetails = await chrome.tabs.sendMessage(tabId, { action: 'scrape_and_get_details' });
-
-        if (!scrapedDetails || !scrapedDetails.url) {
-            return { success: false, error: 'No stream/video detected on the page to add.' };
-        }
-
-        return await addUrlToFolder(folderId, scrapedDetails.url, scrapedDetails.title, request.tab || sender.tab, sender);
-    } catch (e) {
-        return { success: false, error: `Could not communicate with content script: ${e.message}` };
+    // If the title and URL are already provided (by the efficient on-page button),
+    // add them directly without using the scanner.
+    if (request.data?.url && request.data?.title) {
+        broadcastLog({ text: `[Background]: Received pre-scraped item. Adding directly.`, type: 'info' });
+        return await addUrlToFolder(folderId, request.data.url, request.data.title, tab, sender);
+    } else {
+        // Otherwise (e.g., from the popup), trigger the full scrape-and-add process
+        // using the tab's main URL. This will use the scanner.
+        return await _scrapeAndAddUrl(folderId, tab.url, tab, sender);
     }
 }
 
@@ -179,7 +243,7 @@ export async function handleSetPlaylistOrder(request) {
 }
 
 export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
-    return addUrlToFolder(folderId, urlToAdd, title, tab);
+    return await _scrapeAndAddUrl(folderId, urlToAdd, tab, null);
 }
 
 export async function handleGetPlaylist(request) {

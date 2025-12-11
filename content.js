@@ -197,8 +197,10 @@ class MpvController {
             return true; // Indicate async response.
         } else if (request.action === 'scrape_and_get_details') {
             // The background script is asking for the page title and URL.
-            const details = this.pageScraper.scrapePageDetails(this.detectedUrl);
-            sendResponse(details);
+            // Use the current page URL for scraping, not just the detected stream URL,
+            // as the latter may be null when the request is made.
+            const scrapedDetails = this.pageScraper.scrapePageDetails(window.location.href);
+            sendResponse(scrapedDetails);
             return true; // Indicate async response.
         } else if (request.action === 'set_minimized_state') {
             // The background script (relaying from the popup) is telling us to show or hide the UI.
@@ -219,30 +221,31 @@ class MpvController {
         } else if (request.action === 'get_details_for_last_right_click') {
             // The background script is asking for the title of the item that was just right-clicked.
             // This avoids a network request by scraping the current page.
-            const linkElement = this.lastRightClickedElement?.closest('a');
-            const url = linkElement ? linkElement.href : null;
-            let title = null;
+            const linkElement = this.lastRightClickedElement?.closest('a'); // Find the link that was clicked on
+            const url = linkElement ? linkElement.href : window.location.href; // Use link URL or page URL
+            let title;
 
-            // --- YouTube Thumbnail Scraping Logic ---
-            // For YouTube, try to find the title and channel directly from the thumbnail structure.
-            // This is more accurate than scraping the whole page when right-clicking on the homepage.
             if (window.location.hostname.includes('youtube.com') && this.lastRightClickedElement) {
+                // --- YouTube-Specific Thumbnail Scraping ---
+                // This logic is highly specific to finding titles from YouTube thumbnails on pages
+                // like the homepage or subscription feed.
                 const videoContainer = this.lastRightClickedElement.closest('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer');
-                // New: Add selectors for Shorts and other modern layouts
                 const titleSelectors = ['#video-title', '#title-text', 'span#video-title'];
                 const channelSelectors = ['#channel-name .yt-formatted-string', '.ytd-channel-name .yt-formatted-string', '#byline-container .yt-formatted-string'];
-
+    
                 if (videoContainer) {
                     let videoTitle = null;
                     for (const selector of titleSelectors) {
                         const el = videoContainer.querySelector(selector);
                         if (el) { videoTitle = el.textContent.trim(); break; }
                     }
+    
                     let channelName = null;
                     for (const selector of channelSelectors) {
                         const el = videoContainer.querySelector(selector);
                         if (el) { channelName = el.textContent.trim(); break; }
                     }
+    
                     if (videoTitle) {
                         title = channelName ? `${channelName} - ${videoTitle}` : videoTitle;
                     }
@@ -250,14 +253,13 @@ class MpvController {
             }
 
             // If thumbnail scraping fails or it's not YouTube, fall back to the main page scraper.
+            // This ensures that for all non-YouTube sites, we use the exact same robust scraping
+            // logic as the on-page "Add" button.
             if (!title) {
-                title = this.pageScraper.scrapePageDetails(this.detectedUrl).title;
+                title = this.pageScraper.scrapePageDetails(url).title;
             }
-
-            sendResponse({ url: url, title: title, source: 'contextMenu' });
+            sendResponse({ url: url, title: title });
             return true; // Indicate async response.
-            
-            // If no element or title is found, an empty response will be sent, and the background will use a fallback.
         }
     }
 
@@ -791,23 +793,18 @@ class MpvController {
      * @param {boolean} options.isUiVisible - Whether the full UI is visible, allowing for modals.
      */
     async addDetectedUrlToFolder(folderId, { isUiVisible = false } = {}) {
-        const urlToAdd = this.detectedUrl;
-        if (!urlToAdd) {
+        if (!this.detectedUrl) {
             this.addLogEntry({ text: `[Content]: No stream/video detected to add.`, type: 'error' });
             return 'error';
         }
     
-        const isYouTubeUrl = /youtube\.com\/(watch|playlist)/.test(urlToAdd);
-    
         try {
-            if (isYouTubeUrl) {
-                // For YouTube, delegate to the background script to use the oEmbed API for a consistent title.
-                this.sendCommandToBackground('add_youtube_url_with_oembed', folderId, { data: { url: urlToAdd } });
-            } else {
-                // For other sites, scrape the title from the page and send it.
-                const { title: scrapedTitle } = this.pageScraper.scrapePageDetails(urlToAdd);
-                this.sendCommandToBackground('add', folderId, { data: { url: urlToAdd, title: scrapedTitle } });
-            }
+            // For the on-page button, we always have access to the page content.
+            // Perform the scrape here and send the complete details to the background.
+            // This is more efficient than having the background script open a new scanner window.
+            const { url, title } = this.pageScraper.scrapePageDetails(this.detectedUrl);
+            this.sendCommandToBackground('add', folderId, { data: { url, title } });
+
             return 'success';
         } catch (error) {
             this.addLogEntry({ text: `[Content]: Error checking for duplicates: ${error.message}`, type: 'error' });

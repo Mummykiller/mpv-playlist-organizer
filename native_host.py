@@ -127,7 +127,7 @@ try:
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
     SCRIPT_DIR = file_io.SCRIPT_DIR
-
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 
     def log_stream(stream, log_level, owner_folder_id):
         """Reads from a stream line by line and logs it."""

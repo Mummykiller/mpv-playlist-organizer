@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Created `PlaylistUI.js` to manage all playlist rendering and event handling.
 - Implemented cross-platform solution for `__pycache__` issue by modifying `Installer.py` to generate `run_native_host.sh` for Linux/macOS, similar to `run_native_host.bat` for Windows.
 - Created `Draggable.js` to handle the drag of the on screen.
+- Created `PageScraper.js` to centralize all page scraping logic, including the YouTube-specific rules.
 - Created `AniListUI.js` to encapsulate all logic for the AniList side panel, including state management, event handling, and positioning.
 
 ### Fixed
@@ -32,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Corrected a `NameError` in `native_host.py` caused by an incorrect dependency injection order for the `cli.py` module.
 - Fixed an issue where the "Lock Panel Position" setting for the AniList panel was not being applied, allowing the panel to be dragged even when locked.
 - Corrected the "Force Re-attach" setting for the AniList panel to properly reset after being used, ensuring it acts as a one-time trigger.
+- Fixed the "Clear on Completion" feature by ensuring the `on_completion.lua` script is correctly loaded by MPV and by updating the background script to handle both natural playlist completion (exit code 99) and manual closing (exit code 0) as triggers for clearing the playlist.
+- Fixed a major bug where the on-page "Add" button for non-YouTube sites would fail by needlessly using the stream scanner. The button now correctly scrapes the current page locally for a much faster and more reliable experience.
+- Optimized the on-page "Add" button for non-YouTube sites to perform scraping locally in the content script, preventing the creation of a redundant "scanner" window and making the process significantly faster.
+- Fixed syntax errors in `background.js` that prevented the service worker from loading correctly.
 
 ### Changed
 - Simplified the right-click "Add to MPV Folder" context menu. It is now a single-level list of folders instead of a nested menu for a cleaner experience.
@@ -45,5 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored `content.js` to delegate all playlist functionality to the new `PlaylistUI.js` class.
 - Refactored `popup.js` to better centralize UI mode logic within `UIModeManager`.
 - Refactored `content.js` to delegate UI creation and teardown to `UIManager.js`.
+- Refactored `content.js` to use `PageScraper.js` for all title scraping.
 - Refactored `content.js` to delegate all AniList-related functionality to the new `AniListUI.js` class, significantly cleaning up the main controller.
-- Unified YouTube title scraping by making the on-page "Add" button use the same oEmbed API as the right-click context menu, ensuring consistent titles.
+- Improved YouTube title scraping by making the oEmbed API fallback to the robust stream scanner on failure, instead of using a generic title.
