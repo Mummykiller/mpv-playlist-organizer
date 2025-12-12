@@ -115,10 +115,9 @@ async function handleMpvExited(data) {
 
     if (shouldClear) {
         // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion.
-        // An exit code of 0 typically indicates a normal exit (e.g., user closed MPV).
-        // If 'Clear on Completion' is enabled, we treat both as a signal to clear.
-        if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE || returnCode === 0) {
-            const completionType = returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE ? 'naturally completed' : 'closed normally';
+        // We only clear the playlist if it completes naturally, not if the user closes MPV manually (which gives exit code 0).
+        if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
+            const completionType = 'naturally completed';
             broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' ${completionType}. Auto-clearing playlist as per settings.`, type: 'info' });
             await playlistManager.handleClear({ folderId: folderId });
         } else {
@@ -849,16 +848,26 @@ async function findM3u8InUrl(url, originalTab) {
             chrome.tabs.onUpdated.addListener(listener);
         });
 
-        const streamPromise = _waitForM3u8Detection(scannerTab.id, timeoutInSeconds).catch(() => null);
+        const streamPromise = _waitForM3u8Detection(scannerTab.id, timeoutInSeconds);
         const titlePromise = chrome.tabs.sendMessage(scannerTab.id, { action: 'scrape_and_get_details' })
             .catch(() => ({ title: url, url: url }));
 
-        const [detectedStreamUrl, scrapedDetails] = await Promise.all([streamPromise, titlePromise]);
+        // Wait for both promises. If the stream detection fails (e.g., timeout or window closed),
+        // the streamPromise will reject, and we'll catch it, setting detectedStreamUrl to null.
+        let detectedStreamUrl = null;
+        let scrapedDetails = { title: url, url: url };
+        try {
+            [detectedStreamUrl, scrapedDetails] = await Promise.all([streamPromise, titlePromise]);
+        } catch (error) {
+            // This block will be entered if the stream detection times out or the tab is closed.
+            // We only need the title, so we'll still wait for that promise to resolve.
+            scrapedDetails = await titlePromise;
+        }
 
-        const finalUrl = detectedStreamUrl || scrapedDetails.url;
+        const finalUrl = detectedStreamUrl; // This is the critical change. Only use the detected stream.
         const finalTitle = scrapedDetails.title;
 
-        return { url: finalUrl, title: finalTitle, scannerTab: scannerTab };
+        return { url: finalUrl, title: finalTitle, scannerTab: scannerTab, originalUrl: url };
 
     } finally {
         await _focusOriginalTab(originalTab);

@@ -132,6 +132,17 @@ class HostManagerApp:
         self.uninstall_button = ttk.Button(button_frame, text="Uninstall", style="Uninstall.TButton", command=self.run_uninstall)
         self.uninstall_button.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(5, 0))
 
+        # --- CLI Wrapper Button ---
+        cli_button_frame = ttk.Frame(main_frame)
+        cli_button_frame.pack(fill=tk.X, pady=5)
+        self.cli_button = ttk.Button(cli_button_frame, text="Install CLI Wrapper (mpv-cli)", command=self.run_install_cli)
+        self.cli_button.pack(fill=tk.X, expand=True)
+
+        # --- Add to PATH Button ---
+        path_button_frame = ttk.Frame(main_frame)
+        path_button_frame.pack(fill=tk.X, pady=(0, 5))
+        self.path_button = ttk.Button(path_button_frame, text="Add Folder to User PATH", command=self.run_add_to_path)
+        self.path_button.pack(fill=tk.X, expand=True)
         # --- Log Area ---
         ttk.Label(main_frame, text="Log Output:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(10, 5))
         self.log_area = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, height=10, font=("Consolas", 9))
@@ -153,6 +164,7 @@ class HostManagerApp:
 
         self.install_button.config(state=tk.DISABLED)
         self.uninstall_button.config(state=tk.DISABLED)
+        self.cli_button.config(state=tk.DISABLED)
         
         # Run in a separate thread to keep the GUI responsive
         threading.Thread(target=self._install_thread, args=(extension_id,)).start()
@@ -163,8 +175,28 @@ class HostManagerApp:
 
         self.install_button.config(state=tk.DISABLED)
         self.uninstall_button.config(state=tk.DISABLED)
+        self.cli_button.config(state=tk.DISABLED)
 
         threading.Thread(target=self._uninstall_thread).start()
+
+    def run_install_cli(self):
+        """Disables buttons and starts the CLI wrapper installation in a new thread."""
+        self.install_button.config(state=tk.DISABLED)
+        self.uninstall_button.config(state=tk.DISABLED)
+        self.cli_button.config(state=tk.DISABLED)
+        self.path_button.config(state=tk.DISABLED)
+
+        # Run in a separate thread to keep the GUI responsive
+        threading.Thread(target=self._install_cli_thread).start()
+
+    def run_add_to_path(self):
+        """Disables buttons and starts the 'add to PATH' logic in a new thread."""
+        self.install_button.config(state=tk.DISABLED)
+        self.uninstall_button.config(state=tk.DISABLED)
+        self.cli_button.config(state=tk.DISABLED)
+        self.path_button.config(state=tk.DISABLED)
+
+        threading.Thread(target=self._add_to_path_thread).start()
 
     def _install_thread(self, extension_id):
         self.log("--- Starting Installation ---")
@@ -184,6 +216,8 @@ class HostManagerApp:
         finally:
             self.install_button.config(state=tk.NORMAL)
             self.uninstall_button.config(state=tk.NORMAL)
+            self.cli_button.config(state=tk.NORMAL)
+            self.path_button.config(state=tk.NORMAL)
 
     def _uninstall_thread(self):
         self.log("--- Starting Uninstallation ---")
@@ -203,7 +237,109 @@ class HostManagerApp:
         finally:
             self.install_button.config(state=tk.NORMAL)
             self.uninstall_button.config(state=tk.NORMAL)
+            self.cli_button.config(state=tk.NORMAL)
+            self.path_button.config(state=tk.NORMAL)
 
+    def _install_cli_thread(self):
+        """The actual logic for creating the CLI wrapper, run in a thread."""
+        self.log("--- Installing CLI Wrapper ---")
+        try:
+            current_platform = platform.system()
+            if current_platform == 'Windows':
+                self._create_windows_cli_wrapper()
+            elif current_platform in ['Linux', 'Darwin']:
+                self._create_unix_cli_wrapper()
+            else:
+                self.log(f"ERROR: CLI wrapper not supported on platform: {current_platform}")
+
+            self.log("\n--- CLI Wrapper Installation Finished! ---")
+            self.log("Ensure this directory is in your system's PATH to use the command from anywhere.")
+        except Exception as e:
+            self.log(f"An unexpected error occurred during CLI wrapper installation: {e}")
+        finally:
+            self.install_button.config(state=tk.NORMAL)
+            self.uninstall_button.config(state=tk.NORMAL)
+            self.cli_button.config(state=tk.NORMAL)
+            self.path_button.config(state=tk.NORMAL)
+
+    def _add_to_path_thread(self):
+        """The actual logic for adding the install directory to the user's PATH."""
+        self.log("--- Adding to User PATH ---")
+        try:
+            current_platform = platform.system()
+            if current_platform == 'Windows':
+                self._add_to_path_windows()
+            elif current_platform in ['Linux', 'Darwin']:
+                self._add_to_path_unix()
+            else:
+                self.log(f"ERROR: Adding to PATH is not supported on platform: {current_platform}")
+
+        except Exception as e:
+            self.log(f"An unexpected error occurred while modifying PATH: {e}")
+        finally:
+            self.install_button.config(state=tk.NORMAL)
+            self.uninstall_button.config(state=tk.NORMAL)
+            self.cli_button.config(state=tk.NORMAL)
+            self.path_button.config(state=tk.NORMAL)
+
+    def _add_to_path_windows(self):
+        """Adds the INSTALL_DIR to the user's PATH in the Windows Registry."""
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+                current_path, _ = winreg.QueryValueEx(key, 'Path')
+                if INSTALL_DIR in current_path.split(';'):
+                    self.log("Directory is already in the user PATH.")
+                    messagebox.showinfo("Already in PATH", f"The directory '{INSTALL_DIR}' is already in your user PATH.")
+                    return
+
+                new_path = f"{current_path};{INSTALL_DIR}"
+                winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, new_path)
+                self.log("Successfully added directory to user PATH in registry.")
+                self.log("You must restart any open command prompts or terminals for the change to take effect.")
+                messagebox.showinfo("Success", "Directory added to user PATH. Please restart any open terminals to use the 'mpv-cli' command.")
+        except FileNotFoundError:
+            # This happens if the 'Path' value doesn't exist yet for the user.
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_WRITE) as key:
+                winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, INSTALL_DIR)
+            self.log("Created new user PATH and added directory.")
+            messagebox.showinfo("Success", "Directory added to user PATH. Please restart any open terminals to use the 'mpv-cli' command.")
+        except Exception as e:
+            self.log(f"ERROR: Failed to modify registry: {e}")
+            messagebox.showerror("Error", f"Failed to modify the registry. Please add the directory to your PATH manually.\n\nError: {e}")
+
+    def _add_to_path_unix(self):
+        """Shows instructions for adding the directory to PATH on Linux/macOS."""
+        self.log("Displaying manual instructions for adding to PATH on Unix-like system.")
+        instruction_message = (
+            "To complete the process, you need to add the following line to your shell's startup file (e.g., ~/.bashrc, ~/.zshrc, or ~/.profile):\n\n"
+            f'export PATH="$PATH:{INSTALL_DIR}"\n\n'
+            "After adding the line, restart your terminal or run 'source <your_file>' for the change to take effect."
+        )
+        messagebox.showinfo("Add to PATH Manually", instruction_message)
+        self.log("User has been shown the manual instructions.")
+
+    def _create_windows_cli_wrapper(self):
+        """Creates the mpv-cli.bat file."""
+        script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
+        wrapper_path = os.path.join(INSTALL_DIR, "mpv-cli.bat")
+        with open(wrapper_path, 'w') as f:
+            f.write('@echo off\n')
+            f.write('set PYTHONDONTWRITEBYTECODE=1\n')
+            f.write(f'python3 "{script_path}" %*\n')
+        self.log(f"Created Windows CLI wrapper: mpv-cli.bat")
+
+    def _create_unix_cli_wrapper(self):
+        """Creates the mpv-cli shell script for Linux/macOS."""
+        script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
+        wrapper_path = os.path.join(INSTALL_DIR, "mpv-cli")
+        with open(wrapper_path, 'w') as f:
+            f.write("#!/bin/sh\n")
+            f.write("export PYTHONDONTWRITEBYTECODE=1\n")
+            f.write(f'python3 "{script_path}" "$@"\n')
+        # Make the wrapper executable
+        os.chmod(wrapper_path, 0o755)
+        self.log(f"Created executable Unix CLI wrapper: mpv-cli")
+        
     # --- Installation Logic (from install.py) ---
     def _install_windows(self, extension_id):
         self.log("Detected Windows OS.")
@@ -305,7 +441,7 @@ class HostManagerApp:
         with open(wrapper_path, 'w') as f:
             f.write("#!/bin/sh\n")
             f.write("# This wrapper ensures __pycache__ directories are not created.\n")
-            f.write("export PYTHONDONTWRITEBYTECODE=1\n")
+            f.write("export PYTHONDONTWRITEBYTECODE=1\n\n")
             # Use dirname "$0" to find the script's directory, making it portable
             f.write(f'"{python_executable}" "$(dirname "$0")/{SCRIPT_NAME}" "$@"')
         
@@ -352,7 +488,8 @@ class HostManagerApp:
         # Clean up generated files
         files_to_remove = [
             os.path.join(INSTALL_DIR, "run_native_host.bat"),
-            os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
+            os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json"),
+            os.path.join(INSTALL_DIR, "mpv-cli.bat") # Remove the CLI wrapper
         ]
         for file_path in files_to_remove:
             if os.path.exists(file_path):
@@ -379,6 +516,18 @@ class HostManagerApp:
             else:
                 self.log(f"Manifest for {browser} not found (or already removed).")
 
+        # Clean up generated files for Unix-like systems
+        files_to_remove = [
+            os.path.join(INSTALL_DIR, "run_native_host.sh"),
+            os.path.join(INSTALL_DIR, "mpv-cli") # Remove the CLI wrapper
+        ]
+        for file_path in files_to_remove:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    self.log(f"Removed generated file: {os.path.relpath(file_path, INSTALL_DIR)}")
+                except OSError as e:
+                    self.log(f"Could not remove file {file_path}. Error: {e}")
 
 def main():
     root = tk.Tk()
