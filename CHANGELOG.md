@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Created `Draggable.js` to handle the drag of the on screen.
 - Created `PageScraper.js` to centralize all page scraping logic, including the YouTube-specific rules.
 - Created `AniListUI.js` to encapsulate all logic for the AniList side panel, including state management, event handling, and positioning.
+- Added a command-line interface (CLI) wrapper (`mpv-cli`) that can be installed via the `Installer.py` GUI.
+- Added a feature to the installer to add the application directory to the user's PATH for easy CLI access.
 
 ### Fixed
 - Resolved issue where AniList releases were not rendering in `popup.js` due to incorrect static method calls.
@@ -35,9 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Corrected the "Force Re-attach" setting for the AniList panel to properly reset after being used, ensuring it acts as a one-time trigger.
 - Fixed the "Clear on Completion" feature by ensuring the `on_completion.lua` script is correctly loaded by MPV and by updating the background script to handle both natural playlist completion (exit code 99) and manual closing (exit code 0) as triggers for clearing the playlist.
 - Fixed a major bug where the on-page "Add" button for non-YouTube sites would fail by needlessly using the stream scanner. The button now correctly scrapes the current page locally for a much faster and more reliable experience.
+- Fixed an issue where manually closing MPV would incorrectly clear the playlist; it now only clears on natural playlist completion (exit code 99).
+- Corrected a fallback logic flaw in the stream scanner. Manually closing the scanner window will no longer result in adding an incorrect URL to the playlist.
 - Optimized the on-page "Add" button for non-YouTube sites to perform scraping locally in the content script, preventing the creation of a redundant "scanner" window and making the process significantly faster.
 - Fixed syntax errors in `background.js` that prevented the service worker from loading correctly.
-
+- Resolved an issue where the Python CLI could not be run from outside its own directory.
+- Fixed a bug on Windows where CLI commands would incorrectly launch a new, silent window instead of printing output to the current terminal.
+- Corrected the CLI wrapper scripts (`mpv-cli.bat` and `mpv-cli`) to prevent the creation of `__pycache__` directories.
 ### Changed
 - Simplified the right-click "Add to MPV Folder" context menu. It is now a single-level list of folders instead of a nested menu for a cleaner experience.
 - The context menu now intelligently places the most recently used folder at the top of the list for quick access, removing the separate "Add to current" option.

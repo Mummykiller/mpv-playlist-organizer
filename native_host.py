@@ -4,6 +4,13 @@ import os
 import traceback
 from datetime import datetime
 
+# --- Path Correction for CLI Usage ---
+# This ensures that if the script is run from a different directory (e.g., via PATH),
+# it can still find its own modules like 'file_io' and 'cli'.
+SCRIPT_DIR_FOR_PATH = os.path.dirname(os.path.abspath(sys.argv[0]))
+sys.path.insert(0, SCRIPT_DIR_FOR_PATH)
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+
 # --- Standalone Function for Failsafe Path ---
 # This is intentionally self-contained to avoid import errors if dependencies are missing.
 def _get_failsafe_data_dir():
@@ -36,15 +43,18 @@ except Exception:
 
 try:
     # --- Windows pythonw.exe Guard ---
-    # If this script is started with pythonw.exe, sys.stdin will be None, which breaks
-    # native messaging. This guard re-launches with python.exe, which has the necessary streams.
-    if sys.platform == "win32" and sys.executable.endswith("pythonw.exe"):
+    # If this script is started by the browser on Windows, it might be launched with
+    # an executable that has no console (like pythonw.exe), which makes sys.stdin `None`.
+    # This breaks native messaging. This guard detects that situation and re-launches
+    # the script with the standard python.exe, which has the necessary I/O streams.
+    # This check is skipped if CLI arguments are present, assuming it's an interactive session.
+    if sys.platform == "win32" and sys.stdin is None and len(sys.argv) == 1:
         import subprocess
         # Re-launch with python.exe. CREATE_NO_WINDOW prevents a console from flashing.
         si = subprocess.STARTUPINFO()
         si.dwFlags = subprocess.STARTF_USESTDHANDLES
         creation_flags = subprocess.CREATE_NO_WINDOW
-        # Use sys.argv[0] which is more reliable than __file__ in some contexts
+        # Use sys.executable to find the python.exe corresponding to the current pythonw.exe
         script_path = os.path.abspath(sys.argv[0])
         
         subprocess.Popen([sys.executable.replace("pythonw.exe", "python.exe"), script_path] + sys.argv[1:], creationflags=creation_flags, startupinfo=si)
@@ -524,6 +534,11 @@ try:
         # handle_cli() will parse arguments and execute the command if it's a CLI call.
         # It returns True if it was a CLI call, and False otherwise.
         try:
+            # Inject dependencies into the CLI module before handling any commands.
+            cli.inject_dependencies({
+                'file_io': file_io,
+                'mpv_session': mpv_session
+            })
             if not cli.handle_cli():
                 # If it wasn't a CLI call, start the main message loop for the browser.
                 main()
