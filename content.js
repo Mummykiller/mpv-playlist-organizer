@@ -150,20 +150,22 @@ class MpvController {
                 // Handle show/hide anilist panel explicitly
                 if (changedPrefs.anilistPanelVisible !== undefined && this.anilistUI) {
                     this.anilistUI.toggleVisibility(changedPrefs.anilistPanelVisible, false);
-                }
+                } 
                 if (changedPrefs.lockAnilistPanel !== undefined && this.anilistUI) {
                     this.anilistUI.isLocked = changedPrefs.lockAnilistPanel;
                     this.anilistUI.updateDynamicStyles();
                 }
-                if (changedPrefs.forceReattachAnilistPanel !== undefined && this.anilistUI) {
-                    this.anilistUI.forceReattach = changedPrefs.forceReattachAnilistPanel;
-                    // If the panel is currently visible and forceReattach is true, trigger a visibility toggle
-                    // to ensure the re-attachment logic runs.
-                    if (this.anilistUI.forceReattach && this.anilistUI.panelHost.style.display !== 'none') {
-                        // Force visible, but don't save visibility state (as it's already handled by the preference change)
-                        // The toggleVisibility method itself will handle resetting forceReattach in storage.
-                        this.anilistUI.toggleVisibility(true, false);
+                if (changedPrefs.forcePanelAttached !== undefined && this.anilistUI) {
+                    this.anilistUI.forceAttached = changedPrefs.forcePanelAttached;
+                    // If the panel is now forced attached, snap it immediately.
+                    if (this.anilistUI.forceAttached) {
+                        this.anilistUI.snapToController();
                     }
+                    // Re-evaluate visibility, as it might need to be hidden if the controller is minimized.
+                    this.anilistUI.toggleVisibility(this.anilistUI.panelHost.style.display !== 'none', false);
+                }
+                if (changedPrefs.anilistAttachOnOpen !== undefined && this.anilistUI) {
+                    this.anilistUI.attachOnOpen = changedPrefs.anilistAttachOnOpen;
                 }
                 // Handle show/hide minimized stub explicitly
                 if (changedPrefs.showMinimizedStub !== undefined) {
@@ -553,8 +555,14 @@ class MpvController {
 
             // If auto-reattach is enabled, reset the manual positioning flag
             // so it snaps back to the controller on the next position update. Also clear saved position.
+            this.anilistUI.validatePosition(); // Re-validate anilist panel position
             this.validateAndRepositionController(); // Make sure it's on screen
             if (savePref) {
+                // When restoring the controller, if the AniList panel is force-attached,
+                // it should also reappear.
+                if (this.anilistUI.forceAttached) {
+                    this.anilistUI.toggleVisibility(true, false);
+                }
                 this.savePreference(prefsToSave);
             }
         }
@@ -678,14 +686,13 @@ class MpvController {
     }
 
     updateAdaptiveElements() {
-        if (this.anilistUI && !this.anilistUI.autoReattach && this.anilistUI.isManuallyPositioned) return;
         if (!this.uiManager.controllerHost || !this.uiManager.shadowRoot) return;
 
         const anilistBtnLeft = this.uiManager.shadowRoot.getElementById('btn-toggle-anilist-left');
         const anilistBtnRight = this.uiManager.shadowRoot.getElementById('btn-toggle-anilist-right');
         if (!anilistBtnLeft || !anilistBtnRight) return;
-
-        if (!this.anilistUI?.isEnabled || !this.anilistUI?.showOnPage) {
+        
+        if (!this.anilistUI?.isEnabled) {
             anilistBtnLeft.style.display = 'none';
             anilistBtnRight.style.display = 'none';
             this.anilistUI?.toggleVisibility(false, false);
@@ -988,7 +995,7 @@ class MpvController {
                 // If the controller is on-screen AND we have a stored pre-resize position,
                 // it means the window has been made larger again.
             const originalLeft = parseInt(this.preResizePosition.left, 10) || 0;
-            const originalTop = parseInt(this.preResizePosition.top, 10) || 0;
+            const originalTop = parseInt(this.preResizePosition.top, 10) || 0; // We no longer save this automatically, preventing cross-tab interference.
                 // Check if the original position is now back within the valid viewport. If so, restore it.
                 // We no longer save this automatically, preventing cross-tab interference.
                 // The position is only saved on an explicit user drag.
@@ -1019,20 +1026,17 @@ class MpvController {
         const showPlayNew = prefs?.show_play_new_button ?? false;
         const anilistPosition = prefs?.anilistPanelPosition; 
         const anilistImageHeight = prefs?.anilist_image_height;
-        const anilistSize = prefs?.anilistPanelSize;
-        this.anilistUI.autoReattach = prefs?.autoReattachAnilistPanel ?? true;
-        this.anilistUI.forceReattach = prefs?.forceReattachAnilistPanel ?? false;
+        const anilistSize = prefs?.anilistPanelSize;        
         this.anilistUI.isEnabled = prefs?.enable_anilist_integration ?? true;
         this.anilistUI.isLocked = prefs?.lockAnilistPanel ?? false;
         this.anilistUI.updateDynamicStyles(); // Apply lock style
+        this.anilistUI.forceAttached = prefs?.forcePanelAttached ?? false;
+        this.anilistUI.attachOnOpen = prefs?.anilistAttachOnOpen ?? true;
         const minimizedStubPosition = prefs?.minimizedStubPosition;
         this.enableDblclickCopy = prefs?.enable_dblclick_copy ?? false; // New: Apply preference
-        // This setting controls the visibility of the on-page UI elements, but is overridden by the master toggle.
-        this.showAnilistOnPage = prefs?.show_anilist_releases ?? true;
         this.showMinimizedStub = prefs?.show_minimized_stub ?? true;
         this.showCopyTitleButton = prefs?.show_copy_title_button ?? false;
         this.pageScraper.updateFilterWords(prefs?.scraper_filter_words || ['watch', 'online', 'free', 'episode', 'season', 'full', 'hd', 'eng sub', 'subbed', 'dubbed', 'animepahe']);
-        this.anilistUI.showOnPage = prefs?.show_anilist_releases ?? true;
 
         // Restore AniList panel position first.
         if (this.anilistUI.panelHost && anilistPosition?.left && anilistPosition?.top) {

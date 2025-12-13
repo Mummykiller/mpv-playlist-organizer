@@ -30,11 +30,10 @@ class OptionsManager {
             { key: 'autofocus_new_folder', elementId: 'autofocus-new-folder-checkbox', type: 'checkbox' },
             { key: 'enable_dblclick_copy', elementId: 'enable-dblclick-copy-checkbox', type: 'checkbox' },
             { key: 'show_copy_title_button', elementId: 'show-copy-title-button-checkbox', type: 'checkbox' },
-            { key: 'autoReattachAnilistPanel', elementId: 'auto-reattach-anilist-checkbox', type: 'checkbox' },
-            { key: 'forceReattachAnilistPanel', elementId: 'force-reattach-anilist-checkbox', type: 'checkbox' },
             { key: 'lockAnilistPanel', elementId: 'lock-anilist-panel-checkbox', type: 'checkbox' },
+            { key: 'forcePanelAttached', elementId: 'force-panel-attached-checkbox', type: 'checkbox' },
+            { key: 'anilistAttachOnOpen', elementId: 'anilist-attach-on-open-checkbox', type: 'checkbox' },
             { key: 'enable_anilist_integration', elementId: 'enable-anilist-integration-checkbox', type: 'checkbox' },
-            { key: 'show_anilist_releases', elementId: 'show-anilist-releases-checkbox', type: 'checkbox' },
             { key: 'disable_anilist_cache', elementId: 'disable-anilist-cache-checkbox', type: 'checkbox' },
             { key: 'anilist_image_height', elementId: 'anilist-image-height-slider', type: 'slider', transform: Number },
             { key: 'show_minimized_stub', elementId: 'show-minimized-stub-checkbox', type: 'checkbox' },
@@ -75,15 +74,10 @@ class OptionsManager {
         // Handle special UI logic that depends on preferences
         document.getElementById('custom-geometry-container').style.display = isCustom ? 'flex' : 'none';
         const enableAnilist = prefs.enable_anilist_integration ?? true;
-        document.getElementById('anilist-options-container').style.display = enableAnilist ? 'flex' : 'none';
-        document.getElementById('shared-anilist-section').style.display = (enableAnilist && (prefs.show_anilist_releases ?? true)) ? 'block' : 'none';
+        document.getElementById('anilist-options-container').style.display = enableAnilist ? 'block' : 'none';
+        document.getElementById('shared-anilist-section').style.display = enableAnilist ? 'block' : 'none';
 
         this._updateAnilistImageSize(prefs.anilist_image_height || 126);
-
-        // The "force re-attach" is a one-time action, so it should always appear unchecked.
-        // The background script sets it to false after use. This ensures the UI reflects that.
-        const forceReattachCheckbox = document.getElementById('force-reattach-anilist-checkbox');
-        if (forceReattachCheckbox) forceReattachCheckbox.checked = false;
 
         this._renderScraperFilterList(prefs.scraper_filter_words || []);
         this._renderBuiltInFilterList();
@@ -207,21 +201,9 @@ class OptionsManager {
         if (anilistEnableCheck) {
             anilistEnableCheck.addEventListener('change', () => {
                 const isEnabled = anilistEnableCheck.checked;
-                document.getElementById('anilist-options-container').style.display = isEnabled ? 'flex' : 'none';
-                const showReleases = document.getElementById('show-anilist-releases-checkbox').checked;
-                document.getElementById('shared-anilist-section').style.display = isEnabled && showReleases ? 'block' : 'none';
+                document.getElementById('anilist-options-container').style.display = isEnabled ? 'block' : 'none';
+                document.getElementById('shared-anilist-section').style.display = isEnabled ? 'block' : 'none';
                 if (isEnabled && document.getElementById('shared-anilist-section').open) {
-                    this.fetchAniListReleases(true);
-                }
-            });
-        }
-
-        const anilistShowCheck = document.getElementById('show-anilist-releases-checkbox');
-        if (anilistShowCheck) {
-            anilistShowCheck.addEventListener('change', () => {
-                const isVisible = anilistShowCheck.checked;
-                document.getElementById('shared-anilist-section').style.display = isVisible ? 'block' : 'none';
-                if (isVisible && document.getElementById('shared-anilist-section').open) {
                     this.fetchAniListReleases(true);
                 }
             });
