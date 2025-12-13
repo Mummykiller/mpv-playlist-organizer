@@ -67,3 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored `content.js` to use `PageScraper.js` for all title scraping.
 - Refactored `content.js` to delegate all AniList-related functionality to the new `AniListUI.js` class, significantly cleaning up the main controller.
 - Improved YouTube title scraping by making the oEmbed API fallback to the robust stream scanner on failure, instead of using a generic title.
+
+### Documentation
+- Completely overhauled the `README.md` to be more concise, user-friendly, and digestible.
+- Restructured the document to prioritize installation and usage for new users.
+- Condensed the "Features" section into a high-level "Core Features" list, removing the overly technical deep-dive.
+- Simplified the "How It Works" and "Troubleshooting" sections to be more accessible.
+- Removed the "Project Structure" and "Contributing" sections to reduce clutter for the average user.
