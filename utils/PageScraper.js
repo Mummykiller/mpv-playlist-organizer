@@ -32,7 +32,9 @@ class PageScraper {
         // clean title from the DOM, preventing the less reliable generic scrapers from
         // producing a messy title. This is the primary method for the on-page "Add" button.
         if (window.location.hostname.includes('youtube.com')) {
-            // List of selectors to try in order of preference for title and channel.
+            // Only run the detailed scraper if we are on a video watch page.
+            // Otherwise, we fall back to the generic logic to avoid loops on the homepage.
+            if (window.location.pathname === '/watch') {
             const titleSelectors = [
                 'h1.ytd-watch-metadata yt-formatted-string.ytd-video-primary-info-renderer', // Standard video
                 '#title > h1 > yt-formatted-string', // Alternate standard video
@@ -62,6 +64,7 @@ class PageScraper {
             videoTitle = videoTitle.replace(/^\(\d+\)\s*/, '').replace(/\s-\sYouTube$/, '').trim();
 
             return { url: detectedUrl, title: channelName ? `${channelName} - ${videoTitle}` : videoTitle };
+            }
         }
         // --- END AI GUARD ---
 

@@ -1,9 +1,9 @@
 {
     "name": "com.mpv_playlist_organizer.handler",
     "description": "MPV Playlist Organizer Native Host",
-    "path": "C:\\.projects\\project_mpv_playlist\\run_native_host.bat",
+    "path": "/home/shinku/Documents/mpv-playlist-organizer/run_native_host.sh",
     "type": "stdio",
     "allowed_origins": [
-        "chrome-extension://hngafbnlkeodcbnjppdeioahlaflmeke/"
+        "chrome-extension://fohimimlbjjbgonhdfblopjkiddenpcl/"
     ]
 }

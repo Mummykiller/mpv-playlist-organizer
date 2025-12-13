@@ -10,6 +10,9 @@ let sendMessageAsync; // For asking confirmation from other contexts
 let findM3u8InUrl; // For the stream scanner
 let callNativeHost; // For oEmbed via native host
 
+// A lock to prevent multiple scraping processes for the same URL at the same time.
+const scrapingInProgress = new Set();
+
 /**
  * Injects dependencies from the main background script.
  * @param {object} deps - An object containing dependency functions and instances.
@@ -125,11 +128,12 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
  * @param {string} urlToAdd The initial URL (can be a page URL or direct video URL).
  * @param {chrome.tabs.Tab} tab The originating tab, used for confirmations and scanner focus.
  * @param {chrome.runtime.MessageSender} sender The sender of the message.
+ * @param {boolean} [skipYouTubeCheck=false] - Internal flag to prevent oEmbed loops.
  */
-async function _scrapeAndAddUrl(folderId, urlToAdd, tab, sender) {
+async function _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, skipYouTubeCheck = false) {
     const isYouTubeUrl = /youtube\.com\/(watch|playlist)/.test(urlToAdd);
 
-    if (isYouTubeUrl) {
+    if (isYouTubeUrl && !skipYouTubeCheck) {
         broadcastLog({ text: `[Background]: YouTube URL detected. Scraping title via oEmbed...`, type: 'info' });
         try {
             // Use a simple fetch for oEmbed as it's more direct than going through the native host.
@@ -147,7 +151,7 @@ async function _scrapeAndAddUrl(folderId, urlToAdd, tab, sender) {
             broadcastLog({ text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Falling back to stream scanner.`, type: 'info' });
             // If oEmbed fails, don't just give up. Fall back to the robust stream scanner
             // which can use PageScraper.js as a final attempt to get a good title.
-            return await _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, true); // Pass a flag to skip the YouTube check
+            return await _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, true); // Recursive call with the flag set to true
         }
     } else {
         // For all other sites, use the robust stream scanner.
@@ -184,6 +188,13 @@ export async function handleAdd(request, sender) {
     const folderId = request.folderId;
     const tab = sender.tab; // Only trust the sender's tab object
 
+    // --- Loop/Spam Prevention ---
+    const urlToProcess = request.data?.url || tab?.url;
+    if (scrapingInProgress.has(urlToProcess)) {
+        broadcastLog({ text: `[Background]: A request to add "${urlToProcess}" is already in progress. Ignoring.`, type: 'info' });
+        return { success: true, message: 'Scraping already in progress for this URL.' };
+    }
+
     if (!tabId || !folderId) {
         return { success: false, error: 'Missing tabId or folderId for add action.' };
     }
@@ -191,12 +202,20 @@ export async function handleAdd(request, sender) {
     // If the title and URL are already provided (by the efficient on-page button),
     // add them directly without using the scanner.
     if (request.data?.url && request.data?.title) {
+        scrapingInProgress.add(request.data.url);
         broadcastLog({ text: `[Background]: Received pre-scraped item. Adding directly.`, type: 'info' });
-        return await addUrlToFolder(folderId, request.data.url, request.data.title, tab, sender);
+        try {
+            return await addUrlToFolder(folderId, request.data.url, request.data.title, tab, sender);
+        } finally {
+            scrapingInProgress.delete(request.data.url);
+        }
     } else {
         // Otherwise (e.g., from the popup), trigger the full scrape-and-add process
         // using the tab's main URL. This will use the scanner.
-        return await _scrapeAndAddUrl(folderId, tab.url, tab, sender);
+        scrapingInProgress.add(tab.url);
+        const result = await _scrapeAndAddUrl(folderId, tab.url, tab, sender);
+        scrapingInProgress.delete(tab.url);
+        return result;
     }
 }
 
@@ -243,7 +262,14 @@ export async function handleSetPlaylistOrder(request) {
 }
 
 export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
-    return await _scrapeAndAddUrl(folderId, urlToAdd, tab, null);
+    if (scrapingInProgress.has(urlToAdd)) {
+        broadcastLog({ text: `[Background]: A request to add "${urlToAdd}" is already in progress. Ignoring.`, type: 'info' });
+        return { success: true, message: 'Scraping already in progress for this URL.' };
+    }
+    scrapingInProgress.add(urlToAdd);
+    const result = await _scrapeAndAddUrl(folderId, urlToAdd, tab, null);
+    scrapingInProgress.delete(urlToAdd);
+    return result;
 }
 
 export async function handleGetPlaylist(request) {

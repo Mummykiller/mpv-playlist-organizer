@@ -109,9 +109,14 @@ class HostManagerApp:
         self.extension_id_entry.pack(fill=tk.X, expand=True)
 
         # --- Attempt to load previous Extension ID ---
-        # The manifest file created by the Windows installer includes the extension ID.
-        # We can try to read it to pre-fill the field.
-        manifest_file_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
+        # We read the previously created manifest file to pre-fill the extension ID field.
+        # The filename depends on the operating system.
+        if platform.system() == "Windows":
+            manifest_filename = f"{HOST_NAME}-chrome.json"
+        else: # Linux/macOS
+            manifest_filename = f"{HOST_NAME}.json"
+
+        manifest_file_path = os.path.join(DATA_DIR, manifest_filename)
         if os.path.exists(manifest_file_path):
             try:
                 with open(manifest_file_path, 'r', encoding='utf-8') as f:
@@ -449,23 +454,33 @@ class HostManagerApp:
         os.chmod(wrapper_path, 0o755)
         self.log(f"Created executable wrapper script: run_native_host.sh")
 
-        # Generate manifest
+        # Generate a single, portable manifest in the data directory.
+        # The browser requires an absolute path to the executable inside the manifest file.
+        manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}.json")
         chrome_manifest = {
-            "name": HOST_NAME, "description": HOST_DESCRIPTION, "path": wrapper_path,
-            "type": "stdio", "allowed_origins": [f"chrome-extension://{extension_id}/", "moz-extension://*"]
+            "name": HOST_NAME, "description": HOST_DESCRIPTION, "path": wrapper_path, "type": "stdio",
+            "allowed_origins": [f"chrome-extension://{extension_id}/"]
         }
+        with open(manifest_path, 'w') as f:
+            json.dump(chrome_manifest, f, indent=4)
+        self.log(f"Created portable manifest: {os.path.relpath(manifest_path, INSTALL_DIR)}")
 
+        # Symlink the portable manifest into each browser's native messaging host directory.
         browser_paths = get_browser_configs(is_mac)
         for browser, path in browser_paths.items():
             if os.path.isdir(os.path.dirname(path)):
                 try:
                     os.makedirs(path, exist_ok=True)
-                    manifest_path = os.path.join(path, f"{HOST_NAME}.json")
-                    with open(manifest_path, 'w') as f:
-                        json.dump(chrome_manifest, f, indent=4)
-                    self.log(f"Successfully installed manifest for {browser}.")
+                    symlink_target = os.path.join(path, f"{HOST_NAME}.json")
+                    
+                    # Remove old symlink/file if it exists, then create a new one.
+                    if os.path.lexists(symlink_target):
+                        os.remove(symlink_target)
+                    
+                    os.symlink(manifest_path, symlink_target)
+                    self.log(f"Successfully linked manifest for {browser}.")
                 except Exception as e:
-                    self.log(f"Failed to install for {browser}. Error: {e}")
+                    self.log(f"Failed to link manifest for {browser}. Error: {e}")
             else:
                 self.log(f"Skipping {browser} (directory not found).")
 
@@ -504,20 +519,21 @@ class HostManagerApp:
         self.log(f"Uninstalling for {os_name}...")
 
         browser_paths = get_browser_configs(is_mac)
-        manifest_filename = f"{HOST_NAME}.json"
+        symlink_filename = f"{HOST_NAME}.json"
         for browser, path in browser_paths.items():
-            manifest_path = os.path.join(path, manifest_filename)
-            if os.path.exists(manifest_path):
+            symlink_path = os.path.join(path, symlink_filename)
+            if os.path.lexists(symlink_path): # Use lexists to check for symlinks without following them
                 try:
-                    os.remove(manifest_path)
-                    self.log(f"Successfully removed manifest for {browser}.")
+                    os.remove(symlink_path)
+                    self.log(f"Successfully removed manifest link for {browser}.")
                 except OSError as e:
-                    self.log(f"Failed to remove manifest for {browser}. Error: {e}")
+                    self.log(f"Failed to remove manifest link for {browser}. Error: {e}")
             else:
                 self.log(f"Manifest for {browser} not found (or already removed).")
 
         # Clean up generated files for Unix-like systems
         files_to_remove = [
+            os.path.join(DATA_DIR, f"{HOST_NAME}.json"), # Remove the central manifest file
             os.path.join(INSTALL_DIR, "run_native_host.sh"),
             os.path.join(INSTALL_DIR, "mpv-cli") # Remove the CLI wrapper
         ]

@@ -1,0 +1,3 @@
+#!/bin/sh
+export PYTHONDONTWRITEBYTECODE=1
+python3 "/home/shinku/Documents/mpv-playlist-organizer/native_host.py" "$@"
