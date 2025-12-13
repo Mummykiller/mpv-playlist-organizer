@@ -21,10 +21,9 @@ class AniListUI {
         // --- State ---
         this.isManuallyPositioned = false;
         this.isLocked = false;
-        this.autoReattach = true;
-        this.forceReattach = false;
+        this.forceAttached = false; // New state for the setting
+        this.attachOnOpen = true; // New state for the "soft attach" setting
         this.isEnabled = true; // Master toggle from settings
-        this.showOnPage = true; // Sub-setting for on-page UI
     }
 
     /**
@@ -61,7 +60,10 @@ class AniListUI {
 
         if (this.panelHost && dragHandle) {
             new Draggable(this.panelHost, dragHandle, {
-                onDragStart: () => !this.isLocked,
+                onDragStart: () => {
+                    // Prevent dragging if locked OR if forced attached.
+                    return !this.isLocked && !this.forceAttached;
+                },
                 onDragEnd: () => {
                     this.isManuallyPositioned = true;
                     const newPosition = {
@@ -102,24 +104,28 @@ class AniListUI {
         }
 
         // Master override: if the feature is disabled in settings, it can never be visible.
-        if (shouldBeVisible && (!this.isEnabled || !this.showOnPage)) {
+        // New: Also hide if forceAttached is on and the main controller is minimized.
+        const isControllerMinimized = this.uiManager.controllerHost.style.display === 'none';
+        if (shouldBeVisible && (!this.isEnabled || (this.forceAttached && isControllerMinimized))) {
             shouldBeVisible = false;
         }
+
+        // Update the toggle button's active state
+        const leftBtn = this.controllerShadowRoot.getElementById('btn-toggle-anilist-left');
+        const rightBtn = this.controllerShadowRoot.getElementById('btn-toggle-anilist-right');
 
         if (shouldBeVisible) {
             this.panelHost.style.display = 'block';
 
-            // This block should execute if forceReattach is true, regardless of savePref.
-            if (this.forceReattach) {
+            // If 'attachOnOpen' is enabled and this is a user-initiated toggle (not a page load restore),
+            // we treat this opening as a "fresh" one by resetting the manual position flag.
+            // This ensures the soft attach works every time the user clicks the button.
+            if (this.attachOnOpen && typeof forceState !== 'boolean') {
                 this.isManuallyPositioned = false;
-                this.controller.savePreference({
-                    anilistPanelPosition: null,
-                    forceReattachAnilistPanel: false
-                });
-                this.forceReattach = false;
             }
 
-            if (this.autoReattach || !this.isManuallyPositioned) {
+            // Snap if forced, or if it's not manually positioned.
+            if (this.forceAttached || !this.isManuallyPositioned) {
                 this.snapToController();
             }
 
@@ -127,19 +133,28 @@ class AniListUI {
             if (savePref) {
                 this.controller.savePreference({ anilistPanelVisible: true });
             }
+            if (leftBtn) leftBtn.classList.add('active-toggle');
+            if (rightBtn) rightBtn.classList.add('active-toggle');
         } else {
             this.panelHost.style.display = 'none';
             if (savePref) {
                 this.controller.savePreference({ anilistPanelVisible: false });
             }
+            if (leftBtn) leftBtn.classList.remove('active-toggle');
+            if (rightBtn) rightBtn.classList.remove('active-toggle');
         }
+
+        // After toggling, always re-evaluate which side the button should be on.
+        // This ensures the button appears correctly when the panel is first opened.
+        this.controller.updateAdaptiveElements();
     }
 
     /**
      * Snaps the AniList panel to the side of the main controller.
      */
     snapToController() {
-        if (this.isManuallyPositioned && !this.forceReattach) return;
+        // If forceAttached is false, respect manual positioning. Otherwise, snap regardless.
+        if (this.isManuallyPositioned && !this.forceAttached) return;
         if (!this.panelHost || !this.uiManager.controllerHost || this.panelHost.style.display === 'none') return;
 
         const controllerRect = this.uiManager.controllerHost.getBoundingClientRect();

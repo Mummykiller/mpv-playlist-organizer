@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Began foundational refactoring of the service worker (`background.js`).
 - Created `storageManager.js` to isolate all `chrome.storage` interactions and data migration logic.
+- Added a "Force Panel Attached" setting to lock the AniList panel to the controller and manage its visibility when the controller is minimized.
+- Added an "Attach on Open" setting to provide a "soft attach" behavior, snapping the AniList panel to the controller on open while still allowing it to be moved freely.
 - Created `nativeConnection.js` to encapsulate all native messaging port management and communication logic.
 - Created `contextMenu.js` to manage the creation and updates of browser context menu items.
 - Created `playlistManager.js` to centralize all playlist-related actions (add, remove, clear, reorder).
@@ -25,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a feature to the installer to add the application directory to the user's PATH for easy CLI access.
 
 ### Fixed
+- Fixed an issue where the on-page AniList toggle button would not be highlighted (glow) when the panel was active.
+- Fixed a bug where the on-page AniList toggle button would not move to the correct side of the controller when the panel was opened.
+- Resolved an issue where the "Attach on Open" feature would stop working after the AniList panel was manually moved.
+- Corrected position saving logic for the AniList panel to ensure its manually set position is remembered across page refreshes and when the main controller is minimized and restored.
 - Resolved issue where AniList releases were not rendering in `popup.js` due to incorrect static method calls.
 - Corrected `background.js` to properly map `playlistManager` functions in the `actionHandlers` map, restoring playlist functionality.
 - Fixed `native_host.py` to correctly pass the `send_message` dependency to `MpvSessionManager`'s process monitoring threads, resolving MPV playback issues.
@@ -49,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The context menu now intelligently places the most recently used folder at the top of the list for quick access, removing the separate "Add to current" option.
 - `background.js` now imports and uses `storageManager.js`, `nativeConnection.js`, `contextMenu.js`, and `playlistManager.js` for improved modularity.
 - `native_host.py` is now a fully modularized, lightweight entry point that coordinates between the browser and other Python modules.
+- Removed several non-functional AniList settings ("Show UI sections", "Snap panel on open", "Force re-attach panel") to improve code clarity and user experience.
 - Improved robustness of `native_host.py` with better failsafe logging and CLI error handling.
 - Refactored `background.js` context menu handler for improved clarity.
 - Refactored `content.js` to use `Draggable.js` for all draggable components.
