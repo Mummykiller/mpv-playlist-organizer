@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added a "pin" button to the AniList UI to lock its position, with a blue glow effect when active.
 - Began foundational refactoring of the service worker (`background.js`).
 - Created `storageManager.js` to isolate all `chrome.storage` interactions and data migration logic.
 - Added a "Force Panel Attached" setting to lock the AniList panel to the controller and manage its visibility when the controller is minimized.
