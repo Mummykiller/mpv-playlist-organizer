@@ -48,6 +48,11 @@ class AniListUI {
         // --- Panel's Internal Controls ---
         this.shadowRoot.getElementById('btn-close-anilist-panel')?.addEventListener('click', () => this.toggleVisibility(false));
         this.shadowRoot.getElementById('btn-refresh-anilist')?.addEventListener('click', () => this.fetchReleases(true));
+        this.shadowRoot.getElementById('btn-pin-anilist-panel')?.addEventListener('click', (e) => {
+            this.isLocked = !this.isLocked;
+            e.currentTarget.classList.toggle('pinned', this.isLocked);
+            this.updateDynamicStyles();
+        });
 
         // --- Controller's Toggle Buttons ---
         const toggleHandler = () => this.toggleVisibility();

@@ -775,6 +775,31 @@ select:focus-visible {
     box-shadow: none;
 }
 
+
+#btn-pin-anilist-panel {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    box-shadow: none;
+}
+
+#btn-pin-anilist-panel:hover {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+#btn-pin-anilist-panel.pinned {
+    color: var(--accent-primary);
+    box-shadow: 0 0 8px 0px var(--accent-primary);
+}
+
 #btn-close-anilist-panel:hover {
     color: var(--accent-danger);
     opacity: 1;
