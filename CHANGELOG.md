@@ -43,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed an issue where the "Lock Panel Position" setting for the AniList panel was not being applied, allowing the panel to be dragged even when locked.
 - Corrected the "Force Re-attach" setting for the AniList panel to properly reset after being used, ensuring it acts as a one-time trigger.
 - Fixed the "Clear on Completion" feature by ensuring the `on_completion.lua` script is correctly loaded by MPV and by updating the background script to handle both natural playlist completion (exit code 99) and manual closing (exit code 0) as triggers for clearing the playlist.
+- AniList panel state (position, visibility) is now correctly saved on a per-domain basis, preventing the state from being shared across different websites.
+- Resolved an issue where toggling the AniList panel's visibility on one website would incorrectly show the panel on all other open tabs. The UI state is now correctly isolated to the tab where the change was made.
+- Fixed a bug where dragging the minimized UI button would cause it to "bounce" back to its original position on certain dynamic websites. The button's manually set position is now correctly respected.
 - Fixed a major bug where the on-page "Add" button for non-YouTube sites would fail by needlessly using the stream scanner. The button now correctly scrapes the current page locally for a much faster and more reliable experience.
 - Fixed an issue where manually closing MPV would incorrectly clear the playlist; it now only clears on natural playlist completion (exit code 99).
 - Corrected a fallback logic flaw in the stream scanner. Manually closing the scanner window will no longer result in adding an incorrect URL to the playlist.

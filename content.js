@@ -115,73 +115,56 @@ class MpvController {
             this.addLogEntry(request.log);
         } else if (request.action === 'preferences_changed') {
             const changedPrefs = request.preferences; // This will now contain the specific preferences that changed
+            const changeDomain = request.domain; // The domain this change was for. Can be null for global changes.
+            const myDomain = this.uiManager.getDomain(); // Get the current tab's domain.
 
-            // If the change is only UI position/size related, update directly without full re-initialization
-            if (changedPrefs.position || changedPrefs.anilistPanelPosition || changedPrefs.anilistPanelSize || changedPrefs.minimizedStubPosition || changedPrefs.anilistPanelVisible !== undefined || changedPrefs.showMinimizedStub !== undefined || changedPrefs.lockAnilistPanel !== undefined) {
-                // Apply specific position/size changes directly to the UI manager's elements
-                if (changedPrefs.position && this.uiManager.controllerHost) {
-                    this.uiManager.controllerHost.style.left = changedPrefs.position.left;
-                    this.uiManager.controllerHost.style.top = changedPrefs.position.top;
-                    this.uiManager.controllerHost.style.right = changedPrefs.position.right;
-                    this.uiManager.controllerHost.style.bottom = changedPrefs.position.bottom;
-                    this.preFullscreenPosition = null;
-                    this.preResizePosition = null;
-                    this.validateAndRepositionController(); // Ensure it's on screen
-                }
-                if (changedPrefs.anilistPanelPosition && this.anilistUI?.panelHost) {
-                    this.anilistUI.panelHost.style.left = changedPrefs.anilistPanelPosition.left;
-                    this.anilistUI.panelHost.style.top = changedPrefs.anilistPanelPosition.top;
-                    this.anilistUI.panelHost.style.right = changedPrefs.anilistPanelPosition.right;
-                    this.anilistUI.panelHost.style.bottom = changedPrefs.anilistPanelPosition.bottom;
-                    this.anilistUI.isManuallyPositioned = true;
-                    this.anilistUI.validatePosition();
-                }
-                if (changedPrefs.anilistPanelSize && this.anilistUI?.panelHost) {
-                    this.anilistUI.panelHost.style.width = changedPrefs.anilistPanelSize.width;
-                    this.anilistUI.panelHost.style.height = changedPrefs.anilistPanelSize.height;
-                }
-                if (changedPrefs.minimizedStubPosition && this.uiManager.minimizedHost) {
-                    this.uiManager.minimizedHost.style.left = changedPrefs.minimizedStubPosition.left;
-                    this.uiManager.minimizedHost.style.top = changedPrefs.minimizedStubPosition.top;
-                    this.uiManager.minimizedHost.style.right = changedPrefs.minimizedStubPosition.right;
-                    this.uiManager.minimizedHost.style.bottom = changedPrefs.minimizedStubPosition.bottom;
-                    this.validateAndRepositionMinimizedStub();
-                }
-                // Handle show/hide anilist panel explicitly
-                if (changedPrefs.anilistPanelVisible !== undefined && this.anilistUI) {
-                    this.anilistUI.toggleVisibility(changedPrefs.anilistPanelVisible, false);
-                } 
-                if (changedPrefs.lockAnilistPanel !== undefined && this.anilistUI) {
-                    this.anilistUI.isLocked = changedPrefs.lockAnilistPanel;
-                    this.anilistUI.updateDynamicStyles();
-                }
-                if (changedPrefs.forcePanelAttached !== undefined && this.anilistUI) {
-                    this.anilistUI.forceAttached = changedPrefs.forcePanelAttached;
-                    // If the panel is now forced attached, snap it immediately.
-                    if (this.anilistUI.forceAttached) {
-                        this.anilistUI.snapToController();
+            const isDomainSpecificChange = Object.keys(changedPrefs).some(k => ['position', 'anilistPanelPosition', 'anilistPanelSize', 'minimizedStubPosition', 'anilistPanelVisible', 'lockAnilistPanel', 'minimized'].includes(k));
+
+            // If the change is domain-specific (like panel position/visibility), only apply it if the domains match.
+            if (isDomainSpecificChange) {
+                if (myDomain === changeDomain) {
+                    // This change is for our domain, apply it directly.
+                    if (changedPrefs.position && this.uiManager.controllerHost) {
+                        this.uiManager.controllerHost.style.left = changedPrefs.position.left;
+                        this.uiManager.controllerHost.style.top = changedPrefs.position.top;
+                        this.uiManager.controllerHost.style.right = changedPrefs.position.right;
+                        this.uiManager.controllerHost.style.bottom = changedPrefs.position.bottom;
+                        this.validateAndRepositionController();
                     }
-                    // Re-evaluate visibility, as it might need to be hidden if the controller is minimized.
-                    this.anilistUI.toggleVisibility(this.anilistUI.panelHost.style.display !== 'none', false);
+                    if (changedPrefs.anilistPanelPosition && this.anilistUI?.panelHost) {
+                        this.anilistUI.panelHost.style.left = changedPrefs.anilistPanelPosition.left;
+                        this.anilistUI.panelHost.style.top = changedPrefs.anilistPanelPosition.top;
+                        this.anilistUI.panelHost.style.right = changedPrefs.anilistPanelPosition.right;
+                        this.anilistUI.panelHost.style.bottom = changedPrefs.anilistPanelPosition.bottom;
+                        this.anilistUI.isManuallyPositioned = true;
+                        this.anilistUI.validatePosition();
+                    }
+                    if (changedPrefs.anilistPanelSize && this.anilistUI?.panelHost) {
+                        this.anilistUI.panelHost.style.width = changedPrefs.anilistPanelSize.width;
+                        this.anilistUI.panelHost.style.height = changedPrefs.anilistPanelSize.height;
+                    }
+                    if (changedPrefs.minimizedStubPosition && this.uiManager.minimizedHost) {
+                        this.uiManager.minimizedHost.style.left = changedPrefs.minimizedStubPosition.left;
+                        this.uiManager.minimizedHost.style.top = changedPrefs.minimizedStubPosition.top;
+                        this.uiManager.minimizedHost.style.right = changedPrefs.minimizedStubPosition.right;
+                        this.uiManager.minimizedHost.style.bottom = changedPrefs.minimizedStubPosition.bottom;
+                        this.validateAndRepositionMinimizedStub();
+                    }
+                    if (changedPrefs.anilistPanelVisible !== undefined && this.anilistUI) {
+                        this.anilistUI.toggleVisibility(changedPrefs.anilistPanelVisible, false);
+                    }
+                    if (changedPrefs.lockAnilistPanel !== undefined && this.anilistUI) {
+                        this.anilistUI.isLocked = changedPrefs.lockAnilistPanel;
+                        this.anilistUI.updateDynamicStyles();
+                    }
+                    if (changedPrefs.minimized !== undefined) {
+                        this.setMinimizedState(changedPrefs.minimized, false);
+                    }
+                    this.updateAdaptiveElements();
                 }
-                if (changedPrefs.anilistAttachOnOpen !== undefined && this.anilistUI) {
-                    this.anilistUI.attachOnOpen = changedPrefs.anilistAttachOnOpen;
-                }
-                // Handle show/hide minimized stub explicitly
-                if (changedPrefs.showMinimizedStub !== undefined) {
-                     this.showMinimizedStub = changedPrefs.showMinimizedStub;
-                     // Re-apply minimized state to ensure stub visibility is correct
-                     this.setMinimizedState(this.uiManager.controllerHost.style.display === 'none', false);
-                }
-
-                // Call updateAdaptiveElements for adaptive button changes, etc.
-                // This is important because the position changes affect the side where the AniList button appears.
-                this.updateAdaptiveElements();
-
-                // Do NOT call applyInitialState() which triggers refreshPlaylist()
             } else {
-                // If it's not just a position/size change, then a full re-initialization might be necessary.
-                // This could be for things like changing log visibility, pin state, UI mode, etc.
+                // If it's a global change (or not a domain-specific one), re-apply the initial state
+                // to ensure all settings (like AniList image size, etc.) are updated everywhere.
                 this.applyInitialState();
             }
         } else if (request.action === 'show_confirmation') {
@@ -520,14 +503,14 @@ class MpvController {
             // Only show the minimized stub if the setting is enabled.
             if (this.showMinimizedStub) {
                 // Determine which corner to attach to based on the main controller's last position.
-                const savedPosition = prefs?.minimizedStubPosition;
-                if (savedPosition && savedPosition.left && savedPosition.top) {
-                    this.minimizedHost.style.left = savedPosition.left;
-                    this.minimizedHost.style.top = savedPosition.top;
-                    this.minimizedHost.style.right = savedPosition.right;
-                    this.minimizedHost.style.bottom = savedPosition.bottom;
-                } else {
-                    // Calculate corner based on controller position if no saved position.
+                const savedStubPosition = prefs?.minimizedStubPosition;
+                if (savedStubPosition && savedStubPosition.left && savedStubPosition.top) {
+                    this.minimizedHost.style.left = savedStubPosition.left;
+                    this.minimizedHost.style.top = savedStubPosition.top;
+                    this.minimizedHost.style.right = savedStubPosition.right;
+                    this.minimizedHost.style.bottom = savedStubPosition.bottom;
+                } else { // Fallback to corner-based positioning if no manual position is saved.
+                    minimizedHost.classList.remove('top-left', 'top-right');
                     const rect = this.controllerHost.getBoundingClientRect();
                     const controllerCenter = rect.left + (rect.width / 2);
                     const screenCenter = window.innerWidth / 2;
@@ -541,6 +524,7 @@ class MpvController {
                     this.minimizedHost.style.right = '';
                     this.minimizedHost.style.bottom = '';
                 }
+
                 this.minimizedHost.style.display = 'block';
             }
 
@@ -951,6 +935,8 @@ class MpvController {
                         right: this.uiManager.minimizedHost.style.right,
                         bottom: this.uiManager.minimizedHost.style.bottom
                     };
+                    // After dragging, remove corner classes to ensure style-based positioning takes precedence.
+                    this.uiManager.minimizedHost.classList.remove('top-left', 'top-right');
                     this.savePreference({ minimizedStubPosition: newPosition });
                 }
             });
