@@ -52,6 +52,7 @@ class AniListUI {
             this.isLocked = !this.isLocked;
             e.currentTarget.classList.toggle('pinned', this.isLocked);
             this.updateDynamicStyles();
+            this.controller.savePreference({ lockAnilistPanel: this.isLocked });
         });
 
         // --- Controller's Toggle Buttons ---

@@ -212,9 +212,16 @@ async function handleGetUiStateForTab(request) {
 
     const domainPrefs = domain ? data.settings.ui_preferences.domains[domain] || {} : {};
 
-    const isMinimized = domainPrefs.minimized ?? (globalPrefs.mode === 'minimized');
+    // Combine global and domain preferences to get the final state for the tab.
+    const finalPrefs = { ...globalPrefs, ...domainPrefs };
 
-    return { success: true, state: { minimized: isMinimized, detectedUrl: tabState.detectedUrl } };
+    return {
+        success: true,
+        state: {
+            minimized: finalPrefs.minimized ?? (finalPrefs.mode === 'minimized'),
+            detectedUrl: tabState.detectedUrl
+        }
+    };
 }
 
 async function handleReportDetectedUrl(request, sender) {
@@ -277,7 +284,11 @@ async function handleSetUiPreferences(request, sender) {
     }
 
     await storage.set(data);
-    broadcastToTabs({ action: 'preferences_changed', preferences: newPreferences }); // Send the actual preferences that changed
+    // Broadcast the change, but also include the domain it applies to.
+    // This allows other tabs to ignore UI changes that aren't for them.
+    broadcastToTabs({
+        action: 'preferences_changed', preferences: newPreferences, domain: domain
+    });
     return { success: true };
 }
 

@@ -13,6 +13,18 @@ class UIManager {
     }
 
     /**
+     * Gets the hostname of the current page.
+     * @returns {string|null} The domain, or null if it can't be determined.
+     */
+    getDomain() {
+        try {
+            return new URL(window.location.href).hostname;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
      * Creates the controller container and injects the UI's HTML into the DOM.
      */
     createAndInjectUi() {
@@ -78,9 +90,9 @@ class UIManager {
         // Inject styles for the host elements into the main document's head.
         const hostStyle = document.createElement('style');
         hostStyle.textContent = `
-            #m3u8-controller-host, #m3u8-minimized-host { position: fixed; z-index: 2147483647; }
-            #m3u8-minimized-host.top-left { top: 15px; left: 15px; }
-            #m3u8-minimized-host.top-right { top: 15px; right: 15px; }
+            #m3u8-controller-host, #m3u8-minimized-host { position: fixed; z-index: 2147483647; } /* Default position is top-left (0,0) until JS moves it */
+            #m3u8-minimized-host.top-left { top: 15px; left: 15px; right: auto; bottom: auto; }
+            #m3u8-minimized-host.top-right { top: 15px; right: 15px; left: auto; bottom: auto; }
             #anilist-panel-host { position: fixed; width: 400px; height: 600px; z-index: 2147483646; }
             body.mpv-controller-dragging, body.mpv-controller-dragging * { user-select: none; -webkit-user-select: none; cursor: grabbing !important; }
             body.mpv-anilist-dragging, body.mpv-anilist-dragging * { user-select: none; -webkit-user-select: none; cursor: grabbing !important; }
