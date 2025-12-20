@@ -380,7 +380,7 @@ class OptionsManager {
 
     _toggleAutomaticMpvFlag(element) {
         element.classList.toggle('disabled');
-        this.debouncedSaveAllPreferences();
+        this.saveAllPreferences();
     }
 
     async _resetAutomaticMpvFlags() {

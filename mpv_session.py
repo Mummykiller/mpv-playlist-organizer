@@ -139,8 +139,17 @@ class MpvSessionManager:
                 f'--input-ipc-server={ipc_path}',
             ]
 
+            has_terminal_flag = False
             if automatic_mpv_flags:
-                enabled_flags = [flag['flag'] for flag in automatic_mpv_flags if flag['enabled']]
+                enabled_flags = []
+                for flag_info in automatic_mpv_flags:
+                    if flag_info.get('enabled'):
+                        if flag_info.get('flag') == 'terminal':
+                            has_terminal_flag = True
+                        else:
+                            # Ensure we don't append None or empty strings
+                            if flag_info.get('flag'):
+                                enabled_flags.append(flag_info.get('flag'))
                 mpv_args.extend(enabled_flags)
 
             if clear_on_completion:
@@ -151,8 +160,9 @@ class MpvSessionManager:
                 else:
                     logging.warning(f"Completion script not found at {on_completion_script_path}. 'Clear on Completion' may not work as expected.")
 
-            if start_paused:
-                logging.info("Applying --pause flag.")
+            # The --pause flag from automatic flags can be overridden by the explicit start_paused parameter from the 'play' command.
+            if start_paused and '--pause' not in mpv_args:
+                logging.info("Applying --pause flag from explicit 'start_paused' parameter.")
                 mpv_args.append('--pause')
 
             if custom_mpv_flags:
@@ -179,9 +189,19 @@ class MpvSessionManager:
                 'universal_newlines': False
             }
             if platform.system() == "Windows":
-                popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+                if not has_terminal_flag:
+                    creation_flags |= subprocess.CREATE_NO_WINDOW
+                popen_kwargs['creationflags'] = creation_flags
             else:
                 popen_kwargs['start_new_session'] = True
+                if has_terminal_flag:
+                    # On non-windows, we pass the actual flag to mpv
+                    if '--terminal' not in mpv_args:
+                        mpv_args.insert(1, '--terminal')
+            
+            # Re-create full_command in case --terminal was added for non-windows
+            full_command = mpv_args + ['--'] + playlist
 
             process = subprocess.Popen(full_command, **popen_kwargs)
             self.process = process

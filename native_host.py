@@ -319,24 +319,32 @@ try:
         try:
             mpv_args = [mpv_exe]
 
+            has_terminal_flag = False
             if automatic_mpv_flags:
-                enabled_flags = [flag['flag'] for flag in automatic_mpv_flags if flag['enabled']]
+                enabled_flags = []
+                for flag_info in automatic_mpv_flags:
+                    if flag_info.get('enabled'):
+                        if flag_info.get('flag') == 'terminal':
+                            has_terminal_flag = True
+                        else:
+                            if flag_info.get('flag'):
+                                enabled_flags.append(flag_info.get('flag'))
                 mpv_args.extend(enabled_flags)
 
             if custom_mpv_flags:
                 import shlex
                 try:
                     parsed_flags = shlex.split(custom_mpv_flags)
-                    logging.info(f"Applying custom MPV flags: {parsed_flags}")
+                    logging.info(f"Applying custom MPV flags for unmanaged instance: {parsed_flags}")
                     mpv_args.extend(parsed_flags)
                 except Exception as e:
                     logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
 
             if custom_width and custom_height:
-                logging.info(f"Applying custom geometry: {custom_width}x{custom_height}")
+                logging.info(f"Applying custom geometry for unmanaged instance: {custom_width}x{custom_height}")
                 mpv_args.append(f'--geometry={custom_width}x{custom_height}')
             elif geometry:
-                logging.info(f"Applying geometry: {geometry}")
+                logging.info(f"Applying geometry for unmanaged instance: {geometry}")
                 mpv_args.append(f'--geometry={geometry}')
 
             mpv_args.extend(['--'] + playlist)
@@ -347,8 +355,17 @@ try:
                 'universal_newlines': False
             }
             if platform.system() == "Windows":
-                popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+                if not has_terminal_flag:
+                    creation_flags |= subprocess.CREATE_NO_WINDOW
+                popen_kwargs['creationflags'] = creation_flags
+            else:
+                # For non-windows, if terminal is requested, we add the --terminal flag
+                if has_terminal_flag:
+                    # Insert it early in the arg list
+                    mpv_args.insert(1, '--terminal')
 
+            # Re-assign the final command list to mpv_args before Popen
             process = subprocess.Popen(mpv_args, **popen_kwargs)
             
             stderr_thread = threading.Thread(target=log_stream, args=(process.stderr, logging.warning, None))
@@ -507,6 +524,21 @@ try:
 
                 elif command == 'check_dependencies':
                     response = services.check_mpv_and_ytdlp_status(file_io.get_mpv_executable, send_message)
+
+                elif command == 'get_default_automatic_flags':
+                    default_flags = [
+                        {
+                            "flag": "--pause",
+                            "description": "Start MPV paused. This is overridden if 'start_paused' is explicitly requested.",
+                            "enabled": False
+                        },
+                        {
+                            "flag": "terminal", # Use a special keyword instead of the raw flag
+                            "description": "Show a terminal window for MPV (useful for debugging).",
+                            "enabled": False
+                        }
+                    ]
+                    response = {"success": True, "flags": default_flags}
 
                 else:
                     response = {"success": False, "error": "Unknown command"}
