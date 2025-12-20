@@ -51,6 +51,9 @@ const storage = new StorageManager('mpv_organizer_data', broadcastLog);
  * @param {object} message - The message object to send.
  */
 function broadcastToTabs(message) {
+    // Send to other extension contexts (like the popup).
+    chrome.runtime.sendMessage(message).catch(() => {});
+
     chrome.tabs.query({}, (tabs) => {
         for (const tab of tabs) {
             try {
@@ -70,8 +73,6 @@ function broadcastToTabs(message) {
 function broadcastLog(logObject) {
     const message = { log: logObject };
     broadcastToTabs(message);
-    // Send to other extension contexts (like the popup).
-    chrome.runtime.sendMessage(message).catch(() => {});
 }
 
 // --- Native Host Communication (using a persistent connection) ---
@@ -655,6 +656,24 @@ const actionHandlers = {
     'log_from_scanner': (request) => {
         broadcastLog(request.log);
         // This action doesn't need to send a response back to the scanner.
+    },
+    'force_reload_settings': () => {
+        // Broadcast an empty preferences object. This triggers the 'else' block in content.js
+        // which calls applyInitialState(), effectively reloading all settings from storage.
+        broadcastToTabs({ action: 'preferences_changed', preferences: {} });
+        return { success: true };
+    },
+    'open_popup': async (request, sender) => {
+        broadcastLog({ text: `[Background]: Attempting to open popup...`, type: 'info' });
+        if (chrome.action && chrome.action.openPopup) {
+            try {
+                await chrome.action.openPopup({ windowId: sender.tab.windowId });
+                return { success: true };
+            } catch (e) {
+                return { success: false, error: e.message };
+            }
+        }
+        return { success: false, error: 'chrome.action.openPopup is not supported in this browser version.' };
     }
 };
 
@@ -905,6 +924,11 @@ chrome.webRequest.onBeforeRequest.addListener(
             return;
         }
         lastDetectedUrls[details.tabId] = details.url;
+
+        // NEW: Update state immediately and notify popup
+        if (!tabUiState[details.tabId]) tabUiState[details.tabId] = {};
+        tabUiState[details.tabId].detectedUrl = details.url;
+        chrome.runtime.sendMessage({ action: 'detected_url_changed', tabId: details.tabId, url: details.url }).catch(() => {});
 
         // Check if a scanner window is waiting for this URL.
         if (m3u8DetectionPromises[details.tabId]) {

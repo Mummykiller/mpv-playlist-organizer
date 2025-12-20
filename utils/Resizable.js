@@ -41,6 +41,11 @@ class Resizable {
         this.isResizing = true;
         document.body.classList.add('mpv-resizing-active');
 
+        // Ensure the element's position is calculated in pixels before resizing starts.
+        // This prevents issues if the position was previously set in percentages.
+        const rect = this.element.getBoundingClientRect();
+        this.element.style.left = `${rect.left}px`;
+        this.element.style.top = `${rect.top}px`;
         this.startX = e.clientX;
         this.startY = e.clientY;
         this.startWidth = this.element.offsetWidth;
@@ -56,7 +61,8 @@ class Resizable {
         if (!this.isResizing) return;
 
         const rect = this.element.getBoundingClientRect();
-        const maxAllowedWidth = window.innerWidth - rect.left;
+        // Use document.documentElement.clientWidth to get viewport width excluding scrollbar
+        const maxAllowedWidth = document.documentElement.clientWidth - rect.left;
         const maxAllowedHeight = window.innerHeight - rect.top;
 
         const newWidth = Math.min(maxAllowedWidth, Math.max(this.minWidth, this.startWidth + (e.clientX - this.startX)));

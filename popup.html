@@ -64,6 +64,9 @@
             <button id="btn-mini-toggle-settings" title="Settings" style="flex-shrink: 0; padding: 8px; background-color: var(--surface-color);">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             </button>
+            <button id="btn-mini-toggle-stub" title="Toggle Minimized Button" style="flex-shrink: 0; padding: 8px; background-color: var(--surface-color);">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="16" cy="16" r="4"/><polygon points="10 8 16 12 10 16" fill="currentColor" stroke-width="0"/></svg>
+            </button>
             <button id="btn-mini-manage-folders" title="Manage Folders" style="flex-shrink: 0; padding: 8px; background-color: var(--surface-color);">
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L8.6 3.3A2 2 0 0 0 6.9 2H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16z"></path></svg>
             </button>
@@ -184,9 +187,14 @@
                     <span class="custom-geometry-separator">&times;</span>
                     <input type="text" id="custom-height" class="custom-geometry-input" placeholder="Height" pattern="[0-9]{1,4}" maxlength="4" title="Custom window height in pixels.">
                 </div>
-                <div class="control-group" style="flex-direction: column; align-items: stretch; gap: 4px;">
-                    <label for="custom-mpv-flags" class="settings-label" style="flex-basis: auto;">Custom MPV Flags:</label>
-                    <textarea id="custom-mpv-flags" rows="3" placeholder="e.g., --vo=gpu --hwdec=auto" title="Add custom command-line flags for MPV. Example: --vo=gpu --hwdec=auto"></textarea>
+                <div class="control-group stacked-control setting-item">
+                    <label for="mpv-flag-input" class="settings-label">Custom MPV Flags:</label>
+                    <div class="input-group">
+                        <input type="text" id="mpv-flag-input" class="settings-input" placeholder="e.g. --vo=gpu" title="Type a flag and press Enter">
+                        <button id="btn-reset-mpv-flags" class="icon-button" title="Reset to Defaults" style="padding: 8px;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"/><path d="M3 3v9h9"/></svg></button>
+                    </div>
+                    <div id="mpv-flags-list-container" class="filter-list-container"></div>
+                    <small>Click a flag to remove it.</small>
                 </div>
                 <div class="control-group">
                     <label for="show-play-new-button-checkbox" class="settings-label">Show "Play New" Button:</label>
@@ -252,6 +260,26 @@
                 <div class="control-group" style="margin-top: 8px;">
                     <label for="btn-manual-ytdlp-update" class="settings-label">Manual Update:</label>
                     <button id="btn-manual-ytdlp-update" class="secondary-action" style="flex-grow: 1;" title="Manually run the yt-dlp update process.">Update yt-dlp Now</button>
+                </div>
+            </div>
+        </details>
+        <details class="settings-section">
+            <summary class="settings-section-header">Keybindings</summary>
+            <div class="settings-section-content">
+                <div class="control-group">
+                    <label for="kb-add-playlist-input" class="settings-label">Add to Playlist:</label>
+                    <input type="text" id="kb-add-playlist-input" class="settings-input" placeholder="e.g. Shift+A" title="Keybind to add detected URL to playlist">
+                </div>
+                <div class="control-group">
+                    <label for="kb-toggle-ui-input" class="settings-label">Toggle Controller:</label>
+                    <input type="text" id="kb-toggle-ui-input" class="settings-input" placeholder="e.g. Shift+S" title="Keybind to show/hide the on-page controller">
+                </div>
+                <div class="control-group">
+                    <label for="kb-open-popup-input" class="settings-label">Open Popup:</label>
+                    <input type="text" id="kb-open-popup-input" class="settings-input" placeholder="e.g. Alt+P" title="Keybind to open the extension popup">
+                </div>
+                <div class="control-group" style="margin-top: 8px;">
+                    <button id="btn-force-reload-settings" class="secondary-action" style="width: 100%;" title="Force all open tabs to reload extension settings immediately.">Force Reload Settings</button>
                 </div>
             </div>
         </details>

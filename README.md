@@ -89,6 +89,7 @@ A **Command-Line Interface (CLI)** is also available for playing your playlists 
 -   **Import/Export**: Back up your playlists to JSON files and import them later.
 -   **AniList Integration**: See today's airing anime in a draggable, resizable side-panel or in the popup.
 -   **Highly Configurable**: Adjust the UI, playback behavior, confirmation prompts, and more from the settings menu.
+-   **Customizable Keybindings**: Set global shortcuts for adding videos, toggling the UI, and opening the popup.
 -   **SPA Resilience**: The UI works seamlessly on modern Single-Page Applications like YouTube.
 
 ---

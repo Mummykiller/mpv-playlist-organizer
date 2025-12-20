@@ -50,6 +50,7 @@ class MpvController {
         this.enableDblclickCopy = false; // New: Preference for double-click copy
         this.showCopyTitleButton = false; // New: Preference for the copy title button
         this.lastRightClickedElement = null; // New: To track right-clicks for context menu actions
+        this.keybinds = { add: null, toggle: null, openPopup: null };
 
         // Bind `this` for methods that are used as event listeners or callbacks
         this.handleMessage = this.handleMessage.bind(this);
@@ -705,6 +706,7 @@ class MpvController {
         this._bindLogControls();
         this._bindWindowEvents();
         this._bindMinimizedControls();
+        this._bindGlobalShortcuts();
         this._initializeDraggables(); // New centralized method
     }
 
@@ -714,11 +716,27 @@ class MpvController {
 
         this.uiManager.shadowRoot.getElementById('btn-toggle-pin').addEventListener('click', () => this.setPinState(!this.isPinned));
 
+        this.uiManager.shadowRoot.getElementById('btn-toggle-stub').addEventListener('click', () => {
+            this.showMinimizedStub = !this.showMinimizedStub;
+            this.savePreference({ show_minimized_stub: this.showMinimizedStub });
+            this._updateStubButtonState();
+        });
+
         this.uiManager.shadowRoot.getElementById('btn-toggle-ui-mode').addEventListener('click', () => {
             const newMode = this.currentUiMode === 'full' ? 'compact' : 'full';
             this.switchUi(newMode);
         });
 
+    }
+
+    /**
+     * Updates the visual state of the toggle stub button.
+     * @private
+     */
+    _updateStubButtonState() {
+        const btn = this.uiManager.shadowRoot?.getElementById('btn-toggle-stub');
+        if (!btn) return;
+        btn.classList.toggle('active-toggle', this.showMinimizedStub);
     }
 
     /** Binds listeners for the primary action buttons (Play, Add, Clear, etc.). */
@@ -895,6 +913,65 @@ class MpvController {
     }
 
     /**
+     * Binds global keyboard shortcuts for the controller.
+     * @private
+     */
+    _bindGlobalShortcuts() {
+        window.addEventListener('keydown', (e) => {
+            if (!this.keybinds.add && !this.keybinds.toggle && !this.keybinds.openPopup) return;
+            
+            // Ignore if typing in an input
+            if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) return;
+
+            const modifiers = [];
+            if (e.ctrlKey) modifiers.push('Ctrl');
+            if (e.shiftKey) modifiers.push('Shift');
+            if (e.altKey) modifiers.push('Alt');
+            if (e.metaKey) modifiers.push('Meta');
+            
+            let key = e.key;
+            if (key === ' ') key = 'Space';
+            if (key.length === 1) key = key.toUpperCase();
+            
+            if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+
+            const combo = [...modifiers, key].join('+').toLowerCase();
+            const normalize = (str) => {
+                if (!str) return '';
+                return str.replace(/\s+/g, '')
+                          .toLowerCase()
+                          .replace('control', 'ctrl')
+                          .replace('command', 'meta')
+                          .replace('cmd', 'meta')
+                          .replace('option', 'alt');
+            };
+
+            if (this.keybinds.add && combo === normalize(this.keybinds.add)) {
+                e.preventDefault();
+                e.stopPropagation();
+                const folderSelect = this.uiManager.shadowRoot?.getElementById('folder-select');
+                const folderId = folderSelect?.value;
+                if (folderId) {
+                    this.addDetectedUrlToFolder(folderId, { isUiVisible: this.uiManager.controllerHost.style.display !== 'none' });
+                }
+            } else if (this.keybinds.toggle && combo === normalize(this.keybinds.toggle)) {
+                e.preventDefault();
+                e.stopPropagation();
+                const isMinimized = this.uiManager.controllerHost.style.display === 'none';
+                this.setMinimizedState(!isMinimized);
+            } else if (this.keybinds.openPopup && combo === normalize(this.keybinds.openPopup)) {
+                e.preventDefault();
+                e.stopPropagation();
+                sendMessageAsync({ action: 'open_popup' }).then(response => {
+                    if (!response || !response.success) {
+                        this.addLogEntry({ text: `[Content]: Failed to open popup: ${response?.error || 'Unknown error'}`, type: 'error' });
+                    }
+                });
+            }
+        }, true);
+    }
+
+    /**
      * Initializes all draggable UI components using the Draggable utility class.
      * @private
      */
@@ -909,13 +986,12 @@ class MpvController {
                     this.anilistUI?.snapToController();
                     this.updateAdaptiveElements();
                 },
-                onDragEnd: () => {
-                    const newPosition = {
-                        left: this.uiManager.controllerHost.style.left,
-                        top: this.uiManager.controllerHost.style.top,
-                        right: this.uiManager.controllerHost.style.right,
-                        bottom: this.uiManager.controllerHost.style.bottom
-                    };
+                onDragEnd: (e, newPosition) => {
+                    // Apply the new position styles calculated by Draggable.js
+                    this.uiManager.controllerHost.style.left = newPosition.left;
+                    this.uiManager.controllerHost.style.top = newPosition.top;
+                    this.uiManager.controllerHost.style.right = newPosition.right;
+                    this.uiManager.controllerHost.style.bottom = newPosition.bottom;
                     this.preFullscreenPosition = null;
                     this.preResizePosition = null;
                     this.savePreference({ position: newPosition });
@@ -928,13 +1004,13 @@ class MpvController {
         if (this.uiManager.minimizedHost && minimizedHandle) {
             new Draggable(this.uiManager.minimizedHost, minimizedHandle, {
                 dragButton: 2, // Right-click drag
-                onDragEnd: () => {
-                    const newPosition = {
-                        left: this.uiManager.minimizedHost.style.left,
-                        top: this.uiManager.minimizedHost.style.top,
-                        right: this.uiManager.minimizedHost.style.right,
-                        bottom: this.uiManager.minimizedHost.style.bottom
-                    };
+                onDragEnd: (e, newPosition) => {
+                    // Apply the new position styles calculated by Draggable.js
+                    this.uiManager.minimizedHost.style.left = newPosition.left;
+                    this.uiManager.minimizedHost.style.top = newPosition.top;
+                    this.uiManager.minimizedHost.style.right = newPosition.right;
+                    this.uiManager.minimizedHost.style.bottom = newPosition.bottom;
+
                     // After dragging, remove corner classes to ensure style-based positioning takes precedence.
                     this.uiManager.minimizedHost.classList.remove('top-left', 'top-right');
                     this.savePreference({ minimizedStubPosition: newPosition });
@@ -980,8 +1056,8 @@ class MpvController {
             } else if (this.preResizePosition) {
                 // If the controller is on-screen AND we have a stored pre-resize position,
                 // it means the window has been made larger again.
-            const originalLeft = parseInt(this.preResizePosition.left, 10) || 0;
-            const originalTop = parseInt(this.preResizePosition.top, 10) || 0; // We no longer save this automatically, preventing cross-tab interference.
+            const originalLeft = parseFloat(this.preResizePosition.left) || 0;
+            const originalTop = parseFloat(this.preResizePosition.top) || 0; // We no longer save this automatically, preventing cross-tab interference.
                 // Check if the original position is now back within the valid viewport. If so, restore it.
                 // We no longer save this automatically, preventing cross-tab interference.
                 // The position is only saved on an explicit user drag.
@@ -1023,6 +1099,10 @@ class MpvController {
         this.showMinimizedStub = prefs?.show_minimized_stub ?? true;
         this.showCopyTitleButton = prefs?.show_copy_title_button ?? false;
         this.pageScraper.updateFilterWords(prefs?.scraper_filter_words || ['watch', 'online', 'free', 'episode', 'season', 'full', 'hd', 'eng sub', 'subbed', 'dubbed', 'animepahe']);
+        this._updateStubButtonState();
+        this.keybinds.add = prefs?.kb_add_playlist || null;
+        this.keybinds.toggle = prefs?.kb_toggle_controller || null;
+        this.keybinds.openPopup = prefs?.kb_open_popup || null;
 
         // Restore AniList panel position first.
         if (this.anilistUI.panelHost && anilistPosition?.left && anilistPosition?.top) {

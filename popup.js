@@ -210,6 +210,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
     const miniFolderManagementControls = document.getElementById('mini-folder-management-controls');
     const btnMiniToggleSettings = document.getElementById('btn-mini-toggle-settings');
     const miniSettingsControls = document.getElementById('mini-settings-controls');
+    const btnMiniToggleStub = document.getElementById('btn-mini-toggle-stub');
     const miniNewFolderNameInput = document.getElementById('mini-new-folder-name');
     const miniCreateFolderBtn = document.getElementById('btn-mini-create-folder');
     const miniRenameFolderBtn = document.getElementById('btn-mini-rename-folder');
@@ -240,6 +241,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
 
 
     let folderToRename = null;
+    let currentDetectedUrl = null;
 
     // Reorder Elements
     const reorderContainer = document.getElementById('reorder-container');
@@ -541,6 +543,15 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
         const isVisible = miniSettingsControls.style.display === 'block';
         miniSettingsControls.style.display = isVisible ? 'none' : 'block';
     });
+    if (btnMiniToggleStub) {
+        btnMiniToggleStub.addEventListener('click', async () => {
+            const prefs = await sendMessageAsync({ action: 'get_ui_preferences' });
+            const currentVal = prefs?.preferences?.show_minimized_stub ?? true;
+            const newVal = !currentVal;
+            await sendMessageAsync({ action: 'set_ui_preferences', preferences: { show_minimized_stub: newVal } });
+            // UI update will happen via preferences_changed listener
+        });
+    }
 
     // --- Reorder Logic ---
 
@@ -841,6 +852,14 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
         sendMessageAsync({ action: 'set_last_folder_id', folderId: newFolderId });
     });
 
+    // Helper to scrape page details directly from popup
+    const getPageDetails = (tabId) => new Promise((resolve) => {
+        chrome.tabs.sendMessage(tabId, { action: 'scrape_and_get_details' }, (response) => {
+            if (chrome.runtime.lastError) return resolve(null);
+            resolve(response);
+        });
+    });
+
     // --- Mini Controller Logic (Refactored for Clarity) ---
 
     async function handleMiniAdd() {
@@ -852,10 +871,24 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             const tabId = activeTab?.id;
             if (!tabId) return showStatus('Could not find an active tab.', true);
 
+            const payload = { action: 'add', folderId, tabId, tab: activeTab };
+
+            // If we have a detected URL, try to construct a payload with it.
+            if (currentDetectedUrl) {
+                // Try to get a title from the page content script
+                const details = await getPageDetails(tabId);
+                if (details && details.title) {
+                    payload.data = { url: currentDetectedUrl, title: details.title };
+                } else {
+                    // Fallback: use the URL as the title if content script is unreachable
+                    payload.data = { url: currentDetectedUrl, title: currentDetectedUrl };
+                }
+            }
+
             // The 'add' action now triggers the scraper in the background script.
             // We just need to provide the folderId and the tabId.
             // We also pass the full tab object so the background script can show a confirmation dialog on that tab if needed.
-            const addResponse = await sendMessageAsync({ action: 'add', folderId, tabId, tab: activeTab });
+            const addResponse = await sendMessageAsync(payload);
             if (addResponse.success) {
                 if (addResponse.message) showStatus(addResponse.message);
             }
@@ -943,6 +976,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
 
             // New: Check for a detected URL on initialization and update the button state.
             if (uiState?.detectedUrl) {
+                currentDetectedUrl = uiState.detectedUrl;
                 miniAddBtn.classList.add('stream-present');
             }
 
@@ -953,12 +987,18 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             if (prefs) {
                 optionsManager.updateAllPreferencesUI(prefs);
             }
+            
+            if (btnMiniToggleStub) {
+                const isStubEnabled = prefs?.show_minimized_stub ?? true;
+                btnMiniToggleStub.style.opacity = isStubEnabled ? '1' : '0.5';
+            }
             updateRemoveButtonState();
 
             if (uiManager.isMiniView()) {
                 updateItemCount(miniFolderSelect.value);
                 showOnPageControllerBtn.style.display = 'block';
                 hideOnPageControllerBtn.style.display = 'none';
+                if (miniAddBtn) miniAddBtn.focus();
             } else {
                 // Apply focus to the new folder input if the setting is enabled
                 if (prefs?.autofocus_new_folder) {
@@ -1007,6 +1047,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
                 // The miniAddBtn is for the mini-controller view.
                 // We check if the message is for the currently active tab.
                 if (activeTab && activeTab.id === request.tabId && miniAddBtn) {
+                    currentDetectedUrl = request.url;
                     miniAddBtn.classList.toggle('stream-present', !!request.url);
                 }
             });
@@ -1016,6 +1057,10 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
         if (request.action === 'preferences_changed') {
             sendMessageAsync({ action: 'get_ui_preferences' }).then(response => {
                 if (response?.success && response.preferences) optionsManager.updateAllPreferencesUI(response.preferences);
+                if (btnMiniToggleStub && response?.preferences) {
+                    const isStubEnabled = response.preferences.show_minimized_stub ?? true;
+                    btnMiniToggleStub.style.opacity = isStubEnabled ? '1' : '0.5';
+                }
             });
         }
 
@@ -1082,6 +1127,16 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             }, 50);
         }
     });
+
+    // Force Reload Settings Button
+    const forceReloadSettingsBtn = document.getElementById('btn-force-reload-settings');
+    if (forceReloadSettingsBtn) {
+        forceReloadSettingsBtn.addEventListener('click', () => {
+            sendMessageAsync({ action: 'force_reload_settings' }).then(() => {
+                showStatus('Settings reloaded on all tabs.');
+            });
+        });
+    }
 
     // Start the initialization process
     optionsManager.initializeEventListeners();
