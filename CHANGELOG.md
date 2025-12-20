@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Created `AniListUI.js` to encapsulate all logic for the AniList side panel, including state management, event handling, and positioning.
 - Added a command-line interface (CLI) wrapper (`mpv-cli`) that can be installed via the `Installer.py` GUI.
 - Added a feature to the installer to add the application directory to the user's PATH for easy CLI access.
+- Implemented adaptive (percentage-based) positioning for all draggable UI elements, allowing them to scale correctly with window resizes.
+- Added customizable keybindings for "Add to Playlist", "Toggle Controller", and "Open Popup".
+- Added a "Force Reload Settings" button in the popup to immediately apply changes across all tabs.
+- Added a toggle button to show/hide the minimized stub icon in the on-page controller.
+- Implemented a tag-based UI for managing custom MPV flags in settings.
+- Added logic to auto-focus the "Add" button when the popup opens in mini-mode.
 
 ### Fixed
 - Fixed an issue where the on-page AniList toggle button would not be highlighted (glow) when the panel was active.
@@ -52,8 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optimized the on-page "Add" button for non-YouTube sites to perform scraping locally in the content script, preventing the creation of a redundant "scanner" window and making the process significantly faster.
 - Fixed syntax errors in `background.js` that prevented the service worker from loading correctly.
 - Resolved an issue where the Python CLI could not be run from outside its own directory.
+- Fixed a bug where draggable UI elements would "jump" when placed at the right edge of the screen due to the vertical scrollbar's width.
 - Fixed a bug on Windows where CLI commands would incorrectly launch a new, silent window instead of printing output to the current terminal.
 - Corrected the CLI wrapper scripts (`mpv-cli.bat` and `mpv-cli`) to prevent the creation of `__pycache__` directories.
+- Fixed the "Add" button in the popup not glowing green when a URL is detected.
+- Fixed the "Add" button in the popup failing to add items if the content script wasn't fully loaded.
+- Improved keybinding detection to handle spaces and modifier naming differences (e.g., "Control" vs "Ctrl").
 ### Changed
 - Simplified the right-click "Add to MPV Folder" context menu. It is now a single-level list of folders instead of a nested menu for a cleaner experience.
 - The context menu now intelligently places the most recently used folder at the top of the list for quick access, removing the separate "Add to current" option.
@@ -70,6 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored `content.js` to use `PageScraper.js` for all title scraping.
 - Refactored `content.js` to delegate all AniList-related functionality to the new `AniListUI.js` class, significantly cleaning up the main controller.
 - Improved YouTube title scraping by making the oEmbed API fallback to the robust stream scanner on failure, instead of using a generic title.
+
 
 ### Documentation
 - Completely overhauled the `README.md` to be more concise, user-friendly, and digestible.
