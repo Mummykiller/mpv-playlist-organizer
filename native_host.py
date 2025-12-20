@@ -309,7 +309,7 @@ try:
                 except OSError as e:
                      logging.warning(f"Error removing IPC directory {ipc_dir}: {e}")
 
-    def launch_unmanaged_mpv(playlist, geometry, custom_width, custom_height, custom_mpv_flags):
+    def launch_unmanaged_mpv(playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags):
         """Launches a new, unmanaged instance of MPV."""
         logging.info("Launching a new, unmanaged MPV instance.")
         mpv_exe = file_io.get_mpv_executable()
@@ -317,12 +317,11 @@ try:
         # We don't need to generate a unique IPC path.
         
         try:
-            mpv_args = [
-                mpv_exe, '--no-terminal', '--force-window=yes',
-                '--save-position-on-quit',
-                '--write-filename-in-watch-later-config',
-                # No --input-ipc-server, so it's unmanaged
-            ]
+            mpv_args = [mpv_exe]
+
+            if automatic_mpv_flags:
+                enabled_flags = [flag['flag'] for flag in automatic_mpv_flags if flag['enabled']]
+                mpv_args.extend(enabled_flags)
 
             if custom_mpv_flags:
                 import shlex
@@ -386,12 +385,13 @@ try:
                     custom_width = message.get('custom_width')
                     custom_height = message.get('custom_height')
                     custom_mpv_flags = message.get('custom_mpv_flags')
+                    automatic_mpv_flags = message.get('automatic_mpv_flags')
                     clear_on_completion = message.get('clear_on_completion', False)
                     start_paused = message.get('start_paused', False)
                     if not folder_id:
                         response = {"success": False, "error": "No folderId provided for play action."}
                     else:
-                        response = mpv_session.start(playlist, folder_id, geometry=geometry, custom_width=custom_width, custom_height=custom_height, custom_mpv_flags=custom_mpv_flags, start_paused=start_paused, clear_on_completion=clear_on_completion)
+                        response = mpv_session.start(playlist, folder_id, geometry=geometry, custom_width=custom_width, custom_height=custom_height, custom_mpv_flags=custom_mpv_flags, automatic_mpv_flags=automatic_mpv_flags, start_paused=start_paused, clear_on_completion=clear_on_completion)
 
                 elif command == 'play_new_instance':
                     playlist = message.get('playlist', [])
@@ -399,7 +399,8 @@ try:
                     custom_width = message.get('custom_width')
                     custom_height = message.get('custom_height')
                     custom_mpv_flags = message.get('custom_mpv_flags')
-                    response = launch_unmanaged_mpv(playlist, geometry, custom_width, custom_height, custom_mpv_flags)
+                    automatic_mpv_flags = message.get('automatic_mpv_flags')
+                    response = launch_unmanaged_mpv(playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags)
 
                 elif command == 'close_mpv':
                     response = mpv_session.close()

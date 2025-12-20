@@ -566,6 +566,10 @@ const actionHandlers = {
         const folderId = data.settings.last_used_folder_id || Object.keys(data.folders)[0];
         return { success: true, folderId };
     },
+    'get_default_automatic_flags': async () => {
+        const defaultData = storage._getDefaultData();
+        return { success: true, flags: defaultData.settings.ui_preferences.global.automatic_mpv_flags };
+    },
     'get_ui_preferences': handleGetUiPreferences,
     'set_ui_preferences': handleSetUiPreferences,
     'set_minimized_state': async (request) => {
@@ -606,6 +610,7 @@ const actionHandlers = {
             custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
             custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
             custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
+            automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
             clear_on_completion: globalPrefs.clear_on_completion ?? false
         });
     },
@@ -622,6 +627,7 @@ const actionHandlers = {
             geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
             custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
             custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
+            automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
             custom_mpv_flags: globalPrefs.custom_mpv_flags || ''
         });
     },

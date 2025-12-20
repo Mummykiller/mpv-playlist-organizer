@@ -949,11 +949,25 @@ button:disabled {
     box-shadow: 0 2px 4px rgba(0,0,0,0.3);
 }
 
+.filter-pill.disabled:hover {
+    background-color: var(--bg-tertiary);
+    transform: none;
+    box-shadow: none;
+}
+
 .filter-pill.readonly {
     background-color: var(--bg-tertiary);
     color: var(--text-secondary);
     cursor: default;
     box-shadow: none;
+}
+
+.filter-pill.disabled {
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    box-shadow: none;
+    text-decoration: line-through;
 }
 
 .setting-item > small {
