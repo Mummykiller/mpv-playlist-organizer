@@ -125,7 +125,7 @@ class MpvSessionManager:
                 self.clear()
                 return None
 
-    def _launch(self, playlist, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, start_paused, clear_on_completion):
+    def _launch(self, playlist, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion):
         """Launches a new instance of MPV with the given playlist and settings."""
         logging.info("Starting a new MPV instance.")
         mpv_exe = self.get_mpv_executable()
@@ -135,9 +135,13 @@ class MpvSessionManager:
         logging.info(f"Checking for on_completion.lua at: {on_completion_script_path}")
         try:
             mpv_args = [
-                mpv_exe, '--force-window=yes', '--save-position-on-quit', '--write-filename-in-watch-later-config',
+                mpv_exe,
                 f'--input-ipc-server={ipc_path}',
             ]
+
+            if automatic_mpv_flags:
+                enabled_flags = [flag['flag'] for flag in automatic_mpv_flags if flag['enabled']]
+                mpv_args.extend(enabled_flags)
 
             if clear_on_completion:
                 logging.info("'Clear on Completion' is enabled for this session.")
@@ -223,7 +227,7 @@ class MpvSessionManager:
             logging.error(f"An error occurred while trying to launch mpv: {e}")
             return {"success": False, "error": f"Error launching mpv: {e}"}
 
-    def start(self, playlist, folder_id, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, start_paused=False, clear_on_completion=False):
+    def start(self, playlist, folder_id, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, clear_on_completion=False):
         """Starts a new mpv process, or syncs the playlist with a running one."""
         if self.pid and not self.is_process_alive(self.pid, self.ipc_path):
             logging.info("Detected a stale MPV session. Clearing state before proceeding.")
@@ -239,7 +243,7 @@ class MpvSessionManager:
                 logging.warning(error_message)
                 return {"success": False, "error": error_message}
         
-        return self._launch(playlist, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, start_paused, clear_on_completion)
+        return self._launch(playlist, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion)
 
     def close(self):
         """Closes the currently running mpv process, if any."""

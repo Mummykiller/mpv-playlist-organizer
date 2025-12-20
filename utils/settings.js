@@ -84,6 +84,10 @@ class OptionsManager {
         const flags = flagsStr.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
         this._renderMpvFlagsList(flags);
 
+        // Manual handling for Automatic MPV flags list
+        const automaticFlags = prefs.automatic_mpv_flags || [];
+        this._renderAutomaticMpvFlagsList(automaticFlags);
+
         this._updateAnilistImageSize(prefs.anilist_image_height || 126);
 
         this._renderScraperFilterList(prefs.scraper_filter_words || []);
@@ -114,6 +118,19 @@ class OptionsManager {
         } else {
             preferences.custom_mpv_flags = '';
         }
+
+        // Gather Automatic MPV flags from the DOM list
+        const automaticFlagPills = document.querySelectorAll('#automatic-mpv-flags-list-container .filter-pill');
+        if (automaticFlagPills.length > 0) {
+            preferences.automatic_mpv_flags = Array.from(automaticFlagPills).map(p => {
+                return {
+                    flag: p.dataset.flag,
+                    description: p.title,
+                    enabled: !p.classList.contains('disabled')
+                }
+            });
+        }
+
 
         preferences.stream_scanner_timeout = Number(preferences.stream_scanner_timeout) || 60;
 
@@ -146,6 +163,23 @@ class OptionsManager {
             pill.textContent = flag;
             pill.dataset.flag = flag;
             pill.title = 'Click to remove';
+            container.appendChild(pill);
+        });
+    }
+
+    _renderAutomaticMpvFlagsList(flags = []) {
+        const container = document.getElementById('automatic-mpv-flags-list-container');
+        if (!container) return;
+        container.innerHTML = '';
+        flags.forEach(flagData => {
+            const pill = document.createElement('div');
+            pill.className = 'filter-pill';
+            if (!flagData.enabled) {
+                pill.classList.add('disabled');
+            }
+            pill.textContent = flagData.flag;
+            pill.dataset.flag = flagData.flag;
+            pill.title = flagData.description;
             container.appendChild(pill);
         });
     }
@@ -327,6 +361,33 @@ class OptionsManager {
         const resetMpvFlagsBtn = document.getElementById('btn-reset-mpv-flags');
         if (resetMpvFlagsBtn) {
             resetMpvFlagsBtn.addEventListener('click', () => this._resetMpvFlags());
+        }
+
+        const automaticMpvFlagsList = document.getElementById('automatic-mpv-flags-list-container');
+        if (automaticMpvFlagsList) {
+            automaticMpvFlagsList.addEventListener('click', (e) => {
+                if (e.target.classList.contains('filter-pill')) {
+                    this._toggleAutomaticMpvFlag(e.target);
+                }
+            });
+        }
+
+        const resetAutomaticMpvFlagsBtn = document.getElementById('btn-reset-automatic-mpv-flags');
+        if (resetAutomaticMpvFlagsBtn) {
+            resetAutomaticMpvFlagsBtn.addEventListener('click', () => this._resetAutomaticMpvFlags());
+        }
+    }
+
+    _toggleAutomaticMpvFlag(element) {
+        element.classList.toggle('disabled');
+        this.debouncedSaveAllPreferences();
+    }
+
+    async _resetAutomaticMpvFlags() {
+        const response = await this.sendMessageAsync({ action: 'get_default_automatic_flags' });
+        if (response && response.flags) {
+            this._renderAutomaticMpvFlagsList(response.flags);
+            this.debouncedSaveAllPreferences();
         }
     }
 }
