@@ -819,28 +819,26 @@ async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
     return new Promise((resolve, reject) => {
         const timeoutDuration = timeoutInSeconds * 1000;
 
-        const timeout = setTimeout(() => {
-            // The promise might have already been resolved/rejected.
-            // If the entry still exists, it means we timed out.
+        const timeoutId = setTimeout(() => {
             if (m3u8DetectionPromises[tabId]) {
                 delete m3u8DetectionPromises[tabId];
-                reject(new Error(`M3U8 detection timed out after ${timeoutInSeconds} seconds.`));
+                reject(new Error(`M3U8 detection timed out. User did not initiate video playback within ${timeoutInSeconds} seconds.`));
             }
         }, timeoutDuration);
 
         // Store the promise's handlers so the webRequest listener can use them.
-        // The handlers are responsible for cleaning up the timeout and the promise map entry.
         m3u8DetectionPromises[tabId] = {
             resolve: (url) => {
-                clearTimeout(timeout);
-                resolve(url);
+                clearTimeout(timeoutId);
                 delete m3u8DetectionPromises[tabId];
+                resolve(url);
             },
             reject: (err) => {
-                clearTimeout(timeout);
-                reject(err);
+                clearTimeout(timeoutId);
                 delete m3u8DetectionPromises[tabId];
-            }
+                reject(err);
+            },
+            timeoutId: timeoutId // Store the initial timeout ID
         };
     });
 }
@@ -912,6 +910,23 @@ async function findM3u8InUrl(url, originalTab) {
 
 chrome.webRequest.onBeforeRequest.addListener(
     (details) => {
+        // --- NEW: Inactivity timeout logic for scanner windows ---
+        const promiseInfo = m3u8DetectionPromises[details.tabId];
+        if (promiseInfo) {
+            const INACTIVITY_TIMEOUT_MS = 15000; // 15 seconds of inactivity
+            clearTimeout(promiseInfo.timeoutId); // Clear the previous timeout
+
+            // Set a new inactivity timeout
+            promiseInfo.timeoutId = setTimeout(() => {
+                // Check if the promise is still pending before rejecting
+                if (m3u8DetectionPromises[details.tabId]) {
+                    // Use the reject function from the promise which will also clean up the map entry
+                    m3u8DetectionPromises[details.tabId].reject(new Error(`M3U8 detection timed out after ${INACTIVITY_TIMEOUT_MS / 1000} seconds of network inactivity.`));
+                }
+            }, INACTIVITY_TIMEOUT_MS);
+        }
+        // --- END of new logic ---
+
         // Optimization: Ignore requests originating from our own extension to prevent loops.
         if (details.initiator && details.initiator.startsWith(`chrome-extension://${chrome.runtime.id}`)) {
             return;
@@ -937,8 +952,9 @@ chrome.webRequest.onBeforeRequest.addListener(
         chrome.runtime.sendMessage({ action: 'detected_url_changed', tabId: details.tabId, url: details.url }).catch(() => {});
 
         // Check if a scanner window is waiting for this URL.
-        if (m3u8DetectionPromises[details.tabId]) {
-            m3u8DetectionPromises[details.tabId].resolve(details.url);
+        // Re-use promiseInfo from the inactivity check
+        if (promiseInfo) {
+            promiseInfo.resolve(details.url);
             return;
         }
 

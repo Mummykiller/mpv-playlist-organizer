@@ -603,7 +603,6 @@ button:disabled {
     padding: 8px;
     background-color: var(--bg-tertiary);
     border-radius: 4px;
-    cursor: grab;
     border: 1px solid var(--border-primary);
     color: var(--text-primary);
     font-size: 14px;
@@ -973,4 +972,94 @@ button:disabled {
 .setting-item > small {
     font-size: 12px;
     color: var(--text-secondary);
+}
+
+/* --- New Playlist Styles for Popup --- */
+.playlist-container {
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius);
+    padding: 8px;
+    background-color: var(--bg-secondary);
+    max-height: 200px;
+    overflow-y: auto;
+    margin-top: 0; /* Changed from 8px to align better */
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.playlist-container .playlist-placeholder {
+    color: var(--text-secondary);
+    text-align: center;
+    margin: 8px 0;
+    font-size: 13px;
+}
+
+.playlist-container .list-item {
+    display: flex;
+    align-items: center;
+    padding: 8px;
+    background-color: var(--bg-tertiary);
+    border-radius: 4px;
+    border: 1px solid var(--border-primary);
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: grab;
+    transition: background-color var(--transition-speed) ease;
+}
+
+.playlist-container .list-item:hover {
+    background-color: #44484e; /* Slightly darker tertiary */
+    border-color: var(--border-hover);
+}
+
+.playlist-container .list-item.dragging {
+    opacity: 0.5;
+    background: var(--accent-primary-hover);
+}
+
+.playlist-container .list-item.drag-over {
+    border-top: 2px solid var(--accent-primary);
+}
+
+.playlist-container .list-item .url-index {
+    color: var(--text-secondary);
+    margin-right: 8px;
+    font-family: var(--font-mono);
+}
+
+.playlist-container .list-item .url-text {
+    flex-grow: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.playlist-container .list-item .main-title-highlight {
+    color: var(--accent-success);
+    font-weight: 500;
+}
+
+.playlist-container .list-item .btn-remove-item {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 20px;
+    line-height: 1;
+    padding: 0 8px;
+    margin: -8px; /* Negative margin to increase click area */
+    cursor: pointer;
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-speed) ease;
+    box-shadow: none;
+}
+
+.playlist-container .list-item .btn-remove-item:hover {
+    color: var(--text-primary);
+    background-color: var(--accent-danger);
 }

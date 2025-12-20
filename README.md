@@ -73,7 +73,7 @@ The installer is a graphical user interface that configures your browser to comm
 The extension provides three main ways to interact:
 
 -   **On-Page Controller**: The main UI appears on web pages, allowing you to add detected URLs to a playlist, play, and clear. It can be minimized to a small button.
--   **Popup Menu**: Click the extension’s toolbar icon to manage your playlists (create, rename, remove), change settings, and see today's anime releases from AniList.
+-   **Popup Menu**: Click the extension’s toolbar icon to view and manage the current playlist, manage all your folders (create, rename, remove), change settings, and see today's anime releases from AniList.
 -   **Context Menu**: Right-click on a link, video, or page to quickly add it to a playlist without using the main UI.
 
 A **Command-Line Interface (CLI)** is also available for playing your playlists from the terminal.
@@ -85,6 +85,7 @@ A **Command-Line Interface (CLI)** is also available for playing your playlists 
 -   **Live Playlist Sync**: Add new videos to a playlist, and they will be automatically queued in MPV without interrupting playback.
 -   **Session Restoration**: The extension can reconnect to your MPV instance even if you close and reopen your browser.
 -   **Smart Title Scraping**: Automatically creates clean, readable titles from web pages (e.g., `s01e05 - Show Name`).
+-   **Popup Playlist**: View and manage the active playlist directly from the extension's popup icon.
 -   **Playlist Management**: Create multiple playlists (which are called "folders" in the UI) and easily switch between them.
 -   **Import/Export**: Back up your playlists to JSON files and import them later.
 -   **AniList Integration**: See today's airing anime in a draggable, resizable side-panel or in the popup.
