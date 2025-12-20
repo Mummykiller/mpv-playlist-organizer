@@ -91,6 +91,7 @@ A **Command-Line Interface (CLI)** is also available for playing your playlists 
 -   **Highly Configurable**: Adjust the UI, playback behavior, confirmation prompts, and more from the settings menu.
 -   **Customizable Keybindings**: Set global shortcuts for adding videos, toggling the UI, and opening the popup.
 -   **SPA Resilience**: The UI works seamlessly on modern Single-Page Applications like YouTube.
+-   **Manageable Automatic Flags**: The extension's default MPV flags (e.g., `--force-window`) can be disabled or re-enabled through the settings, giving you more control over MPV's behavior.
 
 ---
 
