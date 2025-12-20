@@ -317,10 +317,10 @@ button:disabled {
 }
 
 /* Add button turns green when a URL is detected, providing clear feedback */
-#mini-controller-actions #btn-mini-add.url-detected {
+#mini-controller-actions #btn-mini-add.stream-present {
     background-color: var(--accent-success);
 }
-#mini-controller-actions #btn-mini-add.url-detected:hover {
+#mini-controller-actions #btn-mini-add.stream-present:hover {
     background-color: #45a062; /* A slightly darker green */
 }
 

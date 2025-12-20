@@ -17,7 +17,6 @@ class OptionsManager {
             { key: 'launch_geometry', elementId: 'geometry-select', type: 'select' },
             { key: 'custom_geometry_width', elementId: 'custom-width', type: 'input' },
             { key: 'custom_geometry_height', elementId: 'custom-height', type: 'input' },
-            { key: 'custom_mpv_flags', elementId: 'custom-mpv-flags', type: 'textarea' },
             { key: 'show_play_new_button', elementId: 'show-play-new-button-checkbox', type: 'checkbox' },
             { key: 'duplicate_url_behavior', elementId: 'duplicate-behavior-select', type: 'select' },
             { key: 'one_click_add', elementId: 'one-click-add-checkbox', type: 'checkbox' },
@@ -38,7 +37,10 @@ class OptionsManager {
             { key: 'anilist_image_height', elementId: 'anilist-image-height-slider', type: 'slider', transform: Number },
             { key: 'show_minimized_stub', elementId: 'show-minimized-stub-checkbox', type: 'checkbox' },
             { key: 'ytdlp_update_behavior', elementId: 'ytdlp-update-behavior-select', type: 'select' },
-            { key: 'mode', elementId: 'default-ui-mode-select', type: 'select' }
+            { key: 'mode', elementId: 'default-ui-mode-select', type: 'select' },
+            { key: 'kb_add_playlist', elementId: 'kb-add-playlist-input', type: 'input' },
+            { key: 'kb_toggle_controller', elementId: 'kb-toggle-ui-input', type: 'input' },
+            { key: 'kb_open_popup', elementId: 'kb-open-popup-input', type: 'input' }
         ];
 
         this.debouncedSaveAllPreferences = this._debounce(this.saveAllPreferences.bind(this), 400);
@@ -77,6 +79,11 @@ class OptionsManager {
         document.getElementById('anilist-options-container').style.display = enableAnilist ? 'block' : 'none';
         document.getElementById('shared-anilist-section').style.display = enableAnilist ? 'block' : 'none';
 
+        // Manual handling for MPV flags list
+        const flagsStr = prefs.custom_mpv_flags || '';
+        const flags = flagsStr.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+        this._renderMpvFlagsList(flags);
+
         this._updateAnilistImageSize(prefs.anilist_image_height || 126);
 
         this._renderScraperFilterList(prefs.scraper_filter_words || []);
@@ -99,6 +106,15 @@ class OptionsManager {
             }
         });
 
+        // Gather MPV flags from the DOM list
+        const flagPills = document.querySelectorAll('#mpv-flags-list-container .filter-pill');
+        if (flagPills.length > 0) {
+            const flags = Array.from(flagPills).map(p => p.dataset.flag);
+            preferences.custom_mpv_flags = flags.join(' ');
+        } else {
+            preferences.custom_mpv_flags = '';
+        }
+
         preferences.stream_scanner_timeout = Number(preferences.stream_scanner_timeout) || 60;
 
         this.sendMessageAsync({ action: 'set_ui_preferences', preferences: preferences }).then(response => {
@@ -118,6 +134,49 @@ class OptionsManager {
         document.documentElement.style.setProperty('--anilist-item-width', `${effectiveWidth}px`);
         document.documentElement.style.setProperty('--anilist-image-height', `${effectiveHeight}px`);
         document.getElementById('anilist-image-size-current').textContent = `${effectiveHeight}px`;
+    }
+
+    _renderMpvFlagsList(flags = []) {
+        const container = document.getElementById('mpv-flags-list-container');
+        if (!container) return;
+        container.innerHTML = '';
+        flags.forEach(flag => {
+            const pill = document.createElement('div');
+            pill.className = 'filter-pill';
+            pill.textContent = flag;
+            pill.dataset.flag = flag;
+            pill.title = 'Click to remove';
+            container.appendChild(pill);
+        });
+    }
+
+    _addMpvFlag() {
+        const input = document.getElementById('mpv-flag-input');
+        if (!input) return;
+        const newFlag = input.value.trim();
+        if (!newFlag) return;
+
+        // Create pill and append to DOM immediately
+        const container = document.getElementById('mpv-flags-list-container');
+        const pill = document.createElement('div');
+        pill.className = 'filter-pill';
+        pill.textContent = newFlag;
+        pill.dataset.flag = newFlag;
+        pill.title = 'Click to remove';
+        container.appendChild(pill);
+
+        input.value = '';
+        this.debouncedSaveAllPreferences();
+    }
+
+    _removeMpvFlag(element) {
+        element.remove();
+        this.debouncedSaveAllPreferences();
+    }
+
+    _resetMpvFlags() {
+        this._renderMpvFlagsList([]); // Clear list
+        this.debouncedSaveAllPreferences();
     }
 
     _renderScraperFilterList(words = []) {
@@ -243,6 +302,31 @@ class OptionsManager {
                     this._removeScraperFilterWord(e.target.dataset.word);
                 }
             });
+        }
+
+        // --- MPV Flags Listeners ---
+        const mpvFlagInput = document.getElementById('mpv-flag-input');
+        if (mpvFlagInput) {
+            mpvFlagInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this._addMpvFlag();
+                }
+            });
+        }
+
+        const mpvFlagsList = document.getElementById('mpv-flags-list-container');
+        if (mpvFlagsList) {
+            mpvFlagsList.addEventListener('click', (e) => {
+                if (e.target.classList.contains('filter-pill')) {
+                    this._removeMpvFlag(e.target);
+                }
+            });
+        }
+
+        const resetMpvFlagsBtn = document.getElementById('btn-reset-mpv-flags');
+        if (resetMpvFlagsBtn) {
+            resetMpvFlagsBtn.addEventListener('click', () => this._resetMpvFlags());
         }
     }
 }

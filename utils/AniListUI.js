@@ -70,14 +70,13 @@ class AniListUI {
                     // Prevent dragging if locked OR if forced attached.
                     return !this.isLocked && !this.forceAttached;
                 },
-                onDragEnd: () => {
+                onDragEnd: (e, newPosition) => {
                     this.isManuallyPositioned = true;
-                    const newPosition = {
-                        left: this.panelHost.style.left,
-                        top: this.panelHost.style.top,
-                        right: this.panelHost.style.right,
-                        bottom: this.panelHost.style.bottom
-                    };
+                    // Apply the new position styles calculated by Draggable.js
+                    this.panelHost.style.left = newPosition.left;
+                    this.panelHost.style.top = newPosition.top;
+                    this.panelHost.style.right = newPosition.right;
+                    this.panelHost.style.bottom = newPosition.bottom;
                     this.controller.savePreference({ anilistPanelPosition: newPosition });
                 }
             });

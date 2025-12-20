@@ -61,6 +61,7 @@ The frontend is a browser extension responsible for the user interface and inter
         -   Instantiates and coordinates UI modules (`UIManager`, `PlaylistUI`, `AniListUI`).
         -   Uses `content.css` for styling.
         -   Interacts with the page DOM for UI injection and SPA handling.
+        -   Listens for global keyboard shortcuts defined in settings.
 -   **`content.css`**: Stylesheet for the UI elements injected by `content.js`.
 -   **`popup.html`**: Defines the HTML structure for the extension's popup window.
 -   **`popup.js`**: Provides the logic for the popup window (folder/playlist management, settings).
@@ -137,6 +138,6 @@ This directory contains helper modules for the frontend JavaScript.
 -   **`PageScraper.js`**: Extracts titles and URLs from web pages.
 -   **`playlistManager.js`**: Centralizes all playlist modification logic (add, remove, clear, reorder).
 -   **`PlaylistUI.js`**: Manages rendering and interaction for the playlist view in the on-page UI.
--   **`settings.js`**: Manages the settings UI within the popup.
+-   **`settings.js`**: Manages the settings UI within the popup, including the tag-based MPV flags input.
 -   **`storageManager.js`**: Manages all `chrome.storage.local` operations. This includes persisting core application data (folders, folder order) and all user preferences. It also handles data structure migrations between extension versions.
 -   **`UIManager.js`**: Manages the creation, injection, and teardown of all on-page UI elements.

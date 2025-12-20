@@ -73,7 +73,8 @@ class Draggable {
         if (this.options.clamp) {
             const hostWidth = this.element.offsetWidth;
             const hostHeight = this.element.offsetHeight;
-            const maxX = window.innerWidth - hostWidth;
+            // Use document.documentElement.clientWidth to get viewport width excluding scrollbar
+            const maxX = document.documentElement.clientWidth - hostWidth;
             const maxY = window.innerHeight - hostHeight;
 
             newLeft = Math.min(maxX, Math.max(0, newLeft));
@@ -95,7 +96,30 @@ class Draggable {
         this.element.style.transition = '';
         document.removeEventListener('mousemove', this.onMouseMove);
         document.removeEventListener('mouseup', this.onMouseUp);
-        this.options.onDragEnd(e);
+
+        // --- Smart Position Saving ---
+        // After dragging, determine if the element is in the left or right half of the screen.
+        const rect = this.element.getBoundingClientRect();
+        const viewportWidth = document.documentElement.clientWidth;
+        const viewportHeight = window.innerHeight;
+        const screenCenter = viewportWidth / 2;
+        const elementCenter = rect.left + (rect.width / 2);
+
+        let finalPosition;
+        if (elementCenter < screenCenter) {
+            // Left half: Save left/top as percentages.
+            const leftPercent = (rect.left / viewportWidth) * 100;
+            const topPercent = (rect.top / viewportHeight) * 100;
+            finalPosition = { left: `${leftPercent}%`, top: `${topPercent}%`, right: 'auto', bottom: 'auto' };
+        } else {
+            // Right half: Save right/top as percentages.
+            const rightPercent = ((viewportWidth - rect.right) / viewportWidth) * 100;
+            const topPercent = (rect.top / viewportHeight) * 100;
+            finalPosition = { left: 'auto', top: `${topPercent}%`, right: `${rightPercent}%`, bottom: 'auto' };
+        }
+
+        // Pass the calculated final position to the callback.
+        this.options.onDragEnd(e, finalPosition);
     }
 
     onContextMenu(e) {
