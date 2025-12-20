@@ -78,7 +78,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
      */
     function showStatus(text, isError = false) {
         statusMessageElement.textContent = text;
-        statusMessageElement.style.color = isError ? 'var(--accent-negative)' : 'var(--accent-positive)';
+        statusMessageElement.style.color = isError ? 'var(--accent-danger)' : 'var(--accent-positive)';
         setTimeout(() => {
             statusMessageElement.textContent = '';
         }, 3000);
@@ -217,6 +217,9 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
     const miniRemoveFolderBtn = document.getElementById('btn-mini-remove-folder');
     const miniItemCountSpan = document.getElementById('mini-item-count');
 
+    // Playlist Elements
+    const playlistContainer = document.getElementById('popup-playlist-container');
+
     // Export/Import Elements
     const exportDataBtn = document.getElementById('btn-export-data');
     const exportAllDataBtn = document.getElementById('btn-export-all');
@@ -354,7 +357,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             }
 
             updateRemoveButtonState();
-            updateItemCount(miniFolderSelect.value);
+            refreshPlaylist(); // Now fetches the full playlist
         });
     }
 
@@ -370,9 +373,9 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
         }
 
         // Add validation for folder name characters by disallowing invalid filename chars.
-        const invalidCharsRegex = /[\\/:\*?"<>|]/;
+        const invalidCharsRegex = /[\\/:*?"<>|]/;
         if (invalidCharsRegex.test(newName)) {
-            showStatus('Folder name cannot contain / \\ : * ? " < > |', true);
+            showStatus('Folder name cannot contain / \ : * ? " < > |', true);
             return;
         }
 
@@ -439,9 +442,9 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
         }
 
         // Add validation for folder name characters by disallowing invalid filename chars.
-        const invalidCharsRegex = /[\\/:\*?"<>|]/;
+        const invalidCharsRegex = /[\\/:*?"<>|]/;
         if (invalidCharsRegex.test(newFolderId)) {
-            showStatus('New folder name cannot contain / \\ : * ? " < > |', true);
+            showStatus('New folder name cannot contain / \ : * ? " < > |', true);
             return;
         }
 
@@ -468,20 +471,107 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
     }
 
     /**
-     * Fetches the playlist for a given folder and updates the item count display.
-     * @param {string} folderId The ID of the folder to check.
+     * Fetches the playlist for a given folder and renders it.
      */
-    function updateItemCount(folderId) {
+    function refreshPlaylist() {
+        const folderId = miniFolderSelect.value;
         if (!folderId) {
-            miniItemCountSpan.textContent = '0';
+            renderPlaylist([]); // Render an empty state
             return;
         }
         sendMessageAsync({ action: 'get_playlist', folderId }).then(response => {
             if (response?.success) {
-                miniItemCountSpan.textContent = response.list.length;
+                renderPlaylist(response.list);
             }
         });
     }
+
+    /**
+     * Renders the playlist items in the popup's playlist container.
+     * @param {Array<object>} playlist The array of playlist items.
+     */
+    function renderPlaylist(playlist) {
+        const oldItemCount = playlistContainer.querySelectorAll('.list-item').length;
+        const scrollPosition = playlistContainer.scrollTop;
+
+        playlistContainer.innerHTML = ''; // Clear existing content
+        miniItemCountSpan.textContent = playlist?.length || 0;
+
+        if (playlist && playlist.length > 0) {
+            playlist.forEach((item, index) => {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'list-item';
+                itemDiv.draggable = true;
+                itemDiv.title = item.url;
+                itemDiv.dataset.url = item.url;
+                itemDiv.dataset.title = item.title;
+                itemDiv.dataset.index = index;
+
+                const indexSpan = document.createElement('span');
+                indexSpan.className = 'url-index';
+                indexSpan.textContent = `${index + 1}.`;
+
+                const urlSpan = document.createElement('span');
+                urlSpan.className = 'url-text';
+                _formatTitle(urlSpan, item); // Use the title formatting function
+
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'btn-remove-item';
+                removeBtn.dataset.index = index;
+                removeBtn.title = 'Remove Item';
+                removeBtn.innerHTML = '&times;';
+
+                itemDiv.append(indexSpan, urlSpan, removeBtn);
+                playlistContainer.appendChild(itemDiv);
+            });
+        } else {
+            const placeholder = document.createElement('p');
+            placeholder.className = 'playlist-placeholder';
+            placeholder.textContent = 'Playlist is empty.';
+            playlistContainer.appendChild(placeholder);
+        }
+
+        const newItemCount = playlist ? playlist.length : 0;
+        const wasItemAdded = newItemCount > oldItemCount;
+        const isScrollable = playlistContainer.scrollHeight > playlistContainer.clientHeight;
+
+        if (wasItemAdded && isScrollable) {
+            playlistContainer.scrollTop = playlistContainer.scrollHeight;
+        } else {
+            playlistContainer.scrollTop = scrollPosition;
+        }
+    }
+
+    /**
+     * Formats the title for display, highlighting episode numbers or channel names.
+     * @param {HTMLElement} urlSpan The span element to populate.
+     * @param {object} item The playlist item containing title and url.
+     */
+    function _formatTitle(urlSpan, item) {
+        const titleParts = item.title.split(' - ');
+        const isYouTubeVideoUrl = item.url.includes('youtube.com/watch');
+        const isYouTubePlaylistUrl = item.url.includes('youtube.com/playlist');
+
+        if (titleParts.length > 1 && /^(s\d+)?e\d+(\.\d+)?$/i.test(titleParts[0].trim())) {
+            const episodePrefixSpan = document.createElement('span');
+            episodePrefixSpan.textContent = titleParts.shift() + ' - ';
+            const mainTitleSpan = document.createElement('span');
+            mainTitleSpan.className = 'main-title-highlight';
+            mainTitleSpan.textContent = titleParts.join(' - ');
+            urlSpan.append(episodePrefixSpan, mainTitleSpan);
+        } else if ((isYouTubeVideoUrl || isYouTubePlaylistUrl) && titleParts.length > 1) {
+            const channelPrefixSpan = document.createElement('span');
+            channelPrefixSpan.textContent = titleParts.shift() + ' - ';
+            const videoTitleSpan = document.createElement('span');
+            videoTitleSpan.className = 'main-title-highlight';
+            videoTitleSpan.textContent = titleParts.join(' - ');
+            urlSpan.append(channelPrefixSpan, videoTitleSpan);
+        } else {
+            urlSpan.textContent = item.title;
+        }
+    }
+
+
 
     // --- Event Listeners ---
 
@@ -646,40 +736,43 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
         });
 
         list.addEventListener('dragend', () => {
+            if (!draggedItem) return;
             draggedItem.classList.remove('dragging');
+            draggedItem = null;
         });
 
         list.addEventListener('dragover', e => {
             e.preventDefault();
             
-            // Remove any existing drop indicators to prevent multiple lines
-            const existingIndicator = list.querySelector('.drag-over');
-            if (existingIndicator) {
-                existingIndicator.classList.remove('drag-over');
-            }
-
             const afterElement = getDragAfterElement(list, e.clientY);
+            const existingIndicator = list.querySelector('.drag-over');
+
             if (afterElement) {
+                if (existingIndicator && existingIndicator !== afterElement) {
+                    existingIndicator.classList.remove('drag-over');
+                }
                 afterElement.classList.add('drag-over');
+            } else {
+                if (existingIndicator) {
+                     existingIndicator.classList.remove('drag-over');
+                }
             }
         });
 
         list.addEventListener('drop', e => {
             e.preventDefault();
-            if (!draggedItem) return;
-
             const dropTarget = list.querySelector('.drag-over');
             if (dropTarget) {
                 dropTarget.classList.remove('drag-over');
             }
-
-            // Perform the actual DOM move on drop
-            list.insertBefore(draggedItem, dropTarget); // dropTarget can be null, which correctly appends to the end.
+            if (draggedItem && draggedItem.parentElement === list) {
+                list.insertBefore(draggedItem, dropTarget);
+            }
         });
     }
 
     function getDragAfterElement(container, y) {
-        const draggableElements = [...container.querySelectorAll('.reorder-item:not(.dragging)')];
+        const draggableElements = [...container.querySelectorAll('.reorder-item:not(.dragging), .list-item:not(.dragging)')];
         return draggableElements.reduce((closest, child) => {
             const box = child.getBoundingClientRect();
             const offset = y - box.top - box.height / 2;
@@ -848,7 +941,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
     });
     miniFolderSelect.addEventListener('change', () => {
         const newFolderId = miniFolderSelect.value;
-        updateItemCount(newFolderId);
+        refreshPlaylist();
         sendMessageAsync({ action: 'set_last_folder_id', folderId: newFolderId });
     });
 
@@ -944,7 +1037,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
                 if (response.message) showStatus(response.message);
                 if (action === 'clear') {
                     // When clearing, also update the item count in the UI.
-                    updateItemCount(folderId);
+                    refreshPlaylist();
                 }
             } else if (response.error) {
                 showStatus(response.error, true);
@@ -953,6 +1046,33 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             showStatus(`An error occurred: ${error.message}`, true);
         }
     }
+
+    // --- Playlist Event Binding ---
+    playlistContainer.addEventListener('click', (e) => {
+        const removeBtn = e.target.closest('.btn-remove-item');
+        if (removeBtn) {
+            const index = parseInt(removeBtn.dataset.index, 10);
+            const folderId = miniFolderSelect.value;
+            if (!isNaN(index)) {
+                 sendMessageAsync({ action: 'remove_item', folderId, data: { index } });
+            }
+        }
+    });
+    addDragDropListeners(playlistContainer);
+    playlistContainer.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const dropTarget = playlistContainer.querySelector('.drag-over');
+        if (dropTarget) {
+            dropTarget.classList.remove('drag-over');
+        }
+        if (draggedItem && draggedItem.parentElement === playlistContainer) {
+            const folderId = miniFolderSelect.value;
+            if (!folderId) return;
+
+            const newOrder = [...playlistContainer.querySelectorAll('.list-item')].map(item => ({ url: item.dataset.url, title: item.dataset.title }));
+            sendMessageAsync({ action: 'set_playlist_order', folderId, data: { order: newOrder } });
+        }
+    });
 
     miniAddBtn.addEventListener('click', handleMiniAdd);
     miniPlayBtn.addEventListener('click', () => handleMiniSimpleCommand('play'));
@@ -995,7 +1115,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             updateRemoveButtonState();
 
             if (uiManager.isMiniView()) {
-                updateItemCount(miniFolderSelect.value);
+                refreshPlaylist();
                 showOnPageControllerBtn.style.display = 'block';
                 hideOnPageControllerBtn.style.display = 'none';
                 if (miniAddBtn) miniAddBtn.focus();
@@ -1032,12 +1152,12 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             showStatus(request.log.text, request.log.type === 'error');
         }
 
-        // Handle live playlist updates to keep the item count in sync
+        // Handle live playlist updates to keep the item count and playlist view in sync
         if (request.action === 'render_playlist') {
             const isMiniView = miniControllerView.style.display === 'flex';
             const currentFolderId = miniFolderSelect.value;
             if (isMiniView && currentFolderId === request.folderId) {
-                miniItemCountSpan.textContent = request.playlist.length;
+                renderPlaylist(request.playlist);
             }
         }
 

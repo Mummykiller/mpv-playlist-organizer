@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added playlist display and management (remove, reorder) to the extension popup, mirroring the on-page controller's functionality.
+- Implemented title color-coding (for episode numbers and YouTube channels) in the popup playlist for better readability.
 - Added a new setting to manage automatic MPV flags, allowing users to enable/disable default flags like `--force-window` and `--no-terminal`.
 - Added a "pin" button to the AniList UI to lock its position, with a blue glow effect when active.
 - Began foundational refactoring of the service worker (`background.js`).
@@ -35,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added logic to auto-focus the "Add" button when the popup opens in mini-mode.
 
 ### Fixed
+- Fixed the scanner window's M3U8 detection timeout to be inactivity-based, preventing premature timeouts for slow-loading videos.
 - Fixed an issue where the on-page AniList toggle button would not be highlighted (glow) when the panel was active.
 - Fixed a bug where the on-page AniList toggle button would not move to the correct side of the controller when the panel was opened.
 - Resolved an issue where the "Attach on Open" feature would stop working after the AniList panel was manually moved.
@@ -66,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the "Add" button in the popup failing to add items if the content script wasn't fully loaded.
 - Improved keybinding detection to handle spaces and modifier naming differences (e.g., "Control" vs "Ctrl").
 ### Changed
+- Playlist in the on-page controller now automatically scrolls to newly added items if the list is long enough to be scrollable.
 - Simplified the right-click "Add to MPV Folder" context menu. It is now a single-level list of folders instead of a nested menu for a cleaner experience.
 - The context menu now intelligently places the most recently used folder at the top of the list for quick access, removing the separate "Add to current" option.
 - `background.js` now imports and uses `storageManager.js`, `nativeConnection.js`, `contextMenu.js`, and `playlistManager.js` for improved modularity.

@@ -49,6 +49,7 @@ class PlaylistUI {
 
         if (!this.fullContainer) return;
 
+        const oldItemCount = this.fullContainer.querySelectorAll('.list-item').length;
         const scrollPosition = this.fullContainer.scrollTop;
         this.fullContainer.innerHTML = ''; // Clear existing content
 
@@ -96,7 +97,18 @@ class PlaylistUI {
             this.fullContainer.appendChild(placeholder);
         }
 
-        this.fullContainer.scrollTop = scrollPosition;
+        const newItemCount = playlist ? playlist.length : 0;
+        const wasItemAdded = newItemCount > oldItemCount;
+        const isScrollable = this.fullContainer.scrollHeight > this.fullContainer.clientHeight;
+
+        if (wasItemAdded && isScrollable) {
+            // If a new item was added and the list is scrollable, scroll to the bottom.
+            this.fullContainer.scrollTop = this.fullContainer.scrollHeight;
+        } else {
+            // Otherwise, restore the previous scroll position.
+            this.fullContainer.scrollTop = scrollPosition;
+        }
+
         this.controller.updateAddButtonState();
     }
 
