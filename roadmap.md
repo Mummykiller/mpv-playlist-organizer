@@ -86,12 +86,14 @@ The backend is a Python application that acts as a bridge between the browser ex
         -   Delegates tasks to `mpv_session.py`, `file_io.py`, `services.py`, and `cli.py`.
         -   Handles an `append` command to add videos to the running MPV instance's playlist.
         -   Executes bypass scripts which can return JSON containing a resolved URL and necessary HTTP headers.
+        -   Wraps the MPV command in a terminal emulator on Linux when the `--terminal` flag is used.
 -   **`mpv_session.py`**: Manages the MPV player instance (start, stop, sync, IPC).
     -   **Imports/Dependencies**:
         -   Injected dependencies (from `native_host.py`): `is_process_alive`, `send_ipc_command`, `get_all_folders_from_file`, `get_mpv_executable`, `get_ipc_path`, `log_stream`, `send_message`, `SCRIPT_DIR`.
     -   **Interactions**:
         -   Manages the MPV process lifecycle and state.
         -   Persists session state to `session.json` within the user's application data directory.
+        -   On Linux, when using the `--terminal` flag, it corrects the process PID by querying the IPC socket to ensure session continuity.
 -   **`services.py`**: Handles backend services like dependency checks (MPV, yt-dlp) and AniList data fetching.
     -   **Imports/Dependencies**:
         -   Standard Python modules.
