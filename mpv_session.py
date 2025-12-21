@@ -100,34 +100,37 @@ class MpvSessionManager:
             except OSError: pass
             return None
 
-    def _sync(self, playlist):
-        """Attempts to append new URLs to an already running MPV instance."""
+    def _sync(self, url_item):
+        """Attempts to append a single new URL to an already running MPV instance."""
         with self.sync_lock:
-            logging.info(f"MPV is running for the same folder. Attempting to sync playlist.")
-            known_urls = set(self.playlist) if self.playlist else set()
-            urls_to_add = [url for url in playlist if url not in known_urls]
-
-            if not urls_to_add:
-                logging.info("Playlist is already in sync or only contains removals (which are not handled live).")
-                self.playlist = playlist
-                return {"success": True, "message": "Playlist is already up to date."}
+            logging.info(f"MPV is running for the same folder. Attempting to sync single URL.")
+            url_to_add = url_item['url']
+            
+            # Simple check to prevent adding the same URL multiple times.
+            # This is a basic check; a more robust one might consider other attributes.
+            if self.playlist and url_to_add in [item['url'] for item in self.playlist]:
+                logging.info("URL is already in the running playlist. Not re-adding.")
+                return {"success": True, "message": "URL already in playlist."}
 
             try:
-                logging.info(f"Appending {len(urls_to_add)} new item(s) to the playlist.")
-                for url in urls_to_add:
-                    append_command = {"command": ["loadfile", url, "append-play"]}
-                    self.send_ipc_command(self.ipc_path, append_command, expect_response=False)
+                logging.info(f"Appending single item '{url_to_add}' to the playlist.")
+                append_command = {"command": ["loadfile", url_to_add, "append-play"]}
+                self.send_ipc_command(self.ipc_path, append_command, expect_response=False)
 
-                self.playlist = playlist
-                return {"success": True, "message": f"Added {len(urls_to_add)} new item(s) to the MPV playlist."}
+                # Update the internal playlist representation
+                if self.playlist is None:
+                    self.playlist = []
+                self.playlist.append(url_item) # Append the full item, not just the URL
+
+                return {"success": True, "message": f"Added '{url_to_add}' to the MPV playlist."}
             except Exception as e:
                 logging.warning(f"Live playlist append failed unexpectedly: {e}. Clearing state to allow a restart.")
                 self.clear()
                 return None
 
-    def _launch(self, playlist, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion):
-        """Launches a new instance of MPV with the given playlist and settings."""
-        logging.info("Starting a new MPV instance.")
+    def _launch(self, url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion):
+        """Launches a new instance of MPV with the given URL and settings."""
+        logging.info(f"Starting a new MPV instance for URL: {url_item['url']}.")
         mpv_exe = self.get_mpv_executable()
         ipc_path = self.get_ipc_path()
         
@@ -181,7 +184,7 @@ class MpvSessionManager:
                 logging.info(f"Applying geometry: {geometry}")
                 mpv_args.append(f'--geometry={geometry}')
             
-            full_command = mpv_args + ['--'] + playlist
+            full_command = mpv_args + ['--'] + [url_item['url']] # Use the single URL
 
             popen_kwargs = {
                 'stderr': subprocess.PIPE,
@@ -201,12 +204,12 @@ class MpvSessionManager:
                         mpv_args.insert(1, '--terminal')
             
             # Re-create full_command in case --terminal was added for non-windows
-            full_command = mpv_args + ['--'] + playlist
+            full_command = mpv_args + ['--'] + [url_item['url']]
 
             process = subprocess.Popen(full_command, **popen_kwargs)
             self.process = process
             self.ipc_path = ipc_path
-            self.playlist = playlist
+            self.playlist = [url_item] # Store as a single-item list
             self.pid = process.pid
             self.owner_folder_id = folder_id
 
@@ -238,7 +241,7 @@ class MpvSessionManager:
                 waiter_thread.start()
 
             self.process.waiter_thread = waiter_thread
-            logging.info(f"MPV process launched (PID: {process.pid}) with {len(playlist)} items.")
+            logging.info(f"MPV process launched (PID: {process.pid}) for single URL.")
             return {"success": True, "message": "MPV playback initiated."}
         except FileNotFoundError:
             logging.error(f"Failed to launch mpv. Make sure '{mpv_exe}' is installed and in your system's PATH or configured correctly.")
@@ -247,15 +250,17 @@ class MpvSessionManager:
             logging.error(f"An error occurred while trying to launch mpv: {e}")
             return {"success": False, "error": f"Error launching mpv: {e}"}
 
-    def start(self, playlist, folder_id, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, clear_on_completion=False):
-        """Starts a new mpv process, or syncs the playlist with a running one."""
+    def start(self, url_item, folder_id, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, clear_on_completion=False):
+        """Starts a new mpv process with a single URL, or attempts to sync."""
         if self.pid and not self.is_process_alive(self.pid, self.ipc_path):
             logging.info("Detected a stale MPV session. Clearing state before proceeding.")
             self.clear()
 
         if self.pid:
             if folder_id == self.owner_folder_id:
-                sync_result = self._sync(playlist)
+                # If an MPV instance is already running for the same folder, attempt to sync.
+                # In single-URL playback, this means adding the new URL to the existing MPV instance.
+                sync_result = self._sync(url_item)
                 if sync_result is not None:
                     return sync_result
             else:
@@ -263,7 +268,8 @@ class MpvSessionManager:
                 logging.warning(error_message)
                 return {"success": False, "error": error_message}
         
-        return self._launch(playlist, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion)
+        # If no MPV is running, or if sync failed/was not attempted, launch a new one.
+        return self._launch(url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion)
 
     def close(self):
         """Closes the currently running mpv process, if any."""

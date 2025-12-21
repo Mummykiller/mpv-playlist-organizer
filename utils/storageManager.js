@@ -60,6 +60,16 @@ export class StorageManager {
                         dependencyStatus: {
                             mpv: { found: null, path: null, error: null },
                             ytdlp: { found: null, path: null, version: null, error: null }
+                        },
+                        // Define default bypass scripts. The native host will handle execution.
+                        // These can be enabled/disabled and configured via the UI.
+                        bypassScripts: {
+                            "animepahe_bypass": {
+                                "enabled": true,
+                                "match_patterns": ["*://animepahe.com/*"],
+                                "script_path": "play_with_bypass.sh", // Path relative to native_host.py
+                                "description": "Bypass security for AnimePahe.com streams."
+                            }
                         }
                     },
                     domains: {}
@@ -124,6 +134,20 @@ export class StorageManager {
                 storedValue.settings.ui_preferences.global.dependencyStatus = this._getDefaultData().settings.ui_preferences.global.dependencyStatus;
                 needsUpdate = true;
             }
+
+            // Migration: Ensure all playlist items have a 'settings' object.
+            for (const folderId in storedValue.folders) {
+                const folder = storedValue.folders[folderId];
+                if (folder.playlist && Array.isArray(folder.playlist)) {
+                    folder.playlist = folder.playlist.map(item => {
+                        if (typeof item === 'object' && item !== null && !item.settings) {
+                            needsUpdate = true;
+                            return { ...item, settings: { bypass_script_enabled: false } };
+                        }
+                        return item;
+                    });
+                }
+            }
         }
     
         if (storedValue.folders) {
@@ -158,7 +182,10 @@ export class StorageManager {
                 const storedValue = folderDataResult[folderKey];
                 let playlist = Array.isArray(storedValue) ? storedValue : (storedValue?.playlist || storedValue?.urls || []);
                 if (playlist.length > 0 && typeof playlist[0] === 'string') {
-                    playlist = playlist.map(url => ({ url: url, title: url }));
+                    playlist = playlist.map(url => ({ url: url, title: url, settings: { bypass_script_enabled: false } }));
+                } else {
+                    // Ensure existing objects also have settings
+                    playlist = playlist.map(item => ({ ...item, settings: item.settings || { bypass_script_enabled: false } }));
                 }
                 newData.folders[folderId] = { playlist };
                 newData.folderOrder.push(folderId);
