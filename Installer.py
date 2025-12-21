@@ -129,6 +129,19 @@ class HostManagerApp:
             except (IOError, json.JSONDecodeError, AttributeError, IndexError) as e:
                 self.log(f"WARNING: Could not read previous Extension ID from manifest file: {e}")
 
+        # --- Browser for Bypass Script ---
+        bypass_frame = ttk.Frame(main_frame)
+        bypass_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(bypass_frame, text="Browser for AnimePahe:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=(0, 10))
+        self.browser_var = tk.StringVar()
+        self.browser_combobox = ttk.Combobox(bypass_frame, textvariable=self.browser_var, state="readonly", font=("Segoe UI", 10))
+        self.browser_combobox['values'] = ('brave', 'chrome', 'firefox', 'edge', 'vivaldi', 'opera')
+        self.browser_combobox.pack(fill=tk.X, expand=True)
+
+        # --- Load installer preferences ---
+        # This will set the default browser from the last session.
+        self._load_installer_prefs()
+
         # --- Buttons ---
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=10)
@@ -154,6 +167,10 @@ class HostManagerApp:
         self.log_area.pack(fill=tk.BOTH, expand=True)
         self.log_area.configure(state='disabled')
 
+        # --- Initial Dependency Check ---
+        # Run this check in a separate thread to avoid blocking the GUI at startup
+        threading.Thread(target=self._check_dependencies, daemon=True).start()
+
     def log(self, message):
         self.log_area.configure(state='normal')
         self.log_area.insert(tk.END, message + "\n")
@@ -170,6 +187,7 @@ class HostManagerApp:
         self.install_button.config(state=tk.DISABLED)
         self.uninstall_button.config(state=tk.DISABLED)
         self.cli_button.config(state=tk.DISABLED)
+        self.browser_combobox.config(state=tk.DISABLED)
         
         # Run in a separate thread to keep the GUI responsive
         threading.Thread(target=self._install_thread, args=(extension_id,)).start()
@@ -181,6 +199,7 @@ class HostManagerApp:
         self.install_button.config(state=tk.DISABLED)
         self.uninstall_button.config(state=tk.DISABLED)
         self.cli_button.config(state=tk.DISABLED)
+        self.browser_combobox.config(state=tk.DISABLED)
 
         threading.Thread(target=self._uninstall_thread).start()
 
@@ -190,6 +209,7 @@ class HostManagerApp:
         self.uninstall_button.config(state=tk.DISABLED)
         self.cli_button.config(state=tk.DISABLED)
         self.path_button.config(state=tk.DISABLED)
+        self.browser_combobox.config(state=tk.DISABLED)
 
         # Run in a separate thread to keep the GUI responsive
         threading.Thread(target=self._install_cli_thread).start()
@@ -200,12 +220,183 @@ class HostManagerApp:
         self.uninstall_button.config(state=tk.DISABLED)
         self.cli_button.config(state=tk.DISABLED)
         self.path_button.config(state=tk.DISABLED)
+        self.browser_combobox.config(state=tk.DISABLED)
 
         threading.Thread(target=self._add_to_path_thread).start()
+
+    def _check_dependencies(self):
+        """Checks for required command-line tools like yt-dlp and mpv."""
+        # Check for yt-dlp
+        ytdlp_exe_name = "yt-dlp.exe" if platform.system() == "Windows" else "yt-dlp"
+        if not shutil.which(ytdlp_exe_name):
+            warning_text = f"'{ytdlp_exe_name}' not found in your system's PATH."
+            self.log(f"WARNING: {warning_text}")
+            # The messagebox needs to be called on the main GUI thread.
+            self.root.after(100, lambda: messagebox.showwarning(
+                "Dependency Missing",
+                f"{warning_text}\n\nThe AnimePahe bypass script will not work without it. Please install yt-dlp and ensure it's in your system's PATH."
+            ))
+        else:
+            self.log("yt-dlp found in PATH.")
+
+        # Check for mpv
+        self.log("Checking for mpv dependency...")
+        mpv_exe_name = "mpv.exe" if platform.system() == "Windows" else "mpv"
+        if not shutil.which(mpv_exe_name):
+            warning_text = f"'{mpv_exe_name}' not found in your system's PATH."
+            self.log(f"WARNING: {warning_text}")
+            self.root.after(100, lambda: messagebox.showwarning(
+                "Dependency Missing",
+                f"{warning_text}\n\nThe extension will not be able to play videos. Please install mpv and ensure it's in your system's PATH, or be prepared to select the executable manually during installation."
+            ))
+        else:
+            self.log("mpv found in PATH.")
+
+
+    def _load_installer_prefs(self):
+        """Loads installer preferences like the last selected browser."""
+        prefs_file = os.path.join(DATA_DIR, "installer_prefs.json")
+        default_browser = 'brave'
+        if os.path.exists(prefs_file):
+            try:
+                with open(prefs_file, 'r', encoding='utf-8') as f:
+                    prefs = json.load(f)
+                last_browser = prefs.get('last_selected_browser')
+                if last_browser in self.browser_combobox['values']:
+                    self.browser_var.set(last_browser)
+                    return # Success
+            except (IOError, json.JSONDecodeError):
+                # Fail silently on load error, will use default.
+                pass
+        
+        self.browser_var.set(default_browser)
+
+    def _save_installer_prefs(self):
+        """Saves installer preferences to a file."""
+        prefs_file = os.path.join(DATA_DIR, "installer_prefs.json")
+        selected_browser = self.browser_var.get()
+        prefs = {'last_selected_browser': selected_browser}
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(prefs_file, 'w', encoding='utf-8') as f:
+                json.dump(prefs, f, indent=4)
+            self.log(f"Saved selected browser '{selected_browser}' for next time.")
+        except Exception as e:
+            self.log(f"ERROR: Could not save installer preferences: {e}")
+
+    def _create_bypass_script(self, browser_name):
+        """Generates and writes the play_with_bypass script (sh or bat)."""
+        self.log(f"Generating bypass script for '{browser_name}' browser.")
+        
+        if platform.system() == "Windows":
+            filename = "play_with_bypass.bat"
+            # Batch script content
+            # Note: Double percent signs %% for batch variables in python string
+            script_content = f"""@echo off
+setlocal
+
+:: This script was auto-generated by the installer.
+
+:: Check if URL is provided
+if "%~1"=="" (
+  echo Usage: %0 ^<URL^> >&2
+  exit /b 1
+)
+
+:: Validate URL pattern (owocdn.top)
+echo %~1 | findstr /R "^https://vault-[0-9][0-9]*\\.owocdn\\.top/stream/..*/uwu\\.m3u8" >nul
+if %errorlevel% neq 0 (
+  echo {{"error": "URL pattern mismatch."}} >&2
+  exit /b 1
+)
+
+:: Resolve URL using yt-dlp with specific headers
+set "RESOLVED_URL="
+for /f "delims=" %%i in ('yt-dlp --referer "https://kwik.cx/" --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" --cookies-from-browser {browser_name} --no-warnings -g "%~1"') do set "RESOLVED_URL=%%i"
+
+if "%RESOLVED_URL%"=="" (
+  echo {{"error": "yt-dlp failed to resolve URL."}} >&2
+  exit /b 1
+)
+
+:: Output a JSON object for the native host to parse.
+echo {{
+echo   "url": "%RESOLVED_URL%",
+echo   "headers": {{
+echo     "Referer": "https://kwik.cx/",
+echo     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+echo   }}
+echo }}
+"""
+        else:
+            filename = "play_with_bypass.sh"
+            # Bash script content
+            script_content = f"""#!/bin/bash
+
+# This script was auto-generated by the installer.
+
+# Check if URL is provided
+if [ -z "$1" ]; then
+  echo "Usage: $0 <URL>" >&2
+  exit 1
+fi
+
+# Validate URL pattern (owocdn.top)
+REGEX="^https://vault-[0-9]+\\.owocdn\\.top/stream/.+/uwu\\.m3u8"
+if [[ ! "$1" =~ $REGEX ]]; then
+  echo '{{"error": "URL pattern mismatch."}}' >&2
+  exit 1
+fi
+
+# Resolve URL using yt-dlp with specific headers
+RESOLVED_URL=$(yt-dlp --referer "https://kwik.cx/" \\
+       --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" \\
+       --cookies-from-browser {browser_name} \\
+       --no-warnings \\
+       -g "$1")
+
+if [ -z "$RESOLVED_URL" ]; then
+  echo '{{"error": "yt-dlp failed to resolve URL."}}' >&2
+  exit 1
+fi
+
+# Output a JSON object for the native host to parse.
+cat <<EOF
+{{
+  "url": "$RESOLVED_URL",
+  "headers": {{
+    "Referer": "https://kwik.cx/",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+  }}
+}}
+EOF
+"""
+        
+        bypass_script_path = os.path.join(INSTALL_DIR, filename)
+        try:
+            # Write with Unix-style line endings (LF)
+            with open(bypass_script_path, 'w', newline='\n') as f:
+                f.write(script_content)
+            
+            # Make it executable on non-windows systems
+            if platform.system() != "Windows":
+                os.chmod(bypass_script_path, 0o755)
+                
+            self.log(f"Successfully created {filename}.")
+        except Exception as e:
+            self.log(f"ERROR: Failed to create {filename}: {e}")
+            messagebox.showerror("Error", f"Failed to create the bypass script: {e}")
 
     def _install_thread(self, extension_id):
         self.log("--- Starting Installation ---")
         try:
+            # Save preferences before starting the main install process
+            self._save_installer_prefs()
+
+            # Get browser for bypass script and create the script
+            selected_browser = self.browser_var.get()
+            self._create_bypass_script(selected_browser)
+
             current_platform = platform.system()
             if current_platform == 'Windows':
                 self._install_windows(extension_id)
@@ -223,6 +414,7 @@ class HostManagerApp:
             self.uninstall_button.config(state=tk.NORMAL)
             self.cli_button.config(state=tk.NORMAL)
             self.path_button.config(state=tk.NORMAL)
+            self.browser_combobox.config(state="readonly")
 
     def _uninstall_thread(self):
         self.log("--- Starting Uninstallation ---")
@@ -244,6 +436,7 @@ class HostManagerApp:
             self.uninstall_button.config(state=tk.NORMAL)
             self.cli_button.config(state=tk.NORMAL)
             self.path_button.config(state=tk.NORMAL)
+            self.browser_combobox.config(state="readonly")
 
     def _install_cli_thread(self):
         """The actual logic for creating the CLI wrapper, run in a thread."""
@@ -266,6 +459,7 @@ class HostManagerApp:
             self.uninstall_button.config(state=tk.NORMAL)
             self.cli_button.config(state=tk.NORMAL)
             self.path_button.config(state=tk.NORMAL)
+            self.browser_combobox.config(state="readonly")
 
     def _add_to_path_thread(self):
         """The actual logic for adding the install directory to the user's PATH."""
@@ -286,6 +480,7 @@ class HostManagerApp:
             self.uninstall_button.config(state=tk.NORMAL)
             self.cli_button.config(state=tk.NORMAL)
             self.path_button.config(state=tk.NORMAL)
+            self.browser_combobox.config(state="readonly")
 
     def _add_to_path_windows(self):
         """Adds the INSTALL_DIR to the user's PATH in the Windows Registry."""

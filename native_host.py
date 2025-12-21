@@ -72,6 +72,7 @@ try:
     import shutil
     import urllib.request
     import platform
+    import re
     # socket is only used on non-windows platforms for IPC
     from mpv_session import MpvSessionManager
     import file_io
@@ -179,13 +180,16 @@ try:
         message = sys.stdin.buffer.read(message_length).decode('utf-8')
         return json.loads(message)
 
+    print_lock = threading.Lock()
+
     def send_message(message_content):
         """Encodes and sends a message to stdout."""
-        encoded_content = json.dumps(message_content).encode('utf-8')
-        message_length = struct.pack('@I', len(encoded_content))
-        sys.stdout.buffer.write(message_length)
-        sys.stdout.buffer.write(encoded_content)
-        sys.stdout.buffer.flush()
+        with print_lock:
+            encoded_content = json.dumps(message_content).encode('utf-8')
+            message_length = struct.pack('@I', len(encoded_content))
+            sys.stdout.buffer.write(message_length)
+            sys.stdout.buffer.write(encoded_content)
+            sys.stdout.buffer.flush()
 
     def is_process_alive(pid, ipc_path):
         """Checks if an MPV process is responsive at the given IPC path."""
@@ -280,25 +284,33 @@ try:
     def _apply_bypass_script(url_item, bypass_scripts, send_message_func):
         """
         Applies a bypass script if specified in url_item settings and enabled globally.
-        Returns the processed URL or the original URL if no bypass is applied.
+        Returns a tuple of (processed_url, headers_dict).
+        headers_dict is None if no headers are returned by the script.
         """
         original_url = url_item['url']
-        processed_url = original_url
         
         # Check if a specific bypass script is enabled for this item
         item_bypass_script_id = url_item.get('settings', {}).get('use_bypass_script_id')
+        script_path = None
 
         if item_bypass_script_id and bypass_scripts.get(item_bypass_script_id, {}).get('enabled'):
             script_config = bypass_scripts[item_bypass_script_id]
             script_path = os.path.join(SCRIPT_DIR, script_config['script_path'])
+        elif re.match(r"^https://vault-\d+\.owocdn\.top/stream/.+/uwu\.m3u8", original_url):
+            script_name = "play_with_bypass.bat" if platform.system() == "Windows" else "play_with_bypass.sh"
+            potential_path = os.path.join(SCRIPT_DIR, script_name)
+            if os.path.exists(potential_path):
+                logging.info(f"Auto-detected owocdn URL. Using {script_name}.")
+                script_path = potential_path
 
+        if script_path:
             if not os.path.exists(script_path):
                 logging.error(f"Bypass script not found: {script_path}")
                 send_message_func({
                     "action": "log_from_native_host",
                     "log": {"text": f"Bypass script not found: {script_path}. Playing original URL.", "type": "error"}
                 })
-                return original_url
+                return original_url, None
             
             # Ensure the script is executable
             if platform.system() != "Windows":
@@ -313,7 +325,7 @@ try:
                             "action": "log_from_native_host",
                             "log": {"text": f"Failed to make bypass script executable. Playing original URL.", "type": "error"}
                         })
-                        return original_url
+                        return original_url, None
 
             try:
                 logging.info(f"Executing bypass script '{script_path}' for URL: {original_url}")
@@ -326,19 +338,26 @@ try:
                 process = subprocess.run([script_path, original_url], capture_output=True, text=True, check=True)
                 
                 output = process.stdout.strip()
-                if output:
-                    processed_url = output.splitlines()[-1] # Take the last line as the URL
-                    logging.info(f"Bypass script returned: {processed_url}")
-                    send_message_func({
-                        "action": "log_from_native_host",
-                        "log": {"text": f"Bypass script successful. Playing processed URL.", "type": "info"}
-                    })
-                else:
+                if not output:
                     logging.warning("Bypass script returned no output. Playing original URL.")
                     send_message_func({
                         "action": "log_from_native_host",
                         "log": {"text": f"Bypass script returned no output. Playing original URL.", "type": "warning"}
                     })
+                    return original_url, None
+
+                try:
+                    # Attempt to parse the output as JSON to get URL and headers
+                    data = json.loads(output)
+                    processed_url = data.get("url", original_url)
+                    headers = data.get("headers") # This will be a dict or None
+                    logging.info(f"Bypass script returned JSON with URL: {processed_url}")
+                    return processed_url, headers
+                except json.JSONDecodeError:
+                    # Fallback for older scripts that only return a raw URL
+                    processed_url = output.splitlines()[-1] # Take the last line as the URL
+                    logging.info(f"Bypass script returned raw URL: {processed_url}")
+                    return processed_url, None
 
             except subprocess.CalledProcessError as e:
                 logging.error(f"Bypass script failed with error (exit code {e.returncode}): {e.stderr}")
@@ -346,14 +365,16 @@ try:
                     "action": "log_from_native_host",
                     "log": {"text": f"Bypass script failed: {e.stderr}. Playing original URL.", "type": "error"}
                 })
+                return original_url, None
             except Exception as e:
                 logging.error(f"Error executing bypass script: {e}")
                 send_message_func({
                     "action": "log_from_native_host",
                     "log": {"text": f"Error executing bypass script: {e}. Playing original URL.", "type": "error"}
                 })
+                return original_url, None
         
-        return processed_url
+        return original_url, None
 
     # --- Global Instance ---
     # A single instance of the session manager to handle the MPV state.
@@ -490,12 +511,60 @@ try:
                         response = {"success": False, "error": "Missing folderId or url_item for play action."}
                     else:
                         # Apply bypass script if needed
-                        processed_url = _apply_bypass_script(url_item, bypass_scripts_config, send_message)
+                        processed_url, script_headers = _apply_bypass_script(url_item, bypass_scripts_config, send_message)
                         
                         # Update the url_item with the potentially processed URL
                         url_item['url'] = processed_url # This modifies the original url_item in the message, which is fine as it's a copy
 
-                        response = mpv_session.start(url_item, folder_id, geometry=geometry, custom_width=custom_width, custom_height=custom_height, custom_mpv_flags=custom_mpv_flags, automatic_mpv_flags=automatic_mpv_flags, start_paused=start_paused, clear_on_completion=clear_on_completion)
+                        # If the bypass script returned headers, apply them.
+                        if script_headers:
+                            header_list = [f"{key}: {value}" for key, value in script_headers.items()]
+                            header_string = ",".join(header_list)
+                            header_arg = f'--http-header-fields="{header_string}"'
+                            if custom_mpv_flags:
+                                custom_mpv_flags += " " + header_arg
+                            else:
+                                custom_mpv_flags = header_arg
+
+                        # Run MPV in a separate thread so we don't block the message loop.
+                        # This allows us to receive 'append' commands while MPV is running.
+                        def run_mpv_session():
+                            mpv_session.start(url_item, folder_id, geometry=geometry, custom_width=custom_width, custom_height=custom_height, custom_mpv_flags=custom_mpv_flags, automatic_mpv_flags=automatic_mpv_flags, start_paused=start_paused, clear_on_completion=clear_on_completion)
+                        
+                        mpv_thread = threading.Thread(target=run_mpv_session)
+                        mpv_thread.daemon = True
+                        mpv_thread.start()
+
+                        # Return immediately to let the extension know we started.
+                        # Note: If mpv_session.start fails immediately (e.g. executable not found),
+                        # the extension won't know via this response, but via logs/exit events.
+                        response = {"success": True, "message": "Playback initiated."}
+
+                elif command == 'append':
+                    url_item = message.get('url_item')
+                    bypass_scripts_config = message.get('bypassScripts', {})
+
+                    if not url_item:
+                        response = {"success": False, "error": "Missing url_item for append action."}
+                    else:
+                        logging.info("Processing append request: resolving URL via bypass script if configured.")
+                        processed_url, script_headers = _apply_bypass_script(url_item, bypass_scripts_config, send_message)
+                        
+                        # Construct loadfile command
+                        cmd_args = ["loadfile", processed_url, "append"]
+
+                        # If the bypass script returned headers, apply them as an option.
+                        if script_headers:
+                            header_list = [f"{key}: {value}" for key, value in script_headers.items()]
+                            header_string = ",".join(header_list)
+                            cmd_args.append(f"http-header-fields={header_string}")
+                        # Use 'loadfile' with 'append' to add to the end of the playlist
+                        ipc_response = send_ipc_command(mpv_session.ipc_path, {"command": cmd_args}, expect_response=True)
+                        
+                        if ipc_response and ipc_response.get('error') == 'success':
+                            response = {"success": True, "message": "Appended to playlist."}
+                        else:
+                            response = {"success": False, "error": "Failed to append to MPV playlist."}
 
                 elif command == 'play_new_instance':
                     playlist = message.get('playlist', [])
