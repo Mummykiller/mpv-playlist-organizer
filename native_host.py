@@ -440,6 +440,10 @@ try:
                 except Exception as e:
                     logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
 
+            # Check if --terminal is present in args (e.g. from custom flags)
+            if '--terminal' in mpv_args:
+                has_terminal_flag = True
+
             if custom_width and custom_height:
                 logging.info(f"Applying custom geometry for unmanaged instance: {custom_width}x{custom_height}")
                 mpv_args.append(f'--geometry={custom_width}x{custom_height}')
@@ -464,6 +468,17 @@ try:
                 if has_terminal_flag:
                     # Insert it early in the arg list
                     mpv_args.insert(1, '--terminal')
+                    
+                    # Linux: Wrap in a terminal emulator if possible
+                    term_cmd = []
+                    if shutil.which('x-terminal-emulator'): term_cmd = ['x-terminal-emulator', '-e']
+                    elif shutil.which('gnome-terminal'): term_cmd = ['gnome-terminal', '--wait', '--']
+                    elif shutil.which('konsole'): term_cmd = ['konsole', '-e']
+                    elif shutil.which('xfce4-terminal'): term_cmd = ['xfce4-terminal', '--disable-server', '-x']
+                    elif shutil.which('xterm'): term_cmd = ['xterm', '-e']
+
+                    if term_cmd:
+                        mpv_args = term_cmd + mpv_args
 
             # Re-assign the final command list to mpv_args before Popen
             process = subprocess.Popen(mpv_args, **popen_kwargs)

@@ -3,6 +3,7 @@ import json
 import logging
 import platform
 import signal
+import shutil
 import socket
 import subprocess
 import threading
@@ -177,6 +178,10 @@ class MpvSessionManager:
                 except Exception as e:
                     logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
 
+            # Check if --terminal is present in args (e.g. from custom flags)
+            if '--terminal' in mpv_args:
+                has_terminal_flag = True
+
             if custom_width and custom_height:
                 logging.info(f"Applying custom geometry: {custom_width}x{custom_height}")
                 mpv_args.append(f'--geometry={custom_width}x{custom_height}')
@@ -199,12 +204,23 @@ class MpvSessionManager:
             else:
                 popen_kwargs['start_new_session'] = True
                 if has_terminal_flag:
-                    # On non-windows, we pass the actual flag to mpv
                     if '--terminal' not in mpv_args:
                         mpv_args.insert(1, '--terminal')
+                    
+                    # Linux: Wrap in a terminal emulator if possible
+                    term_cmd = []
+                    if shutil.which('x-terminal-emulator'): term_cmd = ['x-terminal-emulator', '-e']
+                    elif shutil.which('gnome-terminal'): term_cmd = ['gnome-terminal', '--wait', '--']
+                    elif shutil.which('konsole'): term_cmd = ['konsole', '-e']
+                    elif shutil.which('xfce4-terminal'): term_cmd = ['xfce4-terminal', '--disable-server', '-x']
+                    elif shutil.which('xterm'): term_cmd = ['xterm', '-e']
             
             # Re-create full_command in case --terminal was added for non-windows
             full_command = mpv_args + ['--'] + [url_item['url']]
+
+            # Apply terminal wrapper if detected (Linux only)
+            if platform.system() != "Windows" and has_terminal_flag and 'term_cmd' in locals() and term_cmd:
+                 full_command = term_cmd + full_command
 
             process = subprocess.Popen(full_command, **popen_kwargs)
             self.process = process
@@ -212,6 +228,25 @@ class MpvSessionManager:
             self.playlist = [url_item] # Store as a single-item list
             self.pid = process.pid
             self.owner_folder_id = folder_id
+
+            # --- PID Correction for Linux Terminal ---
+            # If we launched via a terminal emulator, the process PID is for the terminal,
+            # not MPV. We need to connect to the IPC socket to get the real MPV PID.
+            if platform.system() != "Windows" and has_terminal_flag:
+                time.sleep(1) # Give MPV time to start and create the socket
+                try:
+                    pid_response = self.send_ipc_command(self.ipc_path, {"command": ["get_property", "pid"]}, timeout=2.0, expect_response=True)
+                    if pid_response and pid_response.get("error") == "success":
+                        actual_mpv_pid = pid_response.get("data")
+                        if actual_mpv_pid:
+                            logging.info(f"Corrected PID from terminal ({self.pid}) to actual MPV PID ({actual_mpv_pid}).")
+                            self.pid = actual_mpv_pid
+                        else:
+                            logging.warning("Could not get actual MPV PID from IPC socket.")
+                    else:
+                        logging.warning("Failed to get PID from MPV via IPC after launching in terminal.")
+                except Exception as e:
+                    logging.error(f"Error while trying to get MPV's real PID from terminal launch: {e}")
 
             stderr_thread = threading.Thread(target=self.log_stream, args=(self.process.stderr, logging.warning, folder_id))
             stderr_thread.daemon = True

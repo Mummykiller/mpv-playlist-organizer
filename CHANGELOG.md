@@ -20,12 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a browser selection dropdown to the Installer to configure cookies for the bypass script.
 - Added startup dependency checks to the Installer to warn users if `mpv` or `yt-dlp` are missing from the system PATH.
 - Added persistence for Installer preferences (e.g., last selected browser).
+- Added support for launching MPV in a terminal window on Linux (via `--terminal` flag) by automatically detecting and using available terminal emulators.
 - Updated `native_host.py` to support parsing JSON output from bypass scripts, allowing dynamic injection of HTTP headers (Referer, User-Agent) into MPV.
 
 ### Changed
 
 - Refactored `play_with_bypass.sh` to resolve URLs and output JSON metadata instead of piping directly to MPV. This allows the extension to maintain control over the MPV instance.
 - The `play` action now queues items in the background script instead of immediately launching MPV, enabling seamless "stacking" of videos with individual processing.
+
+### Fixed
+
+- Fixed an issue on Linux where using the `--terminal` flag would cause a new MPV session for each queued item. The extension now correctly identifies the MPV process PID within the terminal.
 
 
 
