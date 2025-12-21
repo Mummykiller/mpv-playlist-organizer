@@ -9,7 +9,7 @@ It features a draggable on-page UI, synchronization with a command-line interfac
 
 > **Note on Development:** This extension was developed in collaboration with AI assistants, guided and directed by a human developer.
 
-![On-Page Controller](images/big.png) ![Popup Playlist](images/popup_controller.png) ![AniList Releases](images/anilist.png) ![Settings View](images/Settings.png)
+![On-Page-mini Controller](images/mini.png)![On-Page Controller](images/big.png) ![Popup Playlist](images/popup_controller.png) ![AniList Releases](images/anilist.png) ![Settings View](images/Settings.png)
 
 ---
 
