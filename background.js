@@ -79,6 +79,12 @@ function broadcastLog(logObject) {
 
 let tabUiState = {}; // Tracks the minimized state of the UI for each tab
 
+// --- Playback Queue State ---
+let currentPlayingFolderId = null;
+let currentPlayingIndex = -1;
+let currentPlaylist = [];
+let isPlayingQueue = false;
+
 /**
  * Gathers all folder data from chrome.storage.local and sends it to the
  * native host to be written to the folders.json file. This keeps the
@@ -103,6 +109,30 @@ async function syncDataToNativeHostFile() {
 // it will only sync once after the user is done.
 const debouncedSyncToNativeHostFile = debounce(syncDataToNativeHostFile, 1000);
 
+/**
+ * Sends a single URL item to the native host for playback.
+ * This includes all necessary preferences and bypass script configuration.
+ * @param {object} url_item The URL item object to play.
+ * @param {string} folder_id The ID of the folder the item belongs to.
+ * @param {object} globalPrefs The global UI preferences.
+ * @returns {Promise<object>} The response from the native host.
+ */
+async function _playSingleUrlItem(url_item, folder_id, globalPrefs) {
+    return callNativeHost({
+        action: 'play',
+        url_item: url_item,
+        folderId: folder_id,
+        geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
+        custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
+        custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
+        custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
+        automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
+        clear_on_completion: globalPrefs.clear_on_completion ?? false,
+        start_paused: false, // Default to not paused when playing sequentially
+        bypassScripts: globalPrefs.bypassScripts || {} // Pass bypass scripts config
+    });
+}
+
 async function handleMpvExited(data) {
     const { folderId, returnCode } = data;
     if (!folderId) return;
@@ -110,9 +140,39 @@ async function handleMpvExited(data) {
     broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' has ended with exit code ${returnCode}.`, type: 'info' });
 
     const storageData = await storage.get();
-    const shouldClear = storageData.settings.ui_preferences.global.clear_on_completion ?? false;
+    const globalPrefs = storageData.settings.ui_preferences.global;
+    const shouldClear = globalPrefs.clear_on_completion ?? false;
 
     broadcastLog({ text: `[Background]: 'Clear on Completion' setting is ${shouldClear ? 'ENABLED' : 'DISABLED'}.`, type: 'info' });
+
+    // Handle sequential playback
+    if (isPlayingQueue && folderId === currentPlayingFolderId) {
+        currentPlayingIndex++;
+        if (currentPlayingIndex < currentPlaylist.length) {
+            const nextUrlItem = currentPlaylist[currentPlayingIndex];
+            broadcastLog({ text: `[Background]: Playing next item in queue: ${nextUrlItem.title || nextUrlItem.url}`, type: 'info' });
+            try {
+                // Play the next item, reusing preferences from the initial 'play' call
+                await _playSingleUrlItem(nextUrlItem, currentPlayingFolderId, globalPrefs);
+                // No need to send response here, just initiate next playback
+            } catch (error) {
+                broadcastLog({ text: `[Background]: Error playing next item: ${error.message}`, type: 'error' });
+                // If there's an error, try to play the next one or reset queue
+                // For now, let's just reset the queue on error.
+                isPlayingQueue = false;
+                currentPlayingFolderId = null;
+                currentPlayingIndex = -1;
+                currentPlaylist = [];
+            }
+        } else {
+            broadcastLog({ text: `[Background]: Playback queue for folder '${folderId}' completed.`, type: 'info' });
+            isPlayingQueue = false;
+            currentPlayingFolderId = null;
+            currentPlayingIndex = -1;
+            currentPlaylist = [];
+        }
+    }
+
 
     if (shouldClear) {
         // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion.
@@ -600,37 +660,42 @@ const actionHandlers = {
         const data = await storage.get();
         const globalPrefs = data.settings.ui_preferences.global;
         const playlist = data.folders[request.folderId]?.playlist;
-        const urlPlaylist = playlist?.map(item => item.url) || [];
-        if (!urlPlaylist.length) {
+        
+        if (!playlist || playlist.length === 0) {
             return { success: false, error: `Playlist in folder '${request.folderId}' is empty.` };
         }
-        return callNativeHost({
-            action: 'play', folderId: request.folderId, playlist: urlPlaylist,
-            geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
-            custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
-            custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
-            custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
-            automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
-            clear_on_completion: globalPrefs.clear_on_completion ?? false
-        });
+
+        // Initialize queue state
+        currentPlayingFolderId = request.folderId;
+        currentPlaylist = playlist; // Store the full item, not just URLs
+        currentPlayingIndex = 0;
+        isPlayingQueue = true;
+
+        broadcastLog({ text: `[Background]: Starting playback queue for folder '${request.folderId}'.`, type: 'info' });
+
+        const firstUrlItem = currentPlaylist[currentPlayingIndex];
+        return _playSingleUrlItem(firstUrlItem, currentPlayingFolderId, globalPrefs);
     },
-    'play_new_instance': async (request) => {
-        const data = await storage.get();
-        const globalPrefs = data.settings.ui_preferences.global;
-        const playlist = data.folders[request.folderId]?.playlist;
-        const urlPlaylist = playlist?.map(item => item.url) || [];
-        if (!urlPlaylist.length) {
-            return { success: false, error: `Playlist in folder '${request.folderId}' is empty.` };
-        }
-        return callNativeHost({
-            action: 'play_new_instance', playlist: urlPlaylist,
-            geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
-            custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
-            custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
-            automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
-            custom_mpv_flags: globalPrefs.custom_mpv_flags || ''
-        });
-    },
+    // The 'play_new_instance' action is no longer relevant in this sequential single-URL playback model.
+    // If a "play all in a new MPV" functionality is still desired, it would need to be re-implemented
+    // with different logic.
+    // 'play_new_instance': async (request) => {
+    //     const data = await storage.get();
+    //     const globalPrefs = data.settings.ui_preferences.global;
+    //     const playlist = data.folders[request.folderId]?.playlist;
+    //     const urlPlaylist = playlist?.map(item => item.url) || [];
+    //     if (!urlPlaylist.length) {
+    //         return { success: false, error: `Playlist in folder '${request.folderId}' is empty.` };
+    //     }
+    //     return callNativeHost({
+    //         action: 'play_new_instance', playlist: urlPlaylist,
+    //         geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
+    //         custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
+    //         custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
+    //         automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
+    //         custom_mpv_flags: globalPrefs.custom_mpv_flags || ''
+    //     });
+    // },
     'close_mpv': () => callNativeHost({ action: 'close_mpv' }),
     'add': playlistManager.handleAdd,
     'get_playlist': playlistManager.handleGetPlaylist,

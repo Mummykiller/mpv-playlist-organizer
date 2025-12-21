@@ -276,6 +276,85 @@ try:
         else:
             return os.path.join(temp_dir, f"mpv-socket-{pid}")
 
+    # --- Bypass Script Execution ---
+    def _apply_bypass_script(url_item, bypass_scripts, send_message_func):
+        """
+        Applies a bypass script if specified in url_item settings and enabled globally.
+        Returns the processed URL or the original URL if no bypass is applied.
+        """
+        original_url = url_item['url']
+        processed_url = original_url
+        
+        # Check if a specific bypass script is enabled for this item
+        item_bypass_script_id = url_item.get('settings', {}).get('use_bypass_script_id')
+
+        if item_bypass_script_id and bypass_scripts.get(item_bypass_script_id, {}).get('enabled'):
+            script_config = bypass_scripts[item_bypass_script_id]
+            script_path = os.path.join(SCRIPT_DIR, script_config['script_path'])
+
+            if not os.path.exists(script_path):
+                logging.error(f"Bypass script not found: {script_path}")
+                send_message_func({
+                    "action": "log_from_native_host",
+                    "log": {"text": f"Bypass script not found: {script_path}. Playing original URL.", "type": "error"}
+                })
+                return original_url
+            
+            # Ensure the script is executable
+            if platform.system() != "Windows":
+                if not os.access(script_path, os.X_OK):
+                    logging.warning(f"Bypass script not executable: {script_path}. Attempting to make it executable.")
+                    try:
+                        os.chmod(script_path, os.stat(script_path).st_mode | 0o100) # Add execute permission
+                        logging.info(f"Made bypass script executable: {script_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to make bypass script executable: {e}. Playing original URL.")
+                        send_message_func({
+                            "action": "log_from_native_host",
+                            "log": {"text": f"Failed to make bypass script executable. Playing original URL.", "type": "error"}
+                        })
+                        return original_url
+
+            try:
+                logging.info(f"Executing bypass script '{script_path}' for URL: {original_url}")
+                send_message_func({
+                    "action": "log_from_native_host",
+                    "log": {"text": f"Running bypass script for: {original_url}", "type": "info"}
+                })
+                
+                # Execute the script, passing the original URL as an argument
+                process = subprocess.run([script_path, original_url], capture_output=True, text=True, check=True)
+                
+                output = process.stdout.strip()
+                if output:
+                    processed_url = output.splitlines()[-1] # Take the last line as the URL
+                    logging.info(f"Bypass script returned: {processed_url}")
+                    send_message_func({
+                        "action": "log_from_native_host",
+                        "log": {"text": f"Bypass script successful. Playing processed URL.", "type": "info"}
+                    })
+                else:
+                    logging.warning("Bypass script returned no output. Playing original URL.")
+                    send_message_func({
+                        "action": "log_from_native_host",
+                        "log": {"text": f"Bypass script returned no output. Playing original URL.", "type": "warning"}
+                    })
+
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Bypass script failed with error (exit code {e.returncode}): {e.stderr}")
+                send_message_func({
+                    "action": "log_from_native_host",
+                    "log": {"text": f"Bypass script failed: {e.stderr}. Playing original URL.", "type": "error"}
+                })
+            except Exception as e:
+                logging.error(f"Error executing bypass script: {e}")
+                send_message_func({
+                    "action": "log_from_native_host",
+                    "log": {"text": f"Error executing bypass script: {e}. Playing original URL.", "type": "error"}
+                })
+        
+        return processed_url
+
     # --- Global Instance ---
     # A single instance of the session manager to handle the MPV state.
     mpv_session = MpvSessionManager(session_file_path=SESSION_FILE, dependencies={
@@ -395,8 +474,8 @@ try:
                 logging.info(f"Received message (ID: {message.get('request_id')}): {json.dumps(message)}")
 
                 response = {}
-                if command == 'play':
-                    playlist = message.get('playlist', [])
+                if command == 'play': # This command is now for playing a single item from the extension
+                    url_item = message.get('url_item')
                     folder_id = message.get('folderId')
                     geometry = message.get('geometry')
                     custom_width = message.get('custom_width')
@@ -405,10 +484,18 @@ try:
                     automatic_mpv_flags = message.get('automatic_mpv_flags')
                     clear_on_completion = message.get('clear_on_completion', False)
                     start_paused = message.get('start_paused', False)
-                    if not folder_id:
-                        response = {"success": False, "error": "No folderId provided for play action."}
+                    bypass_scripts_config = message.get('bypassScripts', {}) # New: get bypass scripts config from extension
+
+                    if not folder_id or not url_item:
+                        response = {"success": False, "error": "Missing folderId or url_item for play action."}
                     else:
-                        response = mpv_session.start(playlist, folder_id, geometry=geometry, custom_width=custom_width, custom_height=custom_height, custom_mpv_flags=custom_mpv_flags, automatic_mpv_flags=automatic_mpv_flags, start_paused=start_paused, clear_on_completion=clear_on_completion)
+                        # Apply bypass script if needed
+                        processed_url = _apply_bypass_script(url_item, bypass_scripts_config, send_message)
+                        
+                        # Update the url_item with the potentially processed URL
+                        url_item['url'] = processed_url # This modifies the original url_item in the message, which is fine as it's a copy
+
+                        response = mpv_session.start(url_item, folder_id, geometry=geometry, custom_width=custom_width, custom_height=custom_height, custom_mpv_flags=custom_mpv_flags, automatic_mpv_flags=automatic_mpv_flags, start_paused=start_paused, clear_on_completion=clear_on_completion)
 
                 elif command == 'play_new_instance':
                     playlist = message.get('playlist', [])
