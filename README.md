@@ -1,7 +1,7 @@
 # MPV Playlist Organizer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.4.0-blue)](https://github.com/Mummykiller/mpv-playlist-organizer/releases)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/Mummykiller/mpv-playlist-organizer/releases)
 
 A browser extension designed to capture video stream URLs (like M3U8) and YouTube links, organize them into persistent playlists, and play them directly in the [MPV media player](https://mpv.io/).
 
@@ -9,7 +9,7 @@ It features a draggable on-page UI, synchronization with a command-line interfac
 
 > **Note on Development:** This extension was developed in collaboration with AI assistants, guided and directed by a human developer.
 
-![Screenshot of the UI](images/big.png)  ![Screenshot of the UI](images/small.png)  ![Screenshot of the UI](images/minimized.png)
+![On-Page Controller](images/big.png) ![Popup Playlist](images/popup_controller.png) ![AniList Releases](images/anilist.png) ![Settings View](images/Settings.png)
 
 ---
 
