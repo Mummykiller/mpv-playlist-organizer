@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+
+
+## [2.1.0] - 2024-05-24
+
+### Added
+
+- Implemented a sequential playback queue system in the background script. Videos are now processed one by one to ensure per-item settings (like bypass scripts) are applied correctly while maintaining a continuous MPV session.
+- Added dynamic generation of `play_with_bypass` scripts (`.bat` for Windows, `.sh` for Linux/macOS) in the Installer, tailored to the user's selected browser.
+- Added a browser selection dropdown to the Installer to configure cookies for the bypass script.
+- Added startup dependency checks to the Installer to warn users if `mpv` or `yt-dlp` are missing from the system PATH.
+- Added persistence for Installer preferences (e.g., last selected browser).
+- Updated `native_host.py` to support parsing JSON output from bypass scripts, allowing dynamic injection of HTTP headers (Referer, User-Agent) into MPV.
+
+### Changed
+
+- Refactored `play_with_bypass.sh` to resolve URLs and output JSON metadata instead of piping directly to MPV. This allows the extension to maintain control over the MPV instance.
+- The `play` action now queues items in the background script instead of immediately launching MPV, enabling seamless "stacking" of videos with individual processing.
+
 
 
 ## [2.0.0] - 2025-12-20

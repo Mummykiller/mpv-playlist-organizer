@@ -80,10 +80,73 @@ function broadcastLog(logObject) {
 let tabUiState = {}; // Tracks the minimized state of the UI for each tab
 
 // --- Playback Queue State ---
-let currentPlayingFolderId = null;
-let currentPlayingIndex = -1;
-let currentPlaylist = [];
-let isPlayingQueue = false;
+let playbackQueue = [];
+let isPlaying = false;
+let isProcessingQueue = false;
+let currentPlayingItem = null; // { urlItem, folderId, isLastInFolder }
+
+async function processQueue() {
+    if (isProcessingQueue) return;
+    isProcessingQueue = true;
+
+    try {
+        const data = await storage.get();
+        const globalPrefs = data.settings.ui_preferences.global;
+
+        while (playbackQueue.length > 0) {
+            // Peek at the next item
+            const nextItem = playbackQueue[0];
+            const { urlItem, folderId } = nextItem;
+
+            if (isPlaying) {
+                // Try to append to the running session
+                broadcastLog({ text: `[Background]: Appending to active session: ${urlItem.title || urlItem.url}`, type: 'info' });
+                try {
+                    const response = await callNativeHost({
+                        action: 'append',
+                        url_item: urlItem,
+                        bypassScripts: globalPrefs.bypassScripts || {}
+                    });
+
+                    if (response.success) {
+                        playbackQueue.shift(); // Successfully appended, remove from queue
+                        currentPlayingItem = nextItem; // Update current item tracking
+                        continue; // Process next item immediately
+                    } else {
+                        // Append failed (likely MPV closed), fall through to start new session
+                        isPlaying = false;
+                    }
+                } catch (e) {
+                    isPlaying = false;
+                }
+            }
+
+            // Start a new session
+            broadcastLog({ text: `[Background]: Starting playback: ${urlItem.title || urlItem.url}`, type: 'info' });
+            try {
+                await _playSingleUrlItem(urlItem, folderId, globalPrefs);
+                isPlaying = true;
+                // Give MPV a moment to initialize IPC before we try to append subsequent items.
+                // This prevents race conditions where 'append' arrives before the IPC pipe is ready.
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                playbackQueue.shift(); // Successfully started, remove from queue
+                currentPlayingItem = nextItem;
+            } catch (error) {
+                broadcastLog({ text: `[Background]: Error playing item: ${error.message}`, type: 'error' });
+                playbackQueue.shift(); // Remove failed item to prevent infinite loop
+                isPlaying = false;
+            }
+        }
+        
+        if (playbackQueue.length === 0 && !isPlaying) {
+            currentPlayingItem = null;
+            broadcastLog({ text: `[Background]: Playback queue finished.`, type: 'info' });
+        }
+
+    } finally {
+        isProcessingQueue = false;
+    }
+}
 
 /**
  * Gathers all folder data from chrome.storage.local and sends it to the
@@ -139,58 +202,35 @@ async function handleMpvExited(data) {
     
     broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' has ended with exit code ${returnCode}.`, type: 'info' });
 
+    isPlaying = false;
+
     const storageData = await storage.get();
     const globalPrefs = storageData.settings.ui_preferences.global;
     const shouldClear = globalPrefs.clear_on_completion ?? false;
 
     broadcastLog({ text: `[Background]: 'Clear on Completion' setting is ${shouldClear ? 'ENABLED' : 'DISABLED'}.`, type: 'info' });
 
-    // Handle sequential playback
-    if (isPlayingQueue && folderId === currentPlayingFolderId) {
-        currentPlayingIndex++;
-        if (currentPlayingIndex < currentPlaylist.length) {
-            const nextUrlItem = currentPlaylist[currentPlayingIndex];
-            broadcastLog({ text: `[Background]: Playing next item in queue: ${nextUrlItem.title || nextUrlItem.url}`, type: 'info' });
-            try {
-                // Play the next item, reusing preferences from the initial 'play' call
-                await _playSingleUrlItem(nextUrlItem, currentPlayingFolderId, globalPrefs);
-                // No need to send response here, just initiate next playback
-            } catch (error) {
-                broadcastLog({ text: `[Background]: Error playing next item: ${error.message}`, type: 'error' });
-                // If there's an error, try to play the next one or reset queue
-                // For now, let's just reset the queue on error.
-                isPlayingQueue = false;
-                currentPlayingFolderId = null;
-                currentPlayingIndex = -1;
-                currentPlaylist = [];
+    // Only attempt to clear if the item that just finished was the last one in its folder/batch
+    if (currentPlayingItem && currentPlayingItem.folderId === folderId && currentPlayingItem.isLastInFolder) {
+        if (shouldClear) {
+            // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion.
+            if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
+                const completionType = 'naturally completed';
+                broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' ${completionType}. Auto-clearing playlist as per settings.`, type: 'info' });
+                await playlistManager.handleClear({ folderId: folderId });
+            } else {
+                broadcastLog({ text: `[Background]: MPV exited with unexpected code ${returnCode}. Playlist for '${folderId}' will not be cleared.`, type: 'error' });
+                if (returnCode !== 0 && returnCode !== MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
+                    broadcastLog({ text: `[Background]: This may indicate an issue with the 'on_completion.lua' script or an MPV crash.`, type: 'error' });
+                }
             }
         } else {
-            broadcastLog({ text: `[Background]: Playback queue for folder '${folderId}' completed.`, type: 'info' });
-            isPlayingQueue = false;
-            currentPlayingFolderId = null;
-            currentPlayingIndex = -1;
-            currentPlaylist = [];
+            broadcastLog({ text: `[Background]: Playlist for '${folderId}' will not be cleared because the setting is disabled.`, type: 'info' });
         }
     }
 
-
-    if (shouldClear) {
-        // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion.
-        // We only clear the playlist if it completes naturally, not if the user closes MPV manually (which gives exit code 0).
-        if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
-            const completionType = 'naturally completed';
-            broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' ${completionType}. Auto-clearing playlist as per settings.`, type: 'info' });
-            await playlistManager.handleClear({ folderId: folderId });
-        } else {
-            broadcastLog({ text: `[Background]: MPV exited with unexpected code ${returnCode}. Playlist for '${folderId}' will not be cleared.`, type: 'error' });
-            // Only suggest script loading issue if it's not a normal exit (0) or natural completion (99)
-            if (returnCode !== 0 && returnCode !== MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
-                broadcastLog({ text: `[Background]: This may indicate an issue with the 'on_completion.lua' script or an MPV crash.`, type: 'error' });
-            }
-        }
-    } else {
-        broadcastLog({ text: `[Background]: Playlist for '${folderId}' will not be cleared because the setting is disabled.`, type: 'info' });
-    }
+    // We don't need to trigger processQueue here because we drain the queue immediately.
+    // However, if the user adds items *after* MPV exits, processQueue will be triggered by the 'play' action.
 }
 
 injectNativeConnectionDependencies({ broadcastLog, handleMpvExited });
@@ -658,23 +698,23 @@ const actionHandlers = {
     'is_mpv_running': () => callNativeHost({ action: 'is_mpv_running' }),
     'play': async (request) => {
         const data = await storage.get();
-        const globalPrefs = data.settings.ui_preferences.global;
         const playlist = data.folders[request.folderId]?.playlist;
         
         if (!playlist || playlist.length === 0) {
             return { success: false, error: `Playlist in folder '${request.folderId}' is empty.` };
         }
 
-        // Initialize queue state
-        currentPlayingFolderId = request.folderId;
-        currentPlaylist = playlist; // Store the full item, not just URLs
-        currentPlayingIndex = 0;
-        isPlayingQueue = true;
+        const items = playlist.map((item, index) => ({
+            urlItem: item,
+            folderId: request.folderId,
+            isLastInFolder: index === playlist.length - 1
+        }));
+        
+        playbackQueue.push(...items);
+        broadcastLog({ text: `[Background]: Added ${items.length} items to queue. Queue size: ${playbackQueue.length}`, type: 'info' });
 
-        broadcastLog({ text: `[Background]: Starting playback queue for folder '${request.folderId}'.`, type: 'info' });
-
-        const firstUrlItem = currentPlaylist[currentPlayingIndex];
-        return _playSingleUrlItem(firstUrlItem, currentPlayingFolderId, globalPrefs);
+        processQueue();
+        return { success: true, message: "Added to queue" };
     },
     // The 'play_new_instance' action is no longer relevant in this sequential single-URL playback model.
     // If a "play all in a new MPV" functionality is still desired, it would need to be re-implemented

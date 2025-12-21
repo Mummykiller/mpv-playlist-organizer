@@ -1,7 +1,7 @@
 # MPV Playlist Organizer
-
+'
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/Mummykiller/mpv-playlist-organizer/releases)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue)](https://github.com/Mummykiller/mpv-playlist-organizer/releases)
 
 A browser extension designed to capture video stream URLs (like M3U8) and YouTube links, organize them into persistent playlists, and play them directly in the [MPV media player](https://mpv.io/).
 
@@ -9,7 +9,9 @@ It features a draggable on-page UI, synchronization with a command-line interfac
 
 > **Note on Development:** This extension was developed in collaboration with AI assistants, guided and directed by a human developer.
 
-![On-Page Controller](images/big.png) ![Popup Playlist](images/popup_controller.png) ![AniList Releases](images/anilist.png) ![Settings View](images/Settings.png)
+![On-Page Controller](images/big.png) 
+
+![Popup Playlist](images/popup_controller.png) ![AniList Releases](images/anilist.png) ![Settings View](images/Settings.png)
 
 ---
 
@@ -81,10 +83,10 @@ A **Command-Line Interface (CLI)** is also available for playing your playlists 
 ---
 
 ## Core Features
-
--   **Live Playlist Sync**: Add new videos to a playlist, and they will be automatically queued in MPV without interrupting playback.
+-   **Sequential Playback Queue**: Stack multiple videos or entire playlists to be played one after another in the same MPV instance, with per-item settings applied correctly.
 -   **Session Restoration**: The extension can reconnect to your MPV instance even if you close and reopen your browser.
 -   **Smart Title Scraping**: Automatically creates clean, readable titles from web pages (e.g., `s01e05 - Show Name`).
+-   **Advanced Site Support**: Includes a dynamic bypass script system (e.g., for AnimePahe) that is automatically configured by the installer based on your browser choice for handling sites that require special headers or cookies.
 -   **Popup Playlist**: View and manage the active playlist directly from the extension's popup icon.
 -   **Playlist Management**: Create multiple playlists (which are called "folders" in the UI) and easily switch between them.
 -   **Import/Export**: Back up your playlists to JSON files and import them later.
