@@ -4,6 +4,7 @@ import os
 
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
+import re
 # --- Windows Console Hiding Logic ---
 # This block checks if the script is running on Windows with the standard 'python.exe'
 # interpreter. If so, it re-launches itself using 'pythonw.exe' (the windowless version)
@@ -67,6 +68,34 @@ def get_browser_configs(is_mac):
             "Brave": os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             "Microsoft Edge": os.path.join(base_path, "microsoft-edge/NativeMessagingHosts"),
         }
+
+def _get_dynamic_user_agent():
+    """
+    Constructs a plausible, platform-specific User-Agent string for a modern browser.
+    """
+    system = platform.system()
+    ua_system_info = ""
+    # A recent, but generic, Chrome version. This is less likely to break than a
+    # fully hardcoded OS string.
+    chrome_version = "125.0.0.0"
+
+    try:
+        if system == "Windows":
+            # For modern Windows (10, 11), the UA string is standardized to Windows NT 10.0
+            # for compatibility reasons.
+            ua_system_info = "(Windows NT 10.0; Win64; x64)"
+        elif system == "Linux":
+            # e.g., (X11; Linux x86_64)
+            machine = platform.machine()
+            ua_system_info = f"(X11; Linux {machine})"
+        elif system == "Darwin": # macOS
+            # Chrome on Apple Silicon still often reports "Intel Mac OS X" for compatibility.
+            # Using a common modern version is a safe bet.
+            ua_system_info = "(Macintosh; Intel Mac OS X 10_15_7)"
+    except Exception:
+        ua_system_info = "(X11; Linux x86_64)" # Failsafe
+
+    return f"Mozilla/5.0 {ua_system_info} AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version} Safari/537.36"
 
 # --- GUI Application Class ---
 class HostManagerApp:
@@ -136,6 +165,12 @@ class HostManagerApp:
         self.browser_var = tk.StringVar()
         self.browser_combobox = ttk.Combobox(bypass_frame, textvariable=self.browser_var, state="readonly", font=("Segoe UI", 10))
         self.browser_combobox['values'] = ('brave', 'chrome', 'firefox', 'edge', 'vivaldi', 'opera')
+        
+        # Test Button (Packed to the right so it sits next to the dropdown)
+        self.diagnostics_btn = ttk.Button(bypass_frame, text="Run Diagnostics", command=self.run_diagnostics)
+        self.diagnostics_btn.pack(side=tk.RIGHT, padx=(5, 0))
+        
+        # Combobox fills remaining space
         self.browser_combobox.pack(fill=tk.X, expand=True)
 
         # --- Load installer preferences ---
@@ -183,6 +218,11 @@ class HostManagerApp:
         if not extension_id:
             messagebox.showerror("Error", "Extension ID cannot be empty.")
             return
+        
+        # Basic validation for Chrome extension ID format (32 lowercase alpha characters)
+        if not re.match(r"^[a-z]{32}$", extension_id):
+             if not messagebox.askyesno("Warning", "The Extension ID doesn't look like a standard Chrome extension ID (32 lowercase letters).\n\nAre you sure you want to proceed?"):
+                 return
 
         self.install_button.config(state=tk.DISABLED)
         self.uninstall_button.config(state=tk.DISABLED)
@@ -252,6 +292,92 @@ class HostManagerApp:
         else:
             self.log("mpv found in PATH.")
 
+    def run_diagnostics(self):
+        """Runs a suite of diagnostic tests including dependency checks and cookie access."""
+        browser = self.browser_var.get()
+        
+        self.install_button.config(state=tk.DISABLED) # Disable install while testing
+        self.log(f"Starting diagnostics for '{browser}'...")
+        
+        def _test():
+            results = []
+            has_critical_error = False
+
+            # 1. Check yt-dlp
+            ytdlp_exe = "yt-dlp.exe" if platform.system() == "Windows" else "yt-dlp"
+            ytdlp_path = shutil.which(ytdlp_exe)
+            if ytdlp_path:
+                try:
+                    ver_proc = subprocess.run([ytdlp_path, "--version"], capture_output=True, text=True)
+                    ver = ver_proc.stdout.strip() if ver_proc.returncode == 0 else "Unknown"
+                    results.append(f"✅ yt-dlp found: {ver}")
+                except:
+                    results.append(f"✅ yt-dlp found")
+            else:
+                results.append(f"❌ yt-dlp NOT found in PATH")
+                has_critical_error = True
+
+            # 2. Check mpv
+            mpv_exe = "mpv.exe" if platform.system() == "Windows" else "mpv"
+            mpv_path = shutil.which(mpv_exe)
+            if mpv_path:
+                try:
+                    mpv_proc = subprocess.run([mpv_path, "--version"], capture_output=True, text=True)
+                    ver = mpv_proc.stdout.splitlines()[0] if mpv_proc.returncode == 0 and mpv_proc.stdout else "Unknown"
+                    results.append(f"✅ mpv found: {ver}")
+                except:
+                    results.append(f"✅ mpv found")
+            else:
+                results.append(f"❌ mpv NOT found in PATH")
+                has_critical_error = True
+
+            # 3. Check ffmpeg
+            ffmpeg_exe = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
+            if shutil.which(ffmpeg_exe):
+                results.append(f"✅ ffmpeg found")
+            else:
+                results.append(f"⚠️ ffmpeg not found (recommended)")
+
+            # 4. Check Cookies
+            if ytdlp_path and browser:
+                try:
+                    # Use --simulate with a dummy video URL to test cookie extraction without downloading.
+                    # We use a YouTube URL because google.com might trigger "Unsupported URL" errors in some yt-dlp versions.
+                    cmd = [ytdlp_path, "--cookies-from-browser", browser, "--simulate", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+                    startupinfo = None
+                    if platform.system() == "Windows":
+                        startupinfo = subprocess.STARTUPINFO()
+                        startupinfo.dwFlags |= subprocess.STARTF_USESTDHANDLES | subprocess.STARTF_USESHOWWINDOW
+                        startupinfo.wShowWindow = subprocess.SW_HIDE
+
+                    proc = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
+                    
+                    if proc.returncode == 0:
+                        results.append(f"✅ Cookie access successful for {browser}")
+                    else:
+                        err = proc.stderr.strip()
+                        msg = f"❌ Cookie access failed for {browser}"
+                        if "lock" in err.lower() or "open" in err.lower():
+                            msg += "\n   (Tip: Close the browser and try again)"
+                        results.append(msg)
+                        self.log(f"Cookie error: {err}")
+                        has_critical_error = True
+                except Exception as e:
+                    results.append(f"❌ Cookie test error: {e}")
+                    has_critical_error = True
+            elif not browser:
+                results.append(f"⚠️ No browser selected for cookie test")
+
+            # Report
+            report_text = "\n".join(results)
+            self.log("Diagnostics Results:\n" + report_text)
+            
+            title = "Diagnostics Failed" if has_critical_error else "Diagnostics Passed"
+            
+            self.root.after(0, lambda: messagebox.showinfo(title, report_text) if not has_critical_error else messagebox.showerror(title, report_text))
+            self.root.after(0, lambda: self.install_button.config(state=tk.NORMAL))
+        
+        threading.Thread(target=_test, daemon=True).start()
 
     def _load_installer_prefs(self):
         """Loads installer preferences like the last selected browser."""
@@ -286,8 +412,11 @@ class HostManagerApp:
 
     def _create_bypass_script(self, browser_name):
         """Generates and writes the play_with_bypass script (sh or bat)."""
-        self.log(f"Generating bypass script for '{browser_name}' browser.")
+        self.log(f"Generating bypass script for '{browser_name}' browser on {platform.system()}.")
         
+        user_agent = _get_dynamic_user_agent()
+        self.log(f"Using dynamic User-Agent: {user_agent}")
+
         if platform.system() == "Windows":
             filename = "play_with_bypass.bat"
             # Batch script content
@@ -312,7 +441,7 @@ if %errorlevel% neq 0 (
 
 :: Resolve URL using yt-dlp with specific headers
 set "RESOLVED_URL="
-for /f "delims=" %%i in ('yt-dlp --referer "https://kwik.cx/" --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" --cookies-from-browser {browser_name} --no-warnings -g "%~1"') do set "RESOLVED_URL=%%i"
+for /f "delims=" %%i in ('yt-dlp --referer "https://kwik.cx/" --user-agent "{user_agent}" --cookies-from-browser {browser_name} --no-warnings -g "%~1"') do set "RESOLVED_URL=%%i"
 
 if "%RESOLVED_URL%"=="" (
   echo {{"error": "yt-dlp failed to resolve URL."}} >&2
@@ -324,7 +453,7 @@ echo {{
 echo   "url": "%RESOLVED_URL%",
 echo   "headers": {{
 echo     "Referer": "https://kwik.cx/",
-echo     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+echo     "User-Agent": "{user_agent}"
 echo   }}
 echo }}
 """
@@ -350,7 +479,7 @@ fi
 
 # Resolve URL using yt-dlp with specific headers
 RESOLVED_URL=$(yt-dlp --referer "https://kwik.cx/" \\
-       --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36" \\
+       --user-agent "{user_agent}" \\
        --cookies-from-browser {browser_name} \\
        --no-warnings \\
        -g "$1")
@@ -366,7 +495,7 @@ cat <<EOF
   "url": "$RESOLVED_URL",
   "headers": {{
     "Referer": "https://kwik.cx/",
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+    "User-Agent": "{user_agent}"
   }}
 }}
 EOF
