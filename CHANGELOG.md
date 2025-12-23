@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.1.0] - 2024-05-24
 
 ### Added
-
+- **Diagnostics Tool:** Added a diagnostics tool to the installer to help users troubleshoot issues by checking for dependencies like `mpv`, `yt-dlp`, and `ffmpeg`, and verifying browser cookie access.
+- **AnimePahe Bypass Script:** The installer now generates a `play_with_bypass` script that uses `yt-dlp` to resolve streaming URLs, bypassing certain restrictions. This includes dynamic User-Agent generation.
 - Implemented a sequential playback queue system in the background script. Videos are now processed one by one to ensure per-item settings (like bypass scripts) are applied correctly while maintaining a continuous MPV session.
 - Added dynamic generation of `play_with_bypass` scripts (`.bat` for Windows, `.sh` for Linux/macOS) in the Installer, tailored to the user's selected browser.
 - Added a browser selection dropdown to the Installer to configure cookies for the bypass script.
