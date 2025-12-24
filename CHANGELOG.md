@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.1.0] - 2024-05-24
 
 ### Added
+- **Installer UI Tooltips:** Added tooltips to the installer UI to explain complex options, such as the AnimePahe bypass script functionality.
 - **Diagnostics Tool:** Added a diagnostics tool to the installer to help users troubleshoot issues by checking for dependencies like `mpv`, `yt-dlp`, and `ffmpeg`, and verifying browser cookie access.
 - **AnimePahe Bypass Script:** The installer now generates a `play_with_bypass` script that uses `yt-dlp` to resolve streaming URLs, bypassing certain restrictions. This includes dynamic User-Agent generation.
 - Implemented a sequential playback queue system in the background script. Videos are now processed one by one to ensure per-item settings (like bypass scripts) are applied correctly while maintaining a continuous MPV session.
@@ -26,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `native_host.py` to support parsing JSON output from bypass scripts, allowing dynamic injection of HTTP headers (Referer, User-Agent) into MPV.
 
 ### Changed
-
+- **Installer UI Layout:** Refactored the installer's main settings area to use a `grid` layout, ensuring proper alignment of labels and input fields for a cleaner and more robust user interface.
 - Refactored `play_with_bypass.sh` to resolve URLs and output JSON metadata instead of piping directly to MPV. This allows the extension to maintain control over the MPV instance.
 - The `play` action now queues items in the background script instead of immediately launching MPV, enabling seamless "stacking" of videos with individual processing.
 
