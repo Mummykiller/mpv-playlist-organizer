@@ -544,7 +544,7 @@ try:
                         # Run MPV in a separate thread so we don't block the message loop.
                         # This allows us to receive 'append' commands while MPV is running.
                         def run_mpv_session():
-                            mpv_session.start(url_item, folder_id, geometry=geometry, custom_width=custom_width, custom_height=custom_height, custom_mpv_flags=custom_mpv_flags, automatic_mpv_flags=automatic_mpv_flags, start_paused=start_paused, clear_on_completion=clear_on_completion)
+                            mpv_session.start(url_item, folder_id, geometry=geometry, custom_width=custom_width, custom_height=custom_height, custom_mpv_flags=custom_mpv_flags, automatic_mpv_flags=automatic_mpv_flags, start_paused=start_paused, clear_on_completion=clear_on_completion, headers=script_headers)
                         
                         mpv_thread = threading.Thread(target=run_mpv_session)
                         mpv_thread.daemon = True
@@ -564,21 +564,12 @@ try:
                     else:
                         logging.info("Processing append request: resolving URL via bypass script if configured.")
                         processed_url, script_headers = _apply_bypass_script(url_item, bypass_scripts_config, send_message)
+                        url_item['url'] = processed_url # Update URL with resolved one
                         
-                        # Construct loadfile command
-                        cmd_args = ["loadfile", processed_url, "append"]
-
-                        # If the bypass script returned headers, apply them as an option.
-                        if script_headers:
-                            header_list = [f"{key}: {value}" for key, value in script_headers.items()]
-                            header_string = ",".join(header_list)
-                            cmd_args.append(f"http-header-fields={header_string}")
-                        # Use 'loadfile' with 'append' to add to the end of the playlist
-                        ipc_response = send_ipc_command(mpv_session.ipc_path, {"command": cmd_args}, expect_response=True)
+                        # Use mpv_session to append, which now handles headers via set_property
+                        response = mpv_session.append(url_item, headers=script_headers, mode="append")
                         
-                        if ipc_response and ipc_response.get('error') == 'success':
-                            response = {"success": True, "message": "Appended to playlist."}
-                        else:
+                        if not response:
                             response = {"success": False, "error": "Failed to append to MPV playlist."}
 
                 elif command == 'play_new_instance':

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Refactored MPV session management to improve HTTP header handling. The `_sync` method in `mpv_session.py` was renamed to `append` and now directly sets `http-header-fields` before loading a file. `native_host.py` was updated to use this new, more robust approach.
 
 
 
