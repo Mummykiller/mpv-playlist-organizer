@@ -101,10 +101,10 @@ class MpvSessionManager:
             except OSError: pass
             return None
 
-    def _sync(self, url_item):
+    def append(self, url_item, headers=None, mode="append"):
         """Attempts to append a single new URL to an already running MPV instance."""
         with self.sync_lock:
-            logging.info(f"MPV is running for the same folder. Attempting to sync single URL.")
+            logging.info(f"MPV is running. Attempting to append item (mode: {mode}).")
             url_to_add = url_item['url']
             
             # Simple check to prevent adding the same URL multiple times.
@@ -114,9 +114,22 @@ class MpvSessionManager:
                 return {"success": True, "message": "URL already in playlist."}
 
             try:
-                logging.info(f"Appending single item '{url_to_add}' to the playlist.")
-                append_command = {"command": ["loadfile", url_to_add, "append-play"]}
-                self.send_ipc_command(self.ipc_path, append_command, expect_response=False)
+                # If headers are provided, set the http-header-fields property before loading the file.
+                # This avoids the parsing issues with passing options to loadfile directly.
+                header_string = ""
+                if headers:
+                    header_list = []
+                    for k, v in headers.items():
+                        # Remove commas from values to prevent parsing ambiguity in the property list
+                        safe_v = v.replace(",", "")
+                        header_list.append(f"{k}: {safe_v}")
+                    header_string = ",".join(header_list)
+                
+                logging.info(f"Setting http-header-fields to: '{header_string}'")
+                self.send_ipc_command(self.ipc_path, {"command": ["set_property", "http-header-fields", header_string]}, expect_response=False)
+
+                logging.info(f"Loading file '{url_to_add}' with mode '{mode}'.")
+                self.send_ipc_command(self.ipc_path, {"command": ["loadfile", url_to_add, mode]}, expect_response=False)
 
                 # Update the internal playlist representation
                 if self.playlist is None:
@@ -129,7 +142,7 @@ class MpvSessionManager:
                 self.clear()
                 return None
 
-    def _launch(self, url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion):
+    def _launch(self, url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion, headers=None):
         """Launches a new instance of MPV with the given URL and settings."""
         logging.info(f"Starting a new MPV instance for URL: {url_item['url']}.")
         mpv_exe = self.get_mpv_executable()
@@ -285,7 +298,7 @@ class MpvSessionManager:
             logging.error(f"An error occurred while trying to launch mpv: {e}")
             return {"success": False, "error": f"Error launching mpv: {e}"}
 
-    def start(self, url_item, folder_id, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, clear_on_completion=False):
+    def start(self, url_item, folder_id, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, clear_on_completion=False, headers=None):
         """Starts a new mpv process with a single URL, or attempts to sync."""
         if self.pid and not self.is_process_alive(self.pid, self.ipc_path):
             logging.info("Detected a stale MPV session. Clearing state before proceeding.")
@@ -295,7 +308,8 @@ class MpvSessionManager:
             if folder_id == self.owner_folder_id:
                 # If an MPV instance is already running for the same folder, attempt to sync.
                 # In single-URL playback, this means adding the new URL to the existing MPV instance.
-                sync_result = self._sync(url_item)
+                # Use append-play mode to ensure it starts playing if the playlist was finished
+                sync_result = self.append(url_item, headers=headers, mode="append-play")
                 if sync_result is not None:
                     return sync_result
             else:
@@ -304,7 +318,7 @@ class MpvSessionManager:
                 return {"success": False, "error": error_message}
         
         # If no MPV is running, or if sync failed/was not attempted, launch a new one.
-        return self._launch(url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion)
+        return self._launch(url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion, headers=headers)
 
     def close(self):
         """Closes the currently running mpv process, if any."""
