@@ -97,6 +97,41 @@ def _get_dynamic_user_agent():
 
     return f"Mozilla/5.0 {ua_system_info} AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version} Safari/537.36"
 
+# --- Tooltip Class for detailed explanations ---
+class Tooltip:
+    """
+    Creates a tooltip for a given widget.
+    """
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tooltip_window = None
+        self.widget.bind("<Enter>", self.show_tooltip)
+        self.widget.bind("<Leave>", self.hide_tooltip)
+
+    def show_tooltip(self, event=None):
+        # Don't show tooltip if the widget is disabled
+        if str(self.widget['state']) == 'disabled':
+            return
+            
+        x, y, _, _ = self.widget.bbox("insert")
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 25
+
+        self.tooltip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                         background="#ffffe0", relief=tk.SOLID, borderwidth=1,
+                         font=("Segoe UI", 9, "normal"))
+        label.pack(ipadx=4, ipady=2)
+
+    def hide_tooltip(self, event=None):
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+        self.tooltip_window = None
+
 # --- GUI Application Class ---
 class HostManagerApp:
     def __init__(self, root):
@@ -129,13 +164,62 @@ class HostManagerApp:
         main_frame = ttk.Frame(root, padding="15")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # --- Extension ID Input ---
-        id_frame = ttk.Frame(main_frame)
-        id_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(id_frame, text="Extension ID:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=(0, 10))
+        # --- Settings Frame (using Grid layout for alignment) ---
+        settings_frame = ttk.Frame(main_frame)
+        settings_frame.pack(fill=tk.X, pady=(0, 10))
+        settings_frame.columnconfigure(1, weight=1) # Make the input column expandable
+
+        # --- Row 0: Extension ID ---
+        ttk.Label(settings_frame, text="Extension ID:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=4)
         self.extension_id_var = tk.StringVar()
-        self.extension_id_entry = ttk.Entry(id_frame, textvariable=self.extension_id_var, font=("Segoe UI", 10))
-        self.extension_id_entry.pack(fill=tk.X, expand=True)
+        self.extension_id_entry = ttk.Entry(settings_frame, textvariable=self.extension_id_var, font=("Segoe UI", 10))
+        self.extension_id_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+
+        # --- Row 1: AnimePahe Bypass Script Option ---
+        bypass_label = ttk.Label(settings_frame, text="Create Bypass Script:", font=("Segoe UI", 10, "bold"))
+        bypass_label.grid(row=1, column=0, sticky=tk.W, pady=4)
+        
+        self.create_bypass_var = tk.BooleanVar(value=True)
+        self.bypass_checkbutton = ttk.Checkbutton(
+            settings_frame,
+            variable=self.create_bypass_var
+        )
+        self.bypass_checkbutton.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+        
+        tooltip_text = (
+            "If checked, creates a 'play_with_bypass' script.\n\n"
+            "This script uses yt-dlp to resolve AnimePahe stream URLs,\n"
+            "allowing direct playback in MPV by bypassing certain site restrictions.\n"
+            "Requires a selected browser below for cookie access."
+        )
+        Tooltip(bypass_label, tooltip_text)
+        Tooltip(self.bypass_checkbutton, tooltip_text)
+
+        # --- Row 2: Browser for Bypass Script ---
+        browser_label = ttk.Label(settings_frame, text="Browser for Bypass:", font=("Segoe UI", 10, "bold"))
+        browser_label.grid(row=2, column=0, sticky=tk.W, pady=4)
+
+        browser_input_frame = ttk.Frame(settings_frame)
+        browser_input_frame.grid(row=2, column=1, sticky="ew", padx=(10, 0))
+        browser_input_frame.columnconfigure(0, weight=1)
+
+        self.browser_var = tk.StringVar()
+        self.browser_combobox = ttk.Combobox(browser_input_frame, textvariable=self.browser_var, state="readonly", font=("Segoe UI", 10))
+        self.browser_combobox['values'] = ('brave', 'chrome', 'firefox', 'edge', 'vivaldi', 'opera')
+        self.browser_combobox.grid(row=0, column=0, sticky="ew")
+
+        self.diagnostics_btn = ttk.Button(browser_input_frame, text="Run Diagnostics", command=self.run_diagnostics)
+        self.diagnostics_btn.grid(row=0, column=1, sticky=tk.E, padx=(5, 0))
+
+        # --- Connect Toggle Function ---
+        def toggle_bypass_widgets():
+            state = tk.NORMAL if self.create_bypass_var.get() else tk.DISABLED
+            self.browser_combobox.config(state="readonly" if self.create_bypass_var.get() else "disabled")
+            self.diagnostics_btn.config(state=state)
+            # Also toggle the label's appearance to indicate it's disabled
+            browser_label.config(state=state)
+
+        self.bypass_checkbutton.config(command=toggle_bypass_widgets)
 
         # --- Attempt to load previous Extension ID ---
         # We read the previously created manifest file to pre-fill the extension ID field.
@@ -157,21 +241,6 @@ class HostManagerApp:
                     self.extension_id_var.set(ext_id)
             except (IOError, json.JSONDecodeError, AttributeError, IndexError) as e:
                 self.log(f"WARNING: Could not read previous Extension ID from manifest file: {e}")
-
-        # --- Browser for Bypass Script ---
-        bypass_frame = ttk.Frame(main_frame)
-        bypass_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(bypass_frame, text="Browser for AnimePahe:", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=(0, 10))
-        self.browser_var = tk.StringVar()
-        self.browser_combobox = ttk.Combobox(bypass_frame, textvariable=self.browser_var, state="readonly", font=("Segoe UI", 10))
-        self.browser_combobox['values'] = ('brave', 'chrome', 'firefox', 'edge', 'vivaldi', 'opera')
-        
-        # Test Button (Packed to the right so it sits next to the dropdown)
-        self.diagnostics_btn = ttk.Button(bypass_frame, text="Run Diagnostics", command=self.run_diagnostics)
-        self.diagnostics_btn.pack(side=tk.RIGHT, padx=(5, 0))
-        
-        # Combobox fills remaining space
-        self.browser_combobox.pack(fill=tk.X, expand=True)
 
         # --- Load installer preferences ---
         # This will set the default browser from the last session.
@@ -522,9 +591,12 @@ EOF
             # Save preferences before starting the main install process
             self._save_installer_prefs()
 
-            # Get browser for bypass script and create the script
-            selected_browser = self.browser_var.get()
-            self._create_bypass_script(selected_browser)
+            # Get browser for bypass script and create the script if the user opted in.
+            if self.create_bypass_var.get():
+                selected_browser = self.browser_var.get()
+                self._create_bypass_script(selected_browser)
+            else:
+                self.log("Skipping bypass script creation as per user choice.")
 
             current_platform = platform.system()
             if current_platform == 'Windows':
@@ -828,7 +900,8 @@ EOF
         files_to_remove = [
             os.path.join(INSTALL_DIR, "run_native_host.bat"),
             os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json"),
-            os.path.join(INSTALL_DIR, "mpv-cli.bat") # Remove the CLI wrapper
+            os.path.join(INSTALL_DIR, "mpv-cli.bat"), # Remove the CLI wrapper
+            os.path.join(INSTALL_DIR, "play_with_bypass.bat") # Remove bypass script
         ]
         for file_path in files_to_remove:
             if os.path.exists(file_path):
@@ -859,7 +932,8 @@ EOF
         files_to_remove = [
             os.path.join(DATA_DIR, f"{HOST_NAME}.json"), # Remove the central manifest file
             os.path.join(INSTALL_DIR, "run_native_host.sh"),
-            os.path.join(INSTALL_DIR, "mpv-cli") # Remove the CLI wrapper
+            os.path.join(INSTALL_DIR, "mpv-cli"), # Remove the CLI wrapper
+            os.path.join(INSTALL_DIR, "play_with_bypass.sh") # Remove bypass script
         ]
         for file_path in files_to_remove:
             if os.path.exists(file_path):
