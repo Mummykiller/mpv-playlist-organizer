@@ -73,14 +73,11 @@ try:
     import urllib.request
     import platform
     import re
-    # socket is only used on non-windows platforms for IPC
     from mpv_session import MpvSessionManager
     import file_io
     import cli
     import services
-    if platform.system() != "Windows":
-        import socket
-
+    from utils import ipc_utils
 
     # --- Function to get the appropriate user data directory ---
     def get_user_data_dir():
@@ -137,7 +134,6 @@ try:
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
-    SCRIPT_DIR = file_io.SCRIPT_DIR
     SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 
     def log_stream(stream, log_level, owner_folder_id):
@@ -149,15 +145,20 @@ try:
             "unable to extract video data"
         ]
         ytdlp_failure_detected = False
+        
+        # Regex to strip ANSI escape codes (colors)
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
         # The `for line in iter(...)` construct is a standard way to read
         # from a stream until it's closed.
         for line in iter(stream.readline, b''):
             decoded_line = line.decode('utf-8', errors='ignore').strip()
+            clean_line = ansi_escape.sub('', decoded_line)
             # Filter out the noisy and irrelevant 'uname' warning on Windows.
-            if "'uname' is not recognized" not in decoded_line:
+            # Also filter out ffmpeg hls keepalive spam.
+            if "'uname' is not recognized" not in clean_line and "keepalive request failed" not in clean_line:
                 log_level(f"[MPV Process]: {decoded_line}")
-                if not ytdlp_failure_detected and any(keyword in decoded_line for keyword in YTDLP_FAILURE_KEYWORDS):
+                if not ytdlp_failure_detected and any(keyword in clean_line for keyword in YTDLP_FAILURE_KEYWORDS):
                     ytdlp_failure_detected = True # Prevent multiple triggers
                     logging.warning("Detected a potential yt-dlp failure. Notifying extension.")
                     # Send a message to the extension to check if auto-update is enabled
@@ -191,205 +192,17 @@ try:
             sys.stdout.buffer.write(encoded_content)
             sys.stdout.buffer.flush()
 
-    def is_process_alive(pid, ipc_path):
-        """Checks if an MPV process is responsive at the given IPC path."""
-        if not pid or not ipc_path:
-            return False
-        
-        is_alive = False
-        if platform.system() == "Windows":
-            # On Windows, we check both process existence and pipe availability.
-            try:
-                # Check if the process ID exists. This throws OSError if not.
-                os.kill(pid, 0)
-                time.sleep(0.05) # Small delay to allow OS to clean up pipes if process just died.
-                # Try to connect to the named pipe. This will fail if MPV is hung or has closed the pipe.
-                # We open and immediately close it.
-                pipe = open(ipc_path, 'w')
-                pipe.close()
-                is_alive = True # Both checks passed.
-            except (OSError, IOError):
-                # Either the PID doesn't exist, we don't have permission, or the pipe is not available.
-                is_alive = False
-        else: # Linux/macOS
-            try:
-                # On Unix-like systems, we can reliably query the IPC socket.
-                ipc_response = send_ipc_command(ipc_path, {"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
-                # We also verify that the PID from the socket matches our stored PID.
-                if ipc_response and ipc_response.get("error") == "success" and ipc_response.get("data") == pid:
-                    is_alive = True
-            except Exception:
-                is_alive = False # Any exception means it's not running or responsive.
-                
-        return is_alive
-
-    def send_ipc_command(ipc_path, command_dict, timeout=2.0, expect_response=True):
-        """
-        Sends a JSON command to the mpv IPC server.
-        On Linux/macOS, it can return a response.
-        On Windows, this implementation can only send commands, not receive responses,
-        due to the complexity of non-blocking named pipe I/O without extra libraries.
-        """
-        command_str = json.dumps(command_dict) + '\n'
-
-        try:
-            if platform.system() == "Windows":
-                if expect_response:
-                    logging.warning("Receiving data from MPV on Windows is not supported by this script's simple IPC. Sync will fail.")
-                    return None # Signal failure to receive response.
-
-                # Fire-and-forget for commands like 'loadfile' or 'quit'
-                with open(ipc_path, 'w', encoding='utf-8') as pipe:
-                    pipe.write(command_str)
-                return {"error": "success"} # Assume success
-
-            else: # Linux/macOS
-                encoded_command = command_str.encode('utf-8')
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                    sock.settimeout(timeout)
-                    sock.connect(ipc_path)
-                    sock.sendall(encoded_command)
-
-                    if not expect_response:
-                        return {"error": "success"}
-
-                    # Read the response. A single JSON object terminated by a newline is expected.
-                    with sock.makefile('rb') as sock_file:
-                        response_line = sock_file.readline()
-
-                    if not response_line:
-                        logging.warning("No response from MPV IPC.")
-                        return None
-
-                    return json.loads(response_line.decode('utf-8').strip())
-        except (FileNotFoundError, ConnectionRefusedError):
-            logging.error(f"IPC connection failed. Is MPV running? Path: {ipc_path}")
-            raise RuntimeError("IPC connection failed.")
-        except Exception as e:
-            logging.error(f"An unexpected error occurred during IPC command: {e}")
-            raise
-
-    def get_ipc_path():
-        """Generates a unique, platform-specific path for the mpv IPC socket/pipe."""
-        pid = os.getpid()
-        temp_dir = os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")
-        os.makedirs(temp_dir, exist_ok=True)
-
-        if platform.system() == "Windows":
-            return f"\\\\.\\pipe\\mpv-ipc-{pid}"
-        else:
-            return os.path.join(temp_dir, f"mpv-socket-{pid}")
-
-    # --- Bypass Script Execution ---
-    def _apply_bypass_script(url_item, bypass_scripts, send_message_func):
-        """
-        Applies a bypass script if specified in url_item settings and enabled globally.
-        Returns a tuple of (processed_url, headers_dict).
-        headers_dict is None if no headers are returned by the script.
-        """
-        original_url = url_item['url']
-        
-        # Check if a specific bypass script is enabled for this item
-        item_bypass_script_id = url_item.get('settings', {}).get('use_bypass_script_id')
-        script_path = None
-
-        if item_bypass_script_id and bypass_scripts.get(item_bypass_script_id, {}).get('enabled'):
-            script_config = bypass_scripts[item_bypass_script_id]
-            script_path = os.path.join(SCRIPT_DIR, script_config['script_path'])
-        elif re.match(r"^https://vault-\d+\.owocdn\.top/stream/.+/uwu\.m3u8", original_url):
-            script_name = "play_with_bypass.bat" if platform.system() == "Windows" else "play_with_bypass.sh"
-            potential_path = os.path.join(SCRIPT_DIR, script_name)
-            if os.path.exists(potential_path):
-                logging.info(f"Auto-detected owocdn URL. Using {script_name}.")
-                script_path = potential_path
-
-        if script_path:
-            if not os.path.exists(script_path):
-                logging.error(f"Bypass script not found: {script_path}")
-                send_message_func({
-                    "action": "log_from_native_host",
-                    "log": {"text": f"Bypass script not found: {script_path}. Playing original URL.", "type": "error"}
-                })
-                return original_url, None
-            
-            # Ensure the script is executable
-            if platform.system() != "Windows":
-                if not os.access(script_path, os.X_OK):
-                    logging.warning(f"Bypass script not executable: {script_path}. Attempting to make it executable.")
-                    try:
-                        os.chmod(script_path, os.stat(script_path).st_mode | 0o100) # Add execute permission
-                        logging.info(f"Made bypass script executable: {script_path}")
-                    except Exception as e:
-                        logging.error(f"Failed to make bypass script executable: {e}. Playing original URL.")
-                        send_message_func({
-                            "action": "log_from_native_host",
-                            "log": {"text": f"Failed to make bypass script executable. Playing original URL.", "type": "error"}
-                        })
-                        return original_url, None
-
-            try:
-                logging.info(f"Executing bypass script '{script_path}' for URL: {original_url}")
-                send_message_func({
-                    "action": "log_from_native_host",
-                    "log": {"text": f"Running bypass script for: {original_url}", "type": "info"}
-                })
-                
-                # Execute the script, passing the original URL as an argument
-                process = subprocess.run([script_path, original_url], capture_output=True, text=True, check=True)
-                
-                output = process.stdout.strip()
-                if not output:
-                    logging.warning("Bypass script returned no output. Playing original URL.")
-                    send_message_func({
-                        "action": "log_from_native_host",
-                        "log": {"text": f"Bypass script returned no output. Playing original URL.", "type": "warning"}
-                    })
-                    return original_url, None
-
-                try:
-                    # Attempt to parse the output as JSON to get URL and headers
-                    data = json.loads(output)
-                    processed_url = data.get("url", original_url)
-                    headers = data.get("headers") # This will be a dict or None
-                    logging.info(f"Bypass script returned JSON with URL: {processed_url}")
-                    return processed_url, headers
-                except json.JSONDecodeError:
-                    # Fallback for older scripts that only return a raw URL
-                    processed_url = output.splitlines()[-1] # Take the last line as the URL
-                    logging.info(f"Bypass script returned raw URL: {processed_url}")
-                    return processed_url, None
-
-            except subprocess.CalledProcessError as e:
-                logging.error(f"Bypass script failed with error (exit code {e.returncode}): {e.stderr}")
-                send_message_func({
-                    "action": "log_from_native_host",
-                    "log": {"text": f"Bypass script failed: {e.stderr}. Playing original URL.", "type": "error"}
-                })
-                return original_url, None
-            except Exception as e:
-                logging.error(f"Error executing bypass script: {e}")
-                send_message_func({
-                    "action": "log_from_native_host",
-                    "log": {"text": f"Error executing bypass script: {e}. Playing original URL.", "type": "error"}
-                })
-                return original_url, None
-        
-        return original_url, None
-
     # --- Global Instance ---
     # A single instance of the session manager to handle the MPV state.
     mpv_session = MpvSessionManager(session_file_path=SESSION_FILE, dependencies={
-        'is_process_alive': is_process_alive,
-        'send_ipc_command': send_ipc_command,
         'get_all_folders_from_file': file_io.get_all_folders_from_file,
         'get_mpv_executable': file_io.get_mpv_executable,
-        'get_ipc_path': get_ipc_path,
         'log_stream': log_stream,
         'send_message': send_message,
         'SCRIPT_DIR': SCRIPT_DIR
     })
-
-
+    
+    
     def cleanup_ipc_socket():
         """Remove the IPC socket file on exit, if it exists (non-Windows)."""
         # Access the ipc_path from the global session manager instance
@@ -408,7 +221,7 @@ try:
                     logging.info(f"Cleaned up empty IPC directory: {ipc_dir}")
                 except OSError as e:
                      logging.warning(f"Error removing IPC directory {ipc_dir}: {e}")
-
+    
     def launch_unmanaged_mpv(playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags):
         """Launches a new, unmanaged instance of MPV."""
         logging.info("Launching a new, unmanaged MPV instance.")
@@ -417,291 +230,185 @@ try:
         # We don't need to generate a unique IPC path.
         
         try:
-            mpv_args = [mpv_exe]
+            full_command, has_terminal_flag = services.construct_mpv_command(
+                mpv_exe=mpv_exe,
+                urls=playlist,
+                geometry=geometry,
+                custom_width=custom_width,
+                custom_height=custom_height,
+                custom_mpv_flags=custom_mpv_flags,
+                automatic_mpv_flags=automatic_mpv_flags
+            )
 
-            has_terminal_flag = False
-            if automatic_mpv_flags:
-                enabled_flags = []
-                for flag_info in automatic_mpv_flags:
-                    if flag_info.get('enabled'):
-                        if flag_info.get('flag') == 'terminal':
-                            has_terminal_flag = True
-                        else:
-                            if flag_info.get('flag'):
-                                enabled_flags.append(flag_info.get('flag'))
-                mpv_args.extend(enabled_flags)
+            popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
 
-            if custom_mpv_flags:
-                import shlex
-                try:
-                    parsed_flags = shlex.split(custom_mpv_flags)
-                    logging.info(f"Applying custom MPV flags for unmanaged instance: {parsed_flags}")
-                    mpv_args.extend(parsed_flags)
-                except Exception as e:
-                    logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
-
-            # Check if --terminal is present in args (e.g. from custom flags)
-            if '--terminal' in mpv_args:
-                has_terminal_flag = True
-
-            if custom_width and custom_height:
-                logging.info(f"Applying custom geometry for unmanaged instance: {custom_width}x{custom_height}")
-                mpv_args.append(f'--geometry={custom_width}x{custom_height}')
-            elif geometry:
-                logging.info(f"Applying geometry for unmanaged instance: {geometry}")
-                mpv_args.append(f'--geometry={geometry}')
-
-            mpv_args.extend(['--'] + playlist)
-
-            popen_kwargs = {
-                'stderr': subprocess.PIPE,
-                'stdout': subprocess.DEVNULL,
-                'universal_newlines': False
-            }
-            if platform.system() == "Windows":
-                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
-                if not has_terminal_flag:
-                    creation_flags |= subprocess.CREATE_NO_WINDOW
-                popen_kwargs['creationflags'] = creation_flags
-            else:
-                # For non-windows, if terminal is requested, we add the --terminal flag
-                if has_terminal_flag:
-                    # Insert it early in the arg list
-                    mpv_args.insert(1, '--terminal')
-                    
-                    # Linux: Wrap in a terminal emulator if possible
-                    term_cmd = []
-                    if shutil.which('x-terminal-emulator'): term_cmd = ['x-terminal-emulator', '-e']
-                    elif shutil.which('gnome-terminal'): term_cmd = ['gnome-terminal', '--wait', '--']
-                    elif shutil.which('konsole'): term_cmd = ['konsole', '-e']
-                    elif shutil.which('xfce4-terminal'): term_cmd = ['xfce4-terminal', '--disable-server', '-x']
-                    elif shutil.which('xterm'): term_cmd = ['xterm', '-e']
-
-                    if term_cmd:
-                        mpv_args = term_cmd + mpv_args
-
-            # Re-assign the final command list to mpv_args before Popen
-            process = subprocess.Popen(mpv_args, **popen_kwargs)
+            process = subprocess.Popen(full_command, **popen_kwargs)
             
             stderr_thread = threading.Thread(target=log_stream, args=(process.stderr, logging.warning, None))
             stderr_thread.daemon = True
             stderr_thread.start()
-
+    
             logging.info(f"Unmanaged MPV process launched (PID: {process.pid}) with {len(playlist)} items.")
             return {"success": True, "message": "New MPV instance launched."}
         except Exception as e:
             logging.error(f"An error occurred while trying to launch unmanaged mpv: {e}")
             return {"success": False, "error": f"Error launching new mpv instance: {e}"}
 
+    # --- Command Handlers ---
+    def handle_play(message):
+        url_item = message.get('url_item')
+        folder_id = message.get('folderId')
+        if not folder_id or not url_item:
+            return {"success": False, "error": "Missing folderId or url_item for play action."}
+
+        bypass_scripts_config = message.get('bypassScripts', {})
+        processed_url, script_headers, ytdl_options = services.apply_bypass_script(url_item, bypass_scripts_config, send_message, SCRIPT_DIR)
+        url_item['url'] = processed_url
+        
+        disable_http_persistent = True if (script_headers and not ytdl_options) else False
+        custom_mpv_flags = message.get('custom_mpv_flags')
+        if disable_http_persistent:
+            persistent_flag = "--demuxer-lavf-o=http_persistent=0"
+            custom_mpv_flags = (custom_mpv_flags + " " + persistent_flag) if custom_mpv_flags else persistent_flag
+
+        def run_mpv_session():
+            mpv_session.start(
+                url_item, folder_id, 
+                geometry=message.get('geometry'), 
+                custom_width=message.get('custom_width'), 
+                custom_height=message.get('custom_height'), 
+                custom_mpv_flags=custom_mpv_flags, 
+                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+                start_paused=message.get('start_paused', False), 
+                clear_on_completion=message.get('clear_on_completion', False), 
+                headers=script_headers, 
+                disable_http_persistent=disable_http_persistent
+            )
+        
+        mpv_thread = threading.Thread(target=run_mpv_session)
+        mpv_thread.daemon = True
+        mpv_thread.start()
+        return {"success": True, "message": "Playback initiated."}
+
+    def handle_append(message):
+        url_item = message.get('url_item')
+        if not url_item:
+            return {"success": False, "error": "Missing url_item for append action."}
+        
+        logging.info("Processing append request: resolving URL via bypass script if configured.")
+        bypass_scripts_config = message.get('bypassScripts', {})
+        processed_url, script_headers, ytdl_options = services.apply_bypass_script(url_item, bypass_scripts_config, send_message, SCRIPT_DIR)
+        url_item['url'] = processed_url
+        
+        disable_http_persistent = True if (script_headers and not ytdl_options) else False
+        response = mpv_session.append(url_item, headers=script_headers, mode="append", disable_http_persistent=disable_http_persistent)
+        return response if response else {"success": False, "error": "Failed to append to MPV playlist."}
+
+    def handle_play_new_instance(message):
+        return launch_unmanaged_mpv(
+            message.get('playlist', []), 
+            message.get('geometry'), 
+            message.get('custom_width'), 
+            message.get('custom_height'), 
+            message.get('custom_mpv_flags'), 
+            message.get('automatic_mpv_flags')
+        )
+
+    def handle_is_mpv_running(message):
+        is_running = ipc_utils.is_process_alive(mpv_session.pid, mpv_session.ipc_path)
+        if not is_running and mpv_session.pid:
+            mpv_session.clear()
+        logging.info(f"MPV running status check: {is_running} (Path: {mpv_session.ipc_path})")
+        return {"success": True, "is_running": is_running}
+
+    def handle_export_data(message):
+        data = message.get('data')
+        return file_io.write_folders_file(data) if data is not None else {"success": False, "error": "No data provided."}
+
+    def handle_export_playlists(message):
+        data = message.get('data')
+        filename = message.get('filename')
+        if not data or not filename: return {"success": False, "error": "Missing data or filename."}
+        return file_io.write_export_file(filename, data)
+
+    def handle_export_all_separately(message):
+        folders = message.get('data')
+        if not folders: return {"success": False, "error": "No folder data provided."}
+        count = 0
+        for f_id, f_data in folders.items():
+            if 'playlist' in f_data:
+                safe_name = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in f_id).rstrip()
+                if file_io.write_export_file(safe_name, f_data['playlist'])["success"]: count += 1
+        return {"success": True, "message": f"Successfully exported {count} playlists."}
+
+    def handle_import_from_file(message):
+        filename = message.get('filename')
+        if not filename: return {"success": False, "error": "No filename provided."}
+        try:
+            filepath = os.path.abspath(os.path.join(file_io.EXPORT_DIR, filename))
+            if not filepath.startswith(os.path.abspath(file_io.EXPORT_DIR)):
+                return {"success": False, "error": "Access denied."}
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return {"success": True, "data": f.read()}
+        except Exception as e:
+            return {"success": False, "error": f"Failed to read file: {e}"}
+
+    def handle_open_export_folder(message):
+        try:
+            os.makedirs(file_io.EXPORT_DIR, exist_ok=True)
+            path = os.path.abspath(file_io.EXPORT_DIR)
+            if platform.system() == "Windows": subprocess.Popen(['explorer', os.path.normpath(path)])
+            elif platform.system() == "Darwin": subprocess.run(['open', path], check=True)
+            else: subprocess.run(['xdg-open', path], check=True)
+            return {"success": True, "message": "Opening export folder."}
+        except Exception as e:
+            return {"success": False, "error": f"Failed to open folder: {e}"}
+
     def main():
         """Main message loop for native messaging from the browser."""
+
         logging.info("Native host started in messaging mode.")
+
         # On startup, try to restore a session. The result will be handled by the
         # background script, which might trigger cleanup for a stale session.
         restore_result = mpv_session.restore()
+
         if restore_result:
             send_message({"action": "session_restored", "result": restore_result})
+
+        COMMAND_HANDLERS = {
+            'play': handle_play,
+            'append': handle_append,
+            'play_new_instance': handle_play_new_instance,
+            'close_mpv': lambda m: mpv_session.close(),
+            'is_mpv_running': handle_is_mpv_running,
+            'export_data': handle_export_data,
+            'export_playlists': handle_export_playlists,
+            'export_all_playlists_separately': handle_export_all_separately,
+            'list_import_files': lambda m: file_io.list_import_files(),
+            'import_from_file': handle_import_from_file,
+            'open_export_folder': handle_open_export_folder,
+            'get_anilist_releases': lambda m: services.get_anilist_releases_with_cache(
+                m.get('force', False), m.get('delete_cache', False), m.get('is_cache_disabled', False), 
+                ANILIST_CACHE_FILE, SCRIPT_DIR, send_message
+            ),
+            'run_ytdlp_update': lambda m: services.update_ytdlp(send_message),
+            'check_dependencies': lambda m: services.check_mpv_and_ytdlp_status(file_io.get_mpv_executable, send_message),
+            'get_default_automatic_flags': lambda m: {"success": True, "flags": [
+                {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
+                {"flag": "terminal", "description": "Show a terminal window.", "enabled": False}
+            ]}
+        }
 
         while True:
             try:
                 message = get_message()  # This will block or sys.exit() on disconnect
                 command = message.get('action')
-
                 logging.info(f"Received message (ID: {message.get('request_id')}): {json.dumps(message)}")
-
-                response = {}
-                if command == 'play': # This command is now for playing a single item from the extension
-                    url_item = message.get('url_item')
-                    folder_id = message.get('folderId')
-                    geometry = message.get('geometry')
-                    custom_width = message.get('custom_width')
-                    custom_height = message.get('custom_height')
-                    custom_mpv_flags = message.get('custom_mpv_flags')
-                    automatic_mpv_flags = message.get('automatic_mpv_flags')
-                    clear_on_completion = message.get('clear_on_completion', False)
-                    start_paused = message.get('start_paused', False)
-                    bypass_scripts_config = message.get('bypassScripts', {}) # New: get bypass scripts config from extension
-
-                    if not folder_id or not url_item:
-                        response = {"success": False, "error": "Missing folderId or url_item for play action."}
-                    else:
-                        # Apply bypass script if needed
-                        processed_url, script_headers = _apply_bypass_script(url_item, bypass_scripts_config, send_message)
-                        
-                        # Update the url_item with the potentially processed URL
-                        url_item['url'] = processed_url # This modifies the original url_item in the message, which is fine as it's a copy
-
-                        # If the bypass script returned headers, apply them.
-                        if script_headers:
-                            header_list = [f"{key}: {value}" for key, value in script_headers.items()]
-                            header_string = ",".join(header_list)
-                            header_arg = f'--http-header-fields="{header_string}"'
-                            if custom_mpv_flags:
-                                custom_mpv_flags += " " + header_arg
-                            else:
-                                custom_mpv_flags = header_arg
-
-                        # Run MPV in a separate thread so we don't block the message loop.
-                        # This allows us to receive 'append' commands while MPV is running.
-                        def run_mpv_session():
-                            mpv_session.start(url_item, folder_id, geometry=geometry, custom_width=custom_width, custom_height=custom_height, custom_mpv_flags=custom_mpv_flags, automatic_mpv_flags=automatic_mpv_flags, start_paused=start_paused, clear_on_completion=clear_on_completion, headers=script_headers)
-                        
-                        mpv_thread = threading.Thread(target=run_mpv_session)
-                        mpv_thread.daemon = True
-                        mpv_thread.start()
-
-                        # Return immediately to let the extension know we started.
-                        # Note: If mpv_session.start fails immediately (e.g. executable not found),
-                        # the extension won't know via this response, but via logs/exit events.
-                        response = {"success": True, "message": "Playback initiated."}
-
-                elif command == 'append':
-                    url_item = message.get('url_item')
-                    bypass_scripts_config = message.get('bypassScripts', {})
-
-                    if not url_item:
-                        response = {"success": False, "error": "Missing url_item for append action."}
-                    else:
-                        logging.info("Processing append request: resolving URL via bypass script if configured.")
-                        processed_url, script_headers = _apply_bypass_script(url_item, bypass_scripts_config, send_message)
-                        url_item['url'] = processed_url # Update URL with resolved one
-                        
-                        # Use mpv_session to append, which now handles headers via set_property
-                        response = mpv_session.append(url_item, headers=script_headers, mode="append")
-                        
-                        if not response:
-                            response = {"success": False, "error": "Failed to append to MPV playlist."}
-
-                elif command == 'play_new_instance':
-                    playlist = message.get('playlist', [])
-                    geometry = message.get('geometry')
-                    custom_width = message.get('custom_width')
-                    custom_height = message.get('custom_height')
-                    custom_mpv_flags = message.get('custom_mpv_flags')
-                    automatic_mpv_flags = message.get('automatic_mpv_flags')
-                    response = launch_unmanaged_mpv(playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags)
-
-                elif command == 'close_mpv':
-                    response = mpv_session.close()
-
-                elif command == 'is_mpv_running':
-                    is_running = is_process_alive(mpv_session.pid, mpv_session.ipc_path)
-
-                    # If the check fails, clear the stale state.
-                    if not is_running and mpv_session.pid:
-                        mpv_session.clear()
-
-                    logging.info(f"MPV running status check: {is_running} (Path: {mpv_session.ipc_path})")
-                    response = {"success": True, "is_running": is_running}
-                elif command == 'export_data':
-                    data_to_export = message.get('data')
-                    if data_to_export is not None:
-                        response = file_io.write_folders_file(data_to_export)
-                    else:
-                        response = {"success": False, "error": "No data provided for export."}
                 
-                elif command == 'export_playlists':
-                    data_to_export = message.get('data')
-                    custom_filename = message.get('filename')
-                    if not data_to_export: response = {"success": False, "error": "No data provided for export."}
-                    elif not custom_filename: response = {"success": False, "error": "No filename provided for export."}
-                    else: response = file_io.write_export_file(custom_filename, data_to_export)
-
-                elif command == 'export_all_playlists_separately':
-                    folders_to_export = message.get('data')
-                    if not folders_to_export: response = {"success": False, "error": "No folder data provided for export."}
-                    else:
-                        exported_count = 0
-                        for folder_id, folder_data in folders_to_export.items():
-                            playlist = folder_data.get('playlist')
-                            if playlist is None:
-                                logging.warning(f"Skipping folder '{folder_id}' during batch export: 'playlist' key not found.")
-                                continue
-
-                            # Sanitize folder_id to create a safe filename
-                            safe_filename_base = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in folder_id).rstrip()
-                            result = file_io.write_export_file(safe_filename_base, playlist)
-                            if result["success"]:
-                                exported_count += 1
-                        
-                        logging.info(f"Batch exported {exported_count} playlists.")
-                        response = {"success": True, "message": f"Successfully exported {exported_count} playlists to separate files."}
-
-                elif command == 'list_import_files':
-                    response = file_io.list_import_files()
-
-                elif command == 'import_from_file':
-                    filename = message.get('filename')
-                    if filename:
-                        try:
-                            filepath = os.path.abspath(os.path.join(file_io.EXPORT_DIR, filename))
-                            if not filepath.startswith(os.path.abspath(file_io.EXPORT_DIR)):
-                                logging.error(f"Security violation: Attempted to access file outside of export directory: {filepath}")
-                                response = {"success": False, "error": "Access denied."}
-                            else:
-                                with open(filepath, 'r', encoding='utf-8') as f:
-                                    content = f.read()
-                                response = {"success": True, "data": content}
-                        except Exception as e:
-                            response = {"success": False, "error": f"Failed to read import file: {e}"}
-
-                elif command == 'open_export_folder':
-                    try:
-                        os.makedirs(file_io.EXPORT_DIR, exist_ok=True)
-                        abs_path = os.path.abspath(file_io.EXPORT_DIR)
-
-                        system = platform.system()
-                        if system == "Windows":
-                            # os.startfile() can be unreliable when called from a non-interactive
-                            # context like a native messaging host. Using subprocess.Popen to
-                            # call explorer.exe directly is more robust. os.path.normpath
-                            # ensures the path uses the correct backslashes for Windows.
-                            subprocess.Popen(['explorer', os.path.normpath(abs_path)])
-                        elif system == "Darwin":  # macOS
-                            subprocess.run(['open', abs_path], check=True)
-                        else:  # Linux and other Unix-like systems
-                            subprocess.run(['xdg-open', abs_path], check=True)
-
-                        logging.info(f"Successfully issued command to open export folder at: {abs_path}")
-                        response = {"success": True, "message": "Opening export folder."}
-                    except FileNotFoundError:
-                        error_msg = "Could not open file explorer. Command not found (e.g., 'xdg-open' on Linux)."
-                        logging.error(error_msg)
-                        response = {"success": False, "error": error_msg}
-                    except Exception as e:
-                        error_msg = f"An unexpected error occurred while opening the folder: {e}"
-                        logging.error(error_msg)
-                        response = {"success": False, "error": error_msg}
-
-                elif command == 'get_anilist_releases':
-                    force_refresh = message.get('force', False)
-                    delete_cache = message.get('delete_cache', False)
-                    is_cache_disabled = message.get('is_cache_disabled', False)
-                    response = services.get_anilist_releases_with_cache(
-                        force_refresh, delete_cache, is_cache_disabled, ANILIST_CACHE_FILE, SCRIPT_DIR, send_message
-                    )
-
-                elif command == 'run_ytdlp_update':
-                    response = services.update_ytdlp(send_message)
-
-                elif command == 'check_dependencies':
-                    response = services.check_mpv_and_ytdlp_status(file_io.get_mpv_executable, send_message)
-
-                elif command == 'get_default_automatic_flags':
-                    default_flags = [
-                        {
-                            "flag": "--pause",
-                            "description": "Start MPV paused. This is overridden if 'start_paused' is explicitly requested.",
-                            "enabled": False
-                        },
-                        {
-                            "flag": "terminal", # Use a special keyword instead of the raw flag
-                            "description": "Show a terminal window for MPV (useful for debugging).",
-                            "enabled": False
-                        }
-                    ]
-                    response = {"success": True, "flags": default_flags}
-
+                handler = COMMAND_HANDLERS.get(command)
+                if handler:
+                    response = handler(message)
                 else:
                     response = {"success": False, "error": "Unknown command"}
 
@@ -721,7 +428,7 @@ try:
                     send_message(error_response)
                 except Exception as send_e:
                     logging.error(f"Could not send error message back to extension: {send_e}")
-
+    
     # Register a cleanup function to run when the script exits.
     atexit.register(cleanup_ipc_socket)
 

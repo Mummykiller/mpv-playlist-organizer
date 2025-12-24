@@ -9,6 +9,9 @@ import subprocess
 import threading
 import time
 
+import services
+from utils import ipc_utils
+
 class MpvSessionManager:
     """Manages the state and lifecycle of a single MPV instance."""
 
@@ -22,11 +25,8 @@ class MpvSessionManager:
         self.sync_lock = threading.Lock()
 
         # --- Injected Dependencies ---
-        self.is_process_alive = dependencies['is_process_alive']
-        self.send_ipc_command = dependencies['send_ipc_command']
         self.get_all_folders_from_file = dependencies['get_all_folders_from_file']
         self.get_mpv_executable = dependencies['get_mpv_executable']
-        self.get_ipc_path = dependencies['get_ipc_path']
         self.log_stream = dependencies['log_stream']
         self.send_message = dependencies['send_message']
         self.SCRIPT_DIR = dependencies['SCRIPT_DIR']
@@ -76,7 +76,7 @@ class MpvSessionManager:
             if not all([pid, ipc_path, owner_folder_id]):
                 raise ValueError("Session file is malformed.")
 
-            if self.is_process_alive(pid, ipc_path):
+            if ipc_utils.is_process_alive(pid, ipc_path):
                 all_folders = self.get_all_folders_from_file()
                 folder_data = all_folders.get(owner_folder_id)
                 if not folder_data or "playlist" not in folder_data:
@@ -101,7 +101,7 @@ class MpvSessionManager:
             except OSError: pass
             return None
 
-    def append(self, url_item, headers=None, mode="append"):
+    def append(self, url_item, headers=None, mode="append", disable_http_persistent=False):
         """Attempts to append a single new URL to an already running MPV instance."""
         with self.sync_lock:
             logging.info(f"MPV is running. Attempting to append item (mode: {mode}).")
@@ -126,10 +126,20 @@ class MpvSessionManager:
                     header_string = ",".join(header_list)
                 
                 logging.info(f"Setting http-header-fields to: '{header_string}'")
-                self.send_ipc_command(self.ipc_path, {"command": ["set_property", "http-header-fields", header_string]}, expect_response=False)
+                ipc_utils.send_ipc_command(self.ipc_path, {"command": ["set_property", "http-header-fields", header_string]}, expect_response=False)
+
+                if headers:
+                    if 'User-Agent' in headers:
+                        ipc_utils.send_ipc_command(self.ipc_path, {"command": ["set_property", "user-agent", headers['User-Agent']]}, expect_response=False)
+                    if 'Referer' in headers:
+                        ipc_utils.send_ipc_command(self.ipc_path, {"command": ["set_property", "referrer", headers['Referer']]}, expect_response=False)
+
+                if disable_http_persistent:
+                    logging.info("Setting demuxer-lavf-o=http_persistent=0 for this item.")
+                    ipc_utils.send_ipc_command(self.ipc_path, {"command": ["set_property", "demuxer-lavf-o", "http_persistent=0"]}, expect_response=False)
 
                 logging.info(f"Loading file '{url_to_add}' with mode '{mode}'.")
-                self.send_ipc_command(self.ipc_path, {"command": ["loadfile", url_to_add, mode]}, expect_response=False)
+                ipc_utils.send_ipc_command(self.ipc_path, {"command": ["loadfile", url_to_add, mode]}, expect_response=False)
 
                 # Update the internal playlist representation
                 if self.playlist is None:
@@ -142,98 +152,32 @@ class MpvSessionManager:
                 self.clear()
                 return None
 
-    def _launch(self, url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion, headers=None):
+    def _launch(self, url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion, headers=None, disable_http_persistent=False):
         """Launches a new instance of MPV with the given URL and settings."""
         logging.info(f"Starting a new MPV instance for URL: {url_item['url']}.")
         mpv_exe = self.get_mpv_executable()
-        ipc_path = self.get_ipc_path()
-        
-        on_completion_script_path = os.path.join(self.SCRIPT_DIR, "on_completion.lua")
-        logging.info(f"Checking for on_completion.lua at: {on_completion_script_path}")
+        ipc_path = ipc_utils.get_ipc_path()
+
         try:
-            mpv_args = [
-                mpv_exe,
-                f'--input-ipc-server={ipc_path}',
-            ]
+            full_command, has_terminal_flag = services.construct_mpv_command(
+                mpv_exe=mpv_exe,
+                ipc_path=ipc_path,
+                urls=[url_item['url']],
+                is_youtube=url_item.get('is_youtube'),
+                ytdl_raw_options=url_item.get('ytdl_raw_options'),
+                geometry=geometry,
+                custom_width=custom_width,
+                custom_height=custom_height,
+                custom_mpv_flags=custom_mpv_flags,
+                automatic_mpv_flags=automatic_mpv_flags,
+                headers=headers,
+                disable_http_persistent=disable_http_persistent,
+                start_paused=start_paused,
+                clear_on_completion=clear_on_completion,
+                script_dir=self.SCRIPT_DIR
+            )
 
-            has_terminal_flag = False
-            if automatic_mpv_flags:
-                enabled_flags = []
-                for flag_info in automatic_mpv_flags:
-                    if flag_info.get('enabled'):
-                        if flag_info.get('flag') == 'terminal':
-                            has_terminal_flag = True
-                        else:
-                            # Ensure we don't append None or empty strings
-                            if flag_info.get('flag'):
-                                enabled_flags.append(flag_info.get('flag'))
-                mpv_args.extend(enabled_flags)
-
-            if clear_on_completion:
-                logging.info("'Clear on Completion' is enabled for this session.")
-                if os.path.exists(on_completion_script_path):
-                    logging.info(f"on_completion.lua found. Adding --script={on_completion_script_path} to MPV arguments.")
-                    mpv_args.append(f'--script={on_completion_script_path}')
-                else:
-                    logging.warning(f"Completion script not found at {on_completion_script_path}. 'Clear on Completion' may not work as expected.")
-
-            # The --pause flag from automatic flags can be overridden by the explicit start_paused parameter from the 'play' command.
-            if start_paused and '--pause' not in mpv_args:
-                logging.info("Applying --pause flag from explicit 'start_paused' parameter.")
-                mpv_args.append('--pause')
-
-            if custom_mpv_flags:
-                import shlex
-                try:
-                    parsed_flags = shlex.split(custom_mpv_flags)
-                    logging.info(f"Applying custom MPV flags: {parsed_flags}")
-                    mpv_args.extend(parsed_flags)
-                except Exception as e:
-                    logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
-
-            # Check if --terminal is present in args (e.g. from custom flags)
-            if '--terminal' in mpv_args:
-                has_terminal_flag = True
-
-            if custom_width and custom_height:
-                logging.info(f"Applying custom geometry: {custom_width}x{custom_height}")
-                mpv_args.append(f'--geometry={custom_width}x{custom_height}')
-            elif geometry:
-                logging.info(f"Applying geometry: {geometry}")
-                mpv_args.append(f'--geometry={geometry}')
-            
-            full_command = mpv_args + ['--'] + [url_item['url']] # Use the single URL
-
-            popen_kwargs = {
-                'stderr': subprocess.PIPE,
-                'stdout': subprocess.DEVNULL,
-                'universal_newlines': False
-            }
-            if platform.system() == "Windows":
-                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
-                if not has_terminal_flag:
-                    creation_flags |= subprocess.CREATE_NO_WINDOW
-                popen_kwargs['creationflags'] = creation_flags
-            else:
-                popen_kwargs['start_new_session'] = True
-                if has_terminal_flag:
-                    if '--terminal' not in mpv_args:
-                        mpv_args.insert(1, '--terminal')
-                    
-                    # Linux: Wrap in a terminal emulator if possible
-                    term_cmd = []
-                    if shutil.which('x-terminal-emulator'): term_cmd = ['x-terminal-emulator', '-e']
-                    elif shutil.which('gnome-terminal'): term_cmd = ['gnome-terminal', '--wait', '--']
-                    elif shutil.which('konsole'): term_cmd = ['konsole', '-e']
-                    elif shutil.which('xfce4-terminal'): term_cmd = ['xfce4-terminal', '--disable-server', '-x']
-                    elif shutil.which('xterm'): term_cmd = ['xterm', '-e']
-            
-            # Re-create full_command in case --terminal was added for non-windows
-            full_command = mpv_args + ['--'] + [url_item['url']]
-
-            # Apply terminal wrapper if detected (Linux only)
-            if platform.system() != "Windows" and has_terminal_flag and 'term_cmd' in locals() and term_cmd:
-                 full_command = term_cmd + full_command
+            popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
 
             process = subprocess.Popen(full_command, **popen_kwargs)
             self.process = process
@@ -248,7 +192,7 @@ class MpvSessionManager:
             if platform.system() != "Windows" and has_terminal_flag:
                 time.sleep(1) # Give MPV time to start and create the socket
                 try:
-                    pid_response = self.send_ipc_command(self.ipc_path, {"command": ["get_property", "pid"]}, timeout=2.0, expect_response=True)
+                    pid_response = ipc_utils.send_ipc_command(self.ipc_path, {"command": ["get_property", "pid"]}, timeout=2.0, expect_response=True)
                     if pid_response and pid_response.get("error") == "success":
                         actual_mpv_pid = pid_response.get("data")
                         if actual_mpv_pid:
@@ -298,9 +242,9 @@ class MpvSessionManager:
             logging.error(f"An error occurred while trying to launch mpv: {e}")
             return {"success": False, "error": f"Error launching mpv: {e}"}
 
-    def start(self, url_item, folder_id, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, clear_on_completion=False, headers=None):
+    def start(self, url_item, folder_id, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, clear_on_completion=False, headers=None, disable_http_persistent=False):
         """Starts a new mpv process with a single URL, or attempts to sync."""
-        if self.pid and not self.is_process_alive(self.pid, self.ipc_path):
+        if self.pid and not ipc_utils.is_process_alive(self.pid, self.ipc_path):
             logging.info("Detected a stale MPV session. Clearing state before proceeding.")
             self.clear()
 
@@ -309,7 +253,7 @@ class MpvSessionManager:
                 # If an MPV instance is already running for the same folder, attempt to sync.
                 # In single-URL playback, this means adding the new URL to the existing MPV instance.
                 # Use append-play mode to ensure it starts playing if the playlist was finished
-                sync_result = self.append(url_item, headers=headers, mode="append-play")
+                sync_result = self.append(url_item, headers=headers, mode="append-play", disable_http_persistent=disable_http_persistent)
                 if sync_result is not None:
                     return sync_result
             else:
@@ -318,7 +262,7 @@ class MpvSessionManager:
                 return {"success": False, "error": error_message}
         
         # If no MPV is running, or if sync failed/was not attempted, launch a new one.
-        return self._launch(url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion, headers=headers)
+        return self._launch(url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion, headers=headers, disable_http_persistent=disable_http_persistent)
 
     def close(self):
         """Closes the currently running mpv process, if any."""
@@ -326,7 +270,7 @@ class MpvSessionManager:
 
         if self.process and self.process.poll() is None:
             pid_to_close, ipc_path_to_use, process_object = self.pid, self.ipc_path, self.process
-        elif self.pid and self.is_process_alive(self.pid, self.ipc_path):
+        elif self.pid and ipc_utils.is_process_alive(self.pid, self.ipc_path):
              pid_to_close, ipc_path_to_use = self.pid, self.ipc_path
 
         if not pid_to_close:
@@ -338,11 +282,11 @@ class MpvSessionManager:
             if ipc_path_to_use:
                 try:
                     logging.info(f"Attempting to close MPV (PID: {pid_to_close}) via IPC: {ipc_path_to_use}")
-                    self.send_ipc_command(ipc_path_to_use, {"command": ["quit"]}, expect_response=False)
+                    ipc_utils.send_ipc_command(ipc_path_to_use, {"command": ["quit"]}, expect_response=False)
                     if process_object: process_object.wait(timeout=3)
                     else: time.sleep(1)
                     
-                    if not self.is_process_alive(pid_to_close, ipc_path_to_use):
+                    if not ipc_utils.is_process_alive(pid_to_close, ipc_path_to_use):
                         logging.info(f"MPV process (PID: {pid_to_close}) closed gracefully via IPC.")
                         return {"success": True, "message": "MPV instance has been closed."}
                 except Exception as e:
@@ -360,7 +304,7 @@ class MpvSessionManager:
                     os.kill(pid_to_close, signal.SIGTERM)
                 time.sleep(2)
 
-            if not self.is_process_alive(pid_to_close, ipc_path_to_use):
+            if not ipc_utils.is_process_alive(pid_to_close, ipc_path_to_use):
                 logging.info(f"MPV process (PID: {pid_to_close}) terminated successfully via signal.")
                 return {"success": True, "message": "MPV instance has been closed."}
             else:

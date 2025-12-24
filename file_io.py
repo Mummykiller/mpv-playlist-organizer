@@ -46,6 +46,41 @@ def get_mpv_executable():
     
     return mpv_default_name
 
+def _migrate_legacy_data(raw_folders):
+    """
+    Normalizes folder data structures, converting legacy formats if necessary.
+    Returns a tuple (normalized_folders, was_modified).
+    """
+    converted_folders = {}
+    needs_resave = False
+    
+    for folder_id, folder_content in raw_folders.items():
+        # Standard format: {"playlist": [{"url": "...", "title": "..."}, ...]}
+        if isinstance(folder_content, dict) and "playlist" in folder_content:
+            playlist = folder_content.get("playlist", [])
+            # Check for legacy list-of-strings inside "playlist"
+            if playlist and isinstance(playlist[0], str):
+                 needs_resave = True
+                 playlist = [{"url": url, "title": url} for url in playlist]
+            converted_folders[folder_id] = {"playlist": playlist}
+            
+        # Legacy format: List of strings directly
+        elif isinstance(folder_content, list):
+            logging.info(f"Converting old format (list) for folder '{folder_id}' to new format.")
+            converted_folders[folder_id] = {"playlist": [{"url": url, "title": url} for url in folder_content]}
+            needs_resave = True
+            
+        # Legacy format: Dict with "urls" key
+        elif isinstance(folder_content, dict) and "urls" in folder_content:
+            logging.info(f"Converting old format (dict with 'urls') for folder '{folder_id}' to new format.")
+            converted_folders[folder_id] = {"playlist": [{"url": url, "title": url} for url in folder_content.get("urls", [])]}
+            needs_resave = True
+            
+        else:
+            logging.warning(f"Skipping malformed folder data for '{folder_id}' during load: {folder_content}")
+            
+    return converted_folders, needs_resave
+
 def get_all_folders_from_file():
     """Reads all folders data from folders.json, ensuring new format."""
     if not os.path.exists(FOLDERS_FILE):
@@ -67,25 +102,7 @@ def get_all_folders_from_file():
                 return {}
             raw_folders = json.loads(content)
         
-        converted_folders = {}
-        needs_resave = False
-        for folder_id, folder_content in raw_folders.items():
-            if isinstance(folder_content, dict) and "playlist" in folder_content:
-                playlist = folder_content.get("playlist", [])
-                if playlist and isinstance(playlist[0], str):
-                     needs_resave = True
-                     playlist = [{"url": url, "title": url} for url in playlist]
-                converted_folders[folder_id] = {"playlist": playlist}
-            elif isinstance(folder_content, list):
-                logging.info(f"Converting old format (list) for folder '{folder_id}' to new format.")
-                converted_folders[folder_id] = {"playlist": [{"url": url, "title": url} for url in folder_content]}
-                needs_resave = True
-            elif isinstance(folder_content, dict) and "urls" in folder_content:
-                logging.info(f"Converting old format (dict with 'urls') for folder '{folder_id}' to new format.")
-                converted_folders[folder_id] = {"playlist": [{"url": url, "title": url} for url in folder_content.get("urls", [])]}
-                needs_resave = True
-            else:
-                logging.warning(f"Skipping malformed folder data for '{folder_id}' during load: {folder_content}")
+        converted_folders, needs_resave = _migrate_legacy_data(raw_folders)
         
         if needs_resave:
             logging.info("Resaving folders file after converting old data formats.")

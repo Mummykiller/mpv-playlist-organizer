@@ -8,6 +8,8 @@ import subprocess
 import sys
 import time
 import urllib.request
+import shlex
+import re
 
 # --- Dependency Checking & Updating ---
 
@@ -131,6 +133,194 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func):
 
     logging.info(f"Dependency check: MPV={mpv_status['found']}, YTDLP={ytdlp_status['found']}")
     return {"success": True, "mpv": mpv_status, "ytdlp": ytdlp_status}
+
+# --- MPV Command Construction ---
+
+def construct_mpv_command(
+    mpv_exe,
+    ipc_path=None,
+    urls=None,
+    is_youtube=False,
+    ytdl_raw_options=None,
+    geometry=None,
+    custom_width=None,
+    custom_height=None,
+    custom_mpv_flags=None,
+    automatic_mpv_flags=None,
+    headers=None,
+    disable_http_persistent=False,
+    start_paused=False,
+    clear_on_completion=False,
+    script_dir=None
+):
+    """Constructs the MPV command line arguments."""
+    mpv_args = [mpv_exe]
+    if ipc_path:
+        mpv_args.append(f'--input-ipc-server={ipc_path}')
+
+    has_terminal_flag = False
+    if automatic_mpv_flags:
+        for flag_info in automatic_mpv_flags:
+            if flag_info.get('enabled'):
+                if flag_info.get('flag') == 'terminal':
+                    has_terminal_flag = True
+                elif flag_info.get('flag'):
+                    mpv_args.append(flag_info.get('flag'))
+
+    if headers:
+        header_list = []
+        for k, v in headers.items():
+            safe_v = v.replace(",", "")
+            header_list.append(f"{k}: {safe_v}")
+        header_string = ",".join(header_list)
+        mpv_args.append(f'--http-header-fields={header_string}')
+
+        if 'User-Agent' in headers:
+            mpv_args.append(f'--user-agent={headers["User-Agent"]}')
+        if 'Referer' in headers:
+            mpv_args.append(f'--referrer={headers["Referer"]}')
+
+    if disable_http_persistent:
+        mpv_args.append('--demuxer-lavf-o=http_persistent=0')
+
+    if clear_on_completion and script_dir:
+        on_completion_script_path = os.path.join(script_dir, "on_completion.lua")
+        if os.path.exists(on_completion_script_path):
+            mpv_args.append(f'--script={on_completion_script_path}')
+
+    if start_paused and '--pause' not in mpv_args:
+        mpv_args.append('--pause')
+
+    if custom_mpv_flags:
+        try:
+            parsed_flags = shlex.split(custom_mpv_flags)
+            mpv_args.extend(parsed_flags)
+        except Exception as e:
+            logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
+
+    if '--terminal' in mpv_args:
+        has_terminal_flag = True
+
+    if custom_width and custom_height:
+        mpv_args.append(f'--geometry={custom_width}x{custom_height}')
+    elif geometry:
+        mpv_args.append(f'--geometry={geometry}')
+    
+    if is_youtube:
+        mpv_args.append('--ytdl=yes')
+        mpv_args.append('--ytdl-format=bestvideo+bestaudio')
+        if ytdl_raw_options:
+            mpv_args.append(f'--ytdl-raw-options={ytdl_raw_options}')
+
+    full_command = mpv_args + ['--'] + (urls if urls else [])
+
+    if platform.system() != "Windows" and has_terminal_flag:
+        if '--terminal' not in mpv_args:
+             # Try to insert before '--'
+             try:
+                 idx = full_command.index('--')
+                 full_command.insert(idx, '--terminal')
+             except ValueError:
+                 full_command.insert(1, '--terminal')
+
+        term_cmd = []
+        if shutil.which('x-terminal-emulator'): term_cmd = ['x-terminal-emulator', '-e']
+        elif shutil.which('gnome-terminal'): term_cmd = ['gnome-terminal', '--wait', '--']
+        elif shutil.which('konsole'): term_cmd = ['konsole', '-e']
+        elif shutil.which('xfce4-terminal'): term_cmd = ['xfce4-terminal', '--disable-server', '-x']
+        elif shutil.which('xterm'): term_cmd = ['xterm', '-e']
+        
+        if term_cmd:
+             full_command = term_cmd + full_command
+
+    return full_command, has_terminal_flag
+
+def get_mpv_popen_kwargs(has_terminal_flag):
+    """Returns the subprocess arguments for launching MPV."""
+    popen_kwargs = {
+        'stderr': subprocess.PIPE,
+        'stdout': subprocess.DEVNULL,
+        'universal_newlines': False
+    }
+    if platform.system() == "Windows":
+        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+        if not has_terminal_flag:
+            creation_flags |= subprocess.CREATE_NO_WINDOW
+        popen_kwargs['creationflags'] = creation_flags
+    else:
+        popen_kwargs['start_new_session'] = True
+    return popen_kwargs
+
+# --- Bypass Script Logic ---
+
+def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir):
+    """
+    Applies a bypass script if specified in url_item settings and enabled globally.
+    Returns a tuple of (processed_url, headers_dict, ytdl_raw_options).
+    """
+    original_url = url_item['url']
+    
+    # Check if a specific bypass script is enabled for this item
+    item_bypass_script_id = url_item.get('settings', {}).get('use_bypass_script_id')
+    script_path = None
+
+    # URL-based auto-detection for bypass script
+    is_youtube = "youtube.com/" in original_url or "youtu.be/" in original_url
+    is_animepahe = re.match(r"^https://vault-\d+\.owocdn\.top/stream/.+/uwu\.m3u8", original_url)
+
+    if item_bypass_script_id and bypass_scripts.get(item_bypass_script_id, {}).get('enabled'):
+        script_config = bypass_scripts[item_bypass_script_id]
+        script_path = os.path.join(script_dir, script_config.get('script_path', 'play_with_bypass.sh'))
+    elif is_youtube or is_animepahe:
+        script_name = "play_with_bypass.bat" if platform.system() == "Windows" else "play_with_bypass.sh"
+        potential_path = os.path.join(script_dir, script_name)
+        if os.path.exists(potential_path):
+            logging.info(f"Auto-detected bypassable URL. Using {script_name}.")
+            script_path = potential_path
+
+    if script_path:
+        if not os.path.exists(script_path):
+            logging.error(f"Bypass script not found: {script_path}")
+            send_message_func({
+                "action": "log_from_native_host",
+                "log": {"text": f"Bypass script not found: {script_path}. Playing original URL.", "type": "error"}
+            })
+            return original_url, None, None
+        
+        # Ensure the script is executable (Linux/macOS)
+        if platform.system() != "Windows" and not os.access(script_path, os.X_OK):
+            try:
+                os.chmod(script_path, os.stat(script_path).st_mode | 0o100)
+            except Exception as e:
+                logging.error(f"Failed to make bypass script executable: {e}")
+                return original_url, None, None
+
+        try:
+            logging.info(f"Executing bypass script '{script_path}' for URL: {original_url}")
+            send_message_func({"action": "log_from_native_host", "log": {"text": f"Running bypass script for: {original_url}", "type": "info"}})
+            
+            process = subprocess.run([script_path, original_url], capture_output=True, text=True, check=True, timeout=20)
+            output = process.stdout.strip()
+            
+            if not output:
+                return original_url, None, None
+
+            try:
+                data = json.loads(output)
+                processed_url = data.get("url", original_url)
+                if data.get("is_youtube"):
+                    return processed_url, None, data.get("ytdl_raw_options")
+                return processed_url, data.get("headers"), None
+            except json.JSONDecodeError:
+                # Fallback for older scripts returning raw URL
+                return output.splitlines()[-1], None, None
+
+        except Exception as e:
+            logging.error(f"Error executing bypass script: {e}")
+            send_message_func({"action": "log_from_native_host", "log": {"text": f"Bypass script failed: {e}. Playing original URL.", "type": "error"}})
+            return original_url, None, None
+    
+    return original_url, None, None
 
 # --- AniList Service ---
 

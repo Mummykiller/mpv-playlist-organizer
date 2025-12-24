@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Installer UI Tooltips:** Added tooltips to the installer UI to explain complex options, such as the AnimePahe bypass script functionality.
 - **Diagnostics Tool:** Added a diagnostics tool to the installer to help users troubleshoot issues by checking for dependencies like `mpv`, `yt-dlp`, and `ffmpeg`, and verifying browser cookie access.
 - **AnimePahe Bypass Script:** The installer now generates a `play_with_bypass` script that uses `yt-dlp` to resolve streaming URLs, bypassing certain restrictions. This includes dynamic User-Agent generation.
+- **YouTube Bypass Option:** Added an option in the installer to enable YouTube-specific bypass logic within the `play_with_bypass` script, allowing better handling of YouTube URLs and cookie integration.
 - Implemented a sequential playback queue system in the background script. Videos are now processed one by one to ensure per-item settings (like bypass scripts) are applied correctly while maintaining a continuous MPV session.
 - Added dynamic generation of `play_with_bypass` scripts (`.bat` for Windows, `.sh` for Linux/macOS) in the Installer, tailored to the user's selected browser.
 - Added a browser selection dropdown to the Installer to configure cookies for the bypass script.
@@ -28,12 +29,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Installer UI Layout:** Refactored the installer's main settings area to use a `grid` layout, ensuring proper alignment of labels and input fields for a cleaner and more robust user interface.
+- Architectural refactoring of `installer.py` to use a platform-specific strategy pattern, improving maintainability and extensibility.
+- Refactored folder data loading and migration in `file_io.py` to improve robustness and support various legacy data formats.
 - Refactored `play_with_bypass.sh` to resolve URLs and output JSON metadata instead of piping directly to MPV. This allows the extension to maintain control over the MPV instance.
 - The `play` action now queues items in the background script instead of immediately launching MPV, enabling seamless "stacking" of videos with individual processing.
+- Refactored `native_host.py` to use a dictionary-based command dispatcher instead of a monolithic `if/elif` block, improving readability and maintainability.
+- Extracted low-level IPC logic (process checking, command sending) into a new module `utils/ipc_utils.py` to reduce code duplication between `native_host.py` and `mpv_session.py`.
+- Moved bypass script execution logic from `native_host.py` to `services.py` to separate business logic from the host controller.
+- Centralized MPV command line argument construction and dependency checking in `services.py`, removing duplicate logic from `mpv_session.py` and `installer.py`.
 
 ### Fixed
 
 - Fixed an issue on Linux where using the `--terminal` flag would cause a new MPV session for each queued item. The extension now correctly identifies the MPV process PID within the terminal.
+- Fixed a crash in the installer caused by an invalid f-string format when generating the `play_with_bypass` script.
 
 
 

@@ -20,6 +20,9 @@ import subprocess
 import shutil
 import platform
 import threading
+import queue
+import services
+import file_io
 
 # --- GUI Imports ---
 try:
@@ -41,9 +44,136 @@ INSTALL_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(INSTALL_DIR, "data")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 
-def get_browser_configs(is_mac):
-    """Returns a dictionary of browser-specific paths for native messaging manifests."""
-    if platform.system() == "Windows":
+# --- Templates ---
+BYPASS_JSON_TEMPLATE = """{{
+  "url": "{url}",
+  "is_youtube": true,
+  "ytdl_raw_options": "cookies-from-browser={browser},mark-watched",
+  "headers": {{
+    "User-Agent": "{user_agent}"
+  }}
+}}"""
+
+# --- Helper Functions ---
+def _get_dynamic_user_agent():
+    """
+    Constructs a plausible, platform-specific User-Agent string for a modern browser.
+    """
+    system = platform.system()
+    ua_system_info = ""
+    chrome_version = "125.0.0.0"
+
+    try:
+        if system == "Windows":
+            ua_system_info = "(Windows NT 10.0; Win64; x64)"
+        elif system == "Linux":
+            machine = platform.machine()
+            ua_system_info = f"(X11; Linux {machine})"
+        elif system == "Darwin": # macOS
+            ua_system_info = "(Macintosh; Intel Mac OS X 10_15_7)"
+    except Exception:
+        ua_system_info = "(X11; Linux x86_64)" # Failsafe
+
+    return f"Mozilla/5.0 {ua_system_info} AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version} Safari/537.36"
+
+# --- Installer Logic Strategy Pattern ---
+class InstallerLogic:
+    """Abstract base class for platform-specific installer logic."""
+    def __init__(self, logger_func):
+        self.log = logger_func
+
+    def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
+        raise NotImplementedError
+
+    def uninstall(self):
+        raise NotImplementedError
+
+    def install_cli(self):
+        raise NotImplementedError
+
+    def add_to_path(self):
+        raise NotImplementedError
+
+    def check_dependencies(self):
+        """Returns a list of warning messages if dependencies are missing."""
+        warnings = []
+        # Use shared logic from services
+        status = services.check_mpv_and_ytdlp_status(file_io.get_mpv_executable, lambda msg: None)
+
+        if not status['ytdlp']['found']:
+            warnings.append(f"'{status['ytdlp']['error']}'\nBypass scripts will not work without it.")
+        else:
+            self.log("yt-dlp found in PATH.")
+
+        if not status['mpv']['found']:
+            warnings.append(f"'{status['mpv']['error']}'\nPlayback will fail unless you select the executable manually.")
+        else:
+            self.log("mpv found in PATH.")
+            
+        return warnings
+
+    def run_diagnostics(self, browser):
+        """Runs diagnostics and returns (result_text, has_critical_error)."""
+        results = []
+        has_critical_error = False
+
+        # Use shared logic from services
+        status = services.check_mpv_and_ytdlp_status(file_io.get_mpv_executable, lambda msg: None)
+
+        # 1. Check yt-dlp
+        if status['ytdlp']['found']:
+            ver = status['ytdlp'].get('version', 'Unknown')
+            results.append(f"✅ yt-dlp found: {ver}")
+        else:
+            results.append(f"❌ yt-dlp NOT found in PATH")
+            has_critical_error = True
+
+        # 2. Check mpv
+        if status['mpv']['found']:
+            results.append(f"✅ mpv found at: {status['mpv']['path']}")
+        else:
+            results.append(f"❌ mpv NOT found in PATH")
+            has_critical_error = True
+
+        # 3. Check ffmpeg
+        ffmpeg_exe = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
+        if shutil.which(ffmpeg_exe):
+            results.append(f"✅ ffmpeg found")
+        else:
+            results.append(f"⚠️ ffmpeg not found (recommended)")
+
+        # 4. Check Cookies
+        if status['ytdlp']['found'] and browser:
+            try:
+                cmd = [status['ytdlp']['path'], "--cookies-from-browser", browser, "--simulate", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+                startupinfo = None
+                if platform.system() == "Windows":
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESTDHANDLES | subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = subprocess.SW_HIDE
+
+                proc = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
+                
+                if proc.returncode == 0:
+                    results.append(f"✅ Cookie access successful for {browser}")
+                else:
+                    err = proc.stderr.strip()
+                    msg = f"❌ Cookie access failed for {browser}"
+                    if "lock" in err.lower() or "open" in err.lower():
+                        msg += "\n   (Tip: Close the browser and try again)"
+                    results.append(msg)
+                    self.log(f"Cookie error: {err}")
+                    has_critical_error = True
+            except Exception as e:
+                results.append(f"❌ Cookie test error: {e}")
+                has_critical_error = True
+        elif not browser:
+            results.append(f"⚠️ No browser selected for cookie test")
+
+        return "\n".join(results), has_critical_error
+
+class WindowsLogic(InstallerLogic):
+    def get_browser_configs(self):
         manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
         return {
             "Google Chrome": ("SOFTWARE\\Google\\Chrome\\NativeMessagingHosts", manifest_path),
@@ -51,8 +181,342 @@ def get_browser_configs(is_mac):
             "Microsoft Edge": ("SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts", manifest_path),
             "Chromium": ("SOFTWARE\\Chromium\\NativeMessagingHosts", manifest_path),
         }
-    
-    if is_mac:
+
+    def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
+        self.log("Detected Windows OS.")
+        
+        # 1. Find mpv.exe
+        self.log("Searching for mpv.exe...")
+        mpv_path = shutil.which('mpv.exe')
+        if not mpv_path:
+            self.log("mpv.exe not found in PATH. Please select it manually.")
+            # Note: File dialogs must be run on main thread. 
+            # For simplicity in this refactor, we assume PATH or fail, 
+            # or the caller handles the UI interaction before calling install.
+            # Ideally, we'd pass a callback or handle this in the UI layer.
+            # Falling back to a hard error here for safety in thread.
+            raise FileNotFoundError("mpv.exe not found in PATH. Please add it to PATH or implement manual selection.")
+        
+        self.log(f"Found mpv.exe at: {mpv_path}")
+
+        # 2. Save config
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump({"mpv_path": mpv_path}, f, indent=4)
+        self.log(f"Configuration saved to data/config.json")
+
+        # 3. Create Bypass Script
+        if create_bypass:
+            self._create_bypass_script(browser_for_bypass, enable_youtube_bypass)
+
+        # 4. Create .bat wrapper
+        script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
+        python_executable = sys.executable.replace("pythonw.exe", "python.exe")
+        wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.bat")
+        with open(wrapper_path, 'w') as f:
+            f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\n"{python_executable}" "%~dp0{SCRIPT_NAME}" %*')
+        self.log(f"Created wrapper script: run_native_host.bat")
+
+        # 5. Create Manifest
+        manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
+        chrome_manifest = {
+            "name": HOST_NAME,
+            "description": HOST_DESCRIPTION,
+            "path": wrapper_path,
+            "type": "stdio",
+            "allowed_origins": [f"chrome-extension://{extension_id}/"]
+        }
+        with open(manifest_path, 'w') as f:
+            json.dump(chrome_manifest, f, indent=4)
+        self.log(f"Created manifest: {os.path.relpath(manifest_path, INSTALL_DIR)}")
+
+        # 6. Register with browsers
+        browsers = self.get_browser_configs()
+        for browser, (reg_path, manifest_to_register) in browsers.items():
+            try:
+                key_path = os.path.join(reg_path, HOST_NAME)
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                    winreg.SetValue(key, '', winreg.REG_SZ, manifest_path)
+                self.log(f"Successfully registered for {browser}.")
+            except OSError:
+                self.log(f"Skipping {browser} (not installed or registry error).")
+
+    def uninstall(self):
+        self.log("Uninstalling for Windows...")
+        browsers = self.get_browser_configs()
+        for browser, (reg_path, _) in browsers.items():
+            try:
+                key_path = os.path.join(reg_path, HOST_NAME)
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
+                self.log(f"Successfully unregistered from {browser}.")
+            except FileNotFoundError:
+                self.log(f"Not registered for {browser}.")
+            except OSError as e:
+                self.log(f"Could not unregister for {browser}: {e}")
+
+        files_to_remove = [
+            os.path.join(INSTALL_DIR, "run_native_host.bat"),
+            os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json"),
+            os.path.join(INSTALL_DIR, "mpv-cli.bat"),
+            os.path.join(INSTALL_DIR, "play_with_bypass.bat")
+        ]
+        for file_path in files_to_remove:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                self.log(f"Removed: {os.path.basename(file_path)}")
+
+    def install_cli(self):
+        script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
+        wrapper_path = os.path.join(INSTALL_DIR, "mpv-cli.bat")
+        with open(wrapper_path, 'w') as f:
+            f.write('@echo off\n')
+            f.write('set PYTHONDONTWRITEBYTECODE=1\n')
+            f.write(f'python3 "{script_path}" %*\n')
+        self.log(f"Created Windows CLI wrapper: mpv-cli.bat")
+
+    def add_to_path(self):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+                current_path, _ = winreg.QueryValueEx(key, 'Path')
+                if INSTALL_DIR in current_path.split(';'):
+                    return "Directory is already in the user PATH."
+
+                new_path = f"{current_path};{INSTALL_DIR}"
+                winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, new_path)
+                self.log("Successfully added directory to user PATH in registry.")
+                return "Success"
+        except FileNotFoundError:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_WRITE) as key:
+                winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, INSTALL_DIR)
+            return "Success"
+        except Exception as e:
+            raise e
+
+    def _create_bypass_script(self, browser_name, enable_youtube_bypass):
+        self.log(f"Generating bypass script for '{browser_name}'...")
+        user_agent = _get_dynamic_user_agent()
+        youtube_enabled_str = "true" if enable_youtube_bypass else "false"
+
+        # Generate the JSON block using the template
+        json_block = BYPASS_JSON_TEMPLATE.format(
+            url="%~1",
+            browser="!BROWSER!",
+            user_agent="!USER_AGENT!"
+        )
+        # Prefix each line with 'echo ' for Batch
+        echoed_json = "\n".join([f"        echo {line}" for line in json_block.splitlines()])
+        
+        content = f"""@echo off
+setlocal enabledelayedexpansion
+:: Auto-generated bypass script
+set "USER_AGENT={user_agent}"
+set "BROWSER={browser_name}"
+set "YOUTUBE_ENABLED={youtube_enabled_str}"
+
+set "URL=%~1"
+if "%URL%"=="" (
+    echo {{"error": "Usage: %0 <URL>"}} >&2
+    exit /b 1
+)
+
+echo !URL! | findstr /R /C:"youtu.be" /C:"youtube.com/watch" >nul
+if !errorlevel! equ 0 (
+    if "!YOUTUBE_ENABLED!"=="true" (
+        echo {{
+{echoed_json}
+    ) else (
+        echo {{"error": "YouTube bypass is disabled."}} >&2
+    )
+    exit /b 0
+)
+
+echo !URL! | findstr /R "^https://vault-[0-9][0-9]*\\.owocdn\\.top/stream/..*/uwu\\.m3u8" >nul
+if !errorlevel! equ 0 (
+    echo Running yt-dlp for AnimePahe... >&2
+    set "RESOLVED_URL="
+    for /f "delims=" %%i in ('yt-dlp --referer "https://kwik.cx/" --user-agent "!USER_AGENT!" --cookies-from-browser !BROWSER! --no-warnings -g "%~1"') do set "RESOLVED_URL=%%i"
+    if "!RESOLVED_URL!"=="" (
+        echo {{"error": "yt-dlp failed to resolve AnimePahe URL."}} >&2
+        exit /b 1
+    )
+    echo {{
+    echo   "url": "!RESOLVED_URL!",
+    echo   "headers": {{
+    echo     "Origin": "https://kwik.cx",
+    echo     "Referer": "https://kwik.cx/",
+    echo     "User-Agent": "!USER_AGENT!"
+    echo   }}
+    echo }}
+    exit /b 0
+)
+echo {{"error": "Unsupported URL for bypass."}} >&2
+exit /b 1
+"""
+        path = os.path.join(INSTALL_DIR, "play_with_bypass.bat")
+        with open(path, 'w', newline='\n') as f:
+            f.write(content)
+        self.log("Created play_with_bypass.bat")
+
+class UnixLogic(InstallerLogic):
+    """Shared logic for Linux and macOS."""
+    def get_browser_configs(self):
+        raise NotImplementedError
+
+    def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
+        self.log(f"Detected {platform.system()} OS.")
+        
+        # 1. Check mpv
+        mpv_path = shutil.which('mpv')
+        if not mpv_path:
+            self.log("WARNING: mpv not found in PATH. Playback may fail.")
+            mpv_path = "mpv"
+        else:
+            self.log(f"Found mpv at: {mpv_path}")
+
+        # 2. Save config
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump({"mpv_path": mpv_path}, f, indent=4)
+
+        # 3. Make script executable
+        script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
+        os.chmod(script_path, 0o755)
+
+        # 4. Create Bypass Script
+        if create_bypass:
+            self._create_bypass_script(browser_for_bypass, enable_youtube_bypass)
+
+        # 5. Create Shell Wrapper
+        wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.sh")
+        with open(wrapper_path, 'w') as f:
+            f.write("#!/bin/sh\n")
+            f.write("export PYTHONDONTWRITEBYTECODE=1\n\n")
+            f.write(f'"{sys.executable}" "$(dirname "$0")/{SCRIPT_NAME}" "$@"')
+        os.chmod(wrapper_path, 0o755)
+        self.log("Created executable wrapper: run_native_host.sh")
+
+        # 6. Create Portable Manifest
+        manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}.json")
+        chrome_manifest = {
+            "name": HOST_NAME, "description": HOST_DESCRIPTION, "path": wrapper_path, "type": "stdio",
+            "allowed_origins": [f"chrome-extension://{extension_id}/"]
+        }
+        with open(manifest_path, 'w') as f:
+            json.dump(chrome_manifest, f, indent=4)
+        self.log(f"Created manifest: {os.path.relpath(manifest_path, INSTALL_DIR)}")
+
+        # 7. Symlink Manifest
+        browser_paths = self.get_browser_configs()
+        for browser, path in browser_paths.items():
+            if os.path.isdir(os.path.dirname(path)):
+                try:
+                    os.makedirs(path, exist_ok=True)
+                    symlink_target = os.path.join(path, f"{HOST_NAME}.json")
+                    if os.path.lexists(symlink_target):
+                        os.remove(symlink_target)
+                    os.symlink(manifest_path, symlink_target)
+                    self.log(f"Linked manifest for {browser}.")
+                except Exception as e:
+                    self.log(f"Failed to link for {browser}: {e}")
+            else:
+                self.log(f"Skipping {browser} (directory not found).")
+
+    def uninstall(self):
+        self.log(f"Uninstalling for {platform.system()}...")
+        browser_paths = self.get_browser_configs()
+        symlink_filename = f"{HOST_NAME}.json"
+        for browser, path in browser_paths.items():
+            symlink_path = os.path.join(path, symlink_filename)
+            if os.path.lexists(symlink_path):
+                try:
+                    os.remove(symlink_path)
+                    self.log(f"Removed manifest link for {browser}.")
+                except OSError as e:
+                    self.log(f"Failed to remove link for {browser}: {e}")
+
+        files_to_remove = [
+            os.path.join(DATA_DIR, f"{HOST_NAME}.json"),
+            os.path.join(INSTALL_DIR, "run_native_host.sh"),
+            os.path.join(INSTALL_DIR, "mpv-cli"),
+            os.path.join(INSTALL_DIR, "play_with_bypass.sh")
+        ]
+        for file_path in files_to_remove:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                self.log(f"Removed: {os.path.basename(file_path)}")
+
+    def install_cli(self):
+        script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
+        wrapper_path = os.path.join(INSTALL_DIR, "mpv-cli")
+        with open(wrapper_path, 'w') as f:
+            f.write("#!/bin/sh\n")
+            f.write("export PYTHONDONTWRITEBYTECODE=1\n")
+            f.write(f'python3 "{script_path}" "$@"\n')
+        os.chmod(wrapper_path, 0o755)
+        self.log(f"Created executable Unix CLI wrapper: mpv-cli")
+
+    def add_to_path(self):
+        return "Manual"
+
+    def _create_bypass_script(self, browser_name, enable_youtube_bypass):
+        self.log(f"Generating bypass script for '{browser_name}'...")
+        user_agent = _get_dynamic_user_agent()
+        youtube_enabled_str = "true" if enable_youtube_bypass else "false"
+
+        json_block = BYPASS_JSON_TEMPLATE.format(
+            url="$URL",
+            browser="$BROWSER",
+            user_agent="$USER_AGENT"
+        )
+        
+        content = f"""#!/bin/bash
+# Auto-generated bypass script
+USER_AGENT="{user_agent}"
+BROWSER="{browser_name}"
+YOUTUBE_ENABLED="{youtube_enabled_str}"
+URL="$1"
+
+function print_json_error {{
+  echo "{{\\"error\\": \\"$1\\"}}" >&2
+  exit 1
+}}
+
+if [ -z "$URL" ]; then
+  print_json_error "Usage: $0 <URL>"
+fi
+
+if [[ "$YOUTUBE_ENABLED" == "true" && ("$URL" == *"youtube.com/watch"* || "$URL" == *"youtu.be"*) ]]; then
+  cat <<EOF
+{json_block}
+EOF
+elif [[ "$URL" =~ ^https://vault-[0-9]+\\.owocdn\\.top/stream/.+/uwu\\.m3u8 ]]; then
+  echo "Running yt-dlp for AnimePahe..." >&2
+  RESOLVED_URL=$(yt-dlp --referer "https://kwik.cx/" --user-agent "$USER_AGENT" --cookies-from-browser "$BROWSER" --no-warnings -g "$URL")
+  if [ -z "$RESOLVED_URL" ]; then
+    print_json_error "yt-dlp failed to resolve AnimePahe URL."
+  fi
+  cat <<EOF
+{{
+  "url": "$RESOLVED_URL",
+  "headers": {{
+    "Origin": "https://kwik.cx",
+    "Referer": "https://kwik.cx/",
+    "User-Agent": "$USER_AGENT"
+  }}
+}}
+EOF
+else
+  print_json_error "Unsupported URL for bypass."
+fi
+"""
+        path = os.path.join(INSTALL_DIR, "play_with_bypass.sh")
+        with open(path, 'w', newline='\n') as f:
+            f.write(content)
+        os.chmod(path, 0o755)
+        self.log("Created play_with_bypass.sh")
+
+class MacOSLogic(UnixLogic):
+    def get_browser_configs(self):
         base_path = os.path.expanduser("~/Library/Application Support/")
         return {
             "Google Chrome": os.path.join(base_path, "Google/Chrome/NativeMessagingHosts"),
@@ -60,7 +524,9 @@ def get_browser_configs(is_mac):
             "Brave": os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             "Microsoft Edge": os.path.join(base_path, "Microsoft Edge/NativeMessagingHosts"),
         }
-    else: # Linux
+
+class LinuxLogic(UnixLogic):
+    def get_browser_configs(self):
         base_path = os.path.expanduser("~/.config/")
         return {
             "Google Chrome": os.path.join(base_path, "google-chrome/NativeMessagingHosts"),
@@ -68,34 +534,6 @@ def get_browser_configs(is_mac):
             "Brave": os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             "Microsoft Edge": os.path.join(base_path, "microsoft-edge/NativeMessagingHosts"),
         }
-
-def _get_dynamic_user_agent():
-    """
-    Constructs a plausible, platform-specific User-Agent string for a modern browser.
-    """
-    system = platform.system()
-    ua_system_info = ""
-    # A recent, but generic, Chrome version. This is less likely to break than a
-    # fully hardcoded OS string.
-    chrome_version = "125.0.0.0"
-
-    try:
-        if system == "Windows":
-            # For modern Windows (10, 11), the UA string is standardized to Windows NT 10.0
-            # for compatibility reasons.
-            ua_system_info = "(Windows NT 10.0; Win64; x64)"
-        elif system == "Linux":
-            # e.g., (X11; Linux x86_64)
-            machine = platform.machine()
-            ua_system_info = f"(X11; Linux {machine})"
-        elif system == "Darwin": # macOS
-            # Chrome on Apple Silicon still often reports "Intel Mac OS X" for compatibility.
-            # Using a common modern version is a safe bet.
-            ua_system_info = "(Macintosh; Intel Mac OS X 10_15_7)"
-    except Exception:
-        ua_system_info = "(X11; Linux x86_64)" # Failsafe
-
-    return f"Mozilla/5.0 {ua_system_info} AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_version} Safari/537.36"
 
 # --- Tooltip Class for detailed explanations ---
 class Tooltip:
@@ -137,11 +575,15 @@ class HostManagerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("MPV Playlist Organizer - Host Manager")
+        self.log_queue = queue.Queue()
+        
+        self._setup_ui()
+        
         self.root.resizable(False, False)
 
         # --- Center the window on the screen ---
         window_width = 600
-        window_height = 450
+        window_height = 500
         # Get screen dimensions
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
@@ -150,19 +592,54 @@ class HostManagerApp:
         center_y = int(screen_height / 2 - window_height / 2)
         self.root.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
 
+        # --- Initialize Logic ---
+        self.logic = self._get_logic_strategy()
+        
+        # --- Start Log Poller ---
+        self.root.after(100, self._process_log_queue)
+        
+        # --- Initial Dependency Check ---
+        self.root.after(200, self._check_dependencies_async)
+
+    def _get_logic_strategy(self):
+        system = platform.system()
+        if system == "Windows":
+            return WindowsLogic(self.log)
+        elif system == "Linux":
+            return LinuxLogic(self.log)
+        elif system == "Darwin":
+            return MacOSLogic(self.log)
+        else:
+            self.log(f"Unsupported platform: {system}")
+            return UnixLogic(self.log) # Fallback
+
+    def _setup_ui(self):
         # --- Styles ---
+        bg_color = "#f8f9fa"
+        self.root.configure(bg=bg_color)
+
         style = ttk.Style()
         style.theme_use('clam')
-        style.configure("TButton", padding=6, relief="flat", background="#5865f2", foreground="white")
-        style.map("TButton", background=[('active', '#4f5bda')])
+        
+        style.configure(".", background=bg_color, font=("Segoe UI", 10))
+        style.configure("TFrame", background=bg_color)
+        style.configure("TLabel", background=bg_color)
+        style.configure("TCheckbutton", background=bg_color)
+        
+        style.configure("TButton", padding=8, relief="flat", background="#5865f2", foreground="white", borderwidth=0)
+        style.map("TButton", background=[('active', '#4f5bda'), ('disabled', '#cccccc')])
+        
         style.configure("Uninstall.TButton", background="#ed4245")
         style.map("Uninstall.TButton", background=[('active', '#da3739')])
-        style.configure("TLabel", background="#f0f0f0", font=("Segoe UI", 10))
-        style.configure("Header.TLabel", font=("Segoe UI", 12, "bold"))
+        
+        style.configure("Header.TLabel", font=("Segoe UI", 16, "bold"), foreground="#2c2f33")
 
         # --- Main Frame ---
-        main_frame = ttk.Frame(root, padding="15")
+        main_frame = ttk.Frame(self.root, padding="25")
         main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # --- Header ---
+        ttk.Label(main_frame, text="MPV Playlist Organizer", style="Header.TLabel").pack(pady=(0, 20))
 
         # --- Settings Frame (using Grid layout for alignment) ---
         settings_frame = ttk.Frame(main_frame)
@@ -188,19 +665,39 @@ class HostManagerApp:
         
         tooltip_text = (
             "If checked, creates a 'play_with_bypass' script.\n\n"
-            "This script uses yt-dlp to resolve AnimePahe stream URLs,\n"
-            "allowing direct playback in MPV by bypassing certain site restrictions.\n"
+            "This script uses yt-dlp to resolve certain stream URLs (e.g., AnimePahe),\n"
+            "allowing direct playback in MPV by bypassing site restrictions.\n"
             "Requires a selected browser below for cookie access."
         )
         Tooltip(bypass_label, tooltip_text)
         Tooltip(self.bypass_checkbutton, tooltip_text)
 
-        # --- Row 2: Browser for Bypass Script ---
+        # --- Row 2: YouTube Bypass Script Option ---
+        yt_bypass_label = ttk.Label(settings_frame, text="Enable YouTube Bypass:", font=("Segoe UI", 10, "bold"))
+        yt_bypass_label.grid(row=2, column=0, sticky=tk.W, pady=4)
+        
+        self.enable_youtube_bypass_var = tk.BooleanVar(value=True)
+        self.yt_bypass_checkbutton = ttk.Checkbutton(
+            settings_frame,
+            variable=self.enable_youtube_bypass_var
+        )
+        self.yt_bypass_checkbutton.grid(row=2, column=1, sticky=tk.W, padx=(10, 0))
+
+        yt_tooltip_text = (
+            "If checked, the bypass script will also support YouTube URLs.\n\n"
+            "This uses your browser cookies to access logged-in features like\n"
+            "subscriptions, private videos, and ensures videos are marked as watched\n"
+            "in your YouTube history after playback."
+        )
+        Tooltip(yt_bypass_label, yt_tooltip_text)
+        Tooltip(self.yt_bypass_checkbutton, yt_tooltip_text)
+
+        # --- Row 3: Browser for Bypass Script ---
         browser_label = ttk.Label(settings_frame, text="Browser for Bypass:", font=("Segoe UI", 10, "bold"))
-        browser_label.grid(row=2, column=0, sticky=tk.W, pady=4)
+        browser_label.grid(row=3, column=0, sticky=tk.W, pady=4)
 
         browser_input_frame = ttk.Frame(settings_frame)
-        browser_input_frame.grid(row=2, column=1, sticky="ew", padx=(10, 0))
+        browser_input_frame.grid(row=3, column=1, sticky="ew", padx=(10, 0))
         browser_input_frame.columnconfigure(0, weight=1)
 
         self.browser_var = tk.StringVar()
@@ -216,8 +713,10 @@ class HostManagerApp:
             state = tk.NORMAL if self.create_bypass_var.get() else tk.DISABLED
             self.browser_combobox.config(state="readonly" if self.create_bypass_var.get() else "disabled")
             self.diagnostics_btn.config(state=state)
-            # Also toggle the label's appearance to indicate it's disabled
+            self.yt_bypass_checkbutton.config(state=state)
+            # Also toggle the labels' appearance to indicate they're disabled
             browser_label.config(state=state)
+            yt_bypass_label.config(state=state)
 
         self.bypass_checkbutton.config(command=toggle_bypass_widgets)
 
@@ -242,10 +741,6 @@ class HostManagerApp:
             except (IOError, json.JSONDecodeError, AttributeError, IndexError) as e:
                 self.log(f"WARNING: Could not read previous Extension ID from manifest file: {e}")
 
-        # --- Load installer preferences ---
-        # This will set the default browser from the last session.
-        self._load_installer_prefs()
-
         # --- Buttons ---
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=10)
@@ -267,20 +762,27 @@ class HostManagerApp:
         self.path_button.pack(fill=tk.X, expand=True)
         # --- Log Area ---
         ttk.Label(main_frame, text="Log Output:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(10, 5))
-        self.log_area = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, height=10, font=("Consolas", 9))
+        self.log_area = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, height=10, font=("Consolas", 9), relief="flat", borderwidth=1)
         self.log_area.pack(fill=tk.BOTH, expand=True)
         self.log_area.configure(state='disabled')
+        
+        # Load prefs
+        self._load_installer_prefs()
 
-        # --- Initial Dependency Check ---
-        # Run this check in a separate thread to avoid blocking the GUI at startup
-        threading.Thread(target=self._check_dependencies, daemon=True).start()
+    def _process_log_queue(self):
+        try:
+            while True:
+                msg = self.log_queue.get_nowait()
+                self.log_area.configure(state='normal')
+                self.log_area.insert(tk.END, msg + "\n")
+                self.log_area.configure(state='disabled')
+                self.log_area.see(tk.END)
+        except queue.Empty:
+            pass
+        self.root.after(100, self._process_log_queue)
 
     def log(self, message):
-        self.log_area.configure(state='normal')
-        self.log_area.insert(tk.END, message + "\n")
-        self.log_area.configure(state='disabled')
-        self.log_area.see(tk.END)
-        self.root.update_idletasks()
+        self.log_queue.put(message)
 
     def run_install(self):
         extension_id = self.extension_id_var.get().strip()
@@ -290,8 +792,8 @@ class HostManagerApp:
         
         # Basic validation for Chrome extension ID format (32 lowercase alpha characters)
         if not re.match(r"^[a-z]{32}$", extension_id):
-             if not messagebox.askyesno("Warning", "The Extension ID doesn't look like a standard Chrome extension ID (32 lowercase letters).\n\nAre you sure you want to proceed?"):
-                 return
+            if not messagebox.askyesno("Warning", "The Extension ID doesn't look like a standard Chrome extension ID (32 lowercase letters).\n\nAre you sure you want to proceed?"):
+                return
 
         self.install_button.config(state=tk.DISABLED)
         self.uninstall_button.config(state=tk.DISABLED)
@@ -333,33 +835,14 @@ class HostManagerApp:
 
         threading.Thread(target=self._add_to_path_thread).start()
 
-    def _check_dependencies(self):
-        """Checks for required command-line tools like yt-dlp and mpv."""
-        # Check for yt-dlp
-        ytdlp_exe_name = "yt-dlp.exe" if platform.system() == "Windows" else "yt-dlp"
-        if not shutil.which(ytdlp_exe_name):
-            warning_text = f"'{ytdlp_exe_name}' not found in your system's PATH."
-            self.log(f"WARNING: {warning_text}")
-            # The messagebox needs to be called on the main GUI thread.
-            self.root.after(100, lambda: messagebox.showwarning(
-                "Dependency Missing",
-                f"{warning_text}\n\nThe AnimePahe bypass script will not work without it. Please install yt-dlp and ensure it's in your system's PATH."
-            ))
-        else:
-            self.log("yt-dlp found in PATH.")
+    def _check_dependencies_async(self):
+        threading.Thread(target=self._check_dependencies_thread, daemon=True).start()
 
-        # Check for mpv
-        self.log("Checking for mpv dependency...")
-        mpv_exe_name = "mpv.exe" if platform.system() == "Windows" else "mpv"
-        if not shutil.which(mpv_exe_name):
-            warning_text = f"'{mpv_exe_name}' not found in your system's PATH."
-            self.log(f"WARNING: {warning_text}")
-            self.root.after(100, lambda: messagebox.showwarning(
-                "Dependency Missing",
-                f"{warning_text}\n\nThe extension will not be able to play videos. Please install mpv and ensure it's in your system's PATH, or be prepared to select the executable manually during installation."
-            ))
-        else:
-            self.log("mpv found in PATH.")
+    def _check_dependencies_thread(self):
+        warnings = self.logic.check_dependencies()
+        for w in warnings:
+            self.log(f"WARNING: {w.splitlines()[0]}")
+            self.root.after(0, lambda msg=w: messagebox.showwarning("Dependency Missing", msg))
 
     def run_diagnostics(self):
         """Runs a suite of diagnostic tests including dependency checks and cookie access."""
@@ -369,76 +852,7 @@ class HostManagerApp:
         self.log(f"Starting diagnostics for '{browser}'...")
         
         def _test():
-            results = []
-            has_critical_error = False
-
-            # 1. Check yt-dlp
-            ytdlp_exe = "yt-dlp.exe" if platform.system() == "Windows" else "yt-dlp"
-            ytdlp_path = shutil.which(ytdlp_exe)
-            if ytdlp_path:
-                try:
-                    ver_proc = subprocess.run([ytdlp_path, "--version"], capture_output=True, text=True)
-                    ver = ver_proc.stdout.strip() if ver_proc.returncode == 0 else "Unknown"
-                    results.append(f"✅ yt-dlp found: {ver}")
-                except:
-                    results.append(f"✅ yt-dlp found")
-            else:
-                results.append(f"❌ yt-dlp NOT found in PATH")
-                has_critical_error = True
-
-            # 2. Check mpv
-            mpv_exe = "mpv.exe" if platform.system() == "Windows" else "mpv"
-            mpv_path = shutil.which(mpv_exe)
-            if mpv_path:
-                try:
-                    mpv_proc = subprocess.run([mpv_path, "--version"], capture_output=True, text=True)
-                    ver = mpv_proc.stdout.splitlines()[0] if mpv_proc.returncode == 0 and mpv_proc.stdout else "Unknown"
-                    results.append(f"✅ mpv found: {ver}")
-                except:
-                    results.append(f"✅ mpv found")
-            else:
-                results.append(f"❌ mpv NOT found in PATH")
-                has_critical_error = True
-
-            # 3. Check ffmpeg
-            ffmpeg_exe = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
-            if shutil.which(ffmpeg_exe):
-                results.append(f"✅ ffmpeg found")
-            else:
-                results.append(f"⚠️ ffmpeg not found (recommended)")
-
-            # 4. Check Cookies
-            if ytdlp_path and browser:
-                try:
-                    # Use --simulate with a dummy video URL to test cookie extraction without downloading.
-                    # We use a YouTube URL because google.com might trigger "Unsupported URL" errors in some yt-dlp versions.
-                    cmd = [ytdlp_path, "--cookies-from-browser", browser, "--simulate", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
-                    startupinfo = None
-                    if platform.system() == "Windows":
-                        startupinfo = subprocess.STARTUPINFO()
-                        startupinfo.dwFlags |= subprocess.STARTF_USESTDHANDLES | subprocess.STARTF_USESHOWWINDOW
-                        startupinfo.wShowWindow = subprocess.SW_HIDE
-
-                    proc = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
-                    
-                    if proc.returncode == 0:
-                        results.append(f"✅ Cookie access successful for {browser}")
-                    else:
-                        err = proc.stderr.strip()
-                        msg = f"❌ Cookie access failed for {browser}"
-                        if "lock" in err.lower() or "open" in err.lower():
-                            msg += "\n   (Tip: Close the browser and try again)"
-                        results.append(msg)
-                        self.log(f"Cookie error: {err}")
-                        has_critical_error = True
-                except Exception as e:
-                    results.append(f"❌ Cookie test error: {e}")
-                    has_critical_error = True
-            elif not browser:
-                results.append(f"⚠️ No browser selected for cookie test")
-
-            # Report
-            report_text = "\n".join(results)
+            report_text, has_critical_error = self.logic.run_diagnostics(browser)
             self.log("Diagnostics Results:\n" + report_text)
             
             title = "Diagnostics Failed" if has_critical_error else "Diagnostics Passed"
@@ -479,112 +893,6 @@ class HostManagerApp:
         except Exception as e:
             self.log(f"ERROR: Could not save installer preferences: {e}")
 
-    def _create_bypass_script(self, browser_name):
-        """Generates and writes the play_with_bypass script (sh or bat)."""
-        self.log(f"Generating bypass script for '{browser_name}' browser on {platform.system()}.")
-        
-        user_agent = _get_dynamic_user_agent()
-        self.log(f"Using dynamic User-Agent: {user_agent}")
-
-        if platform.system() == "Windows":
-            filename = "play_with_bypass.bat"
-            # Batch script content
-            # Note: Double percent signs %% for batch variables in python string
-            script_content = f"""@echo off
-setlocal
-
-:: This script was auto-generated by the installer.
-
-:: Check if URL is provided
-if "%~1"=="" (
-  echo Usage: %0 ^<URL^> >&2
-  exit /b 1
-)
-
-:: Validate URL pattern (owocdn.top)
-echo %~1 | findstr /R "^https://vault-[0-9][0-9]*\\.owocdn\\.top/stream/..*/uwu\\.m3u8" >nul
-if %errorlevel% neq 0 (
-  echo {{"error": "URL pattern mismatch."}} >&2
-  exit /b 1
-)
-
-:: Resolve URL using yt-dlp with specific headers
-set "RESOLVED_URL="
-for /f "delims=" %%i in ('yt-dlp --referer "https://kwik.cx/" --user-agent "{user_agent}" --cookies-from-browser {browser_name} --no-warnings -g "%~1"') do set "RESOLVED_URL=%%i"
-
-if "%RESOLVED_URL%"=="" (
-  echo {{"error": "yt-dlp failed to resolve URL."}} >&2
-  exit /b 1
-)
-
-:: Output a JSON object for the native host to parse.
-echo {{
-echo   "url": "%RESOLVED_URL%",
-echo   "headers": {{
-echo     "Referer": "https://kwik.cx/",
-echo     "User-Agent": "{user_agent}"
-echo   }}
-echo }}
-"""
-        else:
-            filename = "play_with_bypass.sh"
-            # Bash script content
-            script_content = f"""#!/bin/bash
-
-# This script was auto-generated by the installer.
-
-# Check if URL is provided
-if [ -z "$1" ]; then
-  echo "Usage: $0 <URL>" >&2
-  exit 1
-fi
-
-# Validate URL pattern (owocdn.top)
-REGEX="^https://vault-[0-9]+\\.owocdn\\.top/stream/.+/uwu\\.m3u8"
-if [[ ! "$1" =~ $REGEX ]]; then
-  echo '{{"error": "URL pattern mismatch."}}' >&2
-  exit 1
-fi
-
-# Resolve URL using yt-dlp with specific headers
-RESOLVED_URL=$(yt-dlp --referer "https://kwik.cx/" \\
-       --user-agent "{user_agent}" \\
-       --cookies-from-browser {browser_name} \\
-       --no-warnings \\
-       -g "$1")
-
-if [ -z "$RESOLVED_URL" ]; then
-  echo '{{"error": "yt-dlp failed to resolve URL."}}' >&2
-  exit 1
-fi
-
-# Output a JSON object for the native host to parse.
-cat <<EOF
-{{
-  "url": "$RESOLVED_URL",
-  "headers": {{
-    "Referer": "https://kwik.cx/",
-    "User-Agent": "{user_agent}"
-  }}
-}}
-EOF
-"""
-        
-        bypass_script_path = os.path.join(INSTALL_DIR, filename)
-        try:
-            # Write with Unix-style line endings (LF)
-            with open(bypass_script_path, 'w', newline='\n') as f:
-                f.write(script_content)
-            
-            # Make it executable on non-windows systems
-            if platform.system() != "Windows":
-                os.chmod(bypass_script_path, 0o755)
-                
-            self.log(f"Successfully created {filename}.")
-        except Exception as e:
-            self.log(f"ERROR: Failed to create {filename}: {e}")
-            messagebox.showerror("Error", f"Failed to create the bypass script: {e}")
-
     def _install_thread(self, extension_id):
         self.log("--- Starting Installation ---")
         try:
@@ -592,19 +900,11 @@ EOF
             self._save_installer_prefs()
 
             # Get browser for bypass script and create the script if the user opted in.
-            if self.create_bypass_var.get():
-                selected_browser = self.browser_var.get()
-                self._create_bypass_script(selected_browser)
-            else:
-                self.log("Skipping bypass script creation as per user choice.")
+            create_bypass = self.create_bypass_var.get()
+            selected_browser = self.browser_var.get()
+            enable_youtube = self.enable_youtube_bypass_var.get()
 
-            current_platform = platform.system()
-            if current_platform == 'Windows':
-                self._install_windows(extension_id)
-            elif current_platform in ['Linux', 'Darwin']:
-                self._install_linux_macos(current_platform == 'Darwin', extension_id)
-            else:
-                self.log(f"ERROR: Unsupported platform: {current_platform}")
+            self.logic.install(extension_id, create_bypass, selected_browser, enable_youtube)
             
             self.log("\n--- Installation Finished! ---")
             self.log("[IMPORTANT] You must now RESTART your browser completely for the changes to take effect.")
@@ -620,13 +920,7 @@ EOF
     def _uninstall_thread(self):
         self.log("--- Starting Uninstallation ---")
         try:
-            current_platform = platform.system()
-            if current_platform == 'Windows':
-                self._uninstall_windows()
-            elif current_platform in ['Linux', 'Darwin']:
-                self._uninstall_linux_macos(current_platform == 'Darwin')
-            else:
-                self.log(f"ERROR: Unsupported platform: {current_platform}")
+            self.logic.uninstall()
 
             self.log("\n--- Uninstallation Finished! ---")
             self.log("You can now remove the extension from your browser and delete this folder.")
@@ -643,13 +937,7 @@ EOF
         """The actual logic for creating the CLI wrapper, run in a thread."""
         self.log("--- Installing CLI Wrapper ---")
         try:
-            current_platform = platform.system()
-            if current_platform == 'Windows':
-                self._create_windows_cli_wrapper()
-            elif current_platform in ['Linux', 'Darwin']:
-                self._create_unix_cli_wrapper()
-            else:
-                self.log(f"ERROR: CLI wrapper not supported on platform: {current_platform}")
+            self.logic.install_cli()
 
             self.log("\n--- CLI Wrapper Installation Finished! ---")
             self.log("Ensure this directory is in your system's PATH to use the command from anywhere.")
@@ -666,13 +954,15 @@ EOF
         """The actual logic for adding the install directory to the user's PATH."""
         self.log("--- Adding to User PATH ---")
         try:
-            current_platform = platform.system()
-            if current_platform == 'Windows':
-                self._add_to_path_windows()
-            elif current_platform in ['Linux', 'Darwin']:
-                self._add_to_path_unix()
+            result = self.logic.add_to_path()
+            if result == "Success":
+                self.log("Successfully added directory to user PATH.")
+                self.root.after(0, lambda: messagebox.showinfo("Success", "Directory added to user PATH. Please restart any open terminals."))
+            elif result == "Manual":
+                instruction_message = f"Please add the following line to your shell's startup file:\n\nexport PATH=\"$PATH:{INSTALL_DIR}\""
+                self.root.after(0, lambda: messagebox.showinfo("Add to PATH Manually", instruction_message))
             else:
-                self.log(f"ERROR: Adding to PATH is not supported on platform: {current_platform}")
+                self.log(result)
 
         except Exception as e:
             self.log(f"An unexpected error occurred while modifying PATH: {e}")
@@ -682,266 +972,6 @@ EOF
             self.cli_button.config(state=tk.NORMAL)
             self.path_button.config(state=tk.NORMAL)
             self.browser_combobox.config(state="readonly")
-
-    def _add_to_path_windows(self):
-        """Adds the INSTALL_DIR to the user's PATH in the Windows Registry."""
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
-                current_path, _ = winreg.QueryValueEx(key, 'Path')
-                if INSTALL_DIR in current_path.split(';'):
-                    self.log("Directory is already in the user PATH.")
-                    messagebox.showinfo("Already in PATH", f"The directory '{INSTALL_DIR}' is already in your user PATH.")
-                    return
-
-                new_path = f"{current_path};{INSTALL_DIR}"
-                winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, new_path)
-                self.log("Successfully added directory to user PATH in registry.")
-                self.log("You must restart any open command prompts or terminals for the change to take effect.")
-                messagebox.showinfo("Success", "Directory added to user PATH. Please restart any open terminals to use the 'mpv-cli' command.")
-        except FileNotFoundError:
-            # This happens if the 'Path' value doesn't exist yet for the user.
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_WRITE) as key:
-                winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, INSTALL_DIR)
-            self.log("Created new user PATH and added directory.")
-            messagebox.showinfo("Success", "Directory added to user PATH. Please restart any open terminals to use the 'mpv-cli' command.")
-        except Exception as e:
-            self.log(f"ERROR: Failed to modify registry: {e}")
-            messagebox.showerror("Error", f"Failed to modify the registry. Please add the directory to your PATH manually.\n\nError: {e}")
-
-    def _add_to_path_unix(self):
-        """Shows instructions for adding the directory to PATH on Linux/macOS."""
-        self.log("Displaying manual instructions for adding to PATH on Unix-like system.")
-        instruction_message = (
-            "To complete the process, you need to add the following line to your shell's startup file (e.g., ~/.bashrc, ~/.zshrc, or ~/.profile):\n\n"
-            f'export PATH="$PATH:{INSTALL_DIR}"\n\n'
-            "After adding the line, restart your terminal or run 'source <your_file>' for the change to take effect."
-        )
-        messagebox.showinfo("Add to PATH Manually", instruction_message)
-        self.log("User has been shown the manual instructions.")
-
-    def _create_windows_cli_wrapper(self):
-        """Creates the mpv-cli.bat file."""
-        script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
-        wrapper_path = os.path.join(INSTALL_DIR, "mpv-cli.bat")
-        with open(wrapper_path, 'w') as f:
-            f.write('@echo off\n')
-            f.write('set PYTHONDONTWRITEBYTECODE=1\n')
-            f.write(f'python3 "{script_path}" %*\n')
-        self.log(f"Created Windows CLI wrapper: mpv-cli.bat")
-
-    def _create_unix_cli_wrapper(self):
-        """Creates the mpv-cli shell script for Linux/macOS."""
-        script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
-        wrapper_path = os.path.join(INSTALL_DIR, "mpv-cli")
-        with open(wrapper_path, 'w') as f:
-            f.write("#!/bin/sh\n")
-            f.write("export PYTHONDONTWRITEBYTECODE=1\n")
-            f.write(f'python3 "{script_path}" "$@"\n')
-        # Make the wrapper executable
-        os.chmod(wrapper_path, 0o755)
-        self.log(f"Created executable Unix CLI wrapper: mpv-cli")
-        
-    # --- Installation Logic (from install.py) ---
-    def _install_windows(self, extension_id):
-        self.log("Detected Windows OS.")
-        
-        # Find mpv.exe
-        self.log("Searching for mpv.exe...")
-        mpv_path = shutil.which('mpv.exe')
-        if not mpv_path:
-            self.log("mpv.exe not found in PATH. Please select it manually.")
-            mpv_path = filedialog.askopenfilename(title="Select mpv.exe", filetypes=[("Executable", "*.exe")])
-            if not mpv_path or not os.path.basename(mpv_path).lower() == 'mpv.exe':
-                self.log("ERROR: mpv.exe not selected. Aborting installation.")
-                messagebox.showerror("Installation Error", "mpv.exe not selected or invalid file. Aborting installation.")
-                return
-        self.log(f"Found mpv.exe at: {mpv_path}")
-
-        # Save config
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump({"mpv_path": mpv_path}, f, indent=4)
-        self.log(f"Configuration saved to data/config.json")
-
-        # Create .bat wrapper
-        # This wrapper ensures that the same Python interpreter that runs the installer
-        # is used to run the native host, avoiding PATH issues.
-        script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
-        # Use pythonw.exe for the production wrapper to run silently without a console window.
-        python_executable = sys.executable.replace("pythonw.exe", "python.exe")
-        self.log(f"Using '{os.path.basename(python_executable)}' for a silent wrapper.")
-
-        wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.bat")
-        with open(wrapper_path, 'w') as f:
-            # %~dp0 expands to the directory of the .bat file, making the path relative.
-            f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\n"{python_executable}" "%~dp0{SCRIPT_NAME}" %*')
-        self.log(f"Created wrapper script: run_native_host.bat")
-
-        # Create Manifest
-        # The manifest MUST point to the .bat wrapper, not the .py script directly.
-        manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
-        chrome_manifest = {
-            "name": HOST_NAME,
-            "description": HOST_DESCRIPTION,
-            "path": wrapper_path,
-            "type": "stdio",
-            "allowed_origins": [f"chrome-extension://{extension_id}/"]
-        }
-        with open(manifest_path, 'w') as f:
-            json.dump(chrome_manifest, f, indent=4)
-        self.log(f"Created manifest: {os.path.relpath(manifest_path, INSTALL_DIR)}")
-
-        # Register with browsers
-        browsers = get_browser_configs(is_mac=False)
-        for browser, (reg_path, manifest_to_register) in browsers.items():
-            try:
-                key_path = os.path.join(reg_path, HOST_NAME)
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
-                    winreg.SetValue(key, '', winreg.REG_SZ, manifest_path)
-                self.log(f"Successfully registered for {browser}.")
-            except OSError:
-                self.log(f"Skipping {browser} (not installed or registry error).")
-
-    def _install_linux_macos(self, is_mac, extension_id):
-        os_name = "macOS" if is_mac else "Linux"
-        self.log(f"Detected {os_name} OS.")
-
-        # Check for mpv
-        self.log("Searching for mpv...")
-        mpv_path = shutil.which('mpv')
-        
-        if not mpv_path:
-            self.log("mpv not found in PATH. You may select it manually.")
-            mpv_path = filedialog.askopenfilename(title="Select mpv executable", filetypes=[("Executable", "*")])
-            if not mpv_path or not os.path.basename(mpv_path).lower().startswith('mpv'): # mpv, mpv.app, etc.
-                self.log("WARNING: mpv executable not selected. Native host will rely on 'mpv' being in PATH during runtime.")
-                mpv_path = "mpv" # Fallback to default name, relying on PATH
-                messagebox.showwarning("MPV Selection", "mpv executable not explicitly selected. The native host will attempt to find 'mpv' in your system's PATH during playback. Please ensure it is installed and accessible.")
-            else:
-                self.log(f"Selected mpv executable: {mpv_path}")
-        else:
-            self.log(f"Found mpv in PATH: {mpv_path}")
-
-        # Save config for Unix-like systems as well
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump({"mpv_path": mpv_path}, f, indent=4)
-        self.log(f"Configuration saved to {os.path.relpath(CONFIG_FILE, INSTALL_DIR)}")
-
-        # Make script executable
-        script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
-        try:
-            os.chmod(script_path, 0o755)
-            self.log(f"Made {SCRIPT_NAME} executable.")
-        except Exception as e:
-            self.log(f"Could not make script executable: {e}")
-        
-        # Create a shell wrapper for Linux/macOS to set the environment variable
-        wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.sh")
-        python_executable = sys.executable # Use the same python that's running the installer
-        with open(wrapper_path, 'w') as f:
-            f.write("#!/bin/sh\n")
-            f.write("# This wrapper ensures __pycache__ directories are not created.\n")
-            f.write("export PYTHONDONTWRITEBYTECODE=1\n\n")
-            # Use dirname "$0" to find the script's directory, making it portable
-            f.write(f'"{python_executable}" "$(dirname "$0")/{SCRIPT_NAME}" "$@"')
-        
-        # Make the wrapper executable
-        os.chmod(wrapper_path, 0o755)
-        self.log(f"Created executable wrapper script: run_native_host.sh")
-
-        # Generate a single, portable manifest in the data directory.
-        # The browser requires an absolute path to the executable inside the manifest file.
-        manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}.json")
-        chrome_manifest = {
-            "name": HOST_NAME, "description": HOST_DESCRIPTION, "path": wrapper_path, "type": "stdio",
-            "allowed_origins": [f"chrome-extension://{extension_id}/"]
-        }
-        with open(manifest_path, 'w') as f:
-            json.dump(chrome_manifest, f, indent=4)
-        self.log(f"Created portable manifest: {os.path.relpath(manifest_path, INSTALL_DIR)}")
-
-        # Symlink the portable manifest into each browser's native messaging host directory.
-        browser_paths = get_browser_configs(is_mac)
-        for browser, path in browser_paths.items():
-            if os.path.isdir(os.path.dirname(path)):
-                try:
-                    os.makedirs(path, exist_ok=True)
-                    symlink_target = os.path.join(path, f"{HOST_NAME}.json")
-                    
-                    # Remove old symlink/file if it exists, then create a new one.
-                    if os.path.lexists(symlink_target):
-                        os.remove(symlink_target)
-                    
-                    os.symlink(manifest_path, symlink_target)
-                    self.log(f"Successfully linked manifest for {browser}.")
-                except Exception as e:
-                    self.log(f"Failed to link manifest for {browser}. Error: {e}")
-            else:
-                self.log(f"Skipping {browser} (directory not found).")
-
-    # --- Uninstallation Logic (from uninstall.py) ---
-    def _uninstall_windows(self):
-        self.log("Uninstalling for Windows...")
-        
-        # Unregister from browsers
-        browsers = get_browser_configs(is_mac=False)
-        for browser, (reg_path, _) in browsers.items():
-            try:
-                key_path = os.path.join(reg_path, HOST_NAME)
-                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
-                self.log(f"Successfully unregistered from {browser}.")
-            except FileNotFoundError:
-                self.log(f"Not registered for {browser} (or already removed).")
-            except OSError as e:
-                self.log(f"Could not unregister for {browser}. Error: {e}")
-
-        # Clean up generated files
-        files_to_remove = [
-            os.path.join(INSTALL_DIR, "run_native_host.bat"),
-            os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json"),
-            os.path.join(INSTALL_DIR, "mpv-cli.bat"), # Remove the CLI wrapper
-            os.path.join(INSTALL_DIR, "play_with_bypass.bat") # Remove bypass script
-        ]
-        for file_path in files_to_remove:
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    self.log(f"Removed generated file: {os.path.relpath(file_path, INSTALL_DIR)}")
-                except OSError as e:
-                    self.log(f"Could not remove file {file_path}. Error: {e}")
-
-    def _uninstall_linux_macos(self, is_mac):
-        os_name = "macOS" if is_mac else "Linux"
-        self.log(f"Uninstalling for {os_name}...")
-
-        browser_paths = get_browser_configs(is_mac)
-        symlink_filename = f"{HOST_NAME}.json"
-        for browser, path in browser_paths.items():
-            symlink_path = os.path.join(path, symlink_filename)
-            if os.path.lexists(symlink_path): # Use lexists to check for symlinks without following them
-                try:
-                    os.remove(symlink_path)
-                    self.log(f"Successfully removed manifest link for {browser}.")
-                except OSError as e:
-                    self.log(f"Failed to remove manifest link for {browser}. Error: {e}")
-            else:
-                self.log(f"Manifest for {browser} not found (or already removed).")
-
-        # Clean up generated files for Unix-like systems
-        files_to_remove = [
-            os.path.join(DATA_DIR, f"{HOST_NAME}.json"), # Remove the central manifest file
-            os.path.join(INSTALL_DIR, "run_native_host.sh"),
-            os.path.join(INSTALL_DIR, "mpv-cli"), # Remove the CLI wrapper
-            os.path.join(INSTALL_DIR, "play_with_bypass.sh") # Remove bypass script
-        ]
-        for file_path in files_to_remove:
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    self.log(f"Removed generated file: {os.path.relpath(file_path, INSTALL_DIR)}")
-                except OSError as e:
-                    self.log(f"Could not remove file {file_path}. Error: {e}")
 
 def main():
     root = tk.Tk()
