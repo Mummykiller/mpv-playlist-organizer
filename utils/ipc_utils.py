@@ -10,77 +10,105 @@ def is_process_alive(pid, ipc_path):
     if not pid or not ipc_path:
         return False
     
-    is_alive = False
-    if platform.system() == "Windows":
+    # On non-Windows platforms, we query the IPC socket.
+    # A successful command that returns the correct PID confirms it's alive.
+    if platform.system() != "Windows":
+        try:
+            ipc_response = send_ipc_command(ipc_path, {"command": ["get_property", "pid"]}, timeout=0.2, expect_response=True)
+            if ipc_response and ipc_response.get("error") == "success" and ipc_response.get("data") == pid:
+                return True
+        except Exception:
+            # Any exception during the check means it's not alive.
+            return False
+    else: # Windows
         # On Windows, we check both process existence and pipe availability.
         try:
-            # Check if the process ID exists. This throws OSError if not.
-            os.kill(pid, 0)
-            time.sleep(0.05) # Small delay to allow OS to clean up pipes if process just died.
-            # Try to connect to the named pipe. This will fail if MPV is hung or has closed the pipe.
-            # We open and immediately close it.
-            with open(ipc_path, 'w') as pipe:
+            os.kill(pid, 0) # Throws OSError if PID doesn't exist.
+            time.sleep(0.05)
+            # Try to connect to the named pipe.
+            with open(ipc_path, 'w'):
                 pass
-            is_alive = True # Both checks passed.
+            return True # Both checks passed.
         except (OSError, IOError):
-            # Either the PID doesn't exist, we don't have permission, or the pipe is not available.
-            is_alive = False
-    else: # Linux/macOS
-        try:
-            # On Unix-like systems, we can reliably query the IPC socket.
-            ipc_response = send_ipc_command(ipc_path, {"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
-            # We also verify that the PID from the socket matches our stored PID.
-            if ipc_response and ipc_response.get("error") == "success" and ipc_response.get("data") == pid:
-                is_alive = True
-        except Exception:
-            is_alive = False # Any exception means it's not running or responsive.
+            return False
             
-    return is_alive
+    return False
 
-def send_ipc_command(ipc_path, command_dict, timeout=2.0, expect_response=True):
+def send_ipc_command(ipc_path, command_dict, timeout=2.0, expect_response=True, listen_for_event=None):
     """
-    Sends a JSON command to the mpv IPC server.
-    On Linux/macOS, it can return a response.
-    On Windows, this implementation can only send commands, not receive responses.
+    Sends a JSON command to the mpv IPC server and optionally listens for a specific event.
+    Returns None on connection failure.
     """
     command_str = json.dumps(command_dict) + '\n'
 
     try:
         if platform.system() == "Windows":
-            if expect_response:
-                logging.warning("Receiving data from MPV on Windows is not supported by this script's simple IPC. Sync will fail.")
-                return None # Signal failure to receive response.
-
-            # Fire-and-forget for commands like 'loadfile' or 'quit'
+            if expect_response or listen_for_event:
+                logging.warning("Receiving data/events from MPV on Windows is not supported.")
+                return None
+            
             with open(ipc_path, 'w', encoding='utf-8') as pipe:
                 pipe.write(command_str)
-            return {"error": "success"} # Assume success
+            return {"error": "success"}
 
         else: # Linux/macOS
-            encoded_command = command_str.encode('utf-8')
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(timeout)
                 sock.connect(ipc_path)
-                sock.sendall(encoded_command)
+                sock.sendall(command_str.encode('utf-8'))
 
-                if not expect_response:
+                if not expect_response and not listen_for_event:
                     return {"error": "success"}
 
-                # Read the response. A single JSON object terminated by a newline is expected.
                 with sock.makefile('rb') as sock_file:
-                    response_line = sock_file.readline()
-
-                if not response_line:
-                    logging.warning("No response from MPV IPC.")
-                    return None
-
-                return json.loads(response_line.decode('utf-8').strip())
-    except (FileNotFoundError, ConnectionRefusedError):
-        logging.error(f"IPC connection failed. Is MPV running? Path: {ipc_path}")
-        raise RuntimeError("IPC connection failed.")
+                    while True:
+                        response_line = sock_file.readline()
+                        if not response_line:
+                            break
+                        
+                        response = json.loads(response_line.decode('utf-8').strip())
+                        
+                        if listen_for_event:
+                            if response.get("event") == listen_for_event:
+                                return response
+                        elif expect_response:
+                            if "event" not in response:
+                                return response
+                return None
+                
+    except (FileNotFoundError, ConnectionRefusedError, BrokenPipeError, socket.timeout) as e:
+        # These exceptions are expected if MPV is not running or closes the connection.
+        # We return None to indicate failure without logging a scary error.
+        return None
     except Exception as e:
-        logging.error(f"An unexpected error occurred during IPC command: {e}")
+        logging.error(f"An unexpected error occurred during IPC command '{command_dict.get('command')}': {e}")
+        return None
+
+def receive_ipc_event(ipc_path, timeout=None):
+    """
+    Listens for a single event from the mpv IPC server.
+    """
+    if platform.system() == "Windows":
+        logging.warning("Receiving events from MPV on Windows is not supported.")
+        return None
+
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect(ipc_path)
+            with sock.makefile('rb') as sock_file:
+                response_line = sock_file.readline()
+                if response_line:
+                    return json.loads(response_line.decode('utf-8').strip())
+    except socket.timeout:
+        return None
+    except (FileNotFoundError, ConnectionRefusedError):
+        # This is expected if mpv is closed
         raise
+    except Exception as e:
+        logging.error(f"An unexpected error occurred while receiving IPC event: {e}")
+        return None
+    return None
 
 def get_ipc_path():
     """Generates a unique, platform-specific path for the mpv IPC socket/pipe."""

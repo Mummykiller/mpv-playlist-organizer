@@ -161,3 +161,19 @@ def list_import_files():
         error_msg = f"Failed to list import files: {e}"
         logging.error(error_msg)
         return {"success": False, "error": error_msg}
+
+def get_settings():
+    """Reads and returns the entire contents of the config.json file."""
+    if not os.path.exists(CONFIG_FILE):
+        logging.info("config.json not found, returning empty settings.")
+        return {}
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            content = f.read()
+            if not content:
+                logging.info("config.json is empty, returning empty settings.")
+                return {}
+            return json.loads(content)
+    except (IOError, json.JSONDecodeError) as e:
+        logging.error(f"Failed to read or parse config.json: {e}")
+        return {}

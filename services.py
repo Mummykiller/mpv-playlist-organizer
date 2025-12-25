@@ -10,6 +10,7 @@ import time
 import urllib.request
 import shlex
 import re
+from utils import ipc_utils
 
 # --- Dependency Checking & Updating ---
 
@@ -150,7 +151,6 @@ def construct_mpv_command(
     headers=None,
     disable_http_persistent=False,
     start_paused=False,
-    clear_on_completion=False,
     script_dir=None
 ):
     """Constructs the MPV command line arguments."""
@@ -183,10 +183,7 @@ def construct_mpv_command(
     if disable_http_persistent:
         mpv_args.append('--demuxer-lavf-o=http_persistent=0')
 
-    if clear_on_completion and script_dir:
-        on_completion_script_path = os.path.join(script_dir, "on_completion.lua")
-        if os.path.exists(on_completion_script_path):
-            mpv_args.append(f'--script={on_completion_script_path}')
+
 
     if start_paused and '--pause' not in mpv_args:
         mpv_args.append('--pause')
@@ -253,7 +250,7 @@ def get_mpv_popen_kwargs(has_terminal_flag):
 
 # --- Bypass Script Logic ---
 
-def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir):
+def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir, mpv_session=None):
     """
     Applies a bypass script if specified in url_item settings and enabled globally.
     Returns a tuple of (processed_url, headers_dict, ytdl_raw_options).
@@ -279,6 +276,12 @@ def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir)
             script_path = potential_path
 
     if script_path:
+        # First, check if the mpv session is still active before running an external script.
+        # We use mpv_session.is_alive as it's a quick, internal boolean check.
+        if mpv_session and not mpv_session.is_alive:
+            logging.warning("MPV session is not active. Skipping bypass script execution.")
+            return original_url, None, None
+
         if not os.path.exists(script_path):
             logging.error(f"Bypass script not found: {script_path}")
             send_message_func({

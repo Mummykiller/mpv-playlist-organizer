@@ -48,7 +48,7 @@ try:
     # This breaks native messaging. This guard detects that situation and re-launches
     # the script with the standard python.exe, which has the necessary I/O streams.
     # This check is skipped if CLI arguments are present, assuming it's an interactive session.
-    if sys.platform == "win32" and sys.stdin is None and len(sys.argv) == 1:
+    if sys.platform == "win32" and sys.stdin is None:
         import subprocess
         # Re-launch with python.exe. CREATE_NO_WINDOW prevents a console from flashing.
         si = subprocess.STARTUPINFO()
@@ -74,6 +74,7 @@ try:
     import platform
     import re
     from mpv_session import MpvSessionManager
+    from playlist_tracker import PlaylistTracker
     import file_io
     import cli
     import services
@@ -192,14 +193,15 @@ try:
             sys.stdout.buffer.write(encoded_content)
             sys.stdout.buffer.flush()
 
-    # --- Global Instance ---
-    # A single instance of the session manager to handle the MPV state.
+    # --- Global Instances ---
+    playlist_tracker = None
     mpv_session = MpvSessionManager(session_file_path=SESSION_FILE, dependencies={
         'get_all_folders_from_file': file_io.get_all_folders_from_file,
         'get_mpv_executable': file_io.get_mpv_executable,
         'log_stream': log_stream,
         'send_message': send_message,
-        'SCRIPT_DIR': SCRIPT_DIR
+        'SCRIPT_DIR': SCRIPT_DIR,
+        'playlist_tracker': lambda: playlist_tracker
     })
     
     
@@ -256,13 +258,20 @@ try:
 
     # --- Command Handlers ---
     def handle_play(message):
+        global playlist_tracker
         url_item = message.get('url_item')
         folder_id = message.get('folderId')
         if not folder_id or not url_item:
             return {"success": False, "error": "Missing folderId or url_item for play action."}
 
+        # Get settings from config file
+        settings = file_io.get_settings()
+
+        # Create a new tracker for this playback session
+        playlist_tracker = PlaylistTracker(folder_id, [url_item], file_io, settings)
+
         bypass_scripts_config = message.get('bypassScripts', {})
-        processed_url, script_headers, ytdl_options = services.apply_bypass_script(url_item, bypass_scripts_config, send_message, SCRIPT_DIR)
+        processed_url, script_headers, ytdl_options = services.apply_bypass_script(url_item, bypass_scripts_config, send_message, SCRIPT_DIR, mpv_session)
         url_item['url'] = processed_url
         
         disable_http_persistent = True if (script_headers and not ytdl_options) else False
@@ -280,9 +289,9 @@ try:
                 custom_mpv_flags=custom_mpv_flags, 
                 automatic_mpv_flags=message.get('automatic_mpv_flags'), 
                 start_paused=message.get('start_paused', False), 
-                clear_on_completion=message.get('clear_on_completion', False), 
                 headers=script_headers, 
-                disable_http_persistent=disable_http_persistent
+                disable_http_persistent=disable_http_persistent,
+                ytdl_raw_options=ytdl_options
             )
         
         mpv_thread = threading.Thread(target=run_mpv_session)
@@ -291,17 +300,21 @@ try:
         return {"success": True, "message": "Playback initiated."}
 
     def handle_append(message):
+        global playlist_tracker
         url_item = message.get('url_item')
         if not url_item:
             return {"success": False, "error": "Missing url_item for append action."}
         
+        if playlist_tracker:
+            playlist_tracker.add_item(url_item)
+
         logging.info("Processing append request: resolving URL via bypass script if configured.")
         bypass_scripts_config = message.get('bypassScripts', {})
-        processed_url, script_headers, ytdl_options = services.apply_bypass_script(url_item, bypass_scripts_config, send_message, SCRIPT_DIR)
+        processed_url, script_headers, ytdl_options = services.apply_bypass_script(url_item, bypass_scripts_config, send_message, SCRIPT_DIR, mpv_session)
         url_item['url'] = processed_url
         
         disable_http_persistent = True if (script_headers and not ytdl_options) else False
-        response = mpv_session.append(url_item, headers=script_headers, mode="append", disable_http_persistent=disable_http_persistent)
+        response = mpv_session.append(url_item, headers=script_headers, mode="append", disable_http_persistent=disable_http_persistent, ytdl_raw_options=ytdl_options)
         return response if response else {"success": False, "error": "Failed to append to MPV playlist."}
 
     def handle_play_new_instance(message):
@@ -367,6 +380,11 @@ try:
     def main():
         """Main message loop for native messaging from the browser."""
 
+        # Ensure stdin/stdout are available (critical for native messaging)
+        if sys.stdin is None or sys.stdout is None:
+            logging.error("Standard input/output is missing. If on Windows, ensure the registry key points to 'python.exe' and not 'pythonw.exe'.")
+            sys.exit(1)
+
         logging.info("Native host started in messaging mode.")
 
         # On startup, try to restore a session. The result will be handled by the
@@ -380,7 +398,7 @@ try:
             'play': handle_play,
             'append': handle_append,
             'play_new_instance': handle_play_new_instance,
-            'close_mpv': lambda m: mpv_session.close(),
+            'close_mpv': lambda m: (playlist_tracker.stop_tracking() if playlist_tracker else None) and mpv_session.close(),
             'is_mpv_running': handle_is_mpv_running,
             'export_data': handle_export_data,
             'export_playlists': handle_export_playlists,
@@ -433,13 +451,31 @@ try:
     atexit.register(cleanup_ipc_socket)
 
     if __name__ == '__main__':
+        logging.info(f"Startup Args: {sys.argv}, TTY: {sys.stdin.isatty() if sys.stdin else 'None'}")
+
+        # Robust Browser Detection
+        is_browser = False
+        if len(sys.argv) > 1:
+            if sys.argv[1].startswith('chrome-extension://') or sys.argv[1].startswith('moz-extension://'):
+                is_browser = True
+            elif sys.argv[1].endswith('.json') and os.path.isabs(sys.argv[1]):
+                is_browser = True
+        if not is_browser and sys.stdin and not sys.stdin.isatty():
+            is_browser = True
+
+        if is_browser:
+            main()
+            sys.exit(0)
+
         # handle_cli() will parse arguments and execute the command if it's a CLI call.
         # It returns True if it was a CLI call, and False otherwise.
         try:
             # Inject dependencies into the CLI module before handling any commands.
             cli.inject_dependencies({
                 'file_io': file_io,
-                'mpv_session': mpv_session
+                'mpv_session': mpv_session,
+                'ipc_utils': ipc_utils,
+                'time': time
             })
             if not cli.handle_cli():
                 # If it wasn't a CLI call, start the main message loop for the browser.

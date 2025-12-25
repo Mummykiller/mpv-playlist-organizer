@@ -1,20 +1,15 @@
-import os
 import json
 import logging
+import os
 import platform
-import signal
-import shutil
-import socket
 import subprocess
 import threading
 import time
-
-import services
+import signal
 from utils import ipc_utils
+import services
 
 class MpvSessionManager:
-    """Manages the state and lifecycle of a single MPV instance."""
-
     def __init__(self, session_file_path, dependencies):
         self.process = None
         self.ipc_path = None
@@ -23,6 +18,7 @@ class MpvSessionManager:
         self.owner_folder_id = None
         self.session_file = session_file_path
         self.sync_lock = threading.Lock()
+        self.is_alive = False
 
         # --- Injected Dependencies ---
         self.get_all_folders_from_file = dependencies['get_all_folders_from_file']
@@ -30,16 +26,27 @@ class MpvSessionManager:
         self.log_stream = dependencies['log_stream']
         self.send_message = dependencies['send_message']
         self.SCRIPT_DIR = dependencies['SCRIPT_DIR']
+        self.get_playlist_tracker = dependencies['playlist_tracker']
 
     def clear(self):
         """Clears the session state and removes the session file."""
-        if self.pid:
-            logging.info(f"Clearing session state for PID: {self.pid}")
+        # Immediately signal that the session is no longer active.
+        # This is the most critical part to prevent the race condition with the append loop.
+        self.is_alive = False
+        pid_to_clear = self.pid # Store current pid for logging/tracker before nullifying
+        self.pid = None # Explicitly nullify the pid now.
+
+        if pid_to_clear:
+            logging.info(f"Clearing session state for PID: {pid_to_clear}")
+
+        # Stop the tracker if it's running
+        playlist_tracker = self.get_playlist_tracker()
+        if playlist_tracker and playlist_tracker.is_tracking:
+            playlist_tracker.stop_tracking()
 
         self.process = None
         self.ipc_path = None
         self.playlist = None
-        self.pid = None
         self.owner_folder_id = None
         if os.path.exists(self.session_file):
             try:
@@ -101,12 +108,21 @@ class MpvSessionManager:
             except OSError: pass
             return None
 
-    def append(self, url_item, headers=None, mode="append", disable_http_persistent=False):
+    def append(self, url_item, headers=None, mode="append", disable_http_persistent=False, ytdl_raw_options=None):
         """Attempts to append a single new URL to an already running MPV instance."""
         with self.sync_lock:
+            # First, check if the session is still active before trying to append.
+            if not self.is_alive:
+                logging.warning("Attempted to append to an inactive MPV session. Aborting append.")
+                return {"success": False, "error": "Cannot append: MPV session is not active."}
+
             logging.info(f"MPV is running. Attempting to append item (mode: {mode}).")
             url_to_add = url_item['url']
             
+            playlist_tracker = self.get_playlist_tracker()
+            if playlist_tracker:
+                playlist_tracker.add_item(url_item)
+
             # Simple check to prevent adding the same URL multiple times.
             # This is a basic check; a more robust one might consider other attributes.
             if self.playlist and url_to_add in [item['url'] for item in self.playlist]:
@@ -138,6 +154,10 @@ class MpvSessionManager:
                     logging.info("Setting demuxer-lavf-o=http_persistent=0 for this item.")
                     ipc_utils.send_ipc_command(self.ipc_path, {"command": ["set_property", "demuxer-lavf-o", "http_persistent=0"]}, expect_response=False)
 
+                if ytdl_raw_options:
+                    logging.info(f"Setting ytdl-raw-options to: '{ytdl_raw_options}'")
+                    ipc_utils.send_ipc_command(self.ipc_path, {"command": ["set_property", "ytdl-raw-options", ytdl_raw_options]}, expect_response=False)
+
                 logging.info(f"Loading file '{url_to_add}' with mode '{mode}'.")
                 ipc_utils.send_ipc_command(self.ipc_path, {"command": ["loadfile", url_to_add, mode]}, expect_response=False)
 
@@ -152,7 +172,7 @@ class MpvSessionManager:
                 self.clear()
                 return None
 
-    def _launch(self, url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion, headers=None, disable_http_persistent=False):
+    def _launch(self, url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=None, disable_http_persistent=False):
         """Launches a new instance of MPV with the given URL and settings."""
         logging.info(f"Starting a new MPV instance for URL: {url_item['url']}.")
         mpv_exe = self.get_mpv_executable()
@@ -173,7 +193,6 @@ class MpvSessionManager:
                 headers=headers,
                 disable_http_persistent=disable_http_persistent,
                 start_paused=start_paused,
-                clear_on_completion=clear_on_completion,
                 script_dir=self.SCRIPT_DIR
             )
 
@@ -185,6 +204,11 @@ class MpvSessionManager:
             self.playlist = [url_item] # Store as a single-item list
             self.pid = process.pid
             self.owner_folder_id = folder_id
+            self.is_alive = True
+            
+            playlist_tracker = self.get_playlist_tracker()
+            if playlist_tracker:
+                playlist_tracker.start_tracking(self.ipc_path)
 
             # --- PID Correction for Linux Terminal ---
             # If we launched via a terminal emulator, the process PID is for the terminal,
@@ -213,11 +237,12 @@ class MpvSessionManager:
 
             if platform.system() == "Windows":
                 def process_poller(proc, f_id):
-                    while proc.poll() is None:
-                        time.sleep(0.2)
+                    proc.wait() # Block until the process exits
                     return_code = proc.returncode
                     logging.info(f"MPV process for folder '{f_id}' exited with code {return_code}.")
                     self.send_message({"action": "mpv_exited", "folderId": f_id, "returnCode": return_code})
+                    # Clean up the session state
+                    self.clear()
 
                 waiter_thread = threading.Thread(target=process_poller, args=(self.process, folder_id))
                 waiter_thread.daemon = True
@@ -227,6 +252,8 @@ class MpvSessionManager:
                     return_code = proc.wait()
                     logging.info(f"MPV process for folder '{f_id}' exited with code {return_code}.")
                     self.send_message({"action": "mpv_exited", "folderId": f_id, "returnCode": return_code})
+                    # Clean up the session state
+                    self.clear()
 
                 waiter_thread = threading.Thread(target=process_waiter, args=(self.process, folder_id))
                 waiter_thread.daemon = True
@@ -242,30 +269,61 @@ class MpvSessionManager:
             logging.error(f"An error occurred while trying to launch mpv: {e}")
             return {"success": False, "error": f"Error launching mpv: {e}"}
 
-    def start(self, url_item, folder_id, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, clear_on_completion=False, headers=None, disable_http_persistent=False):
-        """Starts a new mpv process with a single URL, or attempts to sync."""
-        if self.pid and not ipc_utils.is_process_alive(self.pid, self.ipc_path):
-            logging.info("Detected a stale MPV session. Clearing state before proceeding.")
-            self.clear()
-
-        if self.pid:
-            if folder_id == self.owner_folder_id:
-                # If an MPV instance is already running for the same folder, attempt to sync.
-                # In single-URL playback, this means adding the new URL to the existing MPV instance.
-                # Use append-play mode to ensure it starts playing if the playlist was finished
-                sync_result = self.append(url_item, headers=headers, mode="append-play", disable_http_persistent=disable_http_persistent)
-                if sync_result is not None:
-                    return sync_result
-            else:
-                error_message = f"An MPV instance is already running for folder '{self.owner_folder_id}'. Please close it to play from '{folder_id}'."
-                logging.warning(error_message)
-                return {"success": False, "error": error_message}
+    def start(self, url_items, folder_id, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, headers=None, disable_http_persistent=False, ytdl_raw_options=None):
+        """Starts a new mpv process with a playlist of URLs, or attempts to sync."""
         
-        # If no MPV is running, or if sync failed/was not attempted, launch a new one.
-        return self._launch(url_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, clear_on_completion, headers=headers, disable_http_persistent=disable_http_persistent)
+        # Ensure url_items is a list
+        if not isinstance(url_items, list):
+            url_items = [url_items]
+
+        if not url_items:
+            return {"success": False, "error": "No URL items provided."}
+
+        def _playback_thread():
+            if self.pid and not ipc_utils.is_process_alive(self.pid, self.ipc_path):
+                logging.info("Detected a stale MPV session. Clearing state before proceeding.")
+                self.clear()
+
+            if self.pid:
+                if folder_id == self.owner_folder_id:
+                    # Append all items to the existing playlist
+                    for item in url_items:
+                        self.append(item, headers=headers, mode="append-play", disable_http_persistent=disable_http_persistent, ytdl_raw_options=ytdl_raw_options)
+                    return
+                else:
+                    error_message = f"An MPV instance is already running for folder '{self.owner_folder_id}'. Please close it to play from '{folder_id}'."
+                    logging.warning(error_message)
+                    # We can't return a value from a thread, so we just log.
+                    return
+
+            # Launch the first item
+            first_item = url_items[0]
+            launch_result = self._launch(first_item, folder_id, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=headers, disable_http_persistent=disable_http_persistent)
+
+            if launch_result.get("success"):
+                # Give mpv time to start
+                time.sleep(1)
+                # Append the rest of the items
+                for item in url_items[1:]:
+                    # If the pid was cleared by another thread (e.g., process exited), stop appending.
+                    if not self.pid:
+                        logging.warning("MPV process terminated during playlist append. Halting.")
+                        break
+                    self.append(item, headers=headers, mode="append", disable_http_persistent=disable_http_persistent, ytdl_raw_options=ytdl_raw_options)
+
+        # Run the playback logic in a separate thread to avoid blocking
+        playback_thread = threading.Thread(target=_playback_thread)
+        playback_thread.daemon = True
+        playback_thread.start()
+
+        return {"success": True, "message": "Playback initiated."}
 
     def close(self):
         """Closes the currently running mpv process, if any."""
+        playlist_tracker = self.get_playlist_tracker()
+        if playlist_tracker:
+            playlist_tracker.stop_tracking()
+            
         pid_to_close, ipc_path_to_use, process_object = None, None, None
 
         if self.process and self.process.poll() is None:
