@@ -1,16 +1,20 @@
 import argparse
 import sys
 import logging
+import time
 
 # --- Injected Dependencies ---
 file_io = None
 mpv_session = None
+ipc_utils = None
 
 def inject_dependencies(deps):
     """Injects dependencies from the main native_host script."""
-    global file_io, mpv_session
+    global file_io, mpv_session, ipc_utils, time
     file_io = deps['file_io']
     mpv_session = deps['mpv_session']
+    ipc_utils = deps['ipc_utils']
+    time = deps['time']
 
 def _cli_list_folders(args):
     """CLI command to list all available folders and their item counts."""
@@ -44,14 +48,30 @@ def _cli_play_folder(args):
         sys.exit(1)
     
     playlist_items = folder_info.get("playlist", [])
-    playlist_urls = [item['url'] for item in playlist_items if isinstance(item, dict) and 'url' in item]
 
-    if not playlist_urls:
+    if not playlist_items:
         print(f"Playlist for folder '{folder_id}' is empty. Nothing to play.")
         sys.exit(0)
 
-    print(f"Starting mpv for folder '{folder_id}' with {len(playlist_urls)} item(s)...")
-    mpv_session.start(playlist_urls, folder_id)
+    print(f"Starting mpv for folder '{folder_id}' with {len(playlist_items)} item(s)...")
+    result = mpv_session.start(playlist_items, folder_id, clear_on_completion=True)
+
+    if not result.get("success"):
+        print(f"Error starting mpv: {result.get('error')}", file=sys.stderr)
+        sys.exit(1)
+
+    # Since the CLI is a foreground process, we need to wait for the playback to complete.
+    # The `start` method is now threaded, so we can't just wait on the process.
+    # We will poll the `is_mpv_running` status.
+    while mpv_session.pid and ipc_utils.is_process_alive(mpv_session.pid, mpv_session.ipc_path):
+        try:
+            time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nInterrupted by user. Closing mpv...")
+            mpv_session.close()
+            break
+    
+    print("Playback finished.")
 
 def handle_cli():
     """Handles command-line invocation using argparse for a more robust CLI."""
