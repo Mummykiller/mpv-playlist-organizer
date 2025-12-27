@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2025-12-27
+
+### Added
+- **Modularized Frontend Handlers:** Extracted all action handlers from `background.js` into dedicated, modular files for improved organization and maintainability. New modules include `ui_state.js`, `m3u8_scanner.js`, `playback.js`, `folder_management.js`, `import_export.js`, and `dependency_anilist.js`.
+- **PlaybackQueue Class:** Introduced a `PlaybackQueue` class in `playback.js` to encapsulate playback state and logic, enhancing clarity and control over queued items.
+
+### Changed
+- **Comprehensive background.js Refactoring:** The main `background.js` script was significantly refactored to act primarily as an orchestrator, importing and initializing modular handler files and delegating message handling to them. This drastically reduced its complexity and improved readability.
+- **Improved Dependency Management (JS):** Reordered global declarations and initializations in `background.js` to ensure all shared dependencies (`storage`, `broadcastToTabs`, `broadcastLog`, etc.) are defined before being passed to handler initialization functions.
+- **Refined PlaylistManager Dependencies:** Updated `utils/playlistManager.js` to explicitly receive `MPV_PLAYLIST_COMPLETED_EXIT_CODE` as a dependency from the new `playback.js` module.
+- **Centralized Native Host Command Handling:** Centralized command handling within `native_host.py` into `HandlerManager` in `utils/native_host_handlers.py`, improving code organization.
+- **Structured Services Module:** Further modularized `services.py` by introducing helper functions for `yt-dlp` updates (`_find_ytdlp_executable`, `_get_linux_sudo_command_prefix`, `_run_update_command`), encapsulating MPV command construction in `MpvCommandBuilder`, and managing AniList caching with `AniListCache`.
+- **Streamlined Bypass Script Generation:** Improved bypass script generation in `installer.py` by centralizing the core logic into a new `utils/_bypass_logic.py` module.
+
+### Fixed
+- **Native Host `NameError`:** Resolved `NameError: name 'cleanup_ipc_socket' is not defined` in `native_host.py` by correctly placing the `cleanup_ipc_socket` function and its `atexit.register` call in the global scope.
+- **Native Host `IndentationError`:** Corrected `IndentationError: unexpected indent` in `native_host.py` by fixing the indentation of global variables and functions.
+- **Background Script `ReferenceError`:** Addressed `Uncaught ReferenceError: Cannot access 'storage' before initialization` in `background.js` by ensuring a correct and strict order of variable declarations and dependency injections during service worker initialization.
+- **Missing UI State Handler:** Fixed an issue where the `set_minimized_state` handler was not correctly mapped in `background.js`'s `actionHandlers` object, preventing proper UI state management.
+
+
+
 ### Added
 - **Configurable Natural Completion Clearing:** Implemented a custom MPV Lua script (`data/on_completion.lua`) to write a flag file upon natural video/playlist completion. This flag is detected by the native host, which then signals natural completion (exit code 99) to the browser extension, allowing for differentiated playlist clearing.
 - **Native Host Folder Data Retrieval:** Added a `get_all_folders` action to `native_host.py`, enabling the browser extension to retrieve and resynchronize its local storage with the content of `folders.json` from the native host.

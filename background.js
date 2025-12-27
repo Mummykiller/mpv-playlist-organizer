@@ -4,10 +4,17 @@ import { callNativeHost, injectDependencies as injectNativeConnectionDependencie
 import { updateContextMenus } from './utils/contextMenu.js';
 import * as playlistManager from './utils/playlistManager.js';
 
-// --- Constants ---
-const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;
+import * as ui_state_handlers from './background/handlers/ui_state.js';
+import * as m3u8_scanner_handlers from './background/handlers/m3u8_scanner.js';
+import * as playback_handlers from './background/handlers/playback.js';
+import * as folder_management_handlers from './background/handlers/folder_management.js';
+import * as import_export_handlers from './background/handlers/import_export.js';
+import * as dependency_anilist_handlers from './background/handlers/dependency_anilist.js';
 
-// --- Debounce Utility ---
+// --- Shared State ---
+let tabUiState = {}; // Tracks the UI state for each tab (e.g., minimized status, detected URL for content script)
+
+// --- Utility Functions ---
 /**
  * Creates a debounced function that delays invoking `func` until after `wait`
  * milliseconds have elapsed since the last time the debounced function was
@@ -28,8 +35,6 @@ function debounce(func, wait) {
     };
 }
 
-// --- Unified Storage Model ---
-
 /**
  * A promise-based wrapper for chrome.runtime.sendMessage.
  * @param {object} payload The message to send.
@@ -42,10 +47,7 @@ const sendMessageAsync = (payload) => new Promise((resolve, reject) => {
     });
 });
 
-const storage = new StorageManager('mpv_organizer_data', broadcastLog);
-
-// --- Messaging Helper ---
-
+// --- Messaging Helpers ---
 /**
  * Broadcasts a message to all content scripts in open tabs.
  * @param {object} message - The message object to send.
@@ -75,90 +77,10 @@ function broadcastLog(logObject) {
     broadcastToTabs(message);
 }
 
-// --- Native Host Communication (using a persistent connection) ---
+// --- Unified Storage Model ---
+const storage = new StorageManager('mpv_organizer_data', broadcastLog);
 
-// --- Native Host Communication (using a persistent connection) ---
-
-let tabUiState = {}; // Tracks the minimized state of the UI for each tab
-
-// --- Playback Queue State ---
-let playbackQueue = [];
-let isPlaying = false;
-let isProcessingQueue = false;
-let currentPlayingItem = null; // { urlItem, folderId, isLastInFolder }
-
-async function processQueue() {
-    if (isProcessingQueue) return;
-    isProcessingQueue = true;
-
-    try {
-        const data = await storage.get();
-        const globalPrefs = data.settings.ui_preferences.global;
-
-        while (playbackQueue.length > 0) {
-            // Peek at the next item
-            const nextItem = playbackQueue[0];
-            const { urlItem, folderId } = nextItem;
-
-            if (isPlaying) {
-                // Try to append to the running session
-                broadcastLog({ text: `[Background]: Appending to active session: ${urlItem.title || urlItem.url}`, type: 'info' });
-                try {
-                    const response = await callNativeHost({
-                        action: 'append',
-                        url_item: urlItem,
-                        bypassScripts: globalPrefs.bypassScripts || {}
-                    });
-
-                    if (response.success) {
-                        playbackQueue.shift(); // Successfully appended, remove from queue
-                        currentPlayingItem = nextItem; // Update current item tracking
-                        // Add a small delay to prevent flooding the IPC pipe
-                        if (!response.skipped) {
-                            await new Promise(resolve => setTimeout(resolve, 1000));
-                        }
-                        continue; // Process next item immediately
-                    } else {
-                        // Append failed (likely MPV closed), fall through to start new session
-                        isPlaying = false;
-                    }
-                } catch (e) {
-                    isPlaying = false;
-                }
-            }
-
-            // Start a new session
-            broadcastLog({ text: `[Background]: Starting playback: ${urlItem.title || urlItem.url}`, type: 'info' });
-            try {
-                const response = await _playSingleUrlItem(urlItem, folderId, globalPrefs);
-                if (!response.success) {
-                    throw new Error(response.error || "Failed to start playback session.");
-                }
-                isPlaying = true;
-                // Give MPV a moment to initialize IPC before we try to append subsequent items.
-                // This prevents race conditions where 'append' arrives before the IPC pipe is ready.
-                if (!response.skipped) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                }
-                playbackQueue.shift(); // Successfully started, remove from queue
-                currentPlayingItem = nextItem;
-            } catch (error) {
-                broadcastLog({ text: `[Background]: Error playing item: ${error.message}`, type: 'error' });
-                playbackQueue.shift(); // Remove failed item to prevent infinite loop
-                isPlaying = false;
-            }
-        }
-        
-        if (playbackQueue.length === 0 && !isPlaying) {
-            currentPlayingItem = null;
-            broadcastLog({ text: `[Background]: Playback queue finished.`, type: 'info' });
-        }
-
-    } finally {
-        isProcessingQueue = false;
-    }
-}
-
+// --- Native Host Communication Helpers ---
 /**
  * Gathers all folder data from chrome.storage.local and sends it to the
  * native host to be written to the folders.json file. This keeps the
@@ -214,689 +136,123 @@ async function resyncDataFromNativeHostFile() {
     }
 }
 
-/**
- * Sends a single URL item to the native host for playback.
- * This includes all necessary preferences and bypass script configuration.
- * @param {object} url_item The URL item object to play.
- * @param {string} folder_id The ID of the folder the item belongs to.
- * @param {object} globalPrefs The global UI preferences.
- * @returns {Promise<object>} The response from the native host.
- */
-async function _playSingleUrlItem(url_item, folder_id, globalPrefs) {
-    return callNativeHost({
-        action: 'play',
-        url_item: url_item,
-        folderId: folder_id,
-        geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
-        custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
-        custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
-        custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
-        automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
-        clear_on_completion: globalPrefs.clear_on_completion ?? false,
-        start_paused: false, // Default to not paused when playing sequentially
-        bypassScripts: globalPrefs.bypassScripts || {} // Pass bypass scripts config
-    });
-}
+// --- Initialize all handlers with shared dependencies ---
+// Dependencies injected here are defined above this point.
 
-async function handleMpvExited(data) {
-    const { folderId, returnCode } = data;
-    if (!folderId) return;
-    
-    broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' has ended with exit code ${returnCode}.`, type: 'info' });
+injectNativeConnectionDependencies({ broadcastLog, handleMpvExited: playback_handlers.handleMpvExited });
 
-    isPlaying = false; // Reset isPlaying flag
+playlistManager.injectDependencies({
+    storage,
+    broadcastToTabs,
+    broadcastLog,
+    debouncedSyncToNativeHostFile,
+    sendMessageAsync,
+    findM3u8InUrl: m3u8_scanner_handlers.findM3u8InUrl,
+    callNativeHost,
+    MPV_PLAYLIST_COMPLETED_EXIT_CODE: playback_handlers.getMpvPlaylistCompletedExitCode()
+});
 
-    const storageData = await storage.get();
-    const globalPrefs = storageData.settings.ui_preferences.global;
-    const shouldClear = globalPrefs.clear_on_completion ?? false;
+ui_state_handlers.init({
+    storage,
+    broadcastToTabs,
+    broadcastLog,
+    callNativeHost,
+    updateContextMenus,
+    tabUiState, // Pass the shared state
+    m3u8_scanner_handlers // Pass m3u8_scanner_handlers
+});
 
-    broadcastLog({ text: `[Background]: 'Clear on Completion' setting is ${shouldClear ? 'ENABLED' : 'DISABLED'}.`, type: 'info' });
+m3u8_scanner_handlers.init({
+    storage,
+    broadcastLog,
+    broadcastToTabs,
+});
 
-    // Only attempt to clear if the item that just finished was the last one in its folder/batch
-    if (currentPlayingItem && currentPlayingItem.folderId === folderId && currentPlayingItem.isLastInFolder) {
-        if (shouldClear) {
-            // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion via custom script.
-            if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
-                const completionType = 'naturally completed (custom exit code 99)';
-                broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' ${completionType}. Auto-clearing playlist as per settings.`, type: 'info' });
-            } else {
-                // If the user quits manually (e.g., 'q') or MPV exits with any other code,
-                // we assume it's not a natural completion for clearing purposes.
-                broadcastLog({ text: `[Background]: MPV exited with code ${returnCode}. Playlist for '${folderId}' will not be cleared. (Requires exit code ${MPV_PLAYLIST_COMPLETED_EXIT_CODE} for clearing)`, type: 'info' });
-            }
-        } else {
-            broadcastLog({ text: `[Background]: Playlist for '${folderId}' will not be cleared because the setting is disabled.`, type: 'info' });
-        }
-    }
-    
-    // After all potential clearing, always resync the browser's storage
-    // from the native host's folders.json to ensure consistency.
-    await resyncDataFromNativeHostFile();
+playback_handlers.init({
+    storage,
+    broadcastLog,
+    broadcastToTabs,
+    callNativeHost,
+    resyncDataFromNativeHostFile,
+    debouncedSyncToNativeHostFile,
+});
 
-    // We don't need to trigger processQueue here because we drain the queue immediately.
-    // However, if the user adds items *after* MPV exits, processQueue will be triggered by the 'play' action.
-}
+folder_management_handlers.init({
+    storage,
+    broadcastToTabs,
+    updateContextMenus,
+    debouncedSyncToNativeHostFile,
+});
 
-injectNativeConnectionDependencies({ broadcastLog, handleMpvExited });
-playlistManager.injectDependencies({ storage, broadcastToTabs, broadcastLog, debouncedSyncToNativeHostFile, sendMessageAsync, findM3u8InUrl, callNativeHost });
+import_export_handlers.init({
+    storage,
+    broadcastToTabs,
+    callNativeHost,
+    updateContextMenus,
+    debouncedSyncToNativeHostFile,
+});
 
-/**
- * Checks MPV and yt-dlp dependencies via the native host and stores the results.
- * Also broadcasts a message to update UI components.
- */
-async function _checkDependenciesAndStore() {
-    broadcastLog({ text: `[Background]: Checking MPV and yt-dlp dependencies...`, type: 'info' });
-    const response = await callNativeHost({ action: 'check_dependencies' });
+dependency_anilist_handlers.init({
+    storage,
+    broadcastLog,
+    broadcastToTabs,
+    callNativeHost,
+});
 
-    if (response.success) {
-        const data = await storage.get();
-        data.settings.ui_preferences.global.dependencyStatus = {
-            mpv: response.mpv,
-            ytdlp: response.ytdlp
-        };
-        await storage.set(data);
-        broadcastLog({ text: `[Background]: Dependency check completed.`, type: 'info' });
-        broadcastToTabs({ action: 'dependencies_status_changed', status: data.settings.ui_preferences.global.dependencyStatus });
-    } else {
-        broadcastLog({ text: `[Background]: Dependency check failed: ${response.error}`, type: 'error' });
-    }
-}
-
-
-// --- Context Menu Management ---
 
 // --- Main Message Listener ---
-
-async function handleContentScriptInit(request, sender) {
-    const tabId = sender.tab?.id; // Ensure tab exists
-    const origin = sender.origin;
-
-    if (tabId && origin && sender.tab) {
-        if (!tabUiState[tabId]) tabUiState[tabId] = {};
-        try {
-            tabUiState[tabId].uiDomain = new URL(origin).hostname;
-        } catch (e) { /* ignore invalid origins */ }
-        
-        const data = await storage.get();
-        const globalPrefs = data.settings.ui_preferences.global;
-
-        let domain = null;
-        if (origin && (origin.startsWith('http:') || origin.startsWith('https:'))) {
-            try {
-                domain = new URL(origin).hostname;
-            } catch (e) { /* ignore */ }
-        }
-
-        const domainPrefs = domain ? data.settings.ui_preferences.domains[domain] || {} : {};
-
-        let isMinimized;
-        if (typeof domainPrefs.minimized === 'boolean') {
-            isMinimized = domainPrefs.minimized;
-        } else {
-            isMinimized = (globalPrefs.mode === 'minimized');
-        }
-
-        // Send a single message with the determined state. The content script will handle showing/hiding.
-        chrome.tabs.sendMessage(tabId, { action: 'init_ui_state', shouldBeMinimized: isMinimized }).catch(() => {});
-    }
-}
-
-async function handleGetUiStateForTab(request) {
-    const tabId = request.tabId;
-    const tab = await chrome.tabs.get(tabId);
-    const data = await storage.get();
-    const globalPrefs = data.settings.ui_preferences.global;
-    const tabState = tabUiState[tabId] || {};
-
-    let domain = tabState.uiDomain;
-    if (!domain && tab.url && (tab.url.startsWith('http:') || tab.url.startsWith('https:'))) {
-        try {
-            domain = new URL(tab.url).hostname;
-        } catch (e) { /* ignore */ }
-    }
-
-    const domainPrefs = domain ? data.settings.ui_preferences.domains[domain] || {} : {};
-
-    // Combine global and domain preferences to get the final state for the tab.
-    const finalPrefs = { ...globalPrefs, ...domainPrefs };
-
-    return {
-        success: true,
-        state: {
-            minimized: finalPrefs.minimized ?? (finalPrefs.mode === 'minimized'),
-            detectedUrl: tabState.detectedUrl
-        }
-    };
-}
-
-async function handleReportDetectedUrl(request, sender) {
-    const tabId = sender.tab?.id;
-    if (tabId) {
-        if (!tabUiState[tabId]) tabUiState[tabId] = {};
-        tabUiState[tabId].detectedUrl = request.url;
-        // Broadcast to all contexts (popup and content scripts)
-        // The popup can check if the tabId matches the active tab.
-        broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: request.url });
-    }
-}
-
-async function handleSetLastFolderId(request) {
-    if (request.folderId) {
-        const data = await storage.get();
-        data.settings.last_used_folder_id = request.folderId;
-        await storage.set(data);
-        broadcastToTabs({ action: 'last_folder_changed', folderId: request.folderId });
-        await updateContextMenus(storage); // Rebuild context menus to reflect the new "current" folder.
-        return { success: true };
-    }
-    return { success: false, error: 'No folderId provided.' };
-}
-
-async function handleGetUiPreferences(request, sender) {
-    const data = await storage.get();
-    const globalPrefs = data.settings.ui_preferences.global;
-
-    let domain = null;
-    if (sender.origin && (sender.origin.startsWith('http:') || sender.origin.startsWith('https:'))) {
-        try {
-            domain = new URL(sender.origin).hostname;
-        } catch (e) { /* Invalid origin, ignore. */ }
-    }
-
-    if (domain) {
-        const domainPrefs = data.settings.ui_preferences.domains[domain] || {};
-        return { success: true, preferences: { ...globalPrefs, ...domainPrefs } };
-    }
-    return { success: true, preferences: globalPrefs };
-}
-
-async function handleSetUiPreferences(request, sender) {
-    const data = await storage.get();
-    const newPreferences = request.preferences;
-
-    let domain = null;
-    if (sender.origin && (sender.origin.startsWith('http:') || sender.origin.startsWith('https:'))) {
-        try {
-            domain = new URL(sender.origin).hostname;
-        } catch (e) { /* Invalid origin, ignore. */ }
-    }
-
-    if (domain) {
-        const existingDomainPrefs = data.settings.ui_preferences.domains[domain] || {};
-        data.settings.ui_preferences.domains[domain] = { ...existingDomainPrefs, ...newPreferences };
-    } else {
-        data.settings.ui_preferences.global = { ...data.settings.ui_preferences.global, ...newPreferences };
-    }
-
-    await storage.set(data);
-    // Broadcast the change, but also include the domain it applies to.
-    // This allows other tabs to ignore UI changes that aren't for them.
-    broadcastToTabs({
-        action: 'preferences_changed', preferences: newPreferences, domain: domain
-    });
-    return { success: true };
-}
-
-async function handleCreateFolder(request) {
-    if (!request.folderId || !request.folderId.trim()) {
-        return { success: false, error: 'Folder name cannot be empty.' };
-    }
-    const data = await storage.get();
-    if (data.folders[request.folderId]) {
-        return { success: false, error: 'A folder with that name already exists.' };
-    }
-    data.folderOrder.push(request.folderId);
-    data.folders[request.folderId] = { playlist: [] };
-    await storage.set(data);
-    await updateContextMenus(storage);
-    broadcastToTabs({ foldersChanged: true });
-    debouncedSyncToNativeHostFile();
-    return { success: true, message: `Folder "${request.folderId}" created.` };
-}
-
-async function handleGetAllFolderIds() {
-    const data = await storage.get();
-    const folderIds = data.folderOrder || Object.keys(data.folders);
-    const lastUsedFolderId = data.settings.last_used_folder_id;
-    return { success: true, folderIds, lastUsedFolderId };
-}
-
-async function handleRemoveFolder(request) {
-    const folderIdToRemove = request.folderId;
-    if (!folderIdToRemove) return { success: false, error: 'Invalid folder ID provided.' };
-
-    const data = await storage.get();
-    if (data.folderOrder.length <= 1 && data.folders[folderIdToRemove]) {
-        return { success: false, error: 'Cannot remove the last folder.' };
-    }
-    if (!data.folders[folderIdToRemove]) {
-        return { success: false, error: 'Folder not found.' };
-    }
-
-    delete data.folders[folderIdToRemove];
-    data.folderOrder = data.folderOrder.filter(id => id !== folderIdToRemove);
-
-    if (data.settings.last_used_folder_id === folderIdToRemove) {
-        data.settings.last_used_folder_id = Object.keys(data.folders)[0];
-    }
-    await storage.set(data);
-
-    await updateContextMenus(storage);
-    broadcastToTabs({ foldersChanged: true });
-    debouncedSyncToNativeHostFile();
-    return { success: true, message: `Folder "${folderIdToRemove}" removed.` };
-}
-
-async function handleRenameFolder(request) {
-    const { oldFolderId, newFolderId } = request;
-    if (!oldFolderId || !newFolderId || !newFolderId.trim()) {
-        return { success: false, error: 'Invalid folder names provided.' };
-    }
-    const data = await storage.get();
-    if (!data.folders[oldFolderId]) {
-        return { success: false, error: `Folder "${oldFolderId}" not found.` };
-    }
-    if (data.folders[newFolderId]) {
-        return { success: false, error: `A folder named "${newFolderId}" already exists.` };
-    }
-
-    data.folders[newFolderId] = data.folders[oldFolderId];
-    delete data.folders[oldFolderId];
-
-    const index = data.folderOrder.indexOf(oldFolderId);
-    if (index !== -1) data.folderOrder[index] = newFolderId;
-
-    if (data.settings.last_used_folder_id === oldFolderId) {
-        data.settings.last_used_folder_id = newFolderId;
-    }
-
-    await storage.set(data);
-    await updateContextMenus(storage);
-    broadcastToTabs({ foldersChanged: true });
-    debouncedSyncToNativeHostFile();
-    return { success: true, message: `Folder renamed to "${newFolderId}".` };
-}
-
-async function handleSetFolderOrder(request) {
-    const newOrder = request.order;
-    if (!Array.isArray(newOrder)) {
-        return { success: false, error: 'Invalid order data provided.' };
-    }
-    const data = await storage.get();
-    const currentKeys = new Set(Object.keys(data.folders));
-    const newKeys = new Set(newOrder);
-    if (currentKeys.size !== newKeys.size || ![...currentKeys].every(k => newKeys.has(k))) {
-        return { success: false, error: 'New order does not match existing folders.' };
-    }
-
-    data.folderOrder = newOrder;
-    await storage.set(data);
-    debouncedSyncToNativeHostFile();
-    return { success: true, message: 'Folder order updated.' };
-}
-
-async function handleImportFromFile(request) {
-    const filename = request.filename;
-    if (!filename) {
-        return { success: false, error: 'No filename provided.' };
-    }
-
-    const response = await callNativeHost({ action: 'import_from_file', filename });
-
-    if (!response.success) {
-        return response; // Forward the error from native host
-    }
-
-    try {
-        // Derive folder name from filename, e.g., "my_backup.json" -> "my_backup"
-        const baseFolderName = filename.replace(/\.json$/i, '');
-
-        // Parse content and build a single combined playlist
-        const importedData = JSON.parse(response.data);
-        let combinedPlaylist = [];
-
-        if (Array.isArray(importedData)) {
-            // Case 1: The file is a simple JSON array of URLs.
-            combinedPlaylist = importedData
-                .filter(item => typeof item === 'string')
-                .map(url => ({ url: url, title: url }));
-        } else if (typeof importedData === 'object' && importedData !== null) {
-            // Case 2: The file is an object of folders (like our export format).
-            // We'll merge all playlists from within this file into one.
-            for (const key in importedData) {
-                const folderContent = importedData[key];
-                if (folderContent && Array.isArray(folderContent.playlist)) {
-                    // Handle both old (string) and new (object) formats within the import file.
-                    const items = folderContent.playlist.map(item => 
-                        typeof item === 'string' ? { url: item, title: item } : item
-                    );
-                    combinedPlaylist.push(...items.filter(item => item && typeof item.url === 'string'));
-                }
-            }
-        } else {
-            // New: Handle single playlist export (just an array of URLs)
-            if (Array.isArray(importedData)) {
-                 combinedPlaylist = importedData.filter(url => typeof url === 'string').map(url => ({ url, title: url }));
-            } else {
-                throw new Error("Unsupported import file format. Must be a JSON array of URLs or an object of folders.");
-            }
-        }
-
-        if (combinedPlaylist.length === 0) {
-            return { success: true, message: `Import file '${filename}' was empty or contained no valid URLs. No folder created.` };
-        }
-
-        // Get local data and handle name collision for the new folder.
-        const localData = await storage.get();
-        let newFolderId = baseFolderName;
-        let counter = 1;
-        while (localData.folders[newFolderId]) {
-            newFolderId = `${baseFolderName} (${counter})`;
-            counter++;
-        }
-
-        // Create the new folder with the combined playlist.
-        localData.folders[newFolderId] = { playlist: combinedPlaylist };
-        localData.folderOrder.push(newFolderId);
-        await storage.set(localData);
-
-        // Update UI and sync data to the native host's file
-        await updateContextMenus(storage);
-        broadcastToTabs({ foldersChanged: true });
-        debouncedSyncToNativeHostFile();
-        return { success: true, message: `Imported '${filename}' as new folder '${newFolderId}' with ${combinedPlaylist.length} URL(s).` };
-    } catch (e) {
-        return { success: false, error: `Failed to parse or process import file: ${e.message}` };
-    }
-}
-
-async function handleIsMpvRunning(request) {
-    return callNativeHost({ action: 'is_mpv_running' });
-}
-
-async function handleExportFolderPlaylist(request) {
-    if (!request.filename || !request.folderId) return { success: false, error: 'Missing filename or folderId.' };
-    const data = await storage.get();
-    const folder = data.folders[request.folderId];
-    // Extract just the URLs for the export file.
-    const urlPlaylist = folder?.playlist?.map(item => item.url) || [];
-    if (!folder || !urlPlaylist.length) return { success: false, error: `Folder '${request.folderId}' not found or is empty.` };
-    return callNativeHost({ action: 'export_playlists', data: urlPlaylist, filename: request.filename });
-}
-
-async function handleGetAnilistReleases(request) {
-    // All caching logic is now handled by the native host.
-    const forceRefresh = request.force ?? false;
-
-    // Check preferences to see if the user has disabled the cache.
-    // Fetch preferences directly from storage instead of sending a message to itself.
-    const data = await storage.get();
-    const isCacheDisabled = data.settings.ui_preferences.global.disable_anilist_cache ?? false;
-
-    // If the cache is disabled, we instruct the native host to delete the cache file.
-    // This ensures no stale data is ever used when this setting is on.
-    const deleteCache = isCacheDisabled;
-
-    const nativeResponse = await callNativeHost({
-        action: 'get_anilist_releases',
-        force: forceRefresh || isCacheDisabled, // Also force a refresh if cache is disabled.
-        delete_cache: deleteCache,
-        is_cache_disabled: isCacheDisabled // New flag to prevent writing to cache
-    });
-
-    if (nativeResponse.success && nativeResponse.output) {
-        try {
-            // The native host now returns a JSON string, so we parse it here before sending to the UI.
-            const data = JSON.parse(nativeResponse.output);
-            return { success: true, output: data };
-        } catch (e) {
-            return { success: false, error: `Failed to parse JSON response from native host: ${e.message}` };
-        }
-    }
-    // Forward any errors from the native host.
-    return nativeResponse;
-}
-
-async function handleYtdlpUpdateCheck(request) {
-    // This is triggered by the native host when it detects a playback failure.
-    // First, log the message it sent.
-    if (request.log) {
-        broadcastLog(request.log);
-    }
-
-    // Find the tab that originated the MPV command to show the confirmation there.
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const tabId = activeTab?.id;
-
-    const data = await storage.get();
-    const updateBehavior = data.settings.ui_preferences.global.ytdlp_update_behavior || 'manual';
-
-    if (updateBehavior === 'manual') {
-        broadcastLog({ text: `[Background]: yt-dlp update behavior is set to 'manual'. No action taken.`, type: 'info' });
-        return { success: true, message: 'Manual update mode. No action taken.' };
-    }
-
-    if (updateBehavior === 'ask') {
-        if (!tabId) {
-            return { success: false, error: 'Could not find an active tab to show confirmation.' };
-        }
-        // Ask the content script to show a confirmation. The content script will then send a message back.
-        // We use a page-level confirmation that doesn't depend on the controller UI.
-        chrome.tabs.sendMessage(tabId, { action: 'ytdlp_update_confirm' })
-            .catch(err => broadcastLog({ text: `[Background]: Could not send update confirmation to tab ${tabId}. Error: ${err.message}`, type: 'error' }));
-        return { success: true, message: 'Confirmation requested from user.' };
-    }
-    if (updateBehavior === 'auto') {
-        // If the setting is enabled, tell the native host to proceed with the update.
-        return callNativeHost({ action: 'run_ytdlp_update' });
-    }
-}
-
-async function handleGetDependencyStatus() {
-    const data = await storage.get();
-    return { success: true, status: data.settings.ui_preferences.global.dependencyStatus };
-}
-
-// --- Action Handler Map ---
 // This map centralizes all message actions to their corresponding handler functions.
 const actionHandlers = {
     // UI State
-    'content_script_init': handleContentScriptInit,
-    'get_ui_state_for_tab': handleGetUiStateForTab,
-    'report_detected_url': handleReportDetectedUrl,
-    'set_last_folder_id': handleSetLastFolderId,
+    'content_script_init': ui_state_handlers.handleContentScriptInit,
+    'get_ui_state_for_tab': ui_state_handlers.handleGetUiStateForTab,
+    'report_detected_url': ui_state_handlers.handleReportDetectedUrl,
+    'set_last_folder_id': ui_state_handlers.handleSetLastFolderId,
     'get_last_folder_id': async () => {
         const data = await storage.get();
         const folderId = data.settings.last_used_folder_id || Object.keys(data.folders)[0];
         return { success: true, folderId };
     },
-    'get_default_automatic_flags': async () => {
-        const defaultData = storage._getDefaultData();
-        return { success: true, flags: defaultData.settings.ui_preferences.global.automatic_mpv_flags };
-    },
-    'get_ui_preferences': handleGetUiPreferences,
-    'set_ui_preferences': handleSetUiPreferences,
-    'set_minimized_state': async (request) => {
-        const { minimized } = request;
-        if (typeof minimized !== 'boolean') {
-            return { success: false, error: 'Invalid minimized state provided.' };
-        }
-        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!activeTab || !activeTab.id) {
-            return { success: false, error: 'Could not find an active tab.' };
-        }
-        try {
-            await chrome.tabs.sendMessage(activeTab.id, { action: 'set_minimized_state', minimized });
-            return { success: true };
-        } catch (error) {
-            return { success: false, error: 'Controller not available on this page.' };
-        }
-    },
+    'get_default_automatic_flags': ui_state_handlers.handleGetDefaultAutomaticFlags,
+    'get_ui_preferences': ui_state_handlers.handleGetUiPreferences,
+    'set_ui_preferences': ui_state_handlers.handleSetUiPreferences,
+    'set_minimized_state': ui_state_handlers.handleSetMinimizedState,
+    'force_reload_settings': ui_state_handlers.handleForceReloadSettings,
+    'open_popup': ui_state_handlers.handleOpenPopup,
+    'heartbeat': ui_state_handlers.handleHeartbeat,
     // Folder Management
-    'create_folder': handleCreateFolder,
-    'get_all_folder_ids': handleGetAllFolderIds,
-    'remove_folder': handleRemoveFolder,
-    'rename_folder': handleRenameFolder,
-    'set_folder_order': handleSetFolderOrder,
+    'create_folder': folder_management_handlers.handleCreateFolder,
+    'get_all_folder_ids': folder_management_handlers.handleGetAllFolderIds,
+    'remove_folder': folder_management_handlers.handleRemoveFolder,
+    'rename_folder': folder_management_handlers.handleRenameFolder,
+    'set_folder_order': folder_management_handlers.handleSetFolderOrder,
     // MPV and Playlist Actions
-    'is_mpv_running': () => callNativeHost({ action: 'is_mpv_running' }),
-    'play': async (request) => { // This will now accept a single url_item to play immediately
-        const { url_item, folderId } = request;
-
-        // Reset queue and playback state for a new 'play' request
-        playbackQueue = [];
-        isPlaying = false;
-        isProcessingQueue = false;
-        currentPlayingItem = null;
-
-        if (url_item) {
-            // Push the single item to the queue
-            playbackQueue.push({ urlItem: url_item, folderId: folderId, isLastInFolder: false });
-            broadcastLog({ text: `[Background]: Received 'play' request for: ${url_item.title || url_item.url}`, type: 'info' });
-            processQueue();
-            return { success: true, message: `Playing ${url_item.title || url_item.url}` };
-        } else if (folderId) {
-            // Fallback: Play the entire folder if no specific item is provided
-            const data = await storage.get();
-            const folder = data.folders[folderId];
-            if (!folder || !folder.playlist || folder.playlist.length === 0) {
-                return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
-            }
-            
-            broadcastLog({ text: `[Background]: Sending playlist '${folderId}' (${folder.playlist.length} items) to MPV.`, type: 'info' });
-            
-            const globalPrefs = data.settings.ui_preferences.global;
-            const response = await callNativeHost({
-                action: 'play_batch',
-                playlist: folder.playlist,
-                folderId: folderId,
-                geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
-                custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
-                custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
-                custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
-                automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
-                clear_on_completion: globalPrefs.clear_on_completion ?? false,
-                start_paused: false,
-                bypassScripts: globalPrefs.bypassScripts || {}
-            });
-
-            if (response.success) {
-                isPlaying = true;
-                // Set currentPlayingItem to the last item so "Clear on Completion" works if MPV exits after this batch.
-                currentPlayingItem = { 
-                    urlItem: folder.playlist[folder.playlist.length - 1], 
-                    folderId: folderId, 
-                    isLastInFolder: true 
-                };
-                // Resync immediately so the UI gets the IDs assigned by the native host.
-                // This ensures live reordering works even for items that didn't have IDs before playing.
-                resyncDataFromNativeHostFile();
-                return { success: true, message: `Playing playlist '${folderId}'` };
-            } else {
-                return response;
-            }
-        } else {
-            return { success: false, error: 'No URL item or Folder ID provided to play.' };
-        }
-    },
-    'append': async (request) => { // New 'append' action handler
-        const { url_item, folderId } = request;
-        if (!url_item) {
-            return { success: false, error: 'No URL item provided to append.' };
-        }
-
-        // Push the single item to the queue
-        playbackQueue.push({ urlItem: url_item, folderId: folderId, isLastInFolder: false }); // isLastInFolder will be set dynamically by _playSingleUrlItem or processQueue in future.
-
-        broadcastLog({ text: `[Background]: Received 'append' request for: ${url_item.title || url_item.url}`, type: 'info' });
-
-        processQueue(); // Process the queue to append the item
-        return { success: true, message: `Appended ${url_item.title || url_item.url} to queue` };
-    },
-    // The 'play_new_instance' action is no longer relevant in this sequential single-URL playback model.
-    // If a "play all in a new MPV" functionality is still desired, it would need to be re-implemented
-    // with different logic.
-    // 'play_new_instance': async (request) => {
-    //     const data = await storage.get();
-    //     const globalPrefs = data.settings.ui_preferences.global;
-    //     const playlist = data.folders[request.folderId]?.playlist;
-    //     const urlPlaylist = playlist?.map(item => item.url) || [];
-    //     if (!urlPlaylist.length) {
-    //         return { success: false, error: `Playlist in folder '${request.folderId}' is empty.` };
-    //     }
-    //     return callNativeHost({
-    //         action: 'play_new_instance', playlist: urlPlaylist,
-    //         geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
-    //         custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
-    //         custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
-    //         automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
-    //         custom_mpv_flags: globalPrefs.custom_mpv_flags || ''
-    //     });
-    // },
-    'close_mpv': () => callNativeHost({ action: 'close_mpv' }),
+    'is_mpv_running': playback_handlers.handleIsMpvRunning,
+    'play': playback_handlers.handlePlay,
+    'append': playback_handlers.handleAppend,
+    'close_mpv': playback_handlers.handleCloseMpv,
     'add': playlistManager.handleAdd,
     'get_playlist': playlistManager.handleGetPlaylist,
     'clear': playlistManager.handleClear,
     'remove_item': playlistManager.handleRemoveItem,
     'set_playlist_order': playlistManager.handleSetPlaylistOrder,
     // Import/Export
-    'export_all_playlists_separately': async () => {
-        const data = await storage.get();
-        return callNativeHost({ action: 'export_all_playlists_separately', data: data.folders });
-    },
-    'export_folder_playlist': handleExportFolderPlaylist,
-    'import_from_file': handleImportFromFile,
-    'list_import_files': () => callNativeHost({ action: 'list_import_files' }),
-    'open_export_folder': () => callNativeHost({ action: 'open_export_folder' }),
-    'get_anilist_releases': handleGetAnilistReleases,
-    // Special case from scanner
-    'ytdlp_update_check': handleYtdlpUpdateCheck,
-    'user_confirmed_ytdlp_update': () => {
-        broadcastLog({ text: `[Background]: User confirmed. Starting yt-dlp update...`, type: 'info' });
-        return callNativeHost({ action: 'run_ytdlp_update' });
-    },
-    'manual_ytdlp_update': () => {
-        broadcastLog({ text: `[Background]: Manual yt-dlp update triggered from settings.`, type: 'info' });
-        return callNativeHost({ action: 'run_ytdlp_update' });
-    },
-    'get_dependency_status': handleGetDependencyStatus,
+    'export_all_playlists_separately': import_export_handlers.handleExportAllPlaylistsSeparately,
+    'export_folder_playlist': import_export_handlers.handleExportFolderPlaylist,
+    'import_from_file': import_export_handlers.handleImportFromFile,
+    'list_import_files': import_export_handlers.handleListImportFiles,
+    'open_export_folder': import_export_handlers.handleOpenExportFolder,
+    'get_anilist_releases': dependency_anilist_handlers.handleGetAnilistReleases,
+    'ytdlp_update_check': dependency_anilist_handlers.handleYtdlpUpdateCheck,
+    'user_confirmed_ytdlp_update': dependency_anilist_handlers.handleUserConfirmedYtdlpUpdate,
+    'manual_ytdlp_update': dependency_anilist_handlers.handleManualYtdlpUpdate,
+    'get_dependency_status': dependency_anilist_handlers.handleGetDependencyStatus,
 
-    'log_from_scanner': (request) => {
-        broadcastLog(request.log);
-        // This action doesn't need to send a response back to the scanner.
-    },
-    'force_reload_settings': () => {
-        // Broadcast an empty preferences object. This triggers the 'else' block in content.js
-        // which calls applyInitialState(), effectively reloading all settings from storage.
-        broadcastToTabs({ action: 'preferences_changed', preferences: {} });
-        return { success: true };
-    },
-    'open_popup': async (request, sender) => {
-        broadcastLog({ text: `[Background]: Attempting to open popup...`, type: 'info' });
-        if (chrome.action && chrome.action.openPopup) {
-            try {
-                await chrome.action.openPopup({ windowId: sender.tab.windowId });
-                return { success: true };
-            } catch (e) {
-                return { success: false, error: e.message };
-            }
-        }
-        return { success: false, error: 'chrome.action.openPopup is not supported in this browser version.' };
-    }
+    'log_from_scanner': m3u8_scanner_handlers.handleLogFromScanner,
 };
-
-// Add a simple heartbeat handler that does nothing but respond.
-// This allows content scripts to check if the background script is alive.
-actionHandlers['heartbeat'] = () => ({ success: true });
 
 // New handler for the unsolicited 'session_restored' message from the native host
-actionHandlers['session_restored'] = (request) => {
-    if (request.result?.was_stale) {
-        broadcastLog({ text: `[Background]: Detected stale MPV session for folder '${request.result.folderId}'.`, type: 'info' });
-        // Trigger the same cleanup logic as when MPV exits.
-        handleMpvExited(request.result);
-    }
-};
+actionHandlers['session_restored'] = playback_handlers.handleSessionRestored;
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Filter out broadcasted log messages that aren't commands.
@@ -938,7 +294,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
     await updateContextMenus(storage);
     await syncDataToNativeHostFile();
-    await _checkDependenciesAndStore();
+
     console.log("MPV Handler extension installed and initialized.");
 });
 
@@ -963,238 +319,4 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
     // The context menu now uses the exact same centralized handler as the on-page button.
     playlistManager.handleAddFromContextMenu(folderId, urlToAdd, null, tab);
-});
-
-// --- M3U8 Stream Detection ---
-
-// A simple in-memory cache to avoid sending the same URL repeatedly to a tab.
-// The key is the tabId, and the value is the last detected URL.
-const lastDetectedUrls = {};
-// A map to hold promises for M3U8 detection in temporary tabs.
-// The key is the tabId, and the value is { resolve, reject }.
-let m3u8DetectionPromises = {};
-
-/**
- * Creates a new popup window for the user to interact with to trigger stream detection.
- * @param {string} url The URL to open in the new window.
- * @returns {Promise<chrome.tabs.Tab>} A promise that resolves with the tab object of the new window.
- */
-async function _createScannerWindow(url) {
-    let finalUrl = url;
-    try {
-        // Add a parameter to the URL to identify it as a scanner window.
-        // This prevents the content script from injecting the UI into it.
-        const scannerUrl = new URL(url);
-        scannerUrl.searchParams.set('mpv_playlist_scanner', 'true');
-        finalUrl = scannerUrl.toString();
-    } catch (e) {
-        // If URL parsing fails, use the original URL. This is a fallback.
-        console.warn(`Could not parse URL to add scanner parameter: ${url}`);
-    }
-
-    const newWindow = await chrome.windows.create({
-        url: finalUrl,
-        type: 'popup',
-        width: 1024,
-        height: 768,
-    });
-
-    if (!newWindow?.tabs?.length) {
-        throw new Error("Failed to create scanner window.");
-    }
-
-    broadcastLog({
-        text: `[Scanner]: A scanner window has been opened. Please manually start the video in that window to capture the stream.`,
-        type: 'info'
-    });
-
-    return newWindow.tabs[0];
-}
-
-/**
- * Waits for the webRequest listener to detect an M3U8 stream in a specific tab.
- * @param {number} tabId The ID of the tab to listen on.
- * @param {number} timeoutInSeconds The number of seconds to wait before timing out.
- * @returns {Promise<string>} A promise that resolves with the detected M3U8 URL.
- */
-async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
-    return new Promise((resolve, reject) => {
-        const timeoutDuration = timeoutInSeconds * 1000;
-
-        const timeoutId = setTimeout(() => {
-            if (m3u8DetectionPromises[tabId]) {
-                delete m3u8DetectionPromises[tabId];
-                reject(new Error(`M3U8 detection timed out. User did not initiate video playback within ${timeoutInSeconds} seconds.`));
-            }
-        }, timeoutDuration);
-
-        // Store the promise's handlers so the webRequest listener can use them.
-        m3u8DetectionPromises[tabId] = {
-            resolve: (url) => {
-                clearTimeout(timeoutId);
-                delete m3u8DetectionPromises[tabId];
-                resolve(url);
-            },
-            reject: (err) => {
-                clearTimeout(timeoutId);
-                delete m3u8DetectionPromises[tabId];
-                reject(err);
-            },
-            timeoutId: timeoutId // Store the initial timeout ID
-        };
-    });
-}
-
-/**
- * Switches focus back to the user's original tab and window after scanning is complete.
- * @param {chrome.tabs.Tab} originalTab The tab object to return focus to.
- */
-async function _focusOriginalTab(originalTab) {
-    if (!originalTab) return;
-    if (originalTab.windowId) {
-        await chrome.windows.update(originalTab.windowId, { focused: true }).catch(() => {});
-    }
-    if (originalTab.id) {
-        await chrome.tabs.update(originalTab.id, { active: true }).catch(() => {});
-    }
-}
-
-/**
- * Opens a URL in a hidden tab to find an M3U8 stream URL.
- * @param {string} url The page URL to scan.
- * @returns {Promise<{url: string, title: string, scannerTab: chrome.tabs.Tab}>} A promise that resolves with the detected URL, title, and the scanner tab.
- */
-async function findM3u8InUrl(url, originalTab) {
-    let newWindow;
-    let scannerTab; // The tab inside the new window
-
-    try {
-        const data = await storage.get();
-        const timeoutInSeconds = data.settings.ui_preferences.global.stream_scanner_timeout || 60;
-
-        scannerTab = await _createScannerWindow(url);
-
-        await new Promise((resolve) => {
-            const listener = (tabId, changeInfo) => {
-                if (tabId === scannerTab.id && changeInfo.status === 'complete') {
-                    chrome.tabs.onUpdated.removeListener(listener);
-                    resolve();
-                }
-            };
-            chrome.tabs.onUpdated.addListener(listener);
-        });
-
-        const streamPromise = _waitForM3u8Detection(scannerTab.id, timeoutInSeconds);
-        const titlePromise = chrome.tabs.sendMessage(scannerTab.id, { action: 'scrape_and_get_details' })
-            .catch(() => ({ title: url, url: url }));
-
-        // Wait for both promises. If the stream detection fails (e.g., timeout or window closed),
-        // the streamPromise will reject, and we'll catch it, setting detectedStreamUrl to null.
-        let detectedStreamUrl = null;
-        let scrapedDetails = { title: url, url: url };
-        try {
-            [detectedStreamUrl, scrapedDetails] = await Promise.all([streamPromise, titlePromise]);
-        } catch (error) {
-            // This block will be entered if the stream detection times out or the tab is closed.
-            // We only need the title, so we'll still wait for that promise to resolve.
-            scrapedDetails = await titlePromise;
-        }
-
-        const finalUrl = detectedStreamUrl; // This is the critical change. Only use the detected stream.
-        const finalTitle = scrapedDetails.title;
-
-        return { url: finalUrl, title: finalTitle, scannerTab: scannerTab, originalUrl: url };
-
-    } finally {
-        await _focusOriginalTab(originalTab);
-    }
-}
-
-chrome.webRequest.onBeforeRequest.addListener(
-    (details) => {
-        // --- NEW: Inactivity timeout logic for scanner windows ---
-        const promiseInfo = m3u8DetectionPromises[details.tabId];
-        if (promiseInfo) {
-            const INACTIVITY_TIMEOUT_MS = 15000; // 15 seconds of inactivity
-            clearTimeout(promiseInfo.timeoutId); // Clear the previous timeout
-
-            // Set a new inactivity timeout
-            promiseInfo.timeoutId = setTimeout(() => {
-                // Check if the promise is still pending before rejecting
-                if (m3u8DetectionPromises[details.tabId]) {
-                    // Use the reject function from the promise which will also clean up the map entry
-                    m3u8DetectionPromises[details.tabId].reject(new Error(`M3U8 detection timed out after ${INACTIVITY_TIMEOUT_MS / 1000} seconds of network inactivity.`));
-                }
-            }, INACTIVITY_TIMEOUT_MS);
-        }
-        // --- END of new logic ---
-
-        // Optimization: Ignore requests originating from our own extension to prevent loops.
-        if (details.initiator && details.initiator.startsWith(`chrome-extension://${chrome.runtime.id}`)) {
-            return;
-        }
-
-        // Check if the URL's path ends with .m3u8.
-        try {
-            const url = new URL(details.url);
-            if (!url.pathname.endsWith('.m3u8')) return;
-        } catch (e) {
-            return; // Invalid URL, ignore.
-        }
-
-        // Avoid sending the same URL repeatedly for the same tab.
-        if (lastDetectedUrls[details.tabId] === details.url) {
-            return;
-        }
-        lastDetectedUrls[details.tabId] = details.url;
-
-        // NEW: Update state immediately and notify popup
-        if (!tabUiState[details.tabId]) tabUiState[details.tabId] = {};
-        tabUiState[details.tabId].detectedUrl = details.url;
-        chrome.runtime.sendMessage({ action: 'detected_url_changed', tabId: details.tabId, url: details.url }).catch(() => {});
-
-        // Check if a scanner window is waiting for this URL.
-        // Re-use promiseInfo from the inactivity check
-        if (promiseInfo) {
-            promiseInfo.resolve(details.url);
-            return;
-        }
-
-        // Send the detected URL to the content script of the tab where the request originated.
-        chrome.tabs.sendMessage(details.tabId, { m3u8: details.url })
-            .catch(error => {
-                if (!error.message.includes('Receiving end does not exist')) {
-                    console.error(`[Background]: Error sending M3U8 URL to tab ${details.tabId}:`, error);
-                }
-            });
-    },
-    {
-        urls: ["<all_urls>"],
-        types: ["xmlhttprequest", "other", "media", "main_frame"] // Listen on more types for broader compatibility
-    }
-);
-
-// Clean up the cache when a tab is closed to prevent memory leaks.
-chrome.tabs.onRemoved.addListener((tabId) => {
-    if (tabUiState[tabId]) {
-        delete tabUiState[tabId];
-    }
-    // If a tab with a pending detection is closed, reject the promise.
-    if (m3u8DetectionPromises[tabId]) {
-        m3u8DetectionPromises[tabId].reject(new Error('Tab was closed before M3U8 detection completed.'));
-    }
-    if (lastDetectedUrls[tabId]) {
-        delete lastDetectedUrls[tabId];
-    }
-});
-
-// When a tab is reloaded or navigates to a new page, clear its cached M3U8 URL.
-// This ensures that if the same stream is present on the new page, it will be detected again.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'loading') {
-        // A new page is loading, so reset the stream detection caches for this tab.
-        // The minimized state is intentionally NOT cleared to make it persistent.
-        if (lastDetectedUrls[tabId]) delete lastDetectedUrls[tabId];
-        if (tabUiState[tabId]) tabUiState[tabId].detectedUrl = null;
-    }
 });
