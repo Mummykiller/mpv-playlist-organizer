@@ -10,12 +10,13 @@ class PlaylistTracker:
     Tracks the playback progress of a playlist in an MPV instance.
     """
 
-    def __init__(self, folder_id, initial_playlist, file_io, settings):
+    def __init__(self, folder_id, initial_playlist, file_io, settings, ipc_path):
         self.folder_id = folder_id
         self.playlist = []
         self.played_item_ids = set()
         self.file_io = file_io
-        self.ipc_path = None
+        self.ipc_path = ipc_path # Store the IPC path to create a dedicated connection
+        self.ipc_manager = None 
         self.tracking_thread = None
         self.is_tracking = False
         self.clear_behavior = settings.get('playlist_clear_behavior', 'full_on_completion') # 'full_on_completion' or 'on_item_finish'
@@ -24,18 +25,17 @@ class PlaylistTracker:
         for item in initial_playlist:
             self.add_item(item)
 
-    def start_tracking(self, ipc_path):
+    def start_tracking(self): # ipc_path no longer needed here
         """
         Starts tracking the playlist in a separate thread.
         """
-        self.ipc_path = ipc_path
         self.is_tracking = True
         self.tracking_thread = threading.Thread(target=self._track)
         self.tracking_thread.daemon = True
         self.tracking_thread.start()
         logging.info(f"Playlist tracker started for folder '{self.folder_id}' with '{self.clear_behavior}' behavior.")
 
-    def stop_tracking(self):
+    def stop_tracking(self, mpv_return_code=None):
         """
         Stops tracking and performs the final comparison and clearing logic if necessary.
         """
@@ -43,20 +43,33 @@ class PlaylistTracker:
             return
 
         self.is_tracking = False
-        logging.info(f"Playlist tracker stopped for folder '{self.folder_id}'.")
+        logging.info(f"Playlist tracker stopped for folder '{self.folder_id}'. Played item IDs: {self.played_item_ids}")
         if self.tracking_thread:
             self.tracking_thread.join()
         
         if self.clear_behavior == 'full_on_completion':
-            self._compare_and_clear()
+            self._compare_and_clear(mpv_return_code)
 
     def add_item(self, item):
         """
-        Adds a new item to the tracked playlist, assigning a unique ID if it doesn't have one.
+        Adds a new item to the tracked playlist. It is assumed the item already has a stable ID.
         """
-        if 'id' not in item:
-            item['id'] = str(uuid.uuid4())
-        self.playlist.append(item)
+        # It is assumed the item already has an 'id' assigned by resolve_or_assign_item_id.
+        with self.lock:
+            self.playlist.append(item)
+            logging.debug(f"Added item to tracker's internal playlist: {item.get('title') or item['url']} (ID: {item.get('id')})")
+
+    def remove_item_internal(self, item_id):
+        """Removes an item from the tracker's internal playlist (used when removed from UI)."""
+        with self.lock:
+            self.playlist = [item for item in self.playlist if item.get('id') != item_id]
+            logging.debug(f"Removed item ID {item_id} from tracker's internal playlist.")
+
+    def update_playlist_order(self, new_playlist):
+        """Updates the internal playlist order to match the live session."""
+        with self.lock:
+            self.playlist = new_playlist
+            logging.debug("Tracker: Internal playlist order updated.")
 
     def _track(self):
         """
@@ -64,80 +77,129 @@ class PlaylistTracker:
         """
         time.sleep(2) # Wait for mpv to start and the IPC socket to be available
         
+        # Create a dedicated IPC manager for this thread
+        self.ipc_manager = ipc_utils.IPCSocketManager()
+        if not self.ipc_manager.connect(self.ipc_path):
+            logging.error(f"Tracker failed to connect to IPC at {self.ipc_path}")
+            return
+
         # Observe the 'path' property to detect when a file finishes
-        ipc_utils.send_ipc_command(self.ipc_path, {"command": ["observe_property", 1, "path"]})
+        self.ipc_manager.send({"command": ["observe_property", 1, "path"]})
         
         current_path = None
-        response = ipc_utils.send_ipc_command(self.ipc_path, {"command": ["get_property", "path"]}, expect_response=True)
+        response = self.ipc_manager.send({"command": ["get_property", "path"]}, expect_response=True)
         if response and 'data' in response:
             current_path = response['data']
+        logging.info(f"Tracker: Initial current_path: {current_path}")
 
         while self.is_tracking:
-            try:
-                event = ipc_utils.receive_ipc_event(self.ipc_path, timeout=1.0)
-                if not event:
+            if not self.ipc_manager.is_connected():
+                logging.warning("Tracker IPC disconnected. Attempting to reconnect...")
+                if self.ipc_manager.connect(self.ipc_path):
+                    logging.info("Tracker reconnected. Re-observing properties.")
+                    self.ipc_manager.send({"command": ["observe_property", 1, "path"]})
+                    self.ipc_manager.send({"command": ["observe_property", 2, "playlist-pos"]})
+                else:
+                    time.sleep(2)
                     continue
 
-                if event.get('event') == 'property-change' and event.get('name') == 'path':
-                    new_path = event.get('data')
-                    
-                    if current_path and current_path != new_path:
-                        # File has changed, so the previous one is considered played.
-                        for item in self.playlist:
-                            if item.get('url') == current_path and item.get('id') not in self.played_item_ids:
-                                logging.info(f"Marking item as played: {item['url']}")
-                                self.played_item_ids.add(item['id'])
-                                if self.clear_behavior == 'on_item_finish':
-                                    self._clear_items({item['id']})
-                                break
-                    current_path = new_path
+            try:
+                event = self.ipc_manager.receive_event(timeout=1.0)
+                if not event:
+                    time.sleep(0.5) # Prevent tight loop if receive_event returns immediately (e.g. on Windows)
+                    continue
+
+                if event.get('event') == 'property-change':
+                    prop_name = event.get('name')
+                    data = event.get('data')
+
+                    if prop_name == 'path':
+                        new_path = data
+                        logging.debug(f"Tracker: property-change 'path' detected. Old: {current_path}, New: {new_path}")
+
+                        if current_path and current_path != new_path:
+                            # File has changed, so the previous one is considered played.
+                            matched = False
+                            for item in self.playlist:
+                                logging.debug(f"Tracker: Comparing current_path '{current_path}' with item URL '{item.get('url')}'")
+                                if item.get('url') == current_path and item.get('id') not in self.played_item_ids:
+                                    logging.info(f"Tracker: Marking item as played: {item['url']} (ID: {item['id']})")
+                                    self.played_item_ids.add(item['id'])
+                                    matched = True
+                                    if self.clear_behavior == 'on_item_finish':
+                                        self._clear_items({item['id']})
+                                    break
+                            if not matched:
+                                logging.debug(f"Tracker: No item in internal playlist matched previous current_path '{current_path}'.")
+                        current_path = new_path
 
                 elif event.get('event') == 'end-file' and event.get('reason') == 'eof':
+                    logging.debug(f"Tracker: end-file event (eof) detected for path: {current_path}")
                     # This event is a strong confirmation that a file finished naturally.
                     if current_path:
+                         matched = False
                          for item in self.playlist:
+                            logging.debug(f"Tracker: Comparing current_path '{current_path}' with item URL '{item.get('url')}' for end-file.")
                             if item.get('url') == current_path and item.get('id') not in self.played_item_ids:
-                                logging.info(f"Marking item as played on end-file event: {item['url']}")
+                                logging.info(f"Tracker: Marking item as played on end-file event: {item['url']} (ID: {item['id']})")
                                 self.played_item_ids.add(item['id'])
+                                matched = True
                                 if self.clear_behavior == 'on_item_finish':
                                     self._clear_items({item['id']})
                                 break
+                         if not matched:
+                            logging.debug(f"Tracker: No item in internal playlist matched end-file path '{current_path}'.")
 
-            except (FileNotFoundError, ConnectionRefusedError):
-                logging.info("MPV IPC socket closed. Stopping tracker.")
-                self.is_tracking = False
-            except Exception as e:
+            except Exception as e: # Catch all for connection errors now handled by ipc_manager
+                # IPCSocketManager handles FileNotFoundError, ConnectionRefusedError internally now.
+                # If its send/receive methods return None, it means the connection might be dead.
+                # If we get an exception here, it's something unexpected.
                 logging.error(f"Error in playlist tracker: {e}")
-                time.sleep(1)
+                if not self.ipc_manager._sock: # If socket is explicitly closed by manager
+                    logging.info("MPV IPC socket closed. Stopping tracker.")
+                    self.is_tracking = False
+                time.sleep(1) # Avoid busy-looping on other errors
+        
+        # Clean up the local manager when loop exits
+        if self.ipc_manager:
+            self.ipc_manager.close()
 
     def _clear_items(self, item_ids_to_clear):
         """
         Removes a set of item IDs from the playlist in storage.
         """
         with self.lock:
-            logging.info(f"Clearing {len(item_ids_to_clear)} item(s) from playlist for folder '{self.folder_id}'.")
+            logging.info(f"Tracker: Clearing {len(item_ids_to_clear)} item(s) from playlist for folder '{self.folder_id}'. Item IDs: {item_ids_to_clear}")
             all_folders = self.file_io.get_all_folders_from_file()
             if not all_folders or self.folder_id not in all_folders:
-                logging.warning(f"Could not find folder '{self.folder_id}' in storage. Cannot clear items.")
+                logging.warning(f"Tracker: Could not find folder '{self.folder_id}' in storage. Cannot clear items.")
                 return
 
             stored_playlist = all_folders[self.folder_id].get("playlist", [])
+            logging.debug(f"Tracker: Stored playlist before clearing: {[item.get('id') for item in stored_playlist]}")
             
             new_playlist = [item for item in stored_playlist if item.get('id') not in item_ids_to_clear]
             
             if len(new_playlist) < len(stored_playlist):
                 all_folders[self.folder_id]["playlist"] = new_playlist
                 self.file_io.write_folders_file(all_folders)
-                logging.info(f"Successfully cleared {len(stored_playlist) - len(new_playlist)} item(s).")
+                logging.info(f"Tracker: Successfully cleared {len(stored_playlist) - len(new_playlist)} item(s). New playlist length: {len(new_playlist)}")
+                logging.debug(f"Tracker: New stored playlist after clearing: {[item.get('id') for item in new_playlist]}")
+            else:
+                logging.info("Tracker: No items to clear or no matching items found in stored playlist.")
 
-    def _compare_and_clear(self):
+    def _compare_and_clear(self, mpv_return_code):
         """
         Compares the played items with the playlist from storage and clears the playlist if necessary.
         Used for 'full_on_completion' mode.
         """
         if not self.played_item_ids:
-            logging.info("No items were played. Nothing to clear.")
+            logging.info("Tracker: No items were played. Nothing to clear in full_on_completion mode.")
             return
 
-        logging.info("Comparing and clearing playlist for 'full_on_completion' mode...")
-        self._clear_items(self.played_item_ids)
+        # Only clear if the MPV process indicated natural completion (exit code 99)
+        if mpv_return_code == 99:
+            logging.info(f"Tracker: MPV exited with code 99. Clearing played items from playlist for 'full_on_completion' mode. Played IDs: {self.played_item_ids}")
+            self._clear_items(self.played_item_ids)
+        else:
+            logging.info(f"Tracker: MPV exited with code {mpv_return_code}. Not clearing playlist as clearing is only for natural completion (exit code 99).")

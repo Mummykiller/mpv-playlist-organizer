@@ -1,4 +1,5 @@
-document.addEventListener('DOMContentLoaded', async () => { // This line is intentionally kept for the diff
+document.addEventListener('DOMContentLoaded', async () => {
+    try { // This line is intentionally kept for the diff
 
     // IMPORTANT: You must include settings.js in your popup.html before this script, like so:
     // <script src="settings.js"></script>
@@ -506,6 +507,7 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
                 itemDiv.dataset.url = item.url;
                 itemDiv.dataset.title = item.title;
                 itemDiv.dataset.index = index;
+                itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
 
                 const indexSpan = document.createElement('span');
                 indexSpan.className = 'url-index';
@@ -1047,6 +1049,41 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
         }
     }
 
+    async function handlePlaySelectedPlaylist(folderId) {
+        if (!folderId) {
+            return showStatus('Please select a folder.', true);
+        }
+        try {
+            const playlistResponse = await sendMessageAsync({ action: 'get_playlist', folderId });
+
+            if (!playlistResponse.success || !playlistResponse.list || playlistResponse.list.length === 0) {
+                return showStatus(`Playlist in folder "${folderId}" is empty.`, true);
+            }
+
+            const playlist = playlistResponse.list;
+            // Iterate and send play/append requests
+            for (let i = 0; i < playlist.length; i++) {
+                const urlItem = playlist[i];
+                // Validate urlItem before attempting to play/append
+                if (!urlItem || !urlItem.url || urlItem.url.trim() === '') {
+                    showStatus(`Skipping invalid playlist item at index ${i + 1}: Missing or empty URL.`, true);
+                    continue; // Skip this invalid item
+                }
+                const action = (i === 0) ? 'play' : 'append'; // 'play' for first, 'append' for others
+
+                const response = await sendMessageAsync({ action, url_item: urlItem, folderId });
+                if (!response.success) {
+                    showStatus(response.error, true);
+                    break; // Stop if an item fails to play/append
+                }
+            }
+            showStatus(`Queued ${playlist.length} items from playlist "${folderId}".`);
+
+        } catch (error) {
+            showStatus(`An error occurred while playing playlist: ${error.message}`, true);
+        }
+    }
+
     // --- Playlist Event Binding ---
     playlistContainer.addEventListener('click', (e) => {
         const removeBtn = e.target.closest('.btn-remove-item');
@@ -1069,14 +1106,20 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             const folderId = miniFolderSelect.value;
             if (!folderId) return;
 
-            const newOrder = [...playlistContainer.querySelectorAll('.list-item')].map(item => ({ url: item.dataset.url, title: item.dataset.title }));
+            const newOrder = [...playlistContainer.querySelectorAll('.list-item')].map(item => ({ 
+                url: item.dataset.url, 
+                title: item.dataset.title,
+                id: item.dataset.id 
+            }));
             sendMessageAsync({ action: 'set_playlist_order', folderId, data: { order: newOrder } });
         }
     });
 
-    miniAddBtn.addEventListener('click', handleMiniAdd);
-    miniPlayBtn.addEventListener('click', () => handleMiniSimpleCommand('play'));
-    miniClearBtn.addEventListener('click', () => handleMiniSimpleCommand('clear'));
+        miniAddBtn.addEventListener('click', handleMiniAdd);
+
+        miniPlayBtn.addEventListener('click', () => handlePlaySelectedPlaylist(miniFolderSelect.value));
+
+        miniClearBtn.addEventListener('click', () => handleMiniSimpleCommand('clear'));
     miniCloseMpvBtn.addEventListener('click', handleMiniCloseMpv);
 
     // --- Main Initialization ---
@@ -1158,6 +1201,15 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
             const currentFolderId = miniFolderSelect.value;
             if (isMiniView && currentFolderId === request.folderId) {
                 renderPlaylist(request.playlist);
+            }
+        }
+
+        // Handle folder data changes (e.g. IDs assigned after playback starts)
+        if (request.foldersChanged) {
+            populateFolderDropdowns();
+            // If we are in the mini view, refresh the playlist to ensure we have the latest IDs
+            if (uiManager.isMiniView()) {
+                refreshPlaylist();
             }
         }
 
@@ -1261,4 +1313,8 @@ document.addEventListener('DOMContentLoaded', async () => { // This line is inte
     // Start the initialization process
     optionsManager.initializeEventListeners();
     initializePopup();
+    } catch (e) {
+        console.error("Error in DOMContentLoaded handler:", e);
+        showStatus(`Critical error: ${e.message}`, true);
+    }
 });

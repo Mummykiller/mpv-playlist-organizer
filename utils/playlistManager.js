@@ -104,13 +104,22 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
             }
         }
 
-        data.folders[folderId].playlist.push({ url, title });
+        // Generate a stable ID for the item immediately.
+        // This ensures the browser and native host agree on the ID without race conditions.
+        const newItem = { 
+            url, 
+            title, 
+            id: crypto.randomUUID() 
+        };
+
+        data.folders[folderId].playlist.push(newItem);
         await storage.set(data);
         debouncedSyncToNativeHostFile();
 
         broadcastToTabs({ action: 'render_playlist', folderId: folderId, playlist: data.folders[folderId].playlist, fromContextMenu: true });
 
         const logMessage = `[Background]: Added "${title}" to folder '${folderId}'.`;
+
         broadcastLog({ text: logMessage, type: 'info' });
         return { success: true, message: logMessage };
 
@@ -235,10 +244,19 @@ export async function handleRemoveItem(request) {
     const playlist = data.folders[request.folderId].playlist;
     const indexToRemove = request.data?.index;
     if (typeof indexToRemove === 'number' && indexToRemove >= 0 && indexToRemove < playlist.length) {
+        const itemToRemove = playlist[indexToRemove];
         playlist.splice(indexToRemove, 1);
         await storage.set(data);
         broadcastToTabs({ action: 'render_playlist', folderId: request.folderId, playlist: playlist });
         debouncedSyncToNativeHostFile();
+
+        // Attempt to remove from live MPV session if running
+        callNativeHost({ 
+            action: 'remove_item_live', 
+            folderId: request.folderId, 
+            item_id: itemToRemove.id 
+        }).catch(() => {});
+
         return { success: true, message: 'Item removed.' };
     }
     return { success: false, error: 'Invalid item index.' };
@@ -258,6 +276,14 @@ export async function handleSetPlaylistOrder(request) {
     storageData.folders[folderId].playlist = order;
     await storage.set(storageData);
     debouncedSyncToNativeHostFile();
+
+    // Attempt to reorder live MPV session
+    callNativeHost({
+        action: 'reorder_live',
+        folderId: folderId,
+        new_order: order
+    }).catch(() => {});
+
     return { success: true, message: `Playlist order for '${folderId}' updated.` };
 }
 

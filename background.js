@@ -77,6 +77,8 @@ function broadcastLog(logObject) {
 
 // --- Native Host Communication (using a persistent connection) ---
 
+// --- Native Host Communication (using a persistent connection) ---
+
 let tabUiState = {}; // Tracks the minimized state of the UI for each tab
 
 // --- Playback Queue State ---
@@ -111,6 +113,10 @@ async function processQueue() {
                     if (response.success) {
                         playbackQueue.shift(); // Successfully appended, remove from queue
                         currentPlayingItem = nextItem; // Update current item tracking
+                        // Add a small delay to prevent flooding the IPC pipe
+                        if (!response.skipped) {
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                        }
                         continue; // Process next item immediately
                     } else {
                         // Append failed (likely MPV closed), fall through to start new session
@@ -124,11 +130,16 @@ async function processQueue() {
             // Start a new session
             broadcastLog({ text: `[Background]: Starting playback: ${urlItem.title || urlItem.url}`, type: 'info' });
             try {
-                await _playSingleUrlItem(urlItem, folderId, globalPrefs);
+                const response = await _playSingleUrlItem(urlItem, folderId, globalPrefs);
+                if (!response.success) {
+                    throw new Error(response.error || "Failed to start playback session.");
+                }
                 isPlaying = true;
                 // Give MPV a moment to initialize IPC before we try to append subsequent items.
                 // This prevents race conditions where 'append' arrives before the IPC pipe is ready.
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                if (!response.skipped) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
                 playbackQueue.shift(); // Successfully started, remove from queue
                 currentPlayingItem = nextItem;
             } catch (error) {
@@ -173,6 +184,37 @@ async function syncDataToNativeHostFile() {
 const debouncedSyncToNativeHostFile = debounce(syncDataToNativeHostFile, 1000);
 
 /**
+ * Resyncs the browser extension's storage from the native host's folders.json file.
+ * This is crucial when the native host has modified folders.json directly.
+ */
+async function resyncDataFromNativeHostFile() {
+    try {
+        broadcastLog({ text: `[Background]: Requesting folders data from native host...`, type: 'info' });
+        const response = await callNativeHost({ action: 'get_all_folders' });
+        if (response.success) {
+            const data = await storage.get(); // Get current browser storage
+            const oldFolders = JSON.stringify(data.folders); // Stringify for comparison
+            data.folders = response.folders; // Update folders with data from native host
+            await storage.set(data); // Persist updated data to browser storage
+            broadcastLog({ text: `[Background]: Successfully resynced folders from native host.`, type: 'info' });
+            
+            // Only broadcast 'foldersChanged' if actual folder data has changed to prevent unnecessary UI refreshes.
+            if (oldFolders !== JSON.stringify(data.folders)) {
+                broadcastToTabs({ foldersChanged: true }); // Notify UI to refresh
+            }
+        } else {
+            const errorMessage = `Failed to resync folders from native host: ${response.error || 'Unknown error'}`;
+            console.error(errorMessage);
+            broadcastLog({ text: `[Background]: ${errorMessage}`, type: 'error' });
+        }
+    } catch (e) {
+        const errorMessage = `Error during resync from native host: ${e.message}`;
+        console.error(errorMessage);
+        broadcastLog({ text: `[Background]: ${errorMessage}`, type: 'error' });
+    }
+}
+
+/**
  * Sends a single URL item to the native host for playback.
  * This includes all necessary preferences and bypass script configuration.
  * @param {object} url_item The URL item object to play.
@@ -202,7 +244,7 @@ async function handleMpvExited(data) {
     
     broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' has ended with exit code ${returnCode}.`, type: 'info' });
 
-    isPlaying = false;
+    isPlaying = false; // Reset isPlaying flag
 
     const storageData = await storage.get();
     const globalPrefs = storageData.settings.ui_preferences.global;
@@ -213,21 +255,23 @@ async function handleMpvExited(data) {
     // Only attempt to clear if the item that just finished was the last one in its folder/batch
     if (currentPlayingItem && currentPlayingItem.folderId === folderId && currentPlayingItem.isLastInFolder) {
         if (shouldClear) {
-            // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion.
+            // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion via custom script.
             if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
-                const completionType = 'naturally completed';
+                const completionType = 'naturally completed (custom exit code 99)';
                 broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' ${completionType}. Auto-clearing playlist as per settings.`, type: 'info' });
-                await playlistManager.handleClear({ folderId: folderId });
             } else {
-                broadcastLog({ text: `[Background]: MPV exited with unexpected code ${returnCode}. Playlist for '${folderId}' will not be cleared.`, type: 'error' });
-                if (returnCode !== 0 && returnCode !== MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
-                    broadcastLog({ text: `[Background]: This may indicate an issue with the 'on_completion.lua' script or an MPV crash.`, type: 'error' });
-                }
+                // If the user quits manually (e.g., 'q') or MPV exits with any other code,
+                // we assume it's not a natural completion for clearing purposes.
+                broadcastLog({ text: `[Background]: MPV exited with code ${returnCode}. Playlist for '${folderId}' will not be cleared. (Requires exit code ${MPV_PLAYLIST_COMPLETED_EXIT_CODE} for clearing)`, type: 'info' });
             }
         } else {
             broadcastLog({ text: `[Background]: Playlist for '${folderId}' will not be cleared because the setting is disabled.`, type: 'info' });
         }
     }
+    
+    // After all potential clearing, always resync the browser's storage
+    // from the native host's folders.json to ensure consistency.
+    await resyncDataFromNativeHostFile();
 
     // We don't need to trigger processQueue here because we drain the queue immediately.
     // However, if the user adds items *after* MPV exits, processQueue will be triggered by the 'play' action.
@@ -696,25 +740,78 @@ const actionHandlers = {
     'set_folder_order': handleSetFolderOrder,
     // MPV and Playlist Actions
     'is_mpv_running': () => callNativeHost({ action: 'is_mpv_running' }),
-    'play': async (request) => {
-        const data = await storage.get();
-        const playlist = data.folders[request.folderId]?.playlist;
-        
-        if (!playlist || playlist.length === 0) {
-            return { success: false, error: `Playlist in folder '${request.folderId}' is empty.` };
+    'play': async (request) => { // This will now accept a single url_item to play immediately
+        const { url_item, folderId } = request;
+
+        // Reset queue and playback state for a new 'play' request
+        playbackQueue = [];
+        isPlaying = false;
+        isProcessingQueue = false;
+        currentPlayingItem = null;
+
+        if (url_item) {
+            // Push the single item to the queue
+            playbackQueue.push({ urlItem: url_item, folderId: folderId, isLastInFolder: false });
+            broadcastLog({ text: `[Background]: Received 'play' request for: ${url_item.title || url_item.url}`, type: 'info' });
+            processQueue();
+            return { success: true, message: `Playing ${url_item.title || url_item.url}` };
+        } else if (folderId) {
+            // Fallback: Play the entire folder if no specific item is provided
+            const data = await storage.get();
+            const folder = data.folders[folderId];
+            if (!folder || !folder.playlist || folder.playlist.length === 0) {
+                return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
+            }
+            
+            broadcastLog({ text: `[Background]: Sending playlist '${folderId}' (${folder.playlist.length} items) to MPV.`, type: 'info' });
+            
+            const globalPrefs = data.settings.ui_preferences.global;
+            const response = await callNativeHost({
+                action: 'play_batch',
+                playlist: folder.playlist,
+                folderId: folderId,
+                geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
+                custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
+                custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
+                custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
+                automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
+                clear_on_completion: globalPrefs.clear_on_completion ?? false,
+                start_paused: false,
+                bypassScripts: globalPrefs.bypassScripts || {}
+            });
+
+            if (response.success) {
+                isPlaying = true;
+                // Set currentPlayingItem to the last item so "Clear on Completion" works if MPV exits after this batch.
+                currentPlayingItem = { 
+                    urlItem: folder.playlist[folder.playlist.length - 1], 
+                    folderId: folderId, 
+                    isLastInFolder: true 
+                };
+                // Resync immediately so the UI gets the IDs assigned by the native host.
+                // This ensures live reordering works even for items that didn't have IDs before playing.
+                resyncDataFromNativeHostFile();
+                return { success: true, message: `Playing playlist '${folderId}'` };
+            } else {
+                return response;
+            }
+        } else {
+            return { success: false, error: 'No URL item or Folder ID provided to play.' };
+        }
+    },
+    'append': async (request) => { // New 'append' action handler
+        const { url_item, folderId } = request;
+        if (!url_item) {
+            return { success: false, error: 'No URL item provided to append.' };
         }
 
-        const items = playlist.map((item, index) => ({
-            urlItem: item,
-            folderId: request.folderId,
-            isLastInFolder: index === playlist.length - 1
-        }));
-        
-        playbackQueue.push(...items);
-        broadcastLog({ text: `[Background]: Added ${items.length} items to queue. Queue size: ${playbackQueue.length}`, type: 'info' });
+        // Push the single item to the queue
+        playbackQueue.push({ urlItem: url_item, folderId: folderId, isLastInFolder: false }); // isLastInFolder will be set dynamically by _playSingleUrlItem or processQueue in future.
 
-        processQueue();
-        return { success: true, message: "Added to queue" };
+        broadcastLog({ text: `[Background]: Received 'append' request for: ${url_item.title || url_item.url}`, type: 'info' });
+
+        processQueue(); // Process the queue to append the item
+        return { success: true, message: `Appended ${url_item.title || url_item.url} to queue` };
     },
     // The 'play_new_instance' action is no longer relevant in this sequential single-URL playback model.
     // If a "play all in a new MPV" functionality is still desired, it would need to be re-implemented

@@ -56,6 +56,7 @@ Get up and running in 5 simple steps:
 - **Sequential Playback Queue** — Stack multiple videos to play consecutively in the same MPV instance
 - **Session Restoration** — Reconnect to your MPV instance even after closing your browser
 - **Per-Item Settings** — Apply individual settings to each video in your queue
+- **Native M3U Support** — Generates M3U playlists including video names for robust metadata handling and playback stability
 
 ### 🎨 User Interface
 - **Draggable On-Page Controller** — Floating UI that can be minimized to a small button

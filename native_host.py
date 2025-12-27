@@ -73,6 +73,7 @@ try:
     import urllib.request
     import platform
     import re
+    import uuid # Added for UUID generation
     from mpv_session import MpvSessionManager
     from playlist_tracker import PlaylistTracker
     import file_io
@@ -88,9 +89,10 @@ try:
     # --- Configuration ---
     DATA_DIR = file_io.DATA_DIR
     LOG_FILE = os.path.join(DATA_DIR, "native_host.log")
-    MAX_LOG_LINES = 200
+    MAX_LOG_LINES = 2000
     SESSION_FILE = os.path.join(DATA_DIR, "session.json")
     ANILIST_CACHE_FILE = os.path.join(DATA_DIR, "anilist_cache.json")
+    TEMP_PLAYLISTS_DIR = os.path.join(DATA_DIR, "temp_playlists")
 
     class TrimmingFileHandler(logging.FileHandler):
         """
@@ -130,12 +132,17 @@ try:
     root_logger = logging.getLogger()
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(logging.DEBUG) # Changed to DEBUG for better visibility
     handler = TrimmingFileHandler(LOG_FILE, max_lines=MAX_LOG_LINES, encoding='utf-8')
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
     SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+    # Clean up and recreate the temp playlists directory on startup
+    if os.path.exists(TEMP_PLAYLISTS_DIR):
+        shutil.rmtree(TEMP_PLAYLISTS_DIR, ignore_errors=True)
+    os.makedirs(TEMP_PLAYLISTS_DIR, exist_ok=True)
 
     def log_stream(stream, log_level, owner_folder_id):
         """Reads from a stream line by line and logs it."""
@@ -193,15 +200,58 @@ try:
             sys.stdout.buffer.write(encoded_content)
             sys.stdout.buffer.flush()
 
+    def resolve_or_assign_item_id(url_item, folder_id, all_folders=None, persist=True):
+        """
+        Ensures a url_item has a stable ID. If the item (by URL) already exists
+        in folders.json within the specified folder, its existing ID is used.
+        Otherwise, a new UUID is assigned, and the item is added to the folder's playlist
+        in folders.json.
+        Returns the url_item with its (resolved or newly assigned) ID.
+        """
+        logging.debug(f"ResolveOrAssignId: Processing url_item: {url_item.get('title') or url_item['url']}, folder_id: {folder_id}")
+        
+        if all_folders is None:
+            all_folders = file_io.get_all_folders_from_file()
+            
+        if folder_id not in all_folders:
+            all_folders[folder_id] = {"playlist": []}
+            logging.debug(f"ResolveOrAssignId: Created new folder '{folder_id}'.")
+
+        folder_data = all_folders[folder_id]
+        playlist = folder_data.get("playlist", [])
+
+        # Check if item already exists by URL
+        for stored_item in playlist:
+            if stored_item.get('url') == url_item['url']:
+                # If found, use its ID. Ensure the item in url_item has this ID.
+                url_item['id'] = stored_item.get('id', str(uuid.uuid4()))
+                logging.debug(f"ResolveOrAssignId: Found existing item. Assigned ID: {url_item['id']}")
+                # Also, update the existing item in storage with potentially new title/settings from url_item
+                stored_item.update(url_item)
+                if persist:
+                    file_io.write_folders_file(all_folders)
+                return url_item
+        
+        # If not found, assign a new ID and add it to the playlist in storage
+        if 'id' not in url_item:
+            url_item['id'] = str(uuid.uuid4())
+            logging.debug(f"ResolveOrAssignId: Assigned new ID: {url_item['id']}")
+        
+        playlist.append(url_item)
+        folder_data["playlist"] = playlist
+        if persist:
+            file_io.write_folders_file(all_folders)
+        logging.debug(f"ResolveOrAssignId: Added new item to folder '{folder_id}'. Item ID: {url_item['id']}")
+        return url_item
+
     # --- Global Instances ---
-    playlist_tracker = None
     mpv_session = MpvSessionManager(session_file_path=SESSION_FILE, dependencies={
         'get_all_folders_from_file': file_io.get_all_folders_from_file,
         'get_mpv_executable': file_io.get_mpv_executable,
         'log_stream': log_stream,
         'send_message': send_message,
         'SCRIPT_DIR': SCRIPT_DIR,
-        'playlist_tracker': lambda: playlist_tracker
+        'TEMP_PLAYLISTS_DIR': TEMP_PLAYLISTS_DIR
     })
     
     
@@ -258,20 +308,23 @@ try:
 
     # --- Command Handlers ---
     def handle_play(message):
-        global playlist_tracker
         url_item = message.get('url_item')
         folder_id = message.get('folderId')
         if not folder_id or not url_item:
             return {"success": False, "error": "Missing folderId or url_item for play action."}
 
+        logging.debug(f"handle_play: Original url_item from extension: {url_item}")
+        # Ensure the url_item has a stable ID, and it's present in folders.json
+        url_item = resolve_or_assign_item_id(url_item, folder_id)
+        logging.debug(f"handle_play: url_item after ID resolution: {url_item}")
+
         # Get settings from config file
         settings = file_io.get_settings()
 
-        # Create a new tracker for this playback session
-        playlist_tracker = PlaylistTracker(folder_id, [url_item], file_io, settings)
-
         bypass_scripts_config = message.get('bypassScripts', {})
-        processed_url, script_headers, ytdl_options = services.apply_bypass_script(url_item, bypass_scripts_config, send_message, SCRIPT_DIR, mpv_session)
+        processed_url, script_headers, ytdl_options = services.apply_bypass_script(
+            url_item, bypass_scripts_config, send_message, SCRIPT_DIR, mpv_session
+        )
         url_item['url'] = processed_url
         
         disable_http_persistent = True if (script_headers and not ytdl_options) else False
@@ -280,42 +333,104 @@ try:
             persistent_flag = "--demuxer-lavf-o=http_persistent=0"
             custom_mpv_flags = (custom_mpv_flags + " " + persistent_flag) if custom_mpv_flags else persistent_flag
 
-        def run_mpv_session():
-            mpv_session.start(
-                url_item, folder_id, 
-                geometry=message.get('geometry'), 
-                custom_width=message.get('custom_width'), 
-                custom_height=message.get('custom_height'), 
-                custom_mpv_flags=custom_mpv_flags, 
-                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-                start_paused=message.get('start_paused', False), 
-                headers=script_headers, 
-                disable_http_persistent=disable_http_persistent,
-                ytdl_raw_options=ytdl_options
-            )
+        # Run synchronously to ensure MPV is ready before returning success
+        result = mpv_session.start(
+            url_item, folder_id, settings, file_io, # Pass settings and file_io
+            geometry=message.get('geometry'), 
+            custom_width=message.get('custom_width'), 
+            custom_height=message.get('custom_height'), 
+            custom_mpv_flags=custom_mpv_flags, 
+            automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+            start_paused=message.get('start_paused', False), 
+            headers=script_headers, 
+            disable_http_persistent=disable_http_persistent,
+            ytdl_raw_options=ytdl_options
+        )
+        return result if result else {"success": False, "error": "Failed to start MPV session."}
+
+    def handle_play_batch(message):
+        playlist = message.get('playlist')
+        folder_id = message.get('folderId')
+        if not folder_id or not playlist:
+            return {"success": False, "error": "Missing folderId or playlist for play_batch action."}
+
+        logging.info(f"Processing play_batch request for folder '{folder_id}' with {len(playlist)} items.")
         
-        mpv_thread = threading.Thread(target=run_mpv_session)
-        mpv_thread.daemon = True
-        mpv_thread.start()
-        return {"success": True, "message": "Playback initiated."}
+        settings = file_io.get_settings()
+        bypass_scripts_config = message.get('bypassScripts', {})
+        
+        # Optimization: Read folders file once, update all IDs, write once.
+        all_folders = file_io.get_all_folders_from_file()
+        processed_items = []
+        
+        for item in playlist:
+            # Ensure item is a dict
+            if isinstance(item, str): item = {'url': item}
+            
+            item = resolve_or_assign_item_id(item, folder_id, all_folders=all_folders, persist=False)
+            
+            processed_url, script_headers, ytdl_options = services.apply_bypass_script(
+                item, bypass_scripts_config, send_message, SCRIPT_DIR, mpv_session
+            )
+            item['url'] = processed_url
+            if script_headers: item['headers'] = script_headers
+            if ytdl_options: item['ytdl_raw_options'] = ytdl_options
+            item['disable_http_persistent'] = True if (script_headers and not ytdl_options) else False
+            
+            processed_items.append(item)
+            
+        file_io.write_folders_file(all_folders)
+
+        result = mpv_session.start(
+            processed_items, folder_id, settings, file_io,
+            geometry=message.get('geometry'), custom_width=message.get('custom_width'), custom_height=message.get('custom_height'), custom_mpv_flags=message.get('custom_mpv_flags'), automatic_mpv_flags=message.get('automatic_mpv_flags'), start_paused=message.get('start_paused', False)
+        )
+        return result
+
+    def handle_remove_item_live(message):
+        folder_id = message.get('folderId')
+        item_id = message.get('item_id')
+        if not folder_id or not item_id:
+            return {"success": False, "error": "Missing folderId or item_id."}
+        return mpv_session.remove(item_id, folder_id)
+
+    def handle_reorder_live(message):
+        folder_id = message.get('folderId')
+        new_order = message.get('new_order')
+        if not folder_id or not new_order:
+            return {"success": False, "error": "Missing folderId or new_order."}
+        return mpv_session.reorder(folder_id, new_order)
 
     def handle_append(message):
-        global playlist_tracker
         url_item = message.get('url_item')
-        if not url_item:
-            return {"success": False, "error": "Missing url_item for append action."}
+        folder_id = message.get('folderId') # Append also needs folder_id to resolve/assign ID
+        if not url_item or not folder_id:
+            return {"success": False, "error": "Missing url_item or folderId for append action."}
         
-        if playlist_tracker:
-            playlist_tracker.add_item(url_item)
+        logging.debug(f"handle_append: Original url_item from extension: {url_item}")
+        # Ensure the url_item has a stable ID, and it's present in folders.json
+        url_item = resolve_or_assign_item_id(url_item, folder_id)
+        logging.debug(f"handle_append: url_item after ID resolution: {url_item}")
 
         logging.info("Processing append request: resolving URL via bypass script if configured.")
         bypass_scripts_config = message.get('bypassScripts', {})
-        processed_url, script_headers, ytdl_options = services.apply_bypass_script(url_item, bypass_scripts_config, send_message, SCRIPT_DIR, mpv_session)
+        processed_url, script_headers, ytdl_options = services.apply_bypass_script(
+            url_item, bypass_scripts_config, send_message, SCRIPT_DIR, mpv_session
+        )
         url_item['url'] = processed_url
         
         disable_http_persistent = True if (script_headers and not ytdl_options) else False
-        response = mpv_session.append(url_item, headers=script_headers, mode="append", disable_http_persistent=disable_http_persistent, ytdl_raw_options=ytdl_options)
-        return response if response else {"success": False, "error": "Failed to append to MPV playlist."}
+        
+        # Retry logic for append to handle transient IPC busy states
+        max_retries = 3
+        for attempt in range(max_retries):
+            response = mpv_session.append(url_item, headers=script_headers, mode="append", disable_http_persistent=disable_http_persistent, ytdl_raw_options=ytdl_options)
+            if response and response.get("success"):
+                return response
+            logging.warning(f"Append failed (attempt {attempt+1}/{max_retries}). Retrying in 0.5s...")
+            time.sleep(0.5)
+            
+        return {"success": False, "error": "Failed to append to MPV playlist after retries."}
 
     def handle_play_new_instance(message):
         return launch_unmanaged_mpv(
@@ -326,6 +441,9 @@ try:
             message.get('custom_mpv_flags'), 
             message.get('automatic_mpv_flags')
         )
+
+    def handle_close_mpv(message):
+        return mpv_session.close()
 
     def handle_is_mpv_running(message):
         is_running = ipc_utils.is_process_alive(mpv_session.pid, mpv_session.ipc_path)
@@ -396,9 +514,12 @@ try:
 
         COMMAND_HANDLERS = {
             'play': handle_play,
+            'play_batch': handle_play_batch,
+            'remove_item_live': handle_remove_item_live,
+            'reorder_live': handle_reorder_live,
             'append': handle_append,
             'play_new_instance': handle_play_new_instance,
-            'close_mpv': lambda m: (playlist_tracker.stop_tracking() if playlist_tracker else None) and mpv_session.close(),
+            'close_mpv': handle_close_mpv,
             'is_mpv_running': handle_is_mpv_running,
             'export_data': handle_export_data,
             'export_playlists': handle_export_playlists,
@@ -412,6 +533,7 @@ try:
             ),
             'run_ytdlp_update': lambda m: services.update_ytdlp(send_message),
             'check_dependencies': lambda m: services.check_mpv_and_ytdlp_status(file_io.get_mpv_executable, send_message),
+            'get_all_folders': lambda m: {"success": True, "folders": file_io.get_all_folders_from_file()},
             'get_default_automatic_flags': lambda m: {"success": True, "flags": [
                 {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
                 {"flag": "terminal", "description": "Show a terminal window.", "enabled": False}
