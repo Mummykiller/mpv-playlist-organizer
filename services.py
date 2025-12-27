@@ -151,12 +151,21 @@ def construct_mpv_command(
     headers=None,
     disable_http_persistent=False,
     start_paused=False,
-    script_dir=None
+    script_dir=None,
+    load_on_completion_script=False # NEW ARGUMENT
 ):
     """Constructs the MPV command line arguments."""
     mpv_args = [mpv_exe]
     if ipc_path:
         mpv_args.append(f'--input-ipc-server={ipc_path}')
+
+    if load_on_completion_script and script_dir: # Check new argument
+        lua_script_path = os.path.join(script_dir, "data", "on_completion.lua")
+        if os.path.exists(lua_script_path):
+            mpv_args.append(f'--script={lua_script_path}')
+            logging.info(f"MPV will load completion script: {lua_script_path}")
+        else:
+            logging.warning(f"Completion script not found at {lua_script_path}. MPV will not use it.")
 
     has_terminal_flag = False
     if automatic_mpv_flags:
@@ -182,8 +191,6 @@ def construct_mpv_command(
 
     if disable_http_persistent:
         mpv_args.append('--demuxer-lavf-o=http_persistent=0')
-
-
 
     if start_paused and '--pause' not in mpv_args:
         mpv_args.append('--pause')
@@ -255,6 +262,9 @@ def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir,
     Applies a bypass script if specified in url_item settings and enabled globally.
     Returns a tuple of (processed_url, headers_dict, ytdl_raw_options).
     """
+    if not isinstance(url_item, dict):
+        url_item = {'url': url_item if url_item else "", 'settings': {}}
+
     original_url = url_item['url']
     
     # Check if a specific bypass script is enabled for this item
@@ -276,11 +286,7 @@ def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir,
             script_path = potential_path
 
     if script_path:
-        # First, check if the mpv session is still active before running an external script.
-        # We use mpv_session.is_alive as it's a quick, internal boolean check.
-        if mpv_session and not mpv_session.is_alive:
-            logging.warning("MPV session is not active. Skipping bypass script execution.")
-            return original_url, None, None
+
 
         if not os.path.exists(script_path):
             logging.error(f"Bypass script not found: {script_path}")
@@ -298,27 +304,34 @@ def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir,
                 logging.error(f"Failed to make bypass script executable: {e}")
                 return original_url, None, None
 
-        try:
+        try: # Outer try block starts here
             logging.info(f"Executing bypass script '{script_path}' for URL: {original_url}")
             send_message_func({"action": "log_from_native_host", "log": {"text": f"Running bypass script for: {original_url}", "type": "info"}})
             
             process = subprocess.run([script_path, original_url], capture_output=True, text=True, check=True, timeout=20)
             output = process.stdout.strip()
-            
-            if not output:
-                return original_url, None, None
+            error_output = process.stderr.strip() # NEW: Capture stderr
 
-            try:
+            if output: # Log stdout if present
+                logging.info(f"Bypass script stdout: {output}")
+            if error_output: # Log stderr if present
+                logging.warning(f"Bypass script stderr: {error_output}")
+
+            if not output:
+                logging.error(f"Bypass script '{script_path}' returned no stdout for URL: {original_url}")
+                send_message_func({"action": "log_from_native_host", "log": {"text": f"Bypass script '{script_path}' returned no stdout for URL: {original_url}. Playing original URL.", "type": "error"}})
+                return original_url, None, None # Fallback to original URL
+
+            try: # Inner try block
                 data = json.loads(output)
                 processed_url = data.get("url", original_url)
                 if data.get("is_youtube"):
                     return processed_url, None, data.get("ytdl_raw_options")
                 return processed_url, data.get("headers"), None
-            except json.JSONDecodeError:
+            except json.JSONDecodeError: # Inner except block
                 # Fallback for older scripts returning raw URL
                 return output.splitlines()[-1], None, None
-
-        except Exception as e:
+        except Exception as e: # Outer except block
             logging.error(f"Error executing bypass script: {e}")
             send_message_func({"action": "log_from_native_host", "log": {"text": f"Bypass script failed: {e}. Playing original URL.", "type": "error"}})
             return original_url, None, None

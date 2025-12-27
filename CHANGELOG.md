@@ -7,8 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Configurable Natural Completion Clearing:** Implemented a custom MPV Lua script (`data/on_completion.lua`) to write a flag file upon natural video/playlist completion. This flag is detected by the native host, which then signals natural completion (exit code 99) to the browser extension, allowing for differentiated playlist clearing.
+- **Native Host Folder Data Retrieval:** Added a `get_all_folders` action to `native_host.py`, enabling the browser extension to retrieve and resynchronize its local storage with the content of `folders.json` from the native host.
+- **M3U Playlist Architecture:** Switched to generating temporary M3U playlists for playback. This ensures robust title display in MPV's playlist view (`#EXTINF`) and eliminates race conditions associated with IPC property injection.
+
+### Fixed
+- **Robust IPC Communication:**
+    - Resolved persistent "Broken pipe" errors by implementing a persistent `IPCSocketManager` and a "hard kill switch" (`MpvSessionManager.is_alive`), preventing the native host from attempting IPC with closed MPV processes.
+    - Enhanced `IPCSocketManager.send()` to correctly discard interleaved MPV events and retrieve valid command responses, fixing `Tracker: Initial current_path: None` issues where the playlist tracker failed to get the currently playing item's path.
+    - Fixed a critical bug in `ipc_utils.py` where unread IPC responses on Windows caused `is_process_alive` to fail, leading to duplicate MPV instances.
+    - Resolved a connection drop issue on Linux caused by improper handling of buffered IPC events during command execution.
+- **Stable Playlist Item ID Management:** Fixed inconsistent playlist clearing by centralizing item ID management in `native_host.py` via `resolve_or_assign_item_id`. This ensures unique and stable IDs are persisted in `folders.json`, resolving previous `id` mismatches in `PlaylistTracker`.
+- **Accurate MPV Session State Handling:**
+    - Corrected `NameError: name 'PlaylistTracker' is not defined` by adding a missing import in `mpv_session.py`.
+    - Resolved `NameError: name 'process' is not defined` by fixing a logging statement in `mpv_session.py`.
+    - Corrected PID logging in `mpv_session.py` for MPV instances launched in terminals.
+- **Consistent Playlist Clearing Differentiated by Exit Code:**
+    - Modified `mpv_session.py` to detect a natural completion flag file created by `on_completion.lua` and set `returnCode = 99` for the `mpv_exited` message sent to the browser extension and for the internal `self.clear()` call.
+    - Updated `playlist_tracker.py` to only clear played items from `folders.json` if `mpv_return_code` is `99`.
+    - Modified `background.js` to only trigger UI playlist clearing and resync if `returnCode` is `99`, effectively differentiating natural completion from manual quits (which result in `returnCode = 0` and no clearing).
+- **Browser Storage Synchronization:** Implemented `resyncDataFromNativeHostFile` in `background.js` to automatically resynchronize the browser's local storage with `folders.json` after the native host modifies it (e.g., clearing playlist items), ensuring the UI always reflects the current state.
+
 ### Changed
-- Refactored MPV session management to improve HTTP header handling. The `_sync` method in `mpv_session.py` was renamed to `append` and now directly sets `http-header-fields` before loading a file. `native_host.py` was updated to use this new, more robust approach.
+- **MPV Session Clearing API:** Modified `MpvSessionManager.clear()` and `PlaylistTracker.stop_tracking()` methods to accept `mpv_return_code`, allowing conditional clearing logic based on MPV's exit status.
+- **YouTube Bypass Script Control Mechanism:** The YouTube bypass functionality in `play_with_bypass.sh` was updated to read its enabled state from an environment variable (`MPV_PLAYLIST_YOUTUBE_BYPASS_ENABLED`) set by the native host. The previous implementation for `config.json` control was removed as per user request, reverting to `play_with_bypass.sh` always attempting bypass for YouTube if present.
+- **Title Handling:** Deprecated the Lua script title handler. Titles are now embedded directly in the generated M3U files.
+- **YouTube Metadata:** YouTube links now defer to `yt-dlp` for metadata resolution within the M3U playlist, ensuring accurate titles.
 
 
 

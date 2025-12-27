@@ -62,10 +62,10 @@ export class StorageManager {
                             ytdlp: { found: null, path: null, version: null, error: null }
                         },
                         // Define default bypass scripts. The native host will handle execution.
-                        // These can be enabled/disabled and configured via the UI.
+                        // These scripts will be used automatically if detected and matched.
                         bypassScripts: {
                             "animepahe_bypass": {
-                                "enabled": true,
+
                                 "match_patterns": ["*://animepahe.com/*"],
                                 "script_path": "play_with_bypass.sh", // Path relative to native_host.py
                                 "description": "Bypass security for AnimePahe.com streams."
@@ -142,7 +142,7 @@ export class StorageManager {
                     folder.playlist = folder.playlist.map(item => {
                         if (typeof item === 'object' && item !== null && !item.settings) {
                             needsUpdate = true;
-                            return { ...item, settings: { bypass_script_enabled: false } };
+                            return { ...item, settings: {} };
                         }
                         return item;
                     });
@@ -182,10 +182,10 @@ export class StorageManager {
                 const storedValue = folderDataResult[folderKey];
                 let playlist = Array.isArray(storedValue) ? storedValue : (storedValue?.playlist || storedValue?.urls || []);
                 if (playlist.length > 0 && typeof playlist[0] === 'string') {
-                    playlist = playlist.map(url => ({ url: url, title: url, settings: { bypass_script_enabled: false } }));
+                    playlist = playlist.map(url => ({ url: url, title: url, settings: {} }));
                 } else {
                     // Ensure existing objects also have settings
-                    playlist = playlist.map(item => ({ ...item, settings: item.settings || { bypass_script_enabled: false } }));
+                    playlist = playlist.map(item => ({ ...item, settings: item.settings || {} }));
                 }
                 newData.folders[folderId] = { playlist };
                 newData.folderOrder.push(folderId);
