@@ -1054,30 +1054,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             return showStatus('Please select a folder.', true);
         }
         try {
-            const playlistResponse = await sendMessageAsync({ action: 'get_playlist', folderId });
-
-            if (!playlistResponse.success || !playlistResponse.list || playlistResponse.list.length === 0) {
-                return showStatus(`Playlist in folder "${folderId}" is empty.`, true);
+            // Send a single 'play' action with just the folderId.
+            // The background script handles fetching the playlist and using 'play_batch'.
+            const response = await sendMessageAsync({ action: 'play', folderId });
+            
+            if (response.success) {
+                showStatus(response.message);
+            } else {
+                showStatus(response.error || 'Failed to start playback.', true);
             }
-
-            const playlist = playlistResponse.list;
-            // Iterate and send play/append requests
-            for (let i = 0; i < playlist.length; i++) {
-                const urlItem = playlist[i];
-                // Validate urlItem before attempting to play/append
-                if (!urlItem || !urlItem.url || urlItem.url.trim() === '') {
-                    showStatus(`Skipping invalid playlist item at index ${i + 1}: Missing or empty URL.`, true);
-                    continue; // Skip this invalid item
-                }
-                const action = (i === 0) ? 'play' : 'append'; // 'play' for first, 'append' for others
-
-                const response = await sendMessageAsync({ action, url_item: urlItem, folderId });
-                if (!response.success) {
-                    showStatus(response.error, true);
-                    break; // Stop if an item fails to play/append
-                }
-            }
-            showStatus(`Queued ${playlist.length} items from playlist "${folderId}".`);
 
         } catch (error) {
             showStatus(`An error occurred while playing playlist: ${error.message}`, true);
