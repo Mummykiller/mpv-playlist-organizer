@@ -10,6 +10,7 @@ from datetime import datetime
 SCRIPT_DIR_FOR_PATH = os.path.dirname(os.path.abspath(sys.argv[0]))
 sys.path.insert(0, SCRIPT_DIR_FOR_PATH)
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+sys.dont_write_bytecode = True
 
 # --- Standalone Function for Failsafe Path ---
 # This is intentionally self-contained to avoid import errors if dependencies are missing.
