@@ -14,6 +14,15 @@ from utils import ipc_utils
 
 # --- Dependency Checking & Updating ---
 
+def _find_ytdlp_executable():
+    """
+    Finds the yt-dlp executable in the system's PATH.
+    Returns the absolute path to the executable or None if not found.
+    """
+    system = platform.system()
+    exe_name = "yt-dlp.exe" if system == "Windows" else "yt-dlp"
+    return shutil.which(exe_name)
+
 def _get_ytdlp_version(path_to_exe, send_message_func):
     """Runs 'yt-dlp --version' and returns the output."""
     try:
@@ -29,17 +38,59 @@ def _get_ytdlp_version(path_to_exe, send_message_func):
         send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
         return None
 
+    send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
+    return None
+
+def _get_linux_sudo_command_prefix(ytdlp_path, send_message_func):
+    """
+    Checks if write access is denied for ytdlp_path on Linux and finds a suitable
+    graphical sudo tool. Returns a list of command prefixes (e.g., ["pkexec"])
+    or an empty list if not needed or no tool found.
+    """
+    if platform.system() == "Linux" and not os.access(ytdlp_path, os.W_OK):
+        send_message_func({"log": {"text": "[yt-dlp]: Write access denied. Attempting to run with administrator privileges...", "type": "info"}})
+        if shutil.which("pkexec"):
+            send_message_func({"log": {"text": "[yt-dlp]: Please enter your password in the dialog to update yt-dlp.", "type": "info"}})
+            return ["pkexec"]
+        elif shutil.which("gksu"):
+            send_message_func({"log": {"text": "[yt-dlp]: Please enter your password in the dialog to update yt-dlp.", "type": "info"}})
+            return ["gksu"]
+        elif shutil.which("kdesu"):
+            send_message_func({"log": {"text": "[yt-dlp]: Please enter your password in the dialog to update yt-dlp.", "type": "info"}})
+            return ["kdesu"]
+        else:
+            send_message_func({"log": {"text": "[yt-dlp]: No graphical sudo tool found. Please run `sudo yt-dlp -U` in a terminal.", "type": "error"}})
+            return []
+    return []
+
+    return []
+
+def _run_update_command(command, send_message_func):
+    """
+    Runs the yt-dlp update command and streams output to the sender.
+    Returns the process's return code.
+    """
+    system = platform.system()
+    popen_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.STDOUT, 'universal_newlines': True, 'encoding': 'utf-8', 'errors': 'ignore'}
+    if system == "Windows":
+        popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
+    send_message_func({"log": {"text": f"[yt-dlp]: Executing: {' '.join(command)}", "type": "info"}})
+    process = subprocess.Popen(command, **popen_kwargs)
+
+    for line in iter(process.stdout.readline, ''):
+        send_message_func({"log": {"text": f"[yt-dlp]: {line.strip()}", "type": "info"}})
+    
+    process.stdout.close()
+    return process.wait()
+
 def update_ytdlp(send_message_func):
     """Downloads the latest yt-dlp binary and replaces the existing one."""
     send_message_func({"log": {"text": "[yt-dlp]: Starting manual update process...", "type": "info"}})
     try:
-        system = platform.system()
-        exe_name = "yt-dlp.exe" if system == "Windows" else "yt-dlp"
-
-        send_message_func({"log": {"text": f"[Native Host]: Searching for '{exe_name}' in PATH...", "type": "info"}})
-        current_path = shutil.which(exe_name)
+        current_path = _find_ytdlp_executable()
         if not current_path:
-            error_msg = f"'{exe_name}' not found in your system's PATH. Cannot update."
+            error_msg = "'yt-dlp' not found in your system's PATH. Cannot update."
             send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
             return {"success": False, "error": error_msg}
 
@@ -48,30 +99,12 @@ def update_ytdlp(send_message_func):
         if version_before:
             send_message_func({"log": {"text": f"[yt-dlp]: Current version: {version_before}", "type": "info"}})
 
-        command = [current_path, '-U']
-        popen_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.STDOUT, 'universal_newlines': True, 'encoding': 'utf-8', 'errors': 'ignore'}
-        if system == "Windows":
-            popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-
-        if system == "Linux" and not os.access(current_path, os.W_OK):
-            send_message_func({"log": {"text": "[yt-dlp]: Write access denied. Attempting to run with administrator privileges...", "type": "info"}})
-            if shutil.which("pkexec"): command = ["pkexec"] + command
-            elif shutil.which("gksu"): command = ["gksu"] + command
-            elif shutil.which("kdesu"): command = ["kdesu"] + command
-            else:
-                error_msg = "No graphical sudo tool found. Please run `sudo yt-dlp -U` in a terminal."
-                send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
-                return {"success": False, "error": error_msg}
-            send_message_func({"log": {"text": "[yt-dlp]: Please enter your password in the dialog to update yt-dlp.", "type": "info"}})
-
-        send_message_func({"log": {"text": f"[yt-dlp]: Executing: {' '.join(command)}", "type": "info"}})
-        process = subprocess.Popen(command, **popen_kwargs)
-
-        for line in iter(process.stdout.readline, ''):
-            send_message_func({"log": {"text": f"[yt-dlp]: {line.strip()}", "type": "info"}})
+        # Determine if sudo prefix is needed for Linux
+        command_prefix = _get_linux_sudo_command_prefix(current_path, send_message_func)
         
-        process.stdout.close()
-        return_code = process.wait()
+        full_command = command_prefix + [current_path, '-U']
+
+        return_code = _run_update_command(full_command, send_message_func)
 
         if return_code != 0:
             error_msg = f"Update process failed with exit code {return_code}."
@@ -137,6 +170,123 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func):
 
 # --- MPV Command Construction ---
 
+# --- MPV Command Construction ---
+
+class MpvCommandBuilder:
+    def __init__(self, mpv_exe):
+        self.mpv_exe = mpv_exe
+        self.mpv_args = [mpv_exe]
+        self.has_terminal_flag = False
+        self.urls = []
+
+    def with_ipc_path(self, ipc_path):
+        if ipc_path:
+            self.mpv_args.append(f'--input-ipc-server={ipc_path}')
+        return self
+
+    def with_urls(self, urls):
+        if urls:
+            self.urls.extend(urls)
+        return self
+
+    def with_completion_script(self, script_dir):
+        if script_dir:
+            lua_script_path = os.path.join(script_dir, "data", "on_completion.lua")
+            if os.path.exists(lua_script_path):
+                self.mpv_args.append(f'--script={lua_script_path}')
+                logging.info(f"MPV will load completion script: {lua_script_path}")
+            else:
+                logging.warning(f"Completion script not found at {lua_script_path}. MPV will not use it.")
+        return self
+
+    def with_automatic_flags(self, automatic_mpv_flags):
+        if automatic_mpv_flags:
+            for flag_info in automatic_mpv_flags:
+                if flag_info.get('enabled'):
+                    if flag_info.get('flag') == 'terminal':
+                        self.has_terminal_flag = True
+                    elif flag_info.get('flag'):
+                        self.mpv_args.append(flag_info.get('flag'))
+        return self
+
+    def with_headers(self, headers):
+        if headers:
+            header_list = []
+            for k, v in headers.items():
+                safe_v = v.replace(",", "")
+                header_list.append(f"{k}: {safe_v}")
+            header_string = ",".join(header_list)
+            self.mpv_args.append(f'--http-header-fields={header_string}')
+
+            if 'User-Agent' in headers:
+                self.mpv_args.append(f'--user-agent={headers["User-Agent"]}')
+            if 'Referer' in headers:
+                self.mpv_args.append(f'--referrer={headers["Referer"]}')
+        return self
+
+    def with_disable_http_persistent(self, disable_http_persistent):
+        if disable_http_persistent:
+            self.mpv_args.append('--demuxer-lavf-o=http_persistent=0')
+        return self
+
+    def with_start_paused(self, start_paused):
+        if start_paused and '--pause' not in self.mpv_args:
+            self.mpv_args.append('--pause')
+        return self
+
+    def with_custom_flags(self, custom_mpv_flags):
+        if custom_mpv_flags:
+            try:
+                parsed_flags = shlex.split(custom_mpv_flags)
+                self.mpv_args.extend(parsed_flags)
+            except Exception as e:
+                logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
+        return self
+
+    def with_geometry(self, geometry, custom_width, custom_height):
+        if custom_width and custom_height:
+            self.mpv_args.append(f'--geometry={custom_width}x{custom_height}')
+        elif geometry:
+            self.mpv_args.append(f'--geometry={geometry}')
+        return self
+    
+    def with_youtube_options(self, is_youtube, ytdl_raw_options):
+        if is_youtube:
+            self.mpv_args.append('--ytdl=yes')
+            self.mpv_args.append('--ytdl-format=bestvideo+bestaudio')
+            if ytdl_raw_options:
+                self.mpv_args.append(f'--ytdl-raw-options={ytdl_raw_options}')
+        return self
+
+    def build(self):
+        # Final adjustments
+        if '--terminal' in self.mpv_args:
+            self.has_terminal_flag = True
+
+        full_command = list(self.mpv_args) + ['--'] + (self.urls if self.urls else [])
+
+        if platform.system() != "Windows" and self.has_terminal_flag:
+            if '--terminal' not in self.mpv_args:
+                 # Try to insert before '--'
+                 try:
+                     idx = full_command.index('--')
+                     full_command.insert(idx, '--terminal')
+                 except ValueError:
+                     full_command.insert(1, '--terminal')
+
+            term_cmd = []
+            if shutil.which('x-terminal-emulator'): term_cmd = ['x-terminal-emulator', '-e']
+            elif shutil.which('gnome-terminal'): term_cmd = ['gnome-terminal', '--wait', '--']
+            elif shutil.which('konsole'): term_cmd = ['konsole', '-e']
+            elif shutil.which('xfce4-terminal'): term_cmd = ['xfce4-terminal', '--disable-server', '-x']
+            elif shutil.which('xterm'): term_cmd = ['xterm', '-e']
+            
+            if term_cmd:
+                 full_command = term_cmd + full_command
+
+        return full_command, self.has_terminal_flag
+
+
 def construct_mpv_command(
     mpv_exe,
     ipc_path=None,
@@ -152,92 +302,22 @@ def construct_mpv_command(
     disable_http_persistent=False,
     start_paused=False,
     script_dir=None,
-    load_on_completion_script=False # NEW ARGUMENT
+    load_on_completion_script=False
 ):
-    """Constructs the MPV command line arguments."""
-    mpv_args = [mpv_exe]
-    if ipc_path:
-        mpv_args.append(f'--input-ipc-server={ipc_path}')
-
-    if load_on_completion_script and script_dir: # Check new argument
-        lua_script_path = os.path.join(script_dir, "data", "on_completion.lua")
-        if os.path.exists(lua_script_path):
-            mpv_args.append(f'--script={lua_script_path}')
-            logging.info(f"MPV will load completion script: {lua_script_path}")
-        else:
-            logging.warning(f"Completion script not found at {lua_script_path}. MPV will not use it.")
-
-    has_terminal_flag = False
-    if automatic_mpv_flags:
-        for flag_info in automatic_mpv_flags:
-            if flag_info.get('enabled'):
-                if flag_info.get('flag') == 'terminal':
-                    has_terminal_flag = True
-                elif flag_info.get('flag'):
-                    mpv_args.append(flag_info.get('flag'))
-
-    if headers:
-        header_list = []
-        for k, v in headers.items():
-            safe_v = v.replace(",", "")
-            header_list.append(f"{k}: {safe_v}")
-        header_string = ",".join(header_list)
-        mpv_args.append(f'--http-header-fields={header_string}')
-
-        if 'User-Agent' in headers:
-            mpv_args.append(f'--user-agent={headers["User-Agent"]}')
-        if 'Referer' in headers:
-            mpv_args.append(f'--referrer={headers["Referer"]}')
-
-    if disable_http_persistent:
-        mpv_args.append('--demuxer-lavf-o=http_persistent=0')
-
-    if start_paused and '--pause' not in mpv_args:
-        mpv_args.append('--pause')
-
-    if custom_mpv_flags:
-        try:
-            parsed_flags = shlex.split(custom_mpv_flags)
-            mpv_args.extend(parsed_flags)
-        except Exception as e:
-            logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
-
-    if '--terminal' in mpv_args:
-        has_terminal_flag = True
-
-    if custom_width and custom_height:
-        mpv_args.append(f'--geometry={custom_width}x{custom_height}')
-    elif geometry:
-        mpv_args.append(f'--geometry={geometry}')
-    
-    if is_youtube:
-        mpv_args.append('--ytdl=yes')
-        mpv_args.append('--ytdl-format=bestvideo+bestaudio')
-        if ytdl_raw_options:
-            mpv_args.append(f'--ytdl-raw-options={ytdl_raw_options}')
-
-    full_command = mpv_args + ['--'] + (urls if urls else [])
-
-    if platform.system() != "Windows" and has_terminal_flag:
-        if '--terminal' not in mpv_args:
-             # Try to insert before '--'
-             try:
-                 idx = full_command.index('--')
-                 full_command.insert(idx, '--terminal')
-             except ValueError:
-                 full_command.insert(1, '--terminal')
-
-        term_cmd = []
-        if shutil.which('x-terminal-emulator'): term_cmd = ['x-terminal-emulator', '-e']
-        elif shutil.which('gnome-terminal'): term_cmd = ['gnome-terminal', '--wait', '--']
-        elif shutil.which('konsole'): term_cmd = ['konsole', '-e']
-        elif shutil.which('xfce4-terminal'): term_cmd = ['xfce4-terminal', '--disable-server', '-x']
-        elif shutil.which('xterm'): term_cmd = ['xterm', '-e']
+    """Constructs the MPV command line arguments using MpvCommandBuilder."""
+    builder = MpvCommandBuilder(mpv_exe) \
+        .with_ipc_path(ipc_path) \
+        .with_urls(urls) \
+        .with_completion_script(script_dir if load_on_completion_script else None) \
+        .with_automatic_flags(automatic_mpv_flags) \
+        .with_headers(headers) \
+        .with_disable_http_persistent(disable_http_persistent) \
+        .with_start_paused(start_paused) \
+        .with_custom_flags(custom_mpv_flags) \
+        .with_geometry(geometry, custom_width, custom_height) \
+        .with_youtube_options(is_youtube, ytdl_raw_options)
         
-        if term_cmd:
-             full_command = term_cmd + full_command
-
-    return full_command, has_terminal_flag
+    return builder.build()
 
 def get_mpv_popen_kwargs(has_terminal_flag):
     """Returns the subprocess arguments for launching MPV."""
@@ -340,36 +420,63 @@ def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir,
 
 # --- AniList Service ---
 
-def _fetch_from_anilist_script(is_ping, script_dir):
-    """Helper function to execute the anilist_releases.py script."""
-    try:
-        script_path = os.path.join(script_dir, 'anilist_releases.py')
-        script_args = [sys.executable, script_path]
-        if is_ping:
-            script_args.append('--ping')
-        result = subprocess.run(script_args, capture_output=True, text=True, check=True, encoding='utf-8')
-        return {"success": True, "output": result.stdout}
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Error running anilist_releases.py: {e.stderr}")
-        return {"success": False, "error": f"Error fetching AniList releases: {e.stderr}"}
-    except FileNotFoundError:
-        error_msg = "anilist_releases.py not found in the script directory."
-        logging.error(error_msg)
-        return {"success": False, "error": error_msg}
+class AniListCache:
+    def __init__(self, cache_file, script_dir, send_message_func):
+        self.cache_file = cache_file
+        self.script_dir = script_dir
+        self.send_message = send_message_func
+        self.CACHE_DURATION_S = 30 * 60 # 30 minutes
+
+    def _fetch_from_anilist_script(self, is_ping):
+        """Helper function to execute the anilist_releases.py script."""
+        try:
+            script_path = os.path.join(self.script_dir, 'anilist_releases.py')
+            script_args = [sys.executable, script_path]
+            if is_ping:
+                script_args.append('--ping')
+            result = subprocess.run(script_args, capture_output=True, text=True, check=True, encoding='utf-8')
+            return {"success": True, "output": result.stdout}
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Error running anilist_releases.py: {e.stderr}")
+            return {"success": False, "error": f"Error fetching AniList releases: {e.stderr}"}
+        except FileNotFoundError:
+            error_msg = "anilist_releases.py not found in the script directory."
+            logging.error(error_msg)
+            return {"success": False, "error": error_msg}
+
+    def _load_cache(self):
+        """Loads cache data from the cache file."""
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                logging.warning(f"Could not read {self.cache_file}: {e}. Will perform a full fetch.")
+        return None
+
+    def _save_cache(self, cache_data):
+        """Saves cache data to the cache file."""
+        try:
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, indent=4)
+            logging.info(f"{self.cache_file} updated with new data.")
+        except (IOError) as e:
+            logging.error(f"Failed to write new {self.cache_file}: {e}")
 
 def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabled, cache_file, script_dir, send_message_func):
     """Handles fetching AniList releases with a file-based caching mechanism."""
-    CACHE_DURATION_S = 30 * 60
+    
+    anilist_cache = AniListCache(cache_file, script_dir, send_message_func)
     now = time.time()
 
     if is_cache_disabled:
         logging.info("AniList cache is disabled. Fetching directly from API.")
         send_message_func({"log": {"text": "[AniList]: Cache disabled. Fetching new data from API.", "type": "info"}})
-        return _fetch_from_anilist_script(is_ping=False, script_dir=script_dir)
+        return anilist_cache._fetch_from_anilist_script(is_ping=False)
 
-    if delete_cache and os.path.exists(cache_file):
+    if delete_cache and os.path.exists(anilist_cache.cache_file):
         try:
-            os.remove(cache_file)
+            os.remove(anilist_cache.cache_file)
             logging.info("Deleted anilist_cache.json as requested.")
             send_message_func({"log": {"text": "[AniList]: Cache file deleted.", "type": "info"}})
         except OSError as e:
@@ -378,20 +485,13 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
     if force_refresh:
         logging.info("Forcing a full refresh of AniList data.")
         send_message_func({"log": {"text": "[AniList]: Manual refresh requested. Fetching new data...", "type": "info"}})
-        return _fetch_from_anilist_script(is_ping=False, script_dir=script_dir)
+        return anilist_cache._fetch_from_anilist_script(is_ping=False)
 
-    cache = None
-    if os.path.exists(cache_file):
-        try:
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                cache = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            logging.warning(f"Could not read anilist_cache.json: {e}. Will perform a full fetch.")
-            cache = None
+    cache = anilist_cache._load_cache()
 
     if cache and 'timestamp' in cache and 'data' in cache:
         from datetime import datetime
-        is_expired_by_timer = (now - cache['timestamp'] > CACHE_DURATION_S)
+        is_expired_by_timer = (now - cache['timestamp'] > anilist_cache.CACHE_DURATION_S)
         cache_date = datetime.fromtimestamp(cache['timestamp']).date()
         is_new_day = datetime.fromtimestamp(now).date() != cache_date
         next_airing_at = cache['data'].get('next_airing_at')
@@ -409,7 +509,7 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
         logging.info("AniList cache is stale. Pinging API for changes...")
         send_message_func({"log": {"text": "[AniList]: Cache is stale. Pinging for changes...", "type": "info"}})
         
-        ping_response = _fetch_from_anilist_script(is_ping=True, script_dir=script_dir)
+        ping_response = anilist_cache._fetch_from_anilist_script(is_ping=True)
         
         if ping_response['success']:
             try:
@@ -422,8 +522,7 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
                     send_message_func({"log": {"text": "[AniList]: Loaded from local file (no new releases found).", "type": "info"}})
                     
                     cache['timestamp'] = now
-                    with open(cache_file, 'w', encoding='utf-8') as f:
-                        json.dump(cache, f, indent=4)
+                    anilist_cache._save_cache(cache)
                     
                     return {"success": True, "output": json.dumps(cache['data'])}
             except (json.JSONDecodeError, KeyError) as e:
@@ -433,15 +532,14 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
 
     logging.info("Performing a full fetch of AniList data.")
     send_message_func({"log": {"text": "[AniList]: Fetching new data from AniList API...", "type": "info"}})
-    full_fetch_response = _fetch_from_anilist_script(is_ping=False, script_dir=script_dir)
+    full_fetch_response = anilist_cache._fetch_from_anilist_script(is_ping=False)
     
     if full_fetch_response['success'] and not is_cache_disabled:
         try:
             full_data = json.loads(full_fetch_response['output'])
             sorted_ats = sorted([s['airingAt'] for s in full_data.get('raw_schedules_for_cache', [])])
             new_cache = {"timestamp": now, "data": full_data, "sorted_airing_ats": sorted_ats}
-            with open(cache_file, 'w', encoding='utf-8') as f:
-                json.dump(new_cache, f, indent=4)
+            anilist_cache._save_cache(new_cache)
             logging.info("AniList file cache updated with new data.")
         except (json.JSONDecodeError, IOError) as e:
             logging.error(f"Failed to write new AniList cache file: {e}")

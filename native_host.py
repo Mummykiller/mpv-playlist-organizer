@@ -80,6 +80,7 @@ try:
     import cli
     import services
     from utils import ipc_utils
+    from utils.native_host_handlers import HandlerManager
 
     # --- Function to get the appropriate user data directory ---
     def get_user_data_dir():
@@ -200,50 +201,6 @@ try:
             sys.stdout.buffer.write(encoded_content)
             sys.stdout.buffer.flush()
 
-    def resolve_or_assign_item_id(url_item, folder_id, all_folders=None, persist=True):
-        """
-        Ensures a url_item has a stable ID. If the item (by URL) already exists
-        in folders.json within the specified folder, its existing ID is used.
-        Otherwise, a new UUID is assigned, and the item is added to the folder's playlist
-        in folders.json.
-        Returns the url_item with its (resolved or newly assigned) ID.
-        """
-        logging.debug(f"ResolveOrAssignId: Processing url_item: {url_item.get('title') or url_item['url']}, folder_id: {folder_id}")
-        
-        if all_folders is None:
-            all_folders = file_io.get_all_folders_from_file()
-            
-        if folder_id not in all_folders:
-            all_folders[folder_id] = {"playlist": []}
-            logging.debug(f"ResolveOrAssignId: Created new folder '{folder_id}'.")
-
-        folder_data = all_folders[folder_id]
-        playlist = folder_data.get("playlist", [])
-
-        # Check if item already exists by URL
-        for stored_item in playlist:
-            if stored_item.get('url') == url_item['url']:
-                # If found, use its ID. Ensure the item in url_item has this ID.
-                url_item['id'] = stored_item.get('id', str(uuid.uuid4()))
-                logging.debug(f"ResolveOrAssignId: Found existing item. Assigned ID: {url_item['id']}")
-                # Also, update the existing item in storage with potentially new title/settings from url_item
-                stored_item.update(url_item)
-                if persist:
-                    file_io.write_folders_file(all_folders)
-                return url_item
-        
-        # If not found, assign a new ID and add it to the playlist in storage
-        if 'id' not in url_item:
-            url_item['id'] = str(uuid.uuid4())
-            logging.debug(f"ResolveOrAssignId: Assigned new ID: {url_item['id']}")
-        
-        playlist.append(url_item)
-        folder_data["playlist"] = playlist
-        if persist:
-            file_io.write_folders_file(all_folders)
-        logging.debug(f"ResolveOrAssignId: Added new item to folder '{folder_id}'. Item ID: {url_item['id']}")
-        return url_item
-
     # --- Global Instances ---
     mpv_session = MpvSessionManager(session_file_path=SESSION_FILE, dependencies={
         'get_all_folders_from_file': file_io.get_all_folders_from_file,
@@ -253,251 +210,41 @@ try:
         'SCRIPT_DIR': SCRIPT_DIR,
         'TEMP_PLAYLISTS_DIR': TEMP_PLAYLISTS_DIR
     })
-    
-    
-    def cleanup_ipc_socket():
+
+    handler_manager = HandlerManager(
+        mpv_session=mpv_session,
+        file_io_module=file_io,
+        services_module=services,
+        ipc_utils_module=ipc_utils,
+        send_message_func=send_message,
+        script_dir=SCRIPT_DIR,
+        anilist_cache_file=ANILIST_CACHE_FILE,
+        temp_playlists_dir=TEMP_PLAYLISTS_DIR,
+        log_stream_func=log_stream
+    )
+
+    def cleanup_ipc_socket(session_manager):
         """Remove the IPC socket file on exit, if it exists (non-Windows)."""
-        # Access the ipc_path from the global session manager instance
-        if mpv_session.ipc_path and platform.system() != "Windows":
-            ipc_dir = os.path.dirname(mpv_session.ipc_path)
-            if os.path.exists(mpv_session.ipc_path):
+        if session_manager.ipc_path and platform.system() != "Windows":
+            ipc_dir = os.path.dirname(session_manager.ipc_path)
+            if os.path.exists(session_manager.ipc_path):
                 try:
-                    os.remove(mpv_session.ipc_path)
-                    logging.info(f"Cleaned up IPC socket: {mpv_session.ipc_path}")
+                    os.remove(session_manager.ipc_path)
+                    logging.info(f"Cleaned up IPC socket: {session_manager.ipc_path}")
                 except OSError as e:
-                    logging.warning(f"Error removing IPC socket file {mpv_session.ipc_path}: {e}")
-            # Clean up the containing directory if it's empty
+                    logging.warning(f"Error removing IPC socket file {session_manager.ipc_path}: {e}")
             if os.path.exists(ipc_dir) and not os.listdir(ipc_dir):
                 try:
                     os.rmdir(ipc_dir)
                     logging.info(f"Cleaned up empty IPC directory: {ipc_dir}")
                 except OSError as e:
-                     logging.warning(f"Error removing IPC directory {ipc_dir}: {e}")
-    
-    def launch_unmanaged_mpv(playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags):
-        """Launches a new, unmanaged instance of MPV."""
-        logging.info("Launching a new, unmanaged MPV instance.")
-        mpv_exe = file_io.get_mpv_executable()
-        # This instance will not have a persistent IPC server, so it's fire-and-forget.
-        # We don't need to generate a unique IPC path.
-        
-        try:
-            full_command, has_terminal_flag = services.construct_mpv_command(
-                mpv_exe=mpv_exe,
-                urls=playlist,
-                geometry=geometry,
-                custom_width=custom_width,
-                custom_height=custom_height,
-                custom_mpv_flags=custom_mpv_flags,
-                automatic_mpv_flags=automatic_mpv_flags
-            )
+                        logging.warning(f"Error removing IPC directory {ipc_dir}: {e}")
 
-            popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
-
-            process = subprocess.Popen(full_command, **popen_kwargs)
-            
-            stderr_thread = threading.Thread(target=log_stream, args=(process.stderr, logging.warning, None))
-            stderr_thread.daemon = True
-            stderr_thread.start()
-    
-            logging.info(f"Unmanaged MPV process launched (PID: {process.pid}) with {len(playlist)} items.")
-            return {"success": True, "message": "New MPV instance launched."}
-        except Exception as e:
-            logging.error(f"An error occurred while trying to launch unmanaged mpv: {e}")
-            return {"success": False, "error": f"Error launching new mpv instance: {e}"}
-
-    # --- Command Handlers ---
-    def handle_play(message):
-        url_item = message.get('url_item')
-        folder_id = message.get('folderId')
-        if not folder_id or not url_item:
-            return {"success": False, "error": "Missing folderId or url_item for play action."}
-
-        logging.debug(f"handle_play: Original url_item from extension: {url_item}")
-        # Ensure the url_item has a stable ID, and it's present in folders.json
-        url_item = resolve_or_assign_item_id(url_item, folder_id)
-        logging.debug(f"handle_play: url_item after ID resolution: {url_item}")
-
-        # Get settings from config file
-        settings = file_io.get_settings()
-
-        bypass_scripts_config = message.get('bypassScripts', {})
-        processed_url, script_headers, ytdl_options = services.apply_bypass_script(
-            url_item, bypass_scripts_config, send_message, SCRIPT_DIR, mpv_session
-        )
-        url_item['url'] = processed_url
-        
-        disable_http_persistent = True if (script_headers and not ytdl_options) else False
-        custom_mpv_flags = message.get('custom_mpv_flags')
-        if disable_http_persistent:
-            persistent_flag = "--demuxer-lavf-o=http_persistent=0"
-            custom_mpv_flags = (custom_mpv_flags + " " + persistent_flag) if custom_mpv_flags else persistent_flag
-
-        # Run synchronously to ensure MPV is ready before returning success
-        result = mpv_session.start(
-            url_item, folder_id, settings, file_io, # Pass settings and file_io
-            geometry=message.get('geometry'), 
-            custom_width=message.get('custom_width'), 
-            custom_height=message.get('custom_height'), 
-            custom_mpv_flags=custom_mpv_flags, 
-            automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-            start_paused=message.get('start_paused', False), 
-            headers=script_headers, 
-            disable_http_persistent=disable_http_persistent,
-            ytdl_raw_options=ytdl_options
-        )
-        return result if result else {"success": False, "error": "Failed to start MPV session."}
-
-    def handle_play_batch(message):
-        playlist = message.get('playlist')
-        folder_id = message.get('folderId')
-        if not folder_id or not playlist:
-            return {"success": False, "error": "Missing folderId or playlist for play_batch action."}
-
-        logging.info(f"Processing play_batch request for folder '{folder_id}' with {len(playlist)} items.")
-        
-        settings = file_io.get_settings()
-        bypass_scripts_config = message.get('bypassScripts', {})
-        
-        # Optimization: Read folders file once, update all IDs, write once.
-        all_folders = file_io.get_all_folders_from_file()
-        processed_items = []
-        
-        for item in playlist:
-            # Ensure item is a dict
-            if isinstance(item, str): item = {'url': item}
-            
-            item = resolve_or_assign_item_id(item, folder_id, all_folders=all_folders, persist=False)
-            
-            processed_url, script_headers, ytdl_options = services.apply_bypass_script(
-                item, bypass_scripts_config, send_message, SCRIPT_DIR, mpv_session
-            )
-            item['url'] = processed_url
-            if script_headers: item['headers'] = script_headers
-            if ytdl_options: item['ytdl_raw_options'] = ytdl_options
-            item['disable_http_persistent'] = True if (script_headers and not ytdl_options) else False
-            
-            processed_items.append(item)
-            
-        file_io.write_folders_file(all_folders)
-
-        result = mpv_session.start(
-            processed_items, folder_id, settings, file_io,
-            geometry=message.get('geometry'), custom_width=message.get('custom_width'), custom_height=message.get('custom_height'), custom_mpv_flags=message.get('custom_mpv_flags'), automatic_mpv_flags=message.get('automatic_mpv_flags'), start_paused=message.get('start_paused', False)
-        )
-        return result
-
-    def handle_remove_item_live(message):
-        folder_id = message.get('folderId')
-        item_id = message.get('item_id')
-        if not folder_id or not item_id:
-            return {"success": False, "error": "Missing folderId or item_id."}
-        return mpv_session.remove(item_id, folder_id)
-
-    def handle_reorder_live(message):
-        folder_id = message.get('folderId')
-        new_order = message.get('new_order')
-        if not folder_id or not new_order:
-            return {"success": False, "error": "Missing folderId or new_order."}
-        return mpv_session.reorder(folder_id, new_order)
-
-    def handle_append(message):
-        url_item = message.get('url_item')
-        folder_id = message.get('folderId') # Append also needs folder_id to resolve/assign ID
-        if not url_item or not folder_id:
-            return {"success": False, "error": "Missing url_item or folderId for append action."}
-        
-        logging.debug(f"handle_append: Original url_item from extension: {url_item}")
-        # Ensure the url_item has a stable ID, and it's present in folders.json
-        url_item = resolve_or_assign_item_id(url_item, folder_id)
-        logging.debug(f"handle_append: url_item after ID resolution: {url_item}")
-
-        logging.info("Processing append request: resolving URL via bypass script if configured.")
-        bypass_scripts_config = message.get('bypassScripts', {})
-        processed_url, script_headers, ytdl_options = services.apply_bypass_script(
-            url_item, bypass_scripts_config, send_message, SCRIPT_DIR, mpv_session
-        )
-        url_item['url'] = processed_url
-        
-        disable_http_persistent = True if (script_headers and not ytdl_options) else False
-        
-        # Retry logic for append to handle transient IPC busy states
-        max_retries = 3
-        for attempt in range(max_retries):
-            response = mpv_session.append(url_item, headers=script_headers, mode="append", disable_http_persistent=disable_http_persistent, ytdl_raw_options=ytdl_options)
-            if response and response.get("success"):
-                return response
-            logging.warning(f"Append failed (attempt {attempt+1}/{max_retries}). Retrying in 0.5s...")
-            time.sleep(0.5)
-            
-        return {"success": False, "error": "Failed to append to MPV playlist after retries."}
-
-    def handle_play_new_instance(message):
-        return launch_unmanaged_mpv(
-            message.get('playlist', []), 
-            message.get('geometry'), 
-            message.get('custom_width'), 
-            message.get('custom_height'), 
-            message.get('custom_mpv_flags'), 
-            message.get('automatic_mpv_flags')
-        )
-
-    def handle_close_mpv(message):
-        return mpv_session.close()
-
-    def handle_is_mpv_running(message):
-        is_running = ipc_utils.is_process_alive(mpv_session.pid, mpv_session.ipc_path)
-        if not is_running and mpv_session.pid:
-            mpv_session.clear()
-        logging.info(f"MPV running status check: {is_running} (Path: {mpv_session.ipc_path})")
-        return {"success": True, "is_running": is_running}
-
-    def handle_export_data(message):
-        data = message.get('data')
-        return file_io.write_folders_file(data) if data is not None else {"success": False, "error": "No data provided."}
-
-    def handle_export_playlists(message):
-        data = message.get('data')
-        filename = message.get('filename')
-        if not data or not filename: return {"success": False, "error": "Missing data or filename."}
-        return file_io.write_export_file(filename, data)
-
-    def handle_export_all_separately(message):
-        folders = message.get('data')
-        if not folders: return {"success": False, "error": "No folder data provided."}
-        count = 0
-        for f_id, f_data in folders.items():
-            if 'playlist' in f_data:
-                safe_name = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in f_id).rstrip()
-                if file_io.write_export_file(safe_name, f_data['playlist'])["success"]: count += 1
-        return {"success": True, "message": f"Successfully exported {count} playlists."}
-
-    def handle_import_from_file(message):
-        filename = message.get('filename')
-        if not filename: return {"success": False, "error": "No filename provided."}
-        try:
-            filepath = os.path.abspath(os.path.join(file_io.EXPORT_DIR, filename))
-            if not filepath.startswith(os.path.abspath(file_io.EXPORT_DIR)):
-                return {"success": False, "error": "Access denied."}
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return {"success": True, "data": f.read()}
-        except Exception as e:
-            return {"success": False, "error": f"Failed to read file: {e}"}
-
-    def handle_open_export_folder(message):
-        try:
-            os.makedirs(file_io.EXPORT_DIR, exist_ok=True)
-            path = os.path.abspath(file_io.EXPORT_DIR)
-            if platform.system() == "Windows": subprocess.Popen(['explorer', os.path.normpath(path)])
-            elif platform.system() == "Darwin": subprocess.run(['open', path], check=True)
-            else: subprocess.run(['xdg-open', path], check=True)
-            return {"success": True, "message": "Opening export folder."}
-        except Exception as e:
-            return {"success": False, "error": f"Failed to open folder: {e}"}
+    # Register a cleanup function to run when the script exits.
+    atexit.register(cleanup_ipc_socket, mpv_session)
 
     def main():
         """Main message loop for native messaging from the browser."""
-
         # Ensure stdin/stdout are available (critical for native messaging)
         if sys.stdin is None or sys.stdout is None:
             logging.error("Standard input/output is missing. If on Windows, ensure the registry key points to 'python.exe' and not 'pythonw.exe'.")
@@ -513,31 +260,25 @@ try:
             send_message({"action": "session_restored", "result": restore_result})
 
         COMMAND_HANDLERS = {
-            'play': handle_play,
-            'play_batch': handle_play_batch,
-            'remove_item_live': handle_remove_item_live,
-            'reorder_live': handle_reorder_live,
-            'append': handle_append,
-            'play_new_instance': handle_play_new_instance,
-            'close_mpv': handle_close_mpv,
-            'is_mpv_running': handle_is_mpv_running,
-            'export_data': handle_export_data,
-            'export_playlists': handle_export_playlists,
-            'export_all_playlists_separately': handle_export_all_separately,
-            'list_import_files': lambda m: file_io.list_import_files(),
-            'import_from_file': handle_import_from_file,
-            'open_export_folder': handle_open_export_folder,
-            'get_anilist_releases': lambda m: services.get_anilist_releases_with_cache(
-                m.get('force', False), m.get('delete_cache', False), m.get('is_cache_disabled', False), 
-                ANILIST_CACHE_FILE, SCRIPT_DIR, send_message
-            ),
-            'run_ytdlp_update': lambda m: services.update_ytdlp(send_message),
-            'check_dependencies': lambda m: services.check_mpv_and_ytdlp_status(file_io.get_mpv_executable, send_message),
-            'get_all_folders': lambda m: {"success": True, "folders": file_io.get_all_folders_from_file()},
-            'get_default_automatic_flags': lambda m: {"success": True, "flags": [
-                {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
-                {"flag": "terminal", "description": "Show a terminal window.", "enabled": False}
-            ]}
+            'play': handler_manager.handle_play,
+            'play_batch': handler_manager.handle_play_batch,
+            'remove_item_live': handler_manager.handle_remove_item_live,
+            'reorder_live': handler_manager.handle_reorder_live,
+            'append': handler_manager.handle_append,
+            'play_new_instance': handler_manager.handle_play_new_instance,
+            'close_mpv': handler_manager.handle_close_mpv,
+            'is_mpv_running': handler_manager.handle_is_mpv_running,
+            'export_data': handler_manager.handle_export_data,
+            'export_playlists': handler_manager.handle_export_playlists,
+            'export_all_playlists_separately': handler_manager.handle_export_all_separately,
+            'list_import_files': handler_manager.handle_list_import_files,
+            'import_from_file': handler_manager.handle_import_from_file,
+            'open_export_folder': handler_manager.handle_open_export_folder,
+            'get_anilist_releases': handler_manager.handle_get_anilist_releases,
+            'run_ytdlp_update': handler_manager.handle_run_ytdlp_update,
+            'check_dependencies': handler_manager.handle_check_dependencies,
+            'get_all_folders': handler_manager.handle_get_all_folders,
+            'get_default_automatic_flags': handler_manager.handle_get_default_automatic_flags
         }
 
         while True:
@@ -568,9 +309,6 @@ try:
                     send_message(error_response)
                 except Exception as send_e:
                     logging.error(f"Could not send error message back to extension: {send_e}")
-    
-    # Register a cleanup function to run when the script exits.
-    atexit.register(cleanup_ipc_socket)
 
     if __name__ == '__main__':
         logging.info(f"Startup Args: {sys.argv}, TTY: {sys.stdin.isatty() if sys.stdin else 'None'}")

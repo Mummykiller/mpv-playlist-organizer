@@ -9,6 +9,7 @@ let debouncedSyncToNativeHostFile;
 let sendMessageAsync; // For asking confirmation from other contexts
 let findM3u8InUrl; // For the stream scanner
 let callNativeHost; // For oEmbed via native host
+let MPV_PLAYLIST_COMPLETED_EXIT_CODE; // For context-menu driven playlist updates
 
 // A lock to prevent multiple scraping processes for the same URL at the same time.
 const scrapingInProgress = new Set();
@@ -25,6 +26,7 @@ export function injectDependencies(deps) {
     sendMessageAsync = deps.sendMessageAsync;
     findM3u8InUrl = deps.findM3u8InUrl;
     callNativeHost = deps.callNativeHost;
+    MPV_PLAYLIST_COMPLETED_EXIT_CODE = deps.MPV_PLAYLIST_COMPLETED_EXIT_CODE;
 }
 
 /**
