@@ -8,7 +8,7 @@ sys.dont_write_bytecode = True
 import re
 # --- Windows Console Hiding Logic ---
 # This block checks if the script is running on Windows with the standard 'python.exe'
-# interpreter. If so, it re-launches itself using 'pythonw.exe' (the windowless version)
+# interpreter. If so, it re-launchs itself using 'pythonw.exe' (the windowless version)
 # and exits. This prevents a console window from appearing behind the GUI.
 if sys.platform == "win32" and sys.executable.endswith("python.exe"):
     import subprocess
@@ -45,12 +45,44 @@ INSTALL_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(INSTALL_DIR, "data")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 
+# --- Helper to generate User-Agent string ---
+def _generate_user_agent(browser_name, os_name):
+    """Generates a plausible User-Agent string based on browser and OS."""
+    base_ua = "Mozilla/5.0 ({os_part}; K) AppleWebKit/537.36 (KHTML, like Gecko)"
+    
+    os_map = {
+        "Linux": "X11; Linux x86_64",
+        "Windows": "Windows NT 10.0; Win64; x64",
+        "Darwin": "Macintosh; Intel Mac OS X 10_15_7" # Example for macOS
+    }
+    os_part = os_map.get(os_name, os_name) # Fallback to raw os_name if not mapped
+
+    browser_map = {
+        "brave": "Brave Chrome/120.0.0.0", # Specific version for Brave
+        "chrome": "Chrome/120.0.0.0",
+        "edge": "Edg/120.0.0.0",
+        "firefox": "Firefox/120.0", # Firefox has a different format
+        "vivaldi": "Vivaldi/6.5.3206.50",
+        "opera": "Opera/100.0.0.0"
+    }
+    # Attempt to get a more specific browser part, or use a generic Chrome-like if not found
+    browser_part = browser_map.get(browser_name, f"Chrome/120.0.0.0")
+    if browser_name == "brave": # Brave's UA typically also includes Chrome
+        browser_part = f"Brave Chrome/120.0.0.0"
+    elif browser_name == "vivaldi":
+        browser_part = f"Vivaldi/6.5.3206.50 Chrome/120.0.0.0" # Vivaldi also includes Chrome
+    elif browser_name == "edge":
+        browser_part = f"Edg/120.0.0.0 Chrome/120.0.0.0" # Edge also includes Chrome
+
+    return f"{base_ua.format(os_part=os_part)} {browser_part} Safari/537.36"
+
 # --- Templates ---
 
 class InstallerLogic:
     """Abstract base class for platform-specific installer logic."""
-    def __init__(self, logger_func):
+    def __init__(self, logger_func, ask_file_func=None):
         self.log = logger_func
+        self.ask_file = ask_file_func
 
     def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
         raise NotImplementedError
@@ -122,7 +154,7 @@ class InstallerLogic:
                     startupinfo.dwFlags |= subprocess.STARTF_USESTDHANDLES | subprocess.STARTF_USESHOWWINDOW
                     startupinfo.wShowWindow = subprocess.SW_HIDE
 
-                proc = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
+                proc = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, timeout=20)
                 
                 if proc.returncode == 0:
                     results.append(f"✅ Cookie access successful for {browser}")
@@ -134,6 +166,9 @@ class InstallerLogic:
                     results.append(msg)
                     self.log(f"Cookie error: {err}")
                     has_critical_error = True
+            except subprocess.TimeoutExpired:
+                results.append(f"❌ Cookie test timed out for {browser}.\n   (Tip: Check your network or browser profile.)")
+                has_critical_error = True
             except Exception as e:
                 results.append(f"❌ Cookie test error: {e}")
                 has_critical_error = True
@@ -143,6 +178,13 @@ class InstallerLogic:
         return "\n".join(results), has_critical_error
 
 class WindowsLogic(InstallerLogic):
+    def _get_console_python(self):
+        """Helper to ensure we use python.exe instead of pythonw.exe for console output."""
+        exe = sys.executable
+        if exe.lower().endswith("pythonw.exe"):
+            return exe[:-5] + ".exe"
+        return exe
+
     def get_browser_configs(self):
         manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
         return {
@@ -150,6 +192,8 @@ class WindowsLogic(InstallerLogic):
             "Brave": ("SOFTWARE\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts", manifest_path),
             "Microsoft Edge": ("SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts", manifest_path),
             "Chromium": ("SOFTWARE\\Chromium\\NativeMessagingHosts", manifest_path),
+            "Vivaldi": ("SOFTWARE\\Vivaldi\\NativeMessagingHosts", manifest_path),
+            "Opera": ("SOFTWARE\\Opera Software\\Opera Stable\\NativeMessagingHosts", manifest_path),
         }
 
     def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
@@ -159,13 +203,21 @@ class WindowsLogic(InstallerLogic):
         self.log("Searching for mpv.exe...")
         mpv_path = shutil.which('mpv.exe')
         if not mpv_path:
-            self.log("mpv.exe not found in PATH. Please select it manually.")
-            # Note: File dialogs must be run on main thread. 
-            # For simplicity in this refactor, we assume PATH or fail, 
-            # or the caller handles the UI interaction before calling install.
-            # Ideally, we'd pass a callback or handle this in the UI layer.
-            # Falling back to a hard error here for safety in thread.
-            raise FileNotFoundError("mpv.exe not found in PATH. Please add it to PATH or implement manual selection.")
+            # Try to use existing config if available
+            try:
+                existing_mpv = file_io.get_mpv_executable()
+                if existing_mpv and os.path.exists(existing_mpv):
+                    mpv_path = existing_mpv
+                    self.log(f"mpv.exe found in existing config: {mpv_path}")
+            except Exception:
+                pass
+
+        if not mpv_path and self.ask_file:
+            self.log("mpv.exe not found. Prompting user to select it...")
+            mpv_path = self.ask_file("Select mpv.exe", [("Executable", "*.exe"), ("All Files", "*.*")])
+
+        if not mpv_path:
+            raise FileNotFoundError("mpv.exe not found in PATH or config. Please add it to PATH or edit data/config.json.")
         
         self.log(f"Found mpv.exe at: {mpv_path}")
 
@@ -181,7 +233,7 @@ class WindowsLogic(InstallerLogic):
 
         # 4. Create .bat wrapper
         script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
-        python_executable = sys.executable.replace("pythonw.exe", "python.exe")
+        python_executable = self._get_console_python()
         wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.bat")
         with open(wrapper_path, 'w') as f:
             f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\n"{python_executable}" "%~dp0{SCRIPT_NAME}" %*')
@@ -229,7 +281,6 @@ class WindowsLogic(InstallerLogic):
             os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json"),
             os.path.join(INSTALL_DIR, "mpv-cli.bat"),
             os.path.join(INSTALL_DIR, "play_with_bypass.bat"),
-            os.path.join(INSTALL_DIR, "utils", "_bypass_logic.py")
         ]
         for file_path in files_to_remove:
             if os.path.exists(file_path):
@@ -249,7 +300,8 @@ class WindowsLogic(InstallerLogic):
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
                 current_path, _ = winreg.QueryValueEx(key, 'Path')
-                if INSTALL_DIR in current_path.split(';'):
+                # Normalize for case-insensitive comparison
+                if INSTALL_DIR.lower() in [p.lower() for p in current_path.split(';')]:
                     return "Directory is already in the user PATH."
 
                 new_path = f"{current_path};{INSTALL_DIR}"
@@ -265,10 +317,14 @@ class WindowsLogic(InstallerLogic):
 
     def _create_bypass_script(self, browser_name, enable_youtube_bypass):
         self.log(f"Generating bypass script for '{browser_name}'...")
-        python_executable = sys.executable.replace("pythonw.exe", "python.exe")
+        python_executable = self._get_console_python()
+            
         bypass_logic_script = os.path.join(INSTALL_DIR, "utils", "_bypass_logic.py")
         
         youtube_enabled_str = "true" if enable_youtube_bypass else "false"
+        
+        # Generate User-Agent string
+        user_agent_str = _generate_user_agent(browser_name, platform.system())
 
         content = f"""@echo off
 setlocal enabledelayedexpansion
@@ -277,22 +333,48 @@ setlocal enabledelayedexpansion
 
 :: Check for arguments
 if "%~1"=="" (
-    echo {{"error": "Usage: %0 ^<URL^>"}} >&2
+    echo {{'error': 'Usage: %0 ^<URL^>'}} >&2
     exit /b 1
 )
 
+:: --- Configuration ---
+:: These variables are set by the installer based on your selections.
 set "URL=%~1"
 set "BROWSER={browser_name}"
+:: This flag controls YouTube-specific features.
+:: If "true", it enables using browser cookies and marking videos as watched.
+:: This is controlled by the "Enable YouTube Bypass" checkbox in the installer.
 set "YOUTUBE_ENABLED={youtube_enabled_str}"
 set "PYTHON_EXE={python_executable}"
 set "BYPASS_SCRIPT={bypass_logic_script}"
+set "USER_AGENT_STR={user_agent_str}"
 
-:: Execute the Python bypass logic script
-:: It prints JSON output to stdout.
-"%PYTHON_EXE%" "%BYPASS_SCRIPT%" "%URL%" "%BROWSER%" "%YOUTUBE_ENABLED%"
-if !errorlevel! neq 0 (
+:: --- Execution ---
+:: The Python script _bypass_logic.py is called with the above settings to get a direct streamable URL.
+:: Execute the Python bypass logic script and capture its output
+:: Redirect stderr to stdout (2>&1), then capture all output to a temporary file
+:: Using a temporary file is more robust for multi-line output in batch
+set "TEMP_OUTPUT_FILE=%TEMP%\\bypass_output_!RANDOM!.txt"
+"%PYTHON_EXE%" "%BYPASS_SCRIPT%" "%URL%" "%BROWSER%" "%YOUTUBE_ENABLED%" "%USER_AGENT_STR%" > "!TEMP_OUTPUT_FILE!" 2>&1
+set "PYTHON_EXIT_CODE=!ERRORLEVEL!"
+
+:: Read the captured output
+set "PYTHON_OUTPUT="
+for /f "usebackq delims=" %%A in ("!TEMP_OUTPUT_FILE!") do (
+    call set "PYTHON_OUTPUT=!PYTHON_OUTPUT!%%A\n"
+)
+del "!TEMP_OUTPUT_FILE!"
+
+:: Check Python script's exit code
+if !PYTHON_EXIT_CODE! neq 0 (
+    :: Python script failed, print its output to stderr of the current script
+    echo !PYTHON_OUTPUT! >&2
     echo An error occurred during bypass script execution. >&2
-    exit /b !errorlevel!
+    exit /b !PYTHON_EXIT_CODE!
+) else (
+    :: Python script succeeded, print its output to stdout of the current script
+    echo !PYTHON_OUTPUT!
+    exit /b 0
 )
 """
         path = os.path.join(INSTALL_DIR, "play_with_bypass.bat")
@@ -375,14 +457,13 @@ class UnixLogic(InstallerLogic):
                     os.remove(symlink_path)
                     self.log(f"Removed manifest link for {browser}.")
                 except OSError as e:
-                    self.log(f"Failed to remove link for {browser}: {e}")
+                    self.log(f"Could not unregister for {browser}: {e}")
 
         files_to_remove = [
             os.path.join(DATA_DIR, f"{HOST_NAME}.json"),
             os.path.join(INSTALL_DIR, "run_native_host.sh"),
             os.path.join(INSTALL_DIR, "mpv-cli"),
             os.path.join(INSTALL_DIR, "play_with_bypass.sh"),
-            os.path.join(INSTALL_DIR, "utils", "_bypass_logic.py")
         ]
         for file_path in files_to_remove:
             if os.path.exists(file_path):
@@ -395,7 +476,7 @@ class UnixLogic(InstallerLogic):
         with open(wrapper_path, 'w') as f:
             f.write("#!/bin/sh\n")
             f.write("export PYTHONDONTWRITEBYTECODE=1\n")
-            f.write(f'python3 "{script_path}" "$@"\n')
+            f.write(f'"{sys.executable}" "$@" "{script_path}"\n') # Corrected argument order
         os.chmod(wrapper_path, 0o755)
         self.log(f"Created executable Unix CLI wrapper: mpv-cli")
 
@@ -409,28 +490,47 @@ class UnixLogic(InstallerLogic):
         
         youtube_enabled_str = "true" if enable_youtube_bypass else "false"
 
+        # NEW: Generate User-Agent string dynamically
+        user_agent_str = _generate_user_agent(browser_name, platform.system())
+
         content = f"""#!/bin/bash
 # Auto-generated bypass script
 # This script uses the Python helper _bypass_logic.py to process URLs.
 
 # Check for arguments
 if [ -z "$1" ]; then
-  echo "{{\\"error\\": \\"Usage: $0 <URL>\\"}}" >&2
+  echo "{{\"error\": \"Usage: $0 <URL>\"}}" >&2
   exit 1
 fi
 
+# --- Configuration ---
+# These variables are set by the installer based on your selections.
 URL="$1"
 BROWSER="{browser_name}"
+# This flag controls YouTube-specific features.
+# If "true", it enables using browser cookies and marking videos as watched.
+# This is controlled by the "Enable YouTube Bypass" checkbox in the installer.
 YOUTUBE_ENABLED="{youtube_enabled_str}"
 PYTHON_EXE="{python_executable}"
 BYPASS_SCRIPT="{bypass_logic_script}"
+USER_AGENT_STR="{user_agent_str}"
 
-# Execute the Python bypass logic script
-# It prints JSON output to stdout.
-"$PYTHON_EXE" "$BYPASS_SCRIPT" "$URL" "$BROWSER" "$YOUTUBE_ENABLED"
-if [ $? -ne 0 ]; then
+# --- Execution ---
+# The Python script _bypass_logic.py is called with the above settings to get a direct streamable URL.
+# Execute the Python bypass logic script and capture its output
+PYTHON_OUTPUT=$("{python_executable}" "{bypass_logic_script}" "$URL" "{browser_name}" "{youtube_enabled_str}" "{user_agent_str}" 2>&1)
+PYTHON_EXIT_CODE=$?
+
+# Check Python script's exit code
+if [ $PYTHON_EXIT_CODE -ne 0 ]; then
+    # Python script failed, print its output to stderr of the current script
+    echo "$PYTHON_OUTPUT" >&2
     echo "An error occurred during bypass script execution." >&2
     exit 1
+else
+    # Python script succeeded, print its output to stdout of the current script
+    echo "$PYTHON_OUTPUT"
+    exit 0
 fi
 """
         path = os.path.join(INSTALL_DIR, "play_with_bypass.sh")
@@ -447,6 +547,7 @@ class MacOSLogic(UnixLogic):
             "Chromium": os.path.join(base_path, "Chromium/NativeMessagingHosts"),
             "Brave": os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             "Microsoft Edge": os.path.join(base_path, "Microsoft Edge/NativeMessagingHosts"),
+            "Vivaldi": os.path.join(base_path, "Vivaldi/NativeMessagingHosts"),
         }
 
 class LinuxLogic(UnixLogic):
@@ -457,6 +558,8 @@ class LinuxLogic(UnixLogic):
             "Chromium": os.path.join(base_path, "chromium/NativeMessagingHosts"),
             "Brave": os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             "Microsoft Edge": os.path.join(base_path, "microsoft-edge/NativeMessagingHosts"),
+            "Vivaldi": os.path.join(base_path, "vivaldi/NativeMessagingHosts"),
+            "Opera": os.path.join(base_path, "opera/NativeMessagingHosts"),
         }
 
 # --- Tooltip Class for detailed explanations ---
@@ -527,15 +630,24 @@ class HostManagerApp:
 
     def _get_logic_strategy(self):
         system = platform.system()
+        ask_func = self._ask_file_path_sync
         if system == "Windows":
-            return WindowsLogic(self.log)
+            return WindowsLogic(self.log, ask_func)
         elif system == "Linux":
-            return LinuxLogic(self.log)
+            return LinuxLogic(self.log, ask_func)
         elif system == "Darwin":
-            return MacOSLogic(self.log)
+            return MacOSLogic(self.log, ask_func)
         else:
             self.log(f"Unsupported platform: {system}")
-            return UnixLogic(self.log) # Fallback
+            return UnixLogic(self.log, ask_func) # Fallback
+
+    def _ask_file_path_sync(self, title, filetypes):
+        q = queue.Queue()
+        def _ask():
+            path = filedialog.askopenfilename(title=title, filetypes=filetypes, parent=self.root)
+            q.put(path)
+        self.root.after(0, _ask)
+        return q.get()
 
     def _setup_ui(self):
         # --- Styles ---
@@ -626,7 +738,7 @@ class HostManagerApp:
 
         self.browser_var = tk.StringVar()
         self.browser_combobox = ttk.Combobox(browser_input_frame, textvariable=self.browser_var, state="readonly", font=("Segoe UI", 10))
-        self.browser_combobox['values'] = ('brave', 'chrome', 'firefox', 'edge', 'vivaldi', 'opera')
+        self.browser_combobox['values'] = ('brave', 'chrome', 'edge', 'vivaldi', 'opera')
         self.browser_combobox.grid(row=0, column=0, sticky="ew")
 
         self.diagnostics_btn = ttk.Button(browser_input_frame, text="Run Diagnostics", command=self.run_diagnostics)
@@ -714,9 +826,9 @@ class HostManagerApp:
             messagebox.showerror("Error", "Extension ID cannot be empty.")
             return
         
-        # Basic validation for Chrome extension ID format (32 lowercase alpha characters)
-        if not re.match(r"^[a-z]{32}$", extension_id):
-            if not messagebox.askyesno("Warning", "The Extension ID doesn't look like a standard Chrome extension ID (32 lowercase letters).\n\nAre you sure you want to proceed?"):
+        # Basic validation for Chrome extension ID format (32 characters, a-p)
+        if not re.match(r"^[a-p]{32}$", extension_id):
+            if not messagebox.askyesno("Warning", "The Extension ID doesn't look like a standard Chrome extension ID (32 characters, a-p).\n\nAre you sure you want to proceed?"):
                 return
 
         self.install_button.config(state=tk.DISABLED)
@@ -858,7 +970,7 @@ class HostManagerApp:
             self.browser_combobox.config(state="readonly")
 
     def _install_cli_thread(self):
-        """The actual logic for creating the CLI wrapper, run in a thread."""
+        """The actual logic for creating the CLI wrapper, run in a new thread."""
         self.log("--- Installing CLI Wrapper ---")
         try:
             self.logic.install_cli()
@@ -874,7 +986,7 @@ class HostManagerApp:
             self.path_button.config(state=tk.NORMAL)
             self.browser_combobox.config(state="readonly")
 
-    def _add_to_path_thread(self):
+    def run_add_to_path(self):
         """The actual logic for adding the install directory to the user's PATH."""
         self.log("--- Adding to User PATH ---")
         try:

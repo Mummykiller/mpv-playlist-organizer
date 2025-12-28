@@ -118,7 +118,7 @@ class MpvSessionManager:
                 f.write(f"{url}\n")
         return path
 
-    def append(self, url_item, headers=None, mode="append", disable_http_persistent=False, ytdl_raw_options=None):
+    def append(self, url_item, headers=None, mode="append", disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
         """Attempts to append a single new URL to an already running MPV instance."""
         with self.sync_lock:
             logging.info(f"Entering append for URL: {url_item.get('url')}")
@@ -166,40 +166,48 @@ class MpvSessionManager:
                                 if self.playlist_tracker: self.playlist_tracker.add_item(url_item)
                             return {"success": True, "message": "Item already in playlist (synced).", "skipped": True}
 
-                # If headers are provided, set the http-header-fields property before loading the file.
-                # This avoids the parsing issues with passing options to loadfile directly.
-                header_string = ""
-                if headers:
-                    header_list = []
-                    for k, v in headers.items():
-                        # Remove commas from values to prevent parsing ambiguity in the property list
-                        safe_v = v.replace(",", "")
-                        header_list.append(f"{k}: {safe_v}")
-                    header_string = ",".join(header_list)
+                # Construct options for loadfile command
+                load_options = {}
+
+                # Prioritize headers from url_item if present, otherwise use explicit headers arg
+                effective_headers = url_item.get('headers') if 'headers' in url_item else headers
+                if effective_headers:
+                    # Setting headers as properties via IPC. This is global for the MPV instance.
+                    # For loadfile specifically, we need to pass them as options.
+                    load_options['http-header-fields'] = [f"{k}: {v}" for k, v in effective_headers.items()]
+                    if 'User-Agent' in effective_headers: load_options['user-agent'] = effective_headers['User-Agent']
+                    if 'Referer' in effective_headers: load_options['referrer'] = effective_headers['Referer']
                 
-                logging.info(f"Setting http-header-fields to: '{header_string}'")
-                if robust_send({"command": ["set_property", "http-header-fields", header_string]}) is None:
-                     raise RuntimeError("Failed to set http-header-fields via IPC")
+                # Prioritize disable_http_persistent from url_item if present
+                effective_disable_http_persistent = url_item.get('disable_http_persistent') if 'disable_http_persistent' in url_item else disable_http_persistent
+                if effective_disable_http_persistent:
+                    load_options['demuxer-lavf-o'] = 'http_persistent=0'
 
-                if headers:
-                    if 'User-Agent' in headers:
-                        robust_send({"command": ["set_property", "user-agent", headers['User-Agent']]})
-                    if 'Referer' in headers:
-                        robust_send({"command": ["set_property", "referrer", headers['Referer']]})
+                # Prioritize ytdl_raw_options from url_item if present
+                effective_ytdl_raw_options = url_item.get('ytdl_raw_options') if 'ytdl_raw_options' in url_item else ytdl_raw_options
+                effective_use_ytdl_mpv = url_item.get('use_ytdl_mpv') if 'use_ytdl_mpv' in url_item else use_ytdl_mpv
+                effective_is_youtube = url_item.get('is_youtube') if 'is_youtube' in url_item else is_youtube
 
-                if disable_http_persistent:
-                    logging.info("Setting demuxer-lavf-o=http_persistent=0 for this item.")
-                    robust_send({"command": ["set_property", "demuxer-lavf-o", "http_persistent=0"]})
 
-                if ytdl_raw_options:
-                    logging.info(f"Setting ytdl-raw-options to: '{ytdl_raw_options}'")
-                    robust_send({"command": ["set_property", "ytdl-raw-options", ytdl_raw_options]})
+                if effective_use_ytdl_mpv or effective_is_youtube:
+                    load_options['ytdl'] = 'yes'
+                    if effective_ytdl_raw_options:
+                        load_options['ytdl-raw-options'] = effective_ytdl_raw_options
+                    else: # If no raw options, use default format
+                        load_options['ytdl-format'] = 'bestvideo+bestaudio'
 
                 # Create a temporary M3U file for this single item to preserve title metadata
-                m3u_path = self._create_m3u_file([url_item])
-                logging.info(f"Loading M3U file '{m3u_path}' with mode '{mode}'.")
+                # The M3U file itself might not carry these IPC load options.
+                # It's better to pass the original URL to loadfile and apply options.
                 
-                load_resp = robust_send({"command": ["loadfile", m3u_path, mode]})
+                logging.info(f"Loading URL '{url_to_add}' with mode '{mode}' and options: {load_options}")
+                
+                load_cmd = ["loadfile", url_to_add, mode]
+                if load_options:
+                    load_cmd.append(load_options) # Append dictionary of options
+                
+                load_resp = robust_send({"command": load_cmd})
+                
                 if load_resp is None or load_resp.get("error") != "success":
                     raise RuntimeError(f"Failed to send loadfile command via IPC: {load_resp}")
 
@@ -306,7 +314,7 @@ class MpvSessionManager:
             
             return {"success": True, "message": "Live playlist reordered."}
 
-    def _launch(self, url_items, folder_id, settings, file_io, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=None, disable_http_persistent=False):
+    def _launch(self, url_items, folder_id, settings, file_io, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
         """Launches a new instance of MPV with the given URL and settings."""
         logging.info(f"Starting a new MPV instance with {len(url_items)} items.")
         mpv_exe = self.get_mpv_executable()
@@ -323,18 +331,23 @@ class MpvSessionManager:
                 mpv_exe=mpv_exe,
                 ipc_path=ipc_path,
                 urls=[m3u_path], # Pass the M3U file instead of the raw URL
-                is_youtube=first_item.get('is_youtube'),
-                ytdl_raw_options=first_item.get('ytdl_raw_options'),
+                is_youtube=is_youtube, # Use the passed is_youtube flag
+                ytdl_raw_options=first_item.get('ytdl_raw_options'), # ytdl_raw_options from processed item
                 geometry=geometry,
                 custom_width=custom_width,
                 custom_height=custom_height,
                 custom_mpv_flags=custom_mpv_flags,
                 automatic_mpv_flags=automatic_mpv_flags,
-                headers=headers,
+                headers=headers, # Headers from processed item or passed arg
                 disable_http_persistent=disable_http_persistent,
                 start_paused=start_paused,
                 script_dir=self.SCRIPT_DIR,
-                load_on_completion_script=True # NEW ARGUMENT
+                load_on_completion_script=True,
+                # Pass bypass options
+                headers_from_bypass=first_item.get('headers'), # headers from bypass stored in item
+                ytdl_raw_options_from_bypass=first_item.get('ytdl_raw_options'), # from bypass stored in item
+                use_ytdl_mpv_from_bypass=use_ytdl_mpv, # from bypass
+                is_youtube_from_bypass=is_youtube # from bypass
             )
 
             popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
@@ -359,9 +372,8 @@ class MpvSessionManager:
             # If we launched via a terminal emulator, the process PID is for the terminal,
             # not MPV. We need to connect to the IPC socket to get the real MPV PID.
             if platform.system() != "Windows" and has_terminal_flag:
-                time.sleep(1) # Give MPV time to start and create the socket
                 try:
-                    pid_response = self.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=2.0, expect_response=True)
+                    pid_response = self.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=5.0, expect_response=True)
                     if pid_response and pid_response.get("error") == "success":
                         actual_mpv_pid = pid_response.get("data")
                         if actual_mpv_pid:
@@ -413,7 +425,7 @@ class MpvSessionManager:
             logging.error(f"An error occurred while trying to launch mpv: {e}")
             return {"success": False, "error": f"Error launching mpv: {e}"}
 
-    def start(self, url_items, folder_id, settings, file_io, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, headers=None, disable_http_persistent=False, ytdl_raw_options=None):
+    def start(self, url_items, folder_id, settings, file_io, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
         """Starts a new mpv process with a playlist of URLs, or attempts to sync."""
         
         # Ensure url_items is a list
@@ -428,7 +440,9 @@ class MpvSessionManager:
             h = item.get('headers') if isinstance(item, dict) and 'headers' in item else headers
             d = item.get('disable_http_persistent') if isinstance(item, dict) and 'disable_http_persistent' in item else disable_http_persistent
             y = item.get('ytdl_raw_options') if isinstance(item, dict) and 'ytdl_raw_options' in item else ytdl_raw_options
-            return h, d, y
+            u = item.get('use_ytdl_mpv') if isinstance(item, dict) and 'use_ytdl_mpv' in item else use_ytdl_mpv
+            i = item.get('is_youtube') if isinstance(item, dict) and 'is_youtube' in item else is_youtube
+            return h, d, y, u, i
 
         if self.pid and not ipc_utils.is_process_alive(self.pid, self.ipc_path):
             logging.info("Detected a stale MPV session. Clearing state before proceeding.")
@@ -464,9 +478,9 @@ class MpvSessionManager:
 
                 # Append items individually to ensure they appear as flat entries with titles
                 for item in items_to_add:
-                    h, d, y = get_opts(item)
+                    h, d, y, u, i = get_opts(item)
                     # We use self.append which now handles force-media-title correctly
-                    res = self.append(item, headers=h, mode="append-play", disable_http_persistent=d, ytdl_raw_options=y)
+                    res = self.append(item, headers=h, mode="append-play", disable_http_persistent=d, ytdl_raw_options=y, use_ytdl_mpv=u, is_youtube=i)
                     if not res:
                         return {"success": False, "error": "Failed to append item to existing session."}
                 
@@ -479,7 +493,7 @@ class MpvSessionManager:
 
         # Launch the first item
         first_item = url_items[0]
-        h, d, y = get_opts(first_item)
+        h, d, y, u, i = get_opts(first_item)
         launch_result = self._launch(
             url_items, folder_id, settings, file_io,
             geometry=geometry, 
@@ -489,7 +503,10 @@ class MpvSessionManager:
             automatic_mpv_flags=automatic_mpv_flags, 
             start_paused=start_paused, 
             headers=h, 
-            disable_http_persistent=d
+            disable_http_persistent=d,
+            ytdl_raw_options=y,
+            use_ytdl_mpv=u,
+            is_youtube=i
         )
 
         return launch_result

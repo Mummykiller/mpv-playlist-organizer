@@ -16,7 +16,7 @@ class PlaylistTracker:
         self.played_item_ids = set()
         self.file_io = file_io
         self.ipc_path = ipc_path # Store the IPC path to create a dedicated connection
-        self.ipc_manager = None 
+        self.ipc_manager = None
         self.tracking_thread = None
         self.is_tracking = False
         self.clear_behavior = settings.get('playlist_clear_behavior', 'full_on_completion') # 'full_on_completion' or 'on_item_finish'
@@ -46,7 +46,7 @@ class PlaylistTracker:
         logging.info(f"Playlist tracker stopped for folder '{self.folder_id}'. Played item IDs: {self.played_item_ids}")
         if self.tracking_thread:
             self.tracking_thread.join()
-        
+
         if self.clear_behavior == 'full_on_completion':
             self._compare_and_clear(mpv_return_code)
 
@@ -76,7 +76,7 @@ class PlaylistTracker:
         The main tracking loop that connects to MPV's IPC socket and listens for events.
         """
         time.sleep(2) # Wait for mpv to start and the IPC socket to be available
-        
+
         # Create a dedicated IPC manager for this thread
         self.ipc_manager = ipc_utils.IPCSocketManager()
         if not self.ipc_manager.connect(self.ipc_path):
@@ -85,7 +85,7 @@ class PlaylistTracker:
 
         # Observe the 'path' property to detect when a file finishes
         self.ipc_manager.send({"command": ["observe_property", 1, "path"]})
-        
+
         current_path = None
         response = self.ipc_manager.send({"command": ["get_property", "path"]}, expect_response=True)
         if response and 'data' in response:
@@ -158,8 +158,8 @@ class PlaylistTracker:
                 if not self.ipc_manager._sock: # If socket is explicitly closed by manager
                     logging.info("MPV IPC socket closed. Stopping tracker.")
                     self.is_tracking = False
-                time.sleep(1) # Avoid busy-looping on other errors
-        
+                time.sleep(1) # Original sleep
+
         # Clean up the local manager when loop exits
         if self.ipc_manager:
             self.ipc_manager.close()

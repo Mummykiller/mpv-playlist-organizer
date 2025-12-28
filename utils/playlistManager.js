@@ -212,7 +212,8 @@ export async function handleAdd(request, sender) {
 
     // If the title and URL are already provided (by the efficient on-page button),
     // add them directly without using the scanner.
-    if (request.data?.url && request.data?.title) {
+    const isYouTubePlaylist = request.data?.url && request.data.url.includes('youtube.com/playlist');
+    if (request.data?.url && request.data?.title && !isYouTubePlaylist) {
         scrapingInProgress.add(request.data.url);
         broadcastLog({ text: `[Background]: Received pre-scraped item. Adding directly.`, type: 'info' });
         try {
