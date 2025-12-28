@@ -22,7 +22,7 @@ class HandlerManager:
     def _process_url_item(self, url_item, folder_id, bypass_scripts_config, all_folders):
         """
         Helper to process a single URL item: resolves/assigns ID and applies bypass scripts.
-        Takes `all_folders` and returns the updated `url_item`, `script_headers`, `ytdl_options`, and `all_folders`.
+        Returns the updated `url_item`, `script_headers`, `ytdl_options`, `use_ytdl_mpv`, `is_youtube`, and `all_folders`.
         """
         # Ensure item is a dict
         if isinstance(url_item, str): 
@@ -31,15 +31,20 @@ class HandlerManager:
         # Call the refactored _resolve_or_assign_item_id
         url_item, all_folders = self._resolve_or_assign_item_id(url_item, folder_id, all_folders)
         
-        processed_url, script_headers, ytdl_options = self.services.apply_bypass_script(
+        # New return signature from apply_bypass_script (5 values)
+        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag = self.services.apply_bypass_script(
             url_item, bypass_scripts_config, self.send_message, self.script_dir, self.mpv_session
         )
         url_item['url'] = processed_url # Update URL with processed one
         if script_headers: url_item['headers'] = script_headers
         if ytdl_options: url_item['ytdl_raw_options'] = ytdl_options
+        # Store these flags in url_item for consistency if needed later, e.g., in batch processing
+        url_item['use_ytdl_mpv'] = use_ytdl_mpv_flag
+        url_item['is_youtube'] = is_youtube_flag
+
         url_item['disable_http_persistent'] = True if (script_headers and not ytdl_options) else False
         
-        return url_item, script_headers, ytdl_options, all_folders
+        return url_item, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, all_folders
 
     def _prepare_mpv_flags(self, message, script_headers, ytdl_options):
         """
@@ -109,7 +114,7 @@ class HandlerManager:
 
         # Prepare URL item (resolve ID, apply bypass scripts)
         bypass_scripts_config = message.get('bypassScripts', {})
-        url_item, script_headers, ytdl_options, all_folders = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
+        url_item, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, all_folders = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
         logging.debug(f"handle_play: url_item after processing: {url_item}")
 
         # Write changes to all_folders back to file
@@ -132,7 +137,9 @@ class HandlerManager:
             start_paused=message.get('start_paused', False), 
             headers=script_headers, 
             disable_http_persistent=disable_http_persistent,
-            ytdl_raw_options=ytdl_options
+            ytdl_raw_options=ytdl_options,
+            use_ytdl_mpv=use_ytdl_mpv_flag, # NEW
+            is_youtube=is_youtube_flag      # NEW
         )
         return result if result else {"success": False, "error": "Failed to start MPV session."}
 
@@ -151,20 +158,10 @@ class HandlerManager:
         all_folders = self.file_io.get_all_folders_from_file()
         processed_items = []
         
-        # Prepare MPV flags once for the batch, assuming they apply to all items in the batch equally
-        # The script_headers and ytdl_options will come from the _process_url_item for the *first* item
-        # if the flags are meant to be dynamic. If not, they'll remain None from default.
-        # For a batch, it's more likely global flags are applied, so we can get them from the message.
-        # However, _process_url_item also returns item-specific headers/ytdl_options if applicable.
-        # We need to decide if batch flags are truly global or if the first item dictates it.
-        # Current logic is that individual items can carry their own headers/ytdl_options which
-        # will be handled by mpv_session.start if passed in the item dictionary.
-        
         for item in playlist:
             # _process_url_item handles item conversion to dict internally now
-            
-            # Process item (resolve ID, apply bypass scripts, update item with headers/ytdl_options)
-            processed_item, _, _, all_folders = self._process_url_item(item, folder_id, bypass_scripts_config, all_folders)
+            # Unpack the new 6-tuple return
+            processed_item, _, _, _, _, all_folders = self._process_url_item(item, folder_id, bypass_scripts_config, all_folders)
             processed_items.append(processed_item)
             
         self.file_io.write_folders_file(all_folders) # Write changes to all_folders once
@@ -213,7 +210,7 @@ class HandlerManager:
 
         # Prepare URL item (resolve ID, apply bypass scripts)
         bypass_scripts_config = message.get('bypassScripts', {})
-        url_item, script_headers, ytdl_options, all_folders = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
+        url_item, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, all_folders = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
         logging.debug(f"handle_append: url_item after processing: {url_item}")
 
         # Write changes to all_folders back to file, as ID resolution and processing are done
@@ -224,7 +221,7 @@ class HandlerManager:
         # Retry logic for append to handle transient IPC busy states
         max_retries = 3
         for attempt in range(max_retries):
-            response = self.mpv_session.append(url_item, headers=script_headers, mode="append", disable_http_persistent=disable_http_persistent, ytdl_raw_options=ytdl_options)
+            response = self.mpv_session.append(url_item, headers=script_headers, mode="append", disable_http_persistent=disable_http_persistent, ytdl_raw_options=ytdl_options, use_ytdl_mpv=use_ytdl_mpv_flag, is_youtube=is_youtube_flag)
             if response and response.get("success"):
                 return response
             logging.warning(f"Append failed (attempt {attempt+1}/{max_retries}). Retrying in 0.5s...")

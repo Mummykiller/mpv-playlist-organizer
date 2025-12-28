@@ -165,8 +165,8 @@ try:
             decoded_line = line.decode('utf-8', errors='ignore').strip()
             clean_line = ansi_escape.sub('', decoded_line)
             # Filter out the noisy and irrelevant 'uname' warning on Windows.
-            # Also filter out ffmpeg hls keepalive spam.
-            if "'uname' is not recognized" not in clean_line and "keepalive request failed" not in clean_line:
+            # Also filter out ffmpeg hls keepalive spam and thumbnail script errors.
+            if "'uname' is not recognized" not in clean_line and "keepalive request failed" not in clean_line and "[mpv_thumbnail_script" not in clean_line:
                 log_level(f"[MPV Process]: {decoded_line}")
                 if not ytdlp_failure_detected and any(keyword in clean_line for keyword in YTDLP_FAILURE_KEYWORDS):
                     ytdlp_failure_detected = True # Prevent multiple triggers

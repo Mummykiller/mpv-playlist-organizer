@@ -12,6 +12,55 @@ import shlex
 import re
 from utils import ipc_utils
 
+# A set of mpv flags that are considered safe to be passed from the extension.
+# This is a security measure to prevent argument injection vulnerabilities.
+SAFE_MPV_FLAGS_ALLOWLIST = {
+    # Playback
+    '--start',
+    '--end',
+    '--speed',
+    '--loop',
+    '--pause',
+
+    # Window
+    '--fullscreen',
+    '--ontop',
+    '--border',
+    '--title',
+    '--geometry',
+    '--autofit',
+    '--autofit-larger',
+    '--autofit-smaller',
+    '--keep-open',
+
+    # Video
+    '--aspect',
+    '--correct-pts',
+    '--fps',
+    '--deinterlace',
+    '--hwdec',
+
+    # Audio
+    '--volume',
+    '--mute',
+    '--audio-device',
+    '--audio-channels',
+
+    # Subtitles
+    '--sub-visibility',
+    '--sub-pos',
+    '--sub-scale',
+    '--sub-font',
+    '--sub-font-size',
+
+    # Miscellaneous
+    '--no-audio',
+    '--no-video',
+    '--force-window',
+    '--cursor-autohide',
+}
+
+
 # --- Dependency Checking & Updating ---
 
 def _find_ytdlp_executable():
@@ -178,6 +227,11 @@ class MpvCommandBuilder:
         self.mpv_args = [mpv_exe]
         self.has_terminal_flag = False
         self.urls = []
+        self.headers_from_bypass = None         # NEW
+        self.ytdl_raw_options_from_bypass = None # NEW
+        self.use_ytdl_mpv = False               # NEW
+        self.is_youtube_override = False        # NEW (to control youtube options specifically)
+
 
     def with_ipc_path(self, ipc_path):
         if ipc_path:
@@ -210,18 +264,20 @@ class MpvCommandBuilder:
         return self
 
     def with_headers(self, headers):
-        if headers:
+        # Prioritize headers from bypass script
+        effective_headers = self.headers_from_bypass if self.headers_from_bypass else headers
+        if effective_headers:
             header_list = []
-            for k, v in headers.items():
+            for k, v in effective_headers.items():
                 safe_v = v.replace(",", "")
                 header_list.append(f"{k}: {safe_v}")
             header_string = ",".join(header_list)
             self.mpv_args.append(f'--http-header-fields={header_string}')
 
-            if 'User-Agent' in headers:
-                self.mpv_args.append(f'--user-agent={headers["User-Agent"]}')
-            if 'Referer' in headers:
-                self.mpv_args.append(f'--referrer={headers["Referer"]}')
+            if 'User-Agent' in effective_headers:
+                self.mpv_args.append(f'--user-agent={effective_headers["User-Agent"]}')
+            if 'Referer' in effective_headers:
+                self.mpv_args.append(f'--referrer={effective_headers["Referer"]}')
         return self
 
     def with_disable_http_persistent(self, disable_http_persistent):
@@ -251,11 +307,31 @@ class MpvCommandBuilder:
         return self
     
     def with_youtube_options(self, is_youtube, ytdl_raw_options):
-        if is_youtube:
+        # Prioritize bypass options
+        if self.use_ytdl_mpv: # If bypass script explicitly wants MPV to use yt-dlp
+            self.mpv_args.append('--ytdl=yes')
+            if self.ytdl_raw_options_from_bypass:
+                self.mpv_args.append(f'--ytdl-raw-options={self.ytdl_raw_options_from_bypass}')
+            # If use_ytdl_mpv is true, and we added ytdl-raw-options, no need for default format
+            # This also implies we don't need ytdl-format=bestvideo+bestaudio, as yt-dlp-raw-options
+            # might already specify format.
+        elif self.is_youtube_override: # If bypass script marked it as YouTube
+            self.mpv_args.append('--ytdl=yes')
+            self.mpv_args.append('--ytdl-format=bestvideo+bestaudio')
+            if ytdl_raw_options: # Fallback to original ytdl_raw_options if provided
+                self.mpv_args.append(f'--ytdl-raw-options={ytdl_raw_options}')
+        elif is_youtube: # Original logic if no bypass override
             self.mpv_args.append('--ytdl=yes')
             self.mpv_args.append('--ytdl-format=bestvideo+bestaudio')
             if ytdl_raw_options:
                 self.mpv_args.append(f'--ytdl-raw-options={ytdl_raw_options}')
+        return self
+
+    def with_bypass_options(self, headers_from_bypass, ytdl_raw_options_from_bypass, use_ytdl_mpv_from_bypass, is_youtube_from_bypass): # NEW METHOD
+        self.headers_from_bypass = headers_from_bypass
+        self.ytdl_raw_options_from_bypass = ytdl_raw_options_from_bypass
+        self.use_ytdl_mpv = use_ytdl_mpv_from_bypass
+        self.is_youtube_override = is_youtube_from_bypass
         return self
 
     def build(self):
@@ -302,7 +378,11 @@ def construct_mpv_command(
     disable_http_persistent=False,
     start_paused=False,
     script_dir=None,
-    load_on_completion_script=False
+    load_on_completion_script=False,
+    headers_from_bypass=None,         # NEW
+    ytdl_raw_options_from_bypass=None, # NEW
+    use_ytdl_mpv_from_bypass=False,   # NEW
+    is_youtube_from_bypass=False      # NEW
 ):
     """Constructs the MPV command line arguments using MpvCommandBuilder."""
     builder = MpvCommandBuilder(mpv_exe) \
@@ -315,7 +395,8 @@ def construct_mpv_command(
         .with_start_paused(start_paused) \
         .with_custom_flags(custom_mpv_flags) \
         .with_geometry(geometry, custom_width, custom_height) \
-        .with_youtube_options(is_youtube, ytdl_raw_options)
+        .with_youtube_options(is_youtube, ytdl_raw_options) \
+        .with_bypass_options(headers_from_bypass, ytdl_raw_options_from_bypass, use_ytdl_mpv_from_bypass, is_youtube_from_bypass) # NEW call
         
     return builder.build()
 
@@ -340,7 +421,7 @@ def get_mpv_popen_kwargs(has_terminal_flag):
 def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir, mpv_session=None):
     """
     Applies a bypass script if specified in url_item settings and enabled globally.
-    Returns a tuple of (processed_url, headers_dict, ytdl_raw_options).
+    Returns a tuple of (processed_url, headers_dict, ytdl_raw_options, use_ytdl_mpv_flag, is_youtube_flag).
     """
     if not isinstance(url_item, dict):
         url_item = {'url': url_item if url_item else "", 'settings': {}}
@@ -352,13 +433,17 @@ def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir,
     script_path = None
 
     # URL-based auto-detection for bypass script
+    # This is_youtube is for auto-detection and passing to _bypass_logic.py, not necessarily for MpvCommandBuilder
     is_youtube = "youtube.com/" in original_url or "youtu.be/" in original_url
-    is_animepahe = re.match(r"^https://vault-\d+\.owocdn\.top/stream/.+/uwu\.m3u8", original_url)
+    is_animepahe_cdn = re.match(r"^https://vault-\d+\.owocdn\.top/stream/.+/uwu\.m3u8", original_url)
+
+    # The default fallback return values (original URL, no special headers/options, not forcing ytdl, not youtube)
+    default_return_tuple = (original_url, None, None, False, is_youtube)
 
     if item_bypass_script_id and bypass_scripts.get(item_bypass_script_id, {}).get('enabled'):
         script_config = bypass_scripts[item_bypass_script_id]
         script_path = os.path.join(script_dir, script_config.get('script_path', 'play_with_bypass.sh'))
-    elif is_youtube or is_animepahe:
+    elif is_youtube or is_animepahe_cdn: # If it's either YouTube or animepahe-like, we use the bypass script
         script_name = "play_with_bypass.bat" if platform.system() == "Windows" else "play_with_bypass.sh"
         potential_path = os.path.join(script_dir, script_name)
         if os.path.exists(potential_path):
@@ -366,15 +451,13 @@ def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir,
             script_path = potential_path
 
     if script_path:
-
-
         if not os.path.exists(script_path):
             logging.error(f"Bypass script not found: {script_path}")
             send_message_func({
                 "action": "log_from_native_host",
                 "log": {"text": f"Bypass script not found: {script_path}. Playing original URL.", "type": "error"}
             })
-            return original_url, None, None
+            return default_return_tuple
         
         # Ensure the script is executable (Linux/macOS)
         if platform.system() != "Windows" and not os.access(script_path, os.X_OK):
@@ -382,15 +465,16 @@ def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir,
                 os.chmod(script_path, os.stat(script_path).st_mode | 0o100)
             except Exception as e:
                 logging.error(f"Failed to make bypass script executable: {e}")
-                return original_url, None, None
+                return default_return_tuple
 
         try: # Outer try block starts here
             logging.info(f"Executing bypass script '{script_path}' for URL: {original_url}")
             send_message_func({"action": "log_from_native_host", "log": {"text": f"Running bypass script for: {original_url}", "type": "info"}})
             
-            process = subprocess.run([script_path, original_url], capture_output=True, text=True, check=True, timeout=20)
+            # Pass original is_youtube flag to bypass script, so it can make decisions
+            process = subprocess.run([script_path, original_url, "brave", str(is_youtube).lower()], capture_output=True, text=True, check=True, timeout=20)
             output = process.stdout.strip()
-            error_output = process.stderr.strip() # NEW: Capture stderr
+            error_output = process.stderr.strip() # Capture stderr
 
             if output: # Log stdout if present
                 logging.info(f"Bypass script stdout: {output}")
@@ -400,23 +484,45 @@ def apply_bypass_script(url_item, bypass_scripts, send_message_func, script_dir,
             if not output:
                 logging.error(f"Bypass script '{script_path}' returned no stdout for URL: {original_url}")
                 send_message_func({"action": "log_from_native_host", "log": {"text": f"Bypass script '{script_path}' returned no stdout for URL: {original_url}. Playing original URL.", "type": "error"}})
-                return original_url, None, None # Fallback to original URL
+                return default_return_tuple
 
-            try: # Inner try block
+            try: # Inner try block to parse JSON
                 data = json.loads(output)
+                
+                # Check for success flag from _bypass_logic.py
+                if not data.get("success", False):
+                    error_message = data.get("error", "Unknown error from bypass script.")
+                    logging.error(f"Bypass script indicated failure: {error_message}")
+                    send_message_func({"action": "log_from_native_host", "log": {"text": f"Bypass script failed: {error_message}. Playing original URL.", "type": "error"}})
+                    return default_return_tuple
+
                 processed_url = data.get("url", original_url)
-                if data.get("is_youtube"):
-                    return processed_url, None, data.get("ytdl_raw_options")
-                return processed_url, data.get("headers"), None
-            except json.JSONDecodeError: # Inner except block
-                # Fallback for older scripts returning raw URL
-                return output.splitlines()[-1], None, None
+                headers_for_mpv = data.get("headers")
+                ytdl_raw_options_for_mpv = data.get("ytdl_raw_options")
+                use_ytdl_mpv_flag = data.get("use_ytdl_mpv", False)
+                is_youtube_flag_from_script = data.get("is_youtube", False) # Get is_youtube from script result if present
+
+                return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script)
+
+            except json.JSONDecodeError:
+                # This should ideally not happen if _bypass_logic.py always returns JSON
+                # Fallback for older scripts or if it just returned a raw URL as plain text
+                logging.warning(f"Bypass script output was not valid JSON. Assuming it returned a direct URL. Output: {output}")
+                processed_url_from_text = output.splitlines()[-1].strip()
+                return (processed_url_from_text, None, None, False, is_youtube) # Use original is_youtube
+
+        except subprocess.CalledProcessError as e:
+            error_message = f"Bypass script failed: {e}. Stderr: {e.stderr.strip()}"
+            logging.error(error_message)
+            send_message_func({"action": "log_from_native_host", "log": {"text": error_message + ". Playing original URL.", "type": "error"}})
+            return default_return_tuple
         except Exception as e: # Outer except block
             logging.error(f"Error executing bypass script: {e}")
             send_message_func({"action": "log_from_native_host", "log": {"text": f"Bypass script failed: {e}. Playing original URL.", "type": "error"}})
-            return original_url, None, None
+            return default_return_tuple
     
-    return original_url, None, None
+    # If no script_path (e.g., auto-detection failed or not a special URL)
+    return default_return_tuple
 
 # --- AniList Service ---
 
@@ -528,7 +634,7 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
             except (json.JSONDecodeError, KeyError) as e:
                 logging.warning(f"Failed to process ping response: {e}. Proceeding with full fetch.")
         else:
-            logging.warning(f"AniList ping failed. Proceeding with full fetch.")
+            logging.warning("AniList ping failed. Proceeding with full fetch.")
 
     logging.info("Performing a full fetch of AniList data.")
     send_message_func({"log": {"text": "[AniList]: Fetching new data from AniList API...", "type": "info"}})

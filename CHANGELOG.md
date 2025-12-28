@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **IPC Stability & Race Conditions:**
+    - Replaced unreliable socket timeout logic with `select.select()` in `utils/ipc_utils.py`, resolving connection timeouts and data loss during high-traffic MPV startup sequences (especially with `--terminal`).
+    - Implemented thread-safe locking for the IPC event buffer to prevent race conditions between the reader thread and command sender.
+    - Added `request_id` tracking to IPC commands to ensure precise response matching, eliminating errors where events were mistaken for command responses.
+    - Removed arbitrary sleep delays during terminal launch, relying instead on the now-robust connection logic.
+- **Log Noise Reduction:**
+    - Implemented filtering in `utils/ipc_utils.py` to silence excessive `client-message` events from `mpv_thumbnail_script`, preventing IPC buffer congestion.
+    - Added stdout filtering in `native_host.py` to suppress spammy error logs (e.g., HTTP 403) from `mpv_thumbnail_script`.
+
 ## [2.2.0] - 2025-12-27
 
 ### Added

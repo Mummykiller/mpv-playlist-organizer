@@ -34,6 +34,9 @@ class PageScraper {
         if (window.location.hostname.includes('youtube.com')) {
             // Only run the detailed scraper if we are on a video watch page.
             // Otherwise, we fall back to the generic logic to avoid loops on the homepage.
+            if (window.location.pathname === '/playlist') {
+                return { url: detectedUrl, title: null };
+            }
             if (window.location.pathname === '/watch') {
             const titleSelectors = [
                 'h1.ytd-watch-metadata yt-formatted-string.ytd-video-primary-info-renderer', // Standard video
