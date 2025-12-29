@@ -1,0 +1,12 @@
+#EXTM3U
+
+#EXTINF:-1,My Awesome Stream with Headers and YTDL Options
+#EXT-X-HEADERS:User-Agent=CustomPlayer/1.0|Referer=https://some-streaming-site.com
+https://www.youtube.com/watch?v=dQw4w9WgXcQ
+
+#EXTINF:-1,Another Stream with Only Headers
+#EXT-X-HEADERS:User-Agent=AnotherAgent/2.0
+https://example.com/another_stream.mp4
+
+#EXTINF:-1,Simple Stream
+https://example.com/simple_stream.mp4
