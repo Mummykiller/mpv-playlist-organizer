@@ -243,6 +243,7 @@ try:
 
     # Register a cleanup function to run when the script exits.
     atexit.register(cleanup_ipc_socket, mpv_session)
+    atexit.register(handler_manager._stop_local_m3u_server)
 
     def main():
         """Main message loop for native messaging from the browser."""
@@ -263,6 +264,7 @@ try:
         COMMAND_HANDLERS = {
             'play': handler_manager.handle_play,
             'play_batch': handler_manager.handle_play_batch,
+            'play_m3u': handler_manager.handle_play_m3u,
             'remove_item_live': handler_manager.handle_remove_item_live,
             'reorder_live': handler_manager.handle_reorder_live,
             'append': handler_manager.handle_append,

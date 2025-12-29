@@ -7,9 +7,12 @@ import threading
 import time
 import signal
 import tempfile
+from urllib.parse import urlparse # Import for URL parsing
+from urllib.request import urlopen, Request # Import for fetching URLs
 from utils import ipc_utils
 import services
 from playlist_tracker import PlaylistTracker # Added this import
+from utils.m3u_parser import parse_m3u # Import the new M3U parser
 
 class MpvSessionManager:
     def __init__(self, session_file_path, dependencies):
@@ -371,12 +374,40 @@ class MpvSessionManager:
             logging.error(f"An error occurred while trying to launch mpv: {e}")
             return {"success": False, "error": f"Error launching mpv: {e}"}
 
-    def start(self, url_items, folder_id, settings, file_io, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
-        """Starts a new mpv process with a playlist of URLs, loaded sequentially via IPC."""
-        if not isinstance(url_items, list):
-            url_items = [url_items]
-        if not url_items:
-            return {"success": False, "error": "No URL items provided."}
+    def start(self, url_items_or_m3u, folder_id, settings, file_io, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
+        """Starts a new mpv process with a playlist of URLs (or an M3U), loaded sequentially via IPC."""
+        
+        _url_items_list = []
+        if isinstance(url_items_or_m3u, str):
+            # Attempt to parse as M3U
+            logging.info(f"Attempting to parse M3U: {url_items_or_m3u}")
+            m3u_content = None
+            if os.path.exists(url_items_or_m3u):
+                with open(url_items_or_m3u, 'r', encoding='utf-8') as f:
+                    m3u_content = f.read()
+            elif urlparse(url_items_or_m3u).scheme in ['http', 'https']:
+                try:
+                    req = Request(url_items_or_m3u, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urlopen(req, timeout=10) as response:
+                        m3u_content = response.read().decode('utf-8')
+                except Exception as e:
+                    logging.error(f"Failed to fetch M3U from URL {url_items_or_m3u}: {e}")
+                    return {"success": False, "error": f"Failed to fetch M3U: {e}"}
+            else:
+                logging.error(f"Invalid M3U path or URL: {url_items_or_m3u}")
+                return {"success": False, "error": "Invalid M3U path or URL."}
+
+            if m3u_content:
+                _url_items_list = parse_m3u(m3u_content)
+            else:
+                return {"success": False, "error": "M3U content could not be loaded."}
+        elif isinstance(url_items_or_m3u, list):
+            _url_items_list = url_items_or_m3u
+        else:
+            return {"success": False, "error": "Invalid type for url_items_or_m3u. Expected list or string (M3U path/URL)."}
+
+        if not _url_items_list:
+            return {"success": False, "error": "No URL items provided or parsed from M3U."}
 
         def get_opts(item):
             h = item.get('headers') if isinstance(item, dict) and 'headers' in item else headers
@@ -393,7 +424,7 @@ class MpvSessionManager:
         if self.pid:
             if folder_id == self.owner_folder_id:
                 def append_items_thread():
-                    for item in url_items:
+                    for item in _url_items_list:
                         if not self.is_alive:
                             logging.warning("MPV session ended before all items could be appended.")
                             break
@@ -402,14 +433,14 @@ class MpvSessionManager:
                         time.sleep(0.1) # Tiny delay to prevent IPC flooding
                 
                 threading.Thread(target=append_items_thread, daemon=True).start()
-                return {"success": True, "message": f"Appending {len(url_items)} items to the existing session."}
+                return {"success": True, "message": f"Appending {len(_url_items_list)} items to the existing session."}
             else:
                 error_message = f"An MPV instance is already running for folder '{self.owner_folder_id}'. Please close it to play from '{folder_id}'."
                 logging.warning(error_message)
                 return {"success": False, "error": error_message}
 
-        first_item = url_items[0]
-        rest_items = url_items[1:]
+        first_item = _url_items_list[0]
+        rest_items = _url_items_list[1:]
         
         h, d, y, u, i = get_opts(first_item)
         launch_result = self._launch(

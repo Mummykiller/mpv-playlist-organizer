@@ -5,6 +5,9 @@ import time
 import uuid
 import platform
 import subprocess
+import re # Added for parsing server output
+import sys # Added for sys.executable
+from urllib.request import urlopen # Added for server readiness check
 
 class HandlerManager:
     def __init__(self, mpv_session, file_io_module, services_module, ipc_utils_module,
@@ -18,6 +21,18 @@ class HandlerManager:
         self.anilist_cache_file = anilist_cache_file
         self.temp_playlists_dir = temp_playlists_dir
         self.log_stream = log_stream_func # Passed from native_host for unmanaged MPV logging
+
+        self.playlist_server_process = None
+        self.playlist_server_port = None
+        self.temp_m3u_file_for_server = None
+
+        self.playlist_server_process = None
+        self.playlist_server_port = None
+        self.temp_m3u_file_for_server = None
+
+        self.playlist_server_process = None
+        self.playlist_server_port = None
+        self.temp_m3u_file_for_server = None
 
     def _process_url_item(self, url_item, folder_id, bypass_scripts_config, all_folders):
         """
@@ -271,7 +286,9 @@ class HandlerManager:
         )
 
     def handle_close_mpv(self, message):
-        return self.mpv_session.close()
+        response = self.mpv_session.close()
+        self._stop_local_m3u_server() # Also stop the M3U server when MPV is closed
+        return response
 
     def handle_is_mpv_running(self, message):
         is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
@@ -346,3 +363,174 @@ class HandlerManager:
             {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
             {"flag": "terminal", "description": "Show a terminal window.", "enabled": False}
         ]}
+
+    def _start_local_m3u_server(self, m3u_content):
+        """
+        Starts playlist_server.py as a subprocess to serve dynamic M3U content.
+        Returns the URL of the served M3U.
+        """
+        if self.playlist_server_process and self.playlist_server_process.poll() is None:
+            logging.info("Local M3U server already running. Stopping to update content.")
+            self._stop_local_m3u_server() 
+            time.sleep(0.1) # Give it a moment to release port
+
+        # Create a unique temporary M3U file for the server to serve
+        temp_m3u_filename = f"temp_playlist_{uuid.uuid4().hex}.m3u"
+        self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, temp_m3u_filename)
+        with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
+            f.write(m3u_content)
+        
+        logging.info(f"Created temporary M3U file: {self.temp_m3u_file_for_server}")
+
+        server_path = os.path.join(self.script_dir, "playlist_server.py")
+        if not os.path.exists(server_path):
+            logging.error(f"playlist_server.py not found at {server_path}")
+            return None
+
+        logging.info("Launching local M3U server process...")
+        server_env = os.environ.copy()
+        server_env["PYTHONDONTWRITEBYTECODE"] = "1" # Prevent __pycache__ for server
+        
+        try:
+            self.playlist_server_process = subprocess.Popen(
+                [sys.executable, server_path, '--port', '8000', '--file', self.temp_m3u_file_for_server], # Pass temp M3U file
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                env=server_env
+            )
+
+            # Read stderr line by line to find the actual port and confirm readiness
+            port_found_timeout = 10 # seconds
+            start_time = time.time()
+            
+            while time.time() - start_time < port_found_timeout:
+                line = self.playlist_server_process.stderr.readline() # Read from stderr
+                if not line:
+                    if self.playlist_server_process.poll() is not None: # Process exited
+                        break
+                    time.sleep(0.1)
+                    continue
+
+                logging.info(f"Server process stderr output: {line.strip()}")
+                match = re.search(r"Serving M3U playlist on port (\d+)", line)
+                if match:
+                    self.playlist_server_port = int(match.group(1))
+                    logging.info(f"Playlist server bound to port {self.playlist_server_port}.")
+                    break
+            
+            if self.playlist_server_port is None:
+                raise RuntimeError("Could not determine playlist server port from its output.")
+
+            m3u_url = f"http://localhost:{self.playlist_server_port}/{os.path.basename(self.temp_m3u_file_for_server)}"
+
+            # Check if the server process exited immediately after reporting its port
+            if self.playlist_server_process.poll() is not None: # Server exited before readiness check
+                stdout, stderr = self.playlist_server_process.communicate()
+                logging.error(f"Playlist server process exited prematurely after port reporting. Stdout:\n{stdout}\nStderr:\n{stderr}")
+                return None
+
+            # Final readiness check by trying to connect
+            max_retries = 20 # 20 retries * 0.5 sec = 10 seconds timeout
+            for i in range(max_retries):
+                try:
+                    # Note: We are trying to fetch the file from the root path for the server (e.g. /temp_playlist_ABC.m3u)
+                    # The playlist_server.py serves 'playlist.m3u' currently so we need to ensure that the request path is also 'playlist.m3u'.
+                    # We will update playlist_server.py to handle arbitrary paths to the served file
+                    # Or modify _start_local_m3u_server to make it always request /playlist.m3u.
+                    # For now, let's stick to /playlist.m3u and modify playlist_server.py to use this.
+                    fetch_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u"
+                    with urlopen(fetch_url, timeout=0.5) as response:
+                        if response.getcode() == 200:
+                            logging.info(f"Playlist server is ready after {i+1} attempts.")
+                            return fetch_url # Return the URL for the M3U
+                except Exception as e:
+                    logging.debug(f"Attempt {i+1}: Server not ready yet ({e}). Retrying...")
+                time.sleep(0.5)
+            
+            raise RuntimeError("Playlist server did not become ready within the timeout.")
+
+        except Exception as e:
+            logging.error(f"Failed to start local M3U server: {e}", exc_info=True)
+            self._stop_local_m3u_server() # Ensure cleanup on failure
+            return None
+
+    def _stop_local_m3u_server(self):
+        """Stops the local M3U server subprocess and cleans up temp files."""
+        if self.playlist_server_process and self.playlist_server_process.poll() is None:
+            logging.info("Terminating local M3U server process.")
+            self.playlist_server_process.terminate()
+            try:
+                self.playlist_server_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.playlist_server_process.kill()
+            self.playlist_server_process = None
+            self.playlist_server_port = None
+        
+        if self.temp_m3u_file_for_server and os.path.exists(self.temp_m3u_file_for_server):
+            try:
+                os.remove(self.temp_m3u_file_for_server)
+                logging.info(f"Removed temporary M3U file: {self.temp_m3u_file_for_server}")
+            except OSError as e:
+                logging.warning(f"Failed to remove temporary M3U file {self.temp_m3u_file_for_server}: {e}")
+            self.temp_m3u_file_for_server = None
+
+    def handle_play_m3u(self, message):
+        """
+        Handles a request to play an M3U playlist.
+        The message should contain 'm3u_data':
+        {'type': 'url', 'value': 'http://remote.com/playlist.m3u'}
+        {'type': 'path', 'value': '/local/path/to/playlist.m3u'}
+        {'type': 'content', 'value': '#EXTM3U\n...'}
+        """
+        m3u_data = message.get('m3u_data')
+        folder_id = message.get('folderId', str(uuid.uuid4())) # Use a new UUID for folder if not provided
+        if not m3u_data or 'type' not in m3u_data or 'value' not in m3u_data:
+            return {"success": False, "error": "Missing or malformed 'm3u_data' for play_m3u action."}
+
+        m3u_source = m3u_data['value']
+        m3u_type = m3u_data['type']
+        resolved_m3u_path_or_url = None
+
+        try:
+            if m3u_type == 'content':
+                # Stop any existing server before starting a new one for new content
+                # This ensures fresh content is always served
+                self._stop_local_m3u_server() 
+                resolved_m3u_path_or_url = self._start_local_m3u_server(m3u_source)
+                if not resolved_m3u_path_or_url:
+                    raise RuntimeError("Failed to start local M3U server for provided content.")
+            elif m3u_type == 'url' or m3u_type == 'path':
+                resolved_m3u_path_or_url = m3u_source
+            else:
+                return {"success": False, "error": f"Unsupported m3u_data type: {m3u_type}"}
+
+            if not resolved_m3u_path_or_url:
+                return {"success": False, "error": "Failed to resolve M3U source."}
+            
+            # Get settings from config file
+            settings = self.file_io.get_settings()
+
+            # Pass the resolved M3U path or URL directly to mpv_session.start()
+            # It will handle fetching and parsing the M3U content internally.
+            result = self.mpv_session.start(
+                resolved_m3u_path_or_url,
+                folder_id, 
+                settings, 
+                self.file_io,
+                geometry=message.get('geometry'), 
+                custom_width=message.get('custom_width'), 
+                custom_height=message.get('custom_height'), 
+                custom_mpv_flags=message.get('custom_mpv_flags'), 
+                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+                start_paused=message.get('start_paused', False),
+                # Headers and ytdl_raw_options for individual items will be parsed from the M3U itself
+                # and handled by mpv_session.start/append methods.
+            )
+            return result if result else {"success": False, "error": "Failed to start MPV session with M3U."}
+
+        except Exception as e:
+            logging.error(f"Error handling play_m3u: {e}", exc_info=True)
+            self._stop_local_m3u_server() # Ensure cleanup on failure
+            return {"success": False, "error": f"Error playing M3U: {str(e)}"}
