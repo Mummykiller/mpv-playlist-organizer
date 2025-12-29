@@ -105,19 +105,6 @@ class MpvSessionManager:
             except OSError: pass
             return None
 
-    def _create_m3u_file(self, url_items):
-        """Creates a temporary M3U playlist file from a list of items."""
-        fd, path = tempfile.mkstemp(suffix=".m3u", prefix="mpv_playlist_", dir=self.TEMP_PLAYLISTS_DIR)
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write("#EXTM3U\n")
-            for item in url_items:
-                url = str(item.get('url') or '').strip()
-                title = str(item.get('title') or 'Unknown Title').replace('\n', ' ').replace('\r', '')
-                # Always write EXTINF to ensure titles are visible in MPV playlist immediately
-                f.write(f"#EXTINF:-1,{title}\n")
-                f.write(f"{url}\n")
-        return path
-
     def append(self, url_item, headers=None, mode="append", disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
         """Attempts to append a single new URL to an already running MPV instance."""
         with self.sync_lock:
@@ -200,30 +187,22 @@ class MpvSessionManager:
                 # The M3U file itself might not carry these IPC load options.
                 # It's better to pass the original URL to loadfile and apply options.
                 
-                logging.info(f"Loading URL '{url_to_add}' with mode '{mode}' and options: {load_options}")
+                ipc_command = {"command": ["loadfile", url_to_add, mode]}
+
+                title = url_item.get('title')
+                if title:
+                    ipc_command['force-media-title'] = title.replace('"', '\\"')
+
+                # Add other load options as top-level keys in the ipc_command dictionary
+                for key, value in load_options.items():
+                    ipc_command[key] = value
                 
-                load_cmd = ["loadfile", url_to_add, mode]
-                if load_options:
-                    load_cmd.append(load_options) # Append dictionary of options
-                
-                load_resp = robust_send({"command": load_cmd})
+                logging.info(f"Loading URL '{url_to_add}' with mode '{mode}' and IPC command: {ipc_command}")
+
+                load_resp = robust_send(ipc_command)
                 
                 if load_resp is None or load_resp.get("error") != "success":
                     raise RuntimeError(f"Failed to send loadfile command via IPC: {load_resp}")
-
-                # Update the internal playlist representation
-                if self.playlist is None:
-                    self.playlist = []
-                self.playlist.append(url_item) # Append the full item, not just the URL
-
-                # Update the tracker only after successful loadfile to ensure consistency
-                if self.playlist_tracker:
-                    self.playlist_tracker.add_item(url_item)
-
-                # Show OSD feedback
-                title = url_item.get('title') or url_to_add
-                if len(title) > 60: title = title[:57] + "..."
-                robust_send({"command": ["show-text", f"Added: {title}", 3000]})
 
                 return {"success": True, "message": f"Added '{url_to_add}' to the MPV playlist."}
             except Exception as e:
@@ -314,40 +293,29 @@ class MpvSessionManager:
             
             return {"success": True, "message": "Live playlist reordered."}
 
-    def _launch(self, url_items, folder_id, settings, file_io, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
-        """Launches a new instance of MPV with the given URL and settings."""
-        logging.info(f"Starting a new MPV instance with {len(url_items)} items.")
+    def _launch(self, url_item, folder_id, settings, file_io, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
+        """Launches a new instance of MPV with a single URL and prepares for playlist construction via IPC."""
+        logging.info(f"Starting a new MPV instance for URL: {url_item.get('url')}")
         mpv_exe = self.get_mpv_executable()
         ipc_path = ipc_utils.get_ipc_path()
-
-        # Create M3U playlist for the initial launch with all items
-        m3u_path = self._create_m3u_file(url_items)
-        
-        # Use the first item to determine generic launch flags (e.g. YouTube mode)
-        first_item = url_items[0]
 
         try:
             full_command, has_terminal_flag = services.construct_mpv_command(
                 mpv_exe=mpv_exe,
                 ipc_path=ipc_path,
-                urls=[m3u_path], # Pass the M3U file instead of the raw URL
-                is_youtube=is_youtube, # Use the passed is_youtube flag
-                ytdl_raw_options=first_item.get('ytdl_raw_options'), # ytdl_raw_options from processed item
+                url=url_item['url'],
+                is_youtube=is_youtube,
+                ytdl_raw_options=url_item.get('ytdl_raw_options'),
                 geometry=geometry,
                 custom_width=custom_width,
                 custom_height=custom_height,
                 custom_mpv_flags=custom_mpv_flags,
                 automatic_mpv_flags=automatic_mpv_flags,
-                headers=headers, # Headers from processed item or passed arg
+                headers=headers,
                 disable_http_persistent=disable_http_persistent,
                 start_paused=start_paused,
                 script_dir=self.SCRIPT_DIR,
-                load_on_completion_script=True,
-                # Pass bypass options
-                headers_from_bypass=first_item.get('headers'), # headers from bypass stored in item
-                ytdl_raw_options_from_bypass=first_item.get('ytdl_raw_options'), # from bypass stored in item
-                use_ytdl_mpv_from_bypass=use_ytdl_mpv, # from bypass
-                is_youtube_from_bypass=is_youtube # from bypass
+                load_on_completion_script=True
             )
 
             popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
@@ -358,19 +326,15 @@ class MpvSessionManager:
             if not self.ipc_manager.connect(self.ipc_path):
                 raise RuntimeError(f"Failed to connect to MPV IPC at {self.ipc_path}")
 
-            self.playlist = list(url_items) # Store the full list
-            self.pid = self.process.pid # Use self.process.pid for actual PID
+            self.playlist = [url_item]
+            self.pid = self.process.pid
             self.owner_folder_id = folder_id
             self.is_alive = True
             
-            # Instantiate and start the playlist tracker *after* ipc_manager is connected.
-            # Pass self.ipc_path so the tracker can create its own independent connection.
-            self.playlist_tracker = PlaylistTracker(folder_id, url_items, file_io, settings, self.ipc_path)
+            # We pass the full intended playlist to the tracker, even though only one item is loaded initially
+            self.playlist_tracker = PlaylistTracker(folder_id, self.playlist, file_io, settings, self.ipc_path)
             self.playlist_tracker.start_tracking()
 
-            # --- PID Correction for Linux Terminal ---
-            # If we launched via a terminal emulator, the process PID is for the terminal,
-            # not MPV. We need to connect to the IPC socket to get the real MPV PID.
             if platform.system() != "Windows" and has_terminal_flag:
                 try:
                     pid_response = self.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=5.0, expect_response=True)
@@ -379,10 +343,6 @@ class MpvSessionManager:
                         if actual_mpv_pid:
                             logging.info(f"Corrected PID from terminal ({self.pid}) to actual MPV PID ({actual_mpv_pid}).")
                             self.pid = actual_mpv_pid
-                        else:
-                            logging.warning("Could not get actual MPV PID from IPC socket.")
-                    else:
-                        logging.warning("Failed to get PID from MPV via IPC after launching in terminal.")
                 except Exception as e:
                     logging.error(f"Error while trying to get MPV's real PID from terminal launch: {e}")
 
@@ -390,30 +350,15 @@ class MpvSessionManager:
             stderr_thread.daemon = True
             stderr_thread.start()
 
-            # self._persist_session() # Removed as playlist data is now managed in folders.json
+            def process_waiter(proc, f_id):
+                return_code = proc.wait()
+                logging.info(f"MPV process for folder '{f_id}' exited with code {return_code}.")
+                self.send_message({"action": "mpv_exited", "folderId": f_id, "returnCode": return_code})
+                self.clear(mpv_return_code=return_code)
 
-            if platform.system() == "Windows":
-                def process_poller(proc, f_id):
-                    return_code = proc.wait()
-                    logging.info(f"MPV process for folder '{f_id}' exited with code {return_code}.")
-                    self.send_message({"action": "mpv_exited", "folderId": f_id, "returnCode": return_code})
-                    # Clean up the session state
-                    self.clear(mpv_return_code=return_code) # Pass return code
-
-                waiter_thread = threading.Thread(target=process_poller, args=(self.process, folder_id))
-                waiter_thread.daemon = True
-                waiter_thread.start()
-            else:
-                def process_waiter(proc, f_id):
-                    return_code = proc.wait()
-                    logging.info(f"MPV process for folder '{f_id}' exited with code {return_code}.")
-                    self.send_message({"action": "mpv_exited", "folderId": f_id, "returnCode": return_code})
-                    # Clean up the session state
-                    self.clear(mpv_return_code=return_code) # Pass return code
-
-                waiter_thread = threading.Thread(target=process_waiter, args=(self.process, folder_id))
-                waiter_thread.daemon = True
-                waiter_thread.start()
+            waiter_thread = threading.Thread(target=process_waiter, args=(self.process, folder_id))
+            waiter_thread.daemon = True
+            waiter_thread.start()
 
             self.process.waiter_thread = waiter_thread
             logging.info(f"MPV process launched (PID: {self.process.pid}) for single URL.")
@@ -426,16 +371,12 @@ class MpvSessionManager:
             return {"success": False, "error": f"Error launching mpv: {e}"}
 
     def start(self, url_items, folder_id, settings, file_io, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
-        """Starts a new mpv process with a playlist of URLs, or attempts to sync."""
-        
-        # Ensure url_items is a list
+        """Starts a new mpv process with a playlist of URLs, loaded sequentially via IPC."""
         if not isinstance(url_items, list):
             url_items = [url_items]
-
         if not url_items:
             return {"success": False, "error": "No URL items provided."}
 
-        # Helper to extract options from item if present, else use defaults
         def get_opts(item):
             h = item.get('headers') if isinstance(item, dict) and 'headers' in item else headers
             d = item.get('disable_http_persistent') if isinstance(item, dict) and 'disable_http_persistent' in item else disable_http_persistent
@@ -450,52 +391,28 @@ class MpvSessionManager:
 
         if self.pid:
             if folder_id == self.owner_folder_id:
-                # Append all items to the existing playlist
+                def append_items_thread():
+                    for item in url_items:
+                        if not self.is_alive:
+                            logging.warning("MPV session ended before all items could be appended.")
+                            break
+                        h, d, y, u, i = get_opts(item)
+                        self.append(item, headers=h, mode="append", disable_http_persistent=d, ytdl_raw_options=y, use_ytdl_mpv=u, is_youtube=i)
+                        time.sleep(0.1) # Tiny delay to prevent IPC flooding
                 
-                # Helper to send commands robustly
-                def robust_send(command, timeout=1.0):
-                    result = self.ipc_manager.send(command, expect_response=True, timeout=timeout)
-                    if result is None:
-                        logging.warning("IPC command failed. Attempting to reconnect...")
-                        if self.ipc_manager.connect(self.ipc_path):
-                            return self.ipc_manager.send(command, expect_response=True, timeout=timeout)
-                    return result
-
-                # Filter out duplicates by checking MPV's current playlist
-                items_to_add = []
-                playlist_resp = robust_send({"command": ["get_property", "playlist"]}, timeout=2.0)
-                existing_filenames = set()
-                if playlist_resp and playlist_resp.get("error") == "success":
-                    mpv_playlist = playlist_resp.get("data", [])
-                    existing_filenames = {item.get("filename") for item in mpv_playlist}
-                
-                for item in url_items:
-                    if item['url'] not in existing_filenames:
-                        items_to_add.append(item)
-                
-                if not items_to_add:
-                    return {"success": True, "message": "All items already in playlist.", "skipped": True}
-
-                # Append items individually to ensure they appear as flat entries with titles
-                for item in items_to_add:
-                    h, d, y, u, i = get_opts(item)
-                    # We use self.append which now handles force-media-title correctly
-                    res = self.append(item, headers=h, mode="append-play", disable_http_persistent=d, ytdl_raw_options=y, use_ytdl_mpv=u, is_youtube=i)
-                    if not res:
-                        return {"success": False, "error": "Failed to append item to existing session."}
-                
-                robust_send({"command": ["show-text", f"Appended {len(items_to_add)} items", 2000]})
-                return {"success": True, "message": f"Appended {len(items_to_add)} items to existing session.", "skipped": False}
+                threading.Thread(target=append_items_thread, daemon=True).start()
+                return {"success": True, "message": f"Appending {len(url_items)} items to the existing session."}
             else:
                 error_message = f"An MPV instance is already running for folder '{self.owner_folder_id}'. Please close it to play from '{folder_id}'."
                 logging.warning(error_message)
                 return {"success": False, "error": error_message}
 
-        # Launch the first item
         first_item = url_items[0]
+        rest_items = url_items[1:]
+        
         h, d, y, u, i = get_opts(first_item)
         launch_result = self._launch(
-            url_items, folder_id, settings, file_io,
+            first_item, folder_id, settings, file_io,
             geometry=geometry, 
             custom_width=custom_width, 
             custom_height=custom_height, 
@@ -508,6 +425,19 @@ class MpvSessionManager:
             use_ytdl_mpv=u,
             is_youtube=i
         )
+
+        if launch_result and launch_result["success"] and rest_items:
+            def append_remaining_items():
+                time.sleep(2)  # Give MPV time to start and initialize IPC
+                for item in rest_items:
+                    if not self.is_alive:
+                        logging.warning("MPV session ended prematurely. Stopping append thread.")
+                        break
+                    h_item, d_item, y_item, u_item, i_item = get_opts(item)
+                    self.append(item, headers=h_item, mode="append", disable_http_persistent=d_item, ytdl_raw_options=y_item, use_ytdl_mpv=u_item, is_youtube=i_item)
+                    time.sleep(0.1) # Tiny delay to prevent IPC flooding
+
+            threading.Thread(target=append_remaining_items, daemon=True).start()
 
         return launch_result
 
