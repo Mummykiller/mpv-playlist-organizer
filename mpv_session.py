@@ -183,15 +183,11 @@ class MpvSessionManager:
                     else: # If no raw options, use default format
                         load_options['ytdl-format'] = 'bestvideo+bestaudio'
 
-                # Create a temporary M3U file for this single item to preserve title metadata
-                # The M3U file itself might not carry these IPC load options.
-                # It's better to pass the original URL to loadfile and apply options.
-                
                 ipc_command = {"command": ["loadfile", url_to_add, mode]}
 
                 title = url_item.get('title')
                 if title:
-                    ipc_command['force-media-title'] = title.replace('"', '\\"')
+                    self.ipc_manager.send({"command": ["script-message", "set_title", url_to_add, title]})
 
                 # Add other load options as top-level keys in the ipc_command dictionary
                 for key, value in load_options.items():
@@ -315,7 +311,8 @@ class MpvSessionManager:
                 disable_http_persistent=disable_http_persistent,
                 start_paused=start_paused,
                 script_dir=self.SCRIPT_DIR,
-                load_on_completion_script=True
+                load_on_completion_script=True,
+                title=url_item.get('title')
             )
 
             popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
@@ -325,6 +322,10 @@ class MpvSessionManager:
             self.ipc_manager = ipc_utils.IPCSocketManager()
             if not self.ipc_manager.connect(self.ipc_path):
                 raise RuntimeError(f"Failed to connect to MPV IPC at {self.ipc_path}")
+
+            # Register title for the initial item in Lua script (ensures title is known if playlist loops)
+            if url_item.get('title'):
+                self.ipc_manager.send({"command": ["script-message", "set_title", url_item['url'], url_item.get('title')]})
 
             self.playlist = [url_item]
             self.pid = self.process.pid

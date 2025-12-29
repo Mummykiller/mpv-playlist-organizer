@@ -252,6 +252,20 @@ class MpvCommandBuilder:
                 logging.warning(f"Completion script not found at {lua_script_path}. MPV will not use it.")
         return self
 
+    def with_titles_script(self, script_dir):
+        if script_dir:
+            titles_script_path = os.path.join(script_dir, "mpv_scripts", "titles.lua")
+            if os.path.exists(titles_script_path):
+                self.mpv_args.append(f'--script={titles_script_path}')
+                logging.info(f"MPV will load titles script: {titles_script_path}")
+        return self
+
+    def with_title(self, title):
+        if title:
+            # Set the initial title for the first file loaded
+            self.mpv_args.append(f'--force-media-title={title}')
+        return self
+
     def with_automatic_flags(self, automatic_mpv_flags):
         if automatic_mpv_flags:
             for flag_info in automatic_mpv_flags:
@@ -344,13 +358,16 @@ def construct_mpv_command(
     disable_http_persistent=False,
     start_paused=False,
     script_dir=None,
-    load_on_completion_script=False
+    load_on_completion_script=False,
+    title=None
 ):
     """Constructs the MPV command line arguments using MpvCommandBuilder."""
     builder = MpvCommandBuilder(mpv_exe) \
         .with_ipc_path(ipc_path) \
         .with_url(url) \
         .with_completion_script(script_dir if load_on_completion_script else None) \
+        .with_titles_script(script_dir) \
+        .with_title(title) \
         .with_automatic_flags(automatic_mpv_flags) \
         .with_headers(headers) \
         .with_disable_http_persistent(disable_http_persistent) \
