@@ -226,21 +226,20 @@ class MpvCommandBuilder:
         self.mpv_exe = mpv_exe
         self.mpv_args = [mpv_exe]
         self.has_terminal_flag = False
-        self.urls = []
-        self.headers_from_bypass = None         # NEW
-        self.ytdl_raw_options_from_bypass = None # NEW
-        self.use_ytdl_mpv = False               # NEW
-        self.is_youtube_override = False        # NEW (to control youtube options specifically)
-
+        self.url = None
+        self.headers_from_bypass = None
+        self.ytdl_raw_options_from_bypass = None
+        self.use_ytdl_mpv = False
+        self.is_youtube_override = False
 
     def with_ipc_path(self, ipc_path):
         if ipc_path:
             self.mpv_args.append(f'--input-ipc-server={ipc_path}')
         return self
 
-    def with_urls(self, urls):
-        if urls:
-            self.urls.extend(urls)
+    def with_url(self, url):
+        if url:
+            self.url = url
         return self
 
     def with_completion_script(self, script_dir):
@@ -264,16 +263,10 @@ class MpvCommandBuilder:
         return self
 
     def with_headers(self, headers):
-        # Prioritize headers from bypass script
         effective_headers = self.headers_from_bypass if self.headers_from_bypass else headers
         if effective_headers:
-            header_list = []
-            for k, v in effective_headers.items():
-                safe_v = v.replace(",", "")
-                header_list.append(f"{k}: {safe_v}")
-            header_string = ",".join(header_list)
-            self.mpv_args.append(f'--http-header-fields={header_string}')
-
+            header_list = [f"{k}: {v.replace(',', '')}" for k, v in effective_headers.items()]
+            self.mpv_args.append(f'--http-header-fields={",".join(header_list)}')
             if 'User-Agent' in effective_headers:
                 self.mpv_args.append(f'--user-agent={effective_headers["User-Agent"]}')
             if 'Referer' in effective_headers:
@@ -293,8 +286,7 @@ class MpvCommandBuilder:
     def with_custom_flags(self, custom_mpv_flags):
         if custom_mpv_flags:
             try:
-                parsed_flags = shlex.split(custom_mpv_flags)
-                self.mpv_args.extend(parsed_flags)
+                self.mpv_args.extend(shlex.split(custom_mpv_flags))
             except Exception as e:
                 logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
         return self
@@ -307,49 +299,24 @@ class MpvCommandBuilder:
         return self
     
     def with_youtube_options(self, is_youtube, ytdl_raw_options):
-        # Prioritize bypass options
-        if self.use_ytdl_mpv: # If bypass script explicitly wants MPV to use yt-dlp
+        if self.use_ytdl_mpv:
             self.mpv_args.append('--ytdl=yes')
             if self.ytdl_raw_options_from_bypass:
                 self.mpv_args.append(f'--ytdl-raw-options={self.ytdl_raw_options_from_bypass}')
-            # If use_ytdl_mpv is true, and we added ytdl-raw-options, no need for default format
-            # This also implies we don't need ytdl-format=bestvideo+bestaudio, as yt-dlp-raw-options
-            # might already specify format.
-        elif self.is_youtube_override: # If bypass script marked it as YouTube
-            self.mpv_args.append('--ytdl=yes')
-            self.mpv_args.append('--ytdl-format=bestvideo+bestaudio')
-            if ytdl_raw_options: # Fallback to original ytdl_raw_options if provided
-                self.mpv_args.append(f'--ytdl-raw-options={ytdl_raw_options}')
-        elif is_youtube: # Original logic if no bypass override
+        elif self.is_youtube_override or is_youtube:
             self.mpv_args.append('--ytdl=yes')
             self.mpv_args.append('--ytdl-format=bestvideo+bestaudio')
             if ytdl_raw_options:
                 self.mpv_args.append(f'--ytdl-raw-options={ytdl_raw_options}')
         return self
 
-    def with_bypass_options(self, headers_from_bypass, ytdl_raw_options_from_bypass, use_ytdl_mpv_from_bypass, is_youtube_from_bypass): # NEW METHOD
-        self.headers_from_bypass = headers_from_bypass
-        self.ytdl_raw_options_from_bypass = ytdl_raw_options_from_bypass
-        self.use_ytdl_mpv = use_ytdl_mpv_from_bypass
-        self.is_youtube_override = is_youtube_from_bypass
-        return self
-
     def build(self):
-        # Final adjustments
         if '--terminal' in self.mpv_args:
             self.has_terminal_flag = True
 
-        full_command = list(self.mpv_args) + ['--'] + (self.urls if self.urls else [])
+        full_command = self.mpv_args + ['--'] + ([self.url] if self.url else [])
 
         if platform.system() != "Windows" and self.has_terminal_flag:
-            if '--terminal' not in self.mpv_args:
-                 # Try to insert before '--'
-                 try:
-                     idx = full_command.index('--')
-                     full_command.insert(idx, '--terminal')
-                 except ValueError:
-                     full_command.insert(1, '--terminal')
-
             term_cmd = []
             if shutil.which('x-terminal-emulator'): term_cmd = ['x-terminal-emulator', '-e']
             elif shutil.which('gnome-terminal'): term_cmd = ['gnome-terminal', '--wait', '--']
@@ -358,15 +325,14 @@ class MpvCommandBuilder:
             elif shutil.which('xterm'): term_cmd = ['xterm', '-e']
             
             if term_cmd:
-                 full_command = term_cmd + full_command
+                full_command = term_cmd + full_command
 
         return full_command, self.has_terminal_flag
-
 
 def construct_mpv_command(
     mpv_exe,
     ipc_path=None,
-    urls=None,
+    url=None,
     is_youtube=False,
     ytdl_raw_options=None,
     geometry=None,
@@ -378,16 +344,12 @@ def construct_mpv_command(
     disable_http_persistent=False,
     start_paused=False,
     script_dir=None,
-    load_on_completion_script=False,
-    headers_from_bypass=None,         # NEW
-    ytdl_raw_options_from_bypass=None, # NEW
-    use_ytdl_mpv_from_bypass=False,   # NEW
-    is_youtube_from_bypass=False      # NEW
+    load_on_completion_script=False
 ):
     """Constructs the MPV command line arguments using MpvCommandBuilder."""
     builder = MpvCommandBuilder(mpv_exe) \
         .with_ipc_path(ipc_path) \
-        .with_urls(urls) \
+        .with_url(url) \
         .with_completion_script(script_dir if load_on_completion_script else None) \
         .with_automatic_flags(automatic_mpv_flags) \
         .with_headers(headers) \
@@ -395,8 +357,7 @@ def construct_mpv_command(
         .with_start_paused(start_paused) \
         .with_custom_flags(custom_mpv_flags) \
         .with_geometry(geometry, custom_width, custom_height) \
-        .with_youtube_options(is_youtube, ytdl_raw_options) \
-        .with_bypass_options(headers_from_bypass, ytdl_raw_options_from_bypass, use_ytdl_mpv_from_bypass, is_youtube_from_bypass) # NEW call
+        .with_youtube_options(is_youtube, ytdl_raw_options)
         
     return builder.build()
 
