@@ -3,6 +3,8 @@ import sys
 import logging
 import time
 
+sys.dont_write_bytecode = True
+
 # --- Injected Dependencies ---
 file_io = None
 mpv_session = None

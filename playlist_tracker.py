@@ -3,6 +3,13 @@ import threading
 import time
 import uuid
 import json
+import sys
+import os
+
+# Prevent __pycache__ generation
+sys.dont_write_bytecode = True
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+
 from utils import ipc_utils
 
 class PlaylistTracker:

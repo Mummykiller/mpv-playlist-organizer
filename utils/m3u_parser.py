@@ -1,73 +1,81 @@
 import re
+import sys
+import os
+
+# Prevent __pycache__ generation
+sys.dont_write_bytecode = True
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+
 from typing import List, Dict, Optional
 
 def parse_m3u(m3u_content: str) -> List[Dict]:
     """
     Parses M3U content, extracting URLs, titles, and custom per-item headers
     and yt-dlp options based on custom EXT-X- tags.
-
-    Args:
-        m3u_content: The full content of the M3U file as a string.
-
-    Returns:
-        A list of dictionaries, where each dictionary represents a url_item
-        with keys like 'url', 'title', 'headers', 'ytdl_raw_options', etc.
     """
+    # Remove BOM if present
+    if m3u_content.startswith('\ufeff'):
+        m3u_content = m3u_content[1:]
+        
     lines = m3u_content.strip().split('\n')
     url_items = []
     
     current_title: Optional[str] = None
     current_headers: Dict[str, str] = {}
-    current_ytdl_options: List[str] = [] # Use list to store multiple key=value pairs
+    current_ytdl_options: List[str] = []
+
+    def split_pairs(s):
+        # Prefer pipe, then comma if no pipe found
+        if '|' in s:
+            return s.split('|')
+        return s.split(',')
+
+    def parse_pair(p):
+        # Support both ':' and '=' as separators
+        if '=' in p:
+            return p.split('=', 1)
+        if ':' in p:
+            return p.split(':', 1)
+        return None, None
 
     for line in lines:
         line = line.strip()
         if not line or line.startswith('#EXTM3U'):
-            # Skip empty lines or the M3U header
             continue
         
         if line.startswith('#EXTINF:'):
-            # Extract title from #EXTINF tag
             match = re.search(r'#EXTINF:[-0-9]+,(.*)', line)
             if match:
                 current_title = match.group(1).strip()
             else:
                 current_title = "Unknown Title"
-        elif line.startswith('#EXT-X-HEADERS:'):
-            # Parse custom headers
-            headers_str = line[len('#EXT-X-HEADERS:'):].strip()
-            for pair in headers_str.split('|'):
-                if '=' in pair:
-                    key, value = pair.split('=', 1)
-                    current_headers[key.strip()] = value.strip()
-        elif line.startswith('#EXT-X-YTDL-OPTIONS:'):
-            # Parse custom yt-dlp options
-            options_str = line[len('#EXT-X-YTDL-OPTIONS:'):].strip()
-            # We'll store them as a list of strings, then join with spaces later
-            # to form the --ytdl-raw-options string
-            for pair in options_str.split('|'):
+        elif line.startswith('#EXTHTTPHEADERS:'):
+            headers_str = line[len('#EXTHTTPHEADERS:'):].strip()
+            for pair in split_pairs(headers_str):
+                k, v = parse_pair(pair)
+                if k:
+                    current_headers[k.strip()] = v.strip()
+        elif line.startswith('#EXTYTDLOPTIONS:'):
+            options_str = line[len('#EXTYTDLOPTIONS:'):].strip()
+            for pair in split_pairs(options_str):
                 if pair:
-                    # Assuming key=value format for ytdl-raw-options, convert to --key=value
-                    # Handle cases where value might be empty or just a flag
-                    if '=' in pair:
-                        key, value = pair.split('=', 1)
-                        current_ytdl_options.append(f"--{key.strip()}={value.strip()}")
-                    else: # For boolean flags like --no-warnings
-                        current_ytdl_options.append(f"--{pair.strip()}")
+                    k, v = parse_pair(pair)
+                    if k:
+                        current_ytdl_options.append(f"{k.strip()}={v.strip()}")
+                    else:
+                        # For boolean flags, append as key=
+                        current_ytdl_options.append(f"{pair.strip()}=")
         elif not line.startswith('#'):
-            # This is a URL, so create a url_item
+            # This is a URL
             url_item = {
                 'url': line,
-                'title': current_title if current_title else line, # Use URL as title fallback
+                'title': current_title if current_title else line,
                 'headers': current_headers if current_headers else None,
-                'ytdl_raw_options': ' '.join(current_ytdl_options) if current_ytdl_options else None,
-                # Default values, adjust if needed by other custom EXT-X tags
-                'use_ytdl_mpv': False, # Default to False, can be overridden by logic
-                'is_youtube': 'youtube.com/' in line or 'youtu.be/' in line # Basic check
+                'ytdl_raw_options': ','.join(current_ytdl_options) if current_ytdl_options else None,
+                'use_ytdl_mpv': False,
+                'is_youtube': 'youtube.com/' in line or 'youtu.be/' in line
             }
             url_items.append(url_item)
-
-            # Reset for the next item
             current_title = None
             current_headers = {}
             current_ytdl_options = []

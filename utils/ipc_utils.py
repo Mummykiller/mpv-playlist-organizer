@@ -1,4 +1,10 @@
 import os
+import sys
+
+# Prevent __pycache__ generation
+sys.dont_write_bytecode = True
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+
 import json
 import time
 import platform
@@ -28,7 +34,7 @@ class IPCSocketManager:
     def is_connected(self):
         return self._sock is not None
 
-    def connect(self, ipc_path, timeout=5.0):
+    def connect(self, ipc_path, timeout=10.0):
         """
         Connects to the MPV IPC server.
         Retries connection attempts for a specified timeout duration.

@@ -751,7 +751,11 @@ class MpvController {
             await this.addDetectedUrlToFolder(getCurrentFolderId(), { isUiVisible: true });
         };
 
-        const handlePlayClick = () => this.sendCommandToBackground('play', getCurrentFolderId());
+        const handlePlayClick = () => {
+            const folderId = getCurrentFolderId();
+            if (!folderId) return this.addLogEntry({ text: `[Content]: No folder selected to play.`, type: 'error' });
+            this.sendCommandToBackground('play', folderId); // Changed to 'play' action, folderId is enough
+        };
 
         const handleClearClick = async () => {
             const folderId = getCurrentFolderId();
@@ -783,7 +787,10 @@ class MpvController {
                 const confirmed = await this.showPageLevelConfirmation("Launching a new MPV instance while another is running may cause issues. Continue?");
                 if (!confirmed) return this.addLogEntry({ text: `[Content]: 'Play New' action cancelled by user.`, type: 'info' });
             }
-            this.sendCommandToBackground('play_new_instance', folderId);
+            // Send the 'play' action with a flag for a new instance
+            this.sendCommandToBackground('play', folderId, { 
+                play_new_instance: true // Flag to launch in a new instance
+            });
         };
 
         const actionMap = { add: handleAddClick, play: handlePlayClick, clear: handleClearClick, 'close-mpv': handleCloseMpvClick };

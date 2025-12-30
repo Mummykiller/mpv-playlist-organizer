@@ -1054,9 +1054,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             return showStatus('Please select a folder.', true);
         }
         try {
-            // Send a single 'play' action with just the folderId.
-            // The background script handles fetching the playlist and using 'play_batch'.
-            const response = await sendMessageAsync({ action: 'play', folderId });
+            // Send the 'play_m3u' action with m3u_data type 'folderId'.
+            // The background script will then fetch the playlist for this folder and construct the M3U.
+            const response = await sendMessageAsync({ 
+                action: 'play', // Changed back to 'play'
+                folderId: folderId,
+                // m3u_data parameter is removed; handlePlay will resolve folderId into M3U content.
+            });
             
             if (response.success) {
                 showStatus(response.message);

@@ -24,12 +24,22 @@ class PlaylistHandler(http.server.SimpleHTTPRequestHandler):
         if self.path == '/playlist.m3u':
             m3u_file_path = self.m3u_serve_file # Use the dynamically set file path
             if os.path.exists(m3u_file_path):
-                self.send_response(200)
-                self.send_header('Content-type', 'audio/x-mpegurl') # Standard M3U MIME type
-                self.end_headers()
-                with open(m3u_file_path, 'rb') as f:
-                    self.wfile.write(f.read())
-                logging.info(f"Served {m3u_file_path} to {self.client_address[0]}")
+                try:
+                    with open(m3u_file_path, 'rb') as f:
+                        content = f.read()
+                    
+                    self.send_response(200)
+                    self.send_header('Content-type', 'audio/x-mpegurl')
+                    self.send_header('Content-Length', str(len(content)))
+                    self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                    self.send_header('Pragma', 'no-cache')
+                    self.send_header('Expires', '0')
+                    self.end_headers()
+                    self.wfile.write(content)
+                    self.wfile.flush() # Ensure all data is sent
+                    logging.info(f"Served {m3u_file_path} ({len(content)} bytes) to {self.client_address[0]}")
+                except Exception as e:
+                    self.send_error(500, f"Error reading playlist: {e}")
             else:
                 self.send_error(404, f"M3U playlist not found: {m3u_file_path}")
                 logging.warning(f"M3U playlist file not found at {m3u_file_path}")

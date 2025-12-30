@@ -5,6 +5,10 @@ import platform
 import shutil
 import sys
 
+# Prevent __pycache__ generation
+sys.dont_write_bytecode = True
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+
 # --- Path Definitions ---
 
 def get_user_data_dir():
@@ -163,17 +167,50 @@ def list_import_files():
         return {"success": False, "error": error_msg}
 
 def get_settings():
-    """Reads and returns the entire contents of the config.json file."""
-    if not os.path.exists(CONFIG_FILE):
-        logging.info("config.json not found, returning empty settings.")
-        return {}
+    """Reads settings from config.json, providing default values for new keys."""
+    default_settings = {
+        "mpv_path": None, # Will be filled by installer or found in PATH
+        "enable_url_analysis": False,
+        "browser_for_url_analysis": "chrome", # Default browser for UA/cookies
+        "enable_youtube_analysis": False,
+        "user_agent_string": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", # Default UA
+    }
+
+    current_settings = {}
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                content = f.read()
+                if content:
+                    current_settings = json.loads(content)
+        except (IOError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to read or parse config.json: {e}")
+            # If config is corrupted, start fresh with defaults
+            return default_settings
+    
+    # Merge current settings with defaults, prioritizing current_settings
+    settings = {**default_settings, **current_settings}
+
+    # Ensure mpv_path default is platform-appropriate
+    if settings["mpv_path"] is None:
+        settings["mpv_path"] = "mpv.exe" if platform.system() == "Windows" else "mpv"
+
+    return settings
+
+def set_settings(settings_dict):
+    """Writes the provided settings to config.json, merging with existing settings."""
     try:
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            content = f.read()
-            if not content:
-                logging.info("config.json is empty, returning empty settings.")
-                return {}
-            return json.loads(content)
-    except (IOError, json.JSONDecodeError) as e:
-        logging.error(f"Failed to read or parse config.json: {e}")
-        return {}
+        # Load existing settings to avoid overwriting unrelated keys
+        current_settings = get_settings()
+        # Merge new settings, prioritizing the provided settings_dict
+        merged_settings = {**current_settings, **settings_dict}
+
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(merged_settings, f, indent=4)
+        logging.info(f"Settings successfully written to {CONFIG_FILE}.")
+        return {"success": True, "message": "Settings saved."}
+    except Exception as e:
+        error_msg = f"Failed to write settings to {CONFIG_FILE}: {e}"
+        logging.error(error_msg)
+        return {"success": False, "error": error_msg}
