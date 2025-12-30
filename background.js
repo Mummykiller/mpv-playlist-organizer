@@ -228,7 +228,8 @@ const actionHandlers = {
     'set_folder_order': folder_management_handlers.handleSetFolderOrder,
     // MPV and Playlist Actions
     'is_mpv_running': playback_handlers.handleIsMpvRunning,
-    'play': playback_handlers.handlePlay,
+    'play': playback_handlers.handlePlay, // This now delegates to handlePlayM3U internally
+    'play_m3u': playback_handlers.handlePlayM3U, // New action for direct M3U playback
     'append': playback_handlers.handleAppend,
     'close_mpv': playback_handlers.handleCloseMpv,
     'add': playlistManager.handleAdd,

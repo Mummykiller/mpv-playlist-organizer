@@ -1,16 +1,24 @@
 import json
 import logging
 import os
+import sys
+
+# Prevent __pycache__ generation
+sys.dont_write_bytecode = True
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+
 import platform
 import subprocess
 import threading
 import time
 import signal
 import tempfile
+import uuid # Added uuid import
 from urllib.parse import urlparse # Import for URL parsing
 from urllib.request import urlopen, Request # Import for fetching URLs
 from utils import ipc_utils
 import services
+from services import apply_bypass_script
 from playlist_tracker import PlaylistTracker # Added this import
 from utils.m3u_parser import parse_m3u # Import the new M3U parser
 
@@ -108,6 +116,83 @@ class MpvSessionManager:
             except OSError: pass
             return None
 
+    def append_batch(self, items, mode="append"):
+        """Appends multiple items using a temporary M3U to preserve titles and options natively."""
+        if not items:
+            return {"success": True, "message": "No items to append."}
+
+        logging.info(f"Linked Playlist: Preparing to append {len(items)} items.")
+
+        # 1. Register options for all items with the Lua script first
+        for item in items:
+            lua_options = {
+                "title": item.get('title'),
+                "headers": item.get('headers'),
+                "ytdl_raw_options": item.get('ytdl_raw_options'),
+                "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False)
+            }
+            self.ipc_manager.send({"command": ["script-message", "set_url_options", item['url'], json.dumps(lua_options)]})
+            
+            # Sync internal playlist state
+            if self.playlist is None: self.playlist = []
+            
+            # Deduplicate by ID if available, otherwise by URL
+            item_id = item.get('id')
+            item_url = item.get('url')
+            is_duplicate = False
+            if item_id:
+                is_duplicate = any(i.get('id') == item_id for i in self.playlist)
+            else:
+                is_duplicate = any(i.get('url') == item_url for i in self.playlist)
+
+            if not is_duplicate:
+                self.playlist.append(item)
+                if self.playlist_tracker: self.playlist_tracker.add_item(item)
+
+        # 2. Create a Delta M3U string
+        m3u_lines = ["#EXTM3U"]
+        for item in items:
+            m3u_lines.append(f"#EXTINF:-1,{item.get('title', item['url'])}")
+            m3u_lines.append(item['url'])
+        
+        m3u_content = "\n".join(m3u_lines)
+        
+        # 3. Write to a unique temporary file
+        try:
+            # Ensure the temp directory exists
+            os.makedirs(self.TEMP_PLAYLISTS_DIR, exist_ok=True)
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.m3u', dir=self.TEMP_PLAYLISTS_DIR, delete=False, encoding='utf-8') as tf:
+                tf.write(m3u_content)
+                temp_path = tf.name
+            
+            logging.info(f"Linked Playlist: Created delta M3U at {temp_path}")
+
+            # 4. Tell MPV to load this M3U as a list
+            # We use loadlist because it parses #EXTINF titles natively.
+            res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True)
+            
+            # Cleanup the delta file after a short delay to ensure MPV has read it
+            def cleanup():
+                time.sleep(5)
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                        logging.debug(f"Cleaned up delta M3U: {temp_path}")
+                except Exception as e:
+                    logging.warning(f"Failed to cleanup delta M3U: {e}")
+            
+            threading.Thread(target=cleanup, daemon=True).start()
+
+            if res and res.get("error") == "success":
+                return {"success": True, "message": f"Appended {len(items)} items to active session."}
+            else:
+                raise RuntimeError(f"MPV rejected loadlist command: {res}")
+
+        except Exception as e:
+            logging.error(f"Failed to append batch via delta M3U: {e}")
+            return {"success": False, "error": str(e)}
+
     def append(self, url_item, headers=None, mode="append", disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
         """Attempts to append a single new URL to an already running MPV instance."""
         with self.sync_lock:
@@ -120,17 +205,20 @@ class MpvSessionManager:
             logging.info(f"MPV is running. Attempting to append item (mode: {mode}).")
             url_to_add = url_item['url']
             
-            # Simple check to prevent adding the same URL multiple times.
-            # This is a basic check; a more robust one might consider other attributes.
+            # Check for duplicates using ID (primary) or URL (fallback)
             if self.playlist:
-                # Check by ID first if available (more robust for bypass scripts that change URLs)
-                if url_item.get('id') and any(item.get('id') == url_item['id'] for item in self.playlist):
-                    logging.info(f"Item with ID {url_item['id']} already in playlist. Not re-adding.")
+                item_id = url_item.get('id')
+                item_url = url_item['url']
+                
+                is_duplicate = False
+                if item_id:
+                    is_duplicate = any(i.get('id') == item_id for i in self.playlist)
+                else:
+                    is_duplicate = any(i.get('url') == item_url for i in self.playlist)
+                
+                if is_duplicate:
+                    logging.info(f"Item already in playlist (ID/URL match). Not re-adding.")
                     return {"success": True, "message": "Item already in playlist.", "skipped": True}
-
-            if self.playlist and url_to_add in [item['url'] for item in self.playlist]:
-                logging.info("URL is already in the running playlist. Not re-adding.")
-                return {"success": True, "message": "URL already in playlist.", "skipped": True}
 
             try:
                 # Helper to send commands robustly, attempting reconnection if needed
@@ -156,47 +244,26 @@ class MpvSessionManager:
                                 if self.playlist_tracker: self.playlist_tracker.add_item(url_item)
                             return {"success": True, "message": "Item already in playlist (synced).", "skipped": True}
 
-                # Construct options for loadfile command
-                load_options = {}
-
-                # Prioritize headers from url_item if present, otherwise use explicit headers arg
+                # Construct options for the item
+                # Instead of putting them in the loadfile string or setting global properties,
+                # we send them to the 'adaptive_headers.lua' script which applies them on_load.
                 effective_headers = url_item.get('headers') if 'headers' in url_item else headers
-                if effective_headers:
-                    # Setting headers as properties via IPC. This is global for the MPV instance.
-                    # For loadfile specifically, we need to pass them as options.
-                    load_options['http-header-fields'] = [f"{k}: {v}" for k, v in effective_headers.items()]
-                    if 'User-Agent' in effective_headers: load_options['user-agent'] = effective_headers['User-Agent']
-                    if 'Referer' in effective_headers: load_options['referrer'] = effective_headers['Referer']
-                
-                # Prioritize disable_http_persistent from url_item if present
-                effective_disable_http_persistent = url_item.get('disable_http_persistent') if 'disable_http_persistent' in url_item else disable_http_persistent
-                if effective_disable_http_persistent:
-                    load_options['demuxer-lavf-o'] = 'http_persistent=0'
-
-                # Prioritize ytdl_raw_options from url_item if present
                 effective_ytdl_raw_options = url_item.get('ytdl_raw_options') if 'ytdl_raw_options' in url_item else ytdl_raw_options
                 effective_use_ytdl_mpv = url_item.get('use_ytdl_mpv') if 'use_ytdl_mpv' in url_item else use_ytdl_mpv
                 effective_is_youtube = url_item.get('is_youtube') if 'is_youtube' in url_item else is_youtube
 
+                lua_options = {
+                    "title": url_item.get('title'),
+                    "headers": effective_headers,
+                    "ytdl_raw_options": effective_ytdl_raw_options,
+                    "use_ytdl_mpv": effective_use_ytdl_mpv or effective_is_youtube
+                }
+                robust_send({"command": ["script-message", "set_url_options", url_to_add, json.dumps(lua_options)]})
 
-                if effective_use_ytdl_mpv or effective_is_youtube:
-                    load_options['ytdl'] = 'yes'
-                    if effective_ytdl_raw_options:
-                        load_options['ytdl-raw-options'] = effective_ytdl_raw_options
-                    else: # If no raw options, use default format
-                        load_options['ytdl-format'] = 'bestvideo+bestaudio'
-
+                # Simple loadfile command
                 ipc_command = {"command": ["loadfile", url_to_add, mode]}
 
-                title = url_item.get('title')
-                if title:
-                    self.ipc_manager.send({"command": ["script-message", "set_title", url_to_add, title]})
-
-                # Add other load options as top-level keys in the ipc_command dictionary
-                for key, value in load_options.items():
-                    ipc_command[key] = value
-                
-                logging.info(f"Loading URL '{url_to_add}' with mode '{mode}' and IPC command: {ipc_command}")
+                logging.info(f"Loading URL '{url_to_add}' with mode '{mode}' and adaptive settings registered via script message.")
 
                 load_resp = robust_send(ipc_command)
                 
@@ -292,7 +359,7 @@ class MpvSessionManager:
             
             return {"success": True, "message": "Live playlist reordered."}
 
-    def _launch(self, url_item, folder_id, settings, file_io, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
+    def _launch(self, url_item, folder_id, settings, file_io, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False, full_playlist=None):
         """Launches a new instance of MPV with a single URL and prepares for playlist construction via IPC."""
         logging.info(f"Starting a new MPV instance for URL: {url_item.get('url')}")
         mpv_exe = self.get_mpv_executable()
@@ -302,9 +369,9 @@ class MpvSessionManager:
             full_command, has_terminal_flag = services.construct_mpv_command(
                 mpv_exe=mpv_exe,
                 ipc_path=ipc_path,
-                url=url_item['url'],
+                url=None, # DO NOT pass URL on command line to avoid race condition
                 is_youtube=is_youtube,
-                ytdl_raw_options=url_item.get('ytdl_raw_options'),
+                ytdl_raw_options=ytdl_raw_options,
                 geometry=geometry,
                 custom_width=custom_width,
                 custom_height=custom_height,
@@ -315,22 +382,42 @@ class MpvSessionManager:
                 start_paused=start_paused,
                 script_dir=self.SCRIPT_DIR,
                 load_on_completion_script=True,
-                title=url_item.get('title')
+                title=url_item.get('title'),
+                use_ytdl_mpv=use_ytdl_mpv,
+                is_youtube_override=is_youtube,
+                idle="once" # Use 'once' so mpv waits for the first file but exits on error/finish
             )
 
             popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
 
+            # Launch MPV
             self.process = subprocess.Popen(full_command, **popen_kwargs)
             self.ipc_path = ipc_path
             self.ipc_manager = ipc_utils.IPCSocketManager()
             if not self.ipc_manager.connect(self.ipc_path):
                 raise RuntimeError(f"Failed to connect to MPV IPC at {self.ipc_path}")
 
-            # Register title for the initial item in Lua script (ensures title is known if playlist loops)
-            if url_item.get('title'):
-                self.ipc_manager.send({"command": ["script-message", "set_title", url_item['url'], url_item.get('title')]})
+            self.playlist = full_playlist if full_playlist is not None else [url_item]
+            
+            # --- Register options for ALL items BEFORE starting playback ---
+            if self.playlist:
+                for item in self.playlist:
+                    item_headers = item.get('headers')
+                    item_ytdl_raw_options = item.get('ytdl_raw_options')
+                    item_use_ytdl_mpv = item.get('use_ytdl_mpv', False) or item.get('is_youtube', False)
+                    
+                    lua_options = {
+                        "title": item.get('title'),
+                        "headers": item_headers,
+                        "ytdl_raw_options": item_ytdl_raw_options,
+                        "use_ytdl_mpv": item_use_ytdl_mpv
+                    }
+                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item['url'], json.dumps(lua_options)]})
+                logging.info(f"Registered options for {len(self.playlist)} items with adaptive_headers.lua")
 
-            self.playlist = [url_item]
+            # Now start playback of the actual URL
+            self.ipc_manager.send({"command": ["loadfile", url_item['url'], "replace"]})
+
             self.pid = self.process.pid
             self.owner_folder_id = folder_id
             self.is_alive = True
@@ -350,7 +437,7 @@ class MpvSessionManager:
                 except Exception as e:
                     logging.error(f"Error while trying to get MPV's real PID from terminal launch: {e}")
 
-            stderr_thread = threading.Thread(target=self.log_stream, args=(self.process.stderr, logging.warning, folder_id))
+            stderr_thread = threading.Thread(target=self.log_stream, args=(self.process.stdout, logging.warning, folder_id))
             stderr_thread.daemon = True
             stderr_thread.start()
 
@@ -374,77 +461,217 @@ class MpvSessionManager:
             logging.error(f"An error occurred while trying to launch mpv: {e}")
             return {"success": False, "error": f"Error launching mpv: {e}"}
 
-    def start(self, url_items_or_m3u, folder_id, settings, file_io, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
+    def start(self, url_items_or_m3u, folder_id, settings, file_io, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, enriched_items_list=None, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
+        logging.info(f"DEBUG: Start function received enriched_items_list (len): {len(enriched_items_list) if enriched_items_list is not None else 'None'}")
         """Starts a new mpv process with a playlist of URLs (or an M3U), loaded sequentially via IPC."""
         
-        _url_items_list = []
+        m3u_input_was_raw_content_or_items = False # Initialize the flag at the very top
+        _url_items_list = enriched_items_list if enriched_items_list is not None else []
+        m3u_content = None # Initialize m3u_content to ensure it's always defined
         if isinstance(url_items_or_m3u, str):
-            # Attempt to parse as M3U
-            logging.info(f"Attempting to parse M3U: {url_items_or_m3u}")
-            m3u_content = None
-            if os.path.exists(url_items_or_m3u):
-                with open(url_items_or_m3u, 'r', encoding='utf-8') as f:
-                    m3u_content = f.read()
-            elif urlparse(url_items_or_m3u).scheme in ['http', 'https']:
-                try:
-                    req = Request(url_items_or_m3u, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urlopen(req, timeout=10) as response:
-                        m3u_content = response.read().decode('utf-8')
-                except Exception as e:
-                    logging.error(f"Failed to fetch M3U from URL {url_items_or_m3u}: {e}")
-                    return {"success": False, "error": f"Failed to fetch M3U: {e}"}
+            # Check if it's the local server URL first
+            if url_items_or_m3u.startswith('http://localhost') and enriched_items_list is not None:
+                 logging.info(f"Local M3U server URL detected: {url_items_or_m3u}. Skipping M3U parsing because enriched_items_list is provided.")
+                 m3u_input_was_raw_content_or_items = False
             else:
-                logging.error(f"Invalid M3U path or URL: {url_items_or_m3u}")
-                return {"success": False, "error": "Invalid M3U path or URL."}
+                # Attempt to parse as M3U
+                logging.info(f"Attempting to parse M3U: {url_items_or_m3u}")
+                # Check if it's a file path
+                if os.path.exists(url_items_or_m3u):
+                    m3u_input_was_raw_content_or_items = True
+                    with open(url_items_or_m3u, 'r', encoding='utf-8') as f:
+                        m3u_content = f.read()
+                    logging.info(f"Read M3U from local file: {url_items_or_m3u}")
+                # Check if it's a remote URL
+                elif urlparse(url_items_or_m3u).scheme in ['http', 'https']:
+                    # Only fetch if it's a remote URL (already checked localhost above)
+                    try:
+                        # Use provided headers or fallback to a sensible default
+                        fetch_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
+                        if headers:
+                            fetch_headers.update(headers)
+                        
+                        req = Request(url_items_or_m3u, headers=fetch_headers)
+                        with urlopen(req, timeout=10) as response:
+                            m3u_content = response.read().decode('utf-8')
+                        m3u_input_was_raw_content_or_items = True # Treat fetched content as raw for enrichment
+                        logging.info(f"Fetched M3U from remote URL: {url_items_or_m3u}")
+                    except Exception as e:
+                        logging.error(f"Failed to fetch M3U from URL {url_items_or_m3u}: {e}")
+                        return {"success": False, "error": f"Failed to fetch M3U: {e}"}
+                else:
+                    # If it's a string, but not a URL or file path, it's raw M3U content.
+                    m3u_input_was_raw_content_or_items = True
+                    m3u_content = url_items_or_m3u
+                    logging.info("Input string treated as raw M3U content.")
 
             if m3u_content:
                 _url_items_list = parse_m3u(m3u_content)
-            else:
+                logging.info(f"Parsed M3U content ({len(_url_items_list)} items).")
+            elif m3u_input_was_raw_content_or_items:
                 return {"success": False, "error": "M3U content could not be loaded."}
         elif isinstance(url_items_or_m3u, list):
             _url_items_list = url_items_or_m3u
+        elif isinstance(url_items_or_m3u, dict):
+            _url_items_list = [url_items_or_m3u]
         else:
-            return {"success": False, "error": "Invalid type for url_items_or_m3u. Expected list or string (M3U path/URL)."}
+            return {"success": False, "error": "Invalid type for url_items_or_m3u. Expected list, dict, or string (M3U path/URL)."}
 
         if not _url_items_list:
             return {"success": False, "error": "No URL items provided or parsed from M3U."}
 
+        # --- NEW: Enrich url_items with dynamically determined playback options ---
+        # This enrichment and M3U generation ONLY happens during the first call
+        # (when raw M3U content/URLs are provided).
+        if m3u_input_was_raw_content_or_items:
+            from concurrent.futures import ThreadPoolExecutor
+
+            def enrich_item(item):
+                # Ensure item has an ID
+                if not item.get('id'):
+                    item['id'] = str(uuid.uuid4())
+
+                # item.get('url') is used here, but it's important to pass a dictionary
+                # that apply_bypass_script can work with.
+                url_dict_for_analysis = {'url': item.get('url'), 'title': item.get('title'), 'id': item.get('id')}
+                
+                (
+                    processed_url,
+                    headers_for_mpv,
+                    ytdl_raw_options_for_mpv,
+                    use_ytdl_mpv_flag,
+                    is_youtube_flag_from_script
+                ) = apply_bypass_script(url_dict_for_analysis, self.send_message)
+                
+                # Update the original item with the enriched data
+                item['url'] = processed_url # This might be a resolved URL
+                
+                # Merge headers (M3U headers take precedence if they exist)
+                if headers_for_mpv:
+                    if not item.get('headers'):
+                        item['headers'] = headers_for_mpv
+                    else:
+                        # Merge them, keeping existing ones
+                        merged_headers = headers_for_mpv.copy()
+                        merged_headers.update(item['headers'])
+                        item['headers'] = merged_headers
+
+                # Merge YTDL options
+                if ytdl_raw_options_for_mpv:
+                    if not item.get('ytdl_raw_options'):
+                        item['ytdl_raw_options'] = ytdl_raw_options_for_mpv
+                    else:
+                        # Both exist, merge comma-separated strings
+                        existing = item['ytdl_raw_options'].split(',')
+                        new_opts = ytdl_raw_options_for_mpv.split(',')
+                        # Create a dict to de-duplicate by key
+                        merged_map = {}
+                        for o in new_opts + existing:
+                            if '=' in o:
+                                k, v = o.split('=', 1)
+                                merged_map[k.strip()] = v.strip()
+                            else:
+                                merged_map[o.strip()] = ""
+                        item['ytdl_raw_options'] = ','.join([f"{k}={v}" if v is not None and v != "" else f"{k}=" for k, v in merged_map.items()])
+
+                item['use_ytdl_mpv'] = use_ytdl_mpv_flag
+                item['is_youtube'] = is_youtube_flag_from_script
+                return item
+
+            logging.info(f"Enriching {len(_url_items_list)} items in parallel...")
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                enriched_url_items = list(executor.map(enrich_item, _url_items_list))
+            
+            _url_items_list = enriched_url_items # Use the enriched list for subsequent processing
+
+            # --- Generate Enriched M3U Content ---
+            m3u_output_lines = ["#EXTM3U"]
+            for item in _url_items_list:
+                title = item.get('title', item['url'])
+                m3u_output_lines.append(f"#EXTINF:-1,{title}")
+
+                # Add #EXTHTTPHEADERS using '|' and '=' for robustness
+                if item.get('headers'):
+                    header_string = "|".join([f"{k}={v}" for k, v in item['headers'].items()])
+                    m3u_output_lines.append(f"#EXTHTTPHEADERS:{header_string}")
+                
+                # Add #EXTYTDLOPTIONS
+                if item.get('ytdl_raw_options'):
+                    # Use '|' as separator for our custom tag to avoid confusion with commas in values
+                    options_val = item['ytdl_raw_options'].replace(',', '|')
+                    m3u_output_lines.append(f"#EXTYTDLOPTIONS:{options_val}")
+                
+                m3u_output_lines.append(item['url'])
+            
+            enriched_m3u_content = "\n".join(m3u_output_lines)
+            logging.info("Generated enriched M3U content for server.")
+
+            return {
+                "success": True,
+                "enriched_m3u_content": enriched_m3u_content,
+                "enriched_url_items": _url_items_list, # The list of items with their dynamic options
+                "message": "Enriched M3U content generated. Ready for server."
+            }
+
+        # --- END NEW ENRICHMENT LOGIC ---
+
+        # --- Remaining logic is for launching MPV after server is ready ---
+        # If we reach this point, it means `url_items_or_m3u` is either:
+        # 1. A single URL string (e.g., the local M3U server URL or a direct media URL)
+        # 2. A list of URL items that are already enriched and will be played directly (legacy flow)
+
         def get_opts(item):
-            h = item.get('headers') if isinstance(item, dict) and 'headers' in item else headers
+            h = item.get('headers') if isinstance(item, dict) and item.get('headers') else headers
             d = item.get('disable_http_persistent') if isinstance(item, dict) and 'disable_http_persistent' in item else disable_http_persistent
-            y = item.get('ytdl_raw_options') if isinstance(item, dict) and 'ytdl_raw_options' in item else ytdl_raw_options
+            y = item.get('ytdl_raw_options') if isinstance(item, dict) and item.get('ytdl_raw_options') else ytdl_raw_options
             u = item.get('use_ytdl_mpv') if isinstance(item, dict) and 'use_ytdl_mpv' in item else use_ytdl_mpv
             i = item.get('is_youtube') if isinstance(item, dict) and 'is_youtube' in item else is_youtube
             return h, d, y, u, i
+        
+        # Determine the effective _url_items_list for direct MPV launch.
+        # If it was a raw M3U string, _url_items_list would contain the enriched items from the first pass.
+        # If it was already a list of enriched items, use that.
+        # If it's a single URL string (like the local server URL), create a single item list.
+        logging.info(f"DEBUG: Before launch. url_items_or_m3u type: {type(url_items_or_m3u)}, _url_items_list len: {len(_url_items_list)}")
+        
+        if isinstance(url_items_or_m3u, str) and url_items_or_m3u.startswith('http://localhost'):
+            # M3U Flow: Launch with the local server URL
+            # We do NOT set a title here so that MPV can use the individual titles from the M3U (#EXTINF)
+            launch_item = {'url': url_items_or_m3u}
+            rest_items = []
+            # For M3U flow, we pass the full list of enriched items so the tracker knows them all
+            # and self.playlist is populated with them immediately.
+            playlist_for_launch = _url_items_list
+        else:
+            # Standard Flow: Launch with the first item, append the rest
+            launch_item = _url_items_list[0]
+            rest_items = _url_items_list[1:]
+            # For Standard flow, we ONLY pass the first item.
+            # The rest will be added to self.playlist and the tracker via the append() loop.
+            playlist_for_launch = [launch_item]
 
+        # Original logic for checking and launching MPV
         if self.pid and not ipc_utils.is_process_alive(self.pid, self.ipc_path):
             logging.info("Detected a stale MPV session. Clearing state before proceeding.")
             self.clear()
 
         if self.pid:
             if folder_id == self.owner_folder_id:
-                def append_items_thread():
-                    for item in _url_items_list:
-                        if not self.is_alive:
-                            logging.warning("MPV session ended before all items could be appended.")
-                            break
-                        h, d, y, u, i = get_opts(item)
-                        self.append(item, headers=h, mode="append", disable_http_persistent=d, ytdl_raw_options=y, use_ytdl_mpv=u, is_youtube=i)
-                        time.sleep(0.1) # Tiny delay to prevent IPC flooding
-                
-                threading.Thread(target=append_items_thread, daemon=True).start()
-                return {"success": True, "message": f"Appending {len(_url_items_list)} items to the existing session."}
+                # If we are here, it means the caller (native_host_handlers) might want
+                # to sync/append to the active session. We return success but indicate
+                # that a launch is not needed.
+                logging.info(f"Session for folder '{folder_id}' is already active. Launch skipped.")
+                return {"success": True, "message": "MPV session already active.", "already_active": True}
             else:
                 error_message = f"An MPV instance is already running for folder '{self.owner_folder_id}'. Please close it to play from '{folder_id}'."
                 logging.warning(error_message)
                 return {"success": False, "error": error_message}
 
-        first_item = _url_items_list[0]
-        rest_items = _url_items_list[1:]
+        h, d, y, u, i = get_opts(launch_item)
+        logging.info(f"Standard Flow: Launching MPV with item 1/{len(_url_items_list)}: {launch_item.get('title', 'Unknown')}")
         
-        h, d, y, u, i = get_opts(first_item)
         launch_result = self._launch(
-            first_item, folder_id, settings, file_io,
+            launch_item, folder_id, settings, file_io,
             geometry=geometry, 
             custom_width=custom_width, 
             custom_height=custom_height, 
@@ -455,21 +682,39 @@ class MpvSessionManager:
             disable_http_persistent=d,
             ytdl_raw_options=y,
             use_ytdl_mpv=u,
-            is_youtube=i
+            is_youtube=i,
+            full_playlist=playlist_for_launch # Pass the correct initial playlist state
         )
 
         if launch_result and launch_result["success"] and rest_items:
+            logging.info(f"Standard Flow: MPV launch successful. Starting thread to append {len(rest_items)} remaining items.")
             def append_remaining_items():
-                time.sleep(2)  # Give MPV time to start and initialize IPC
-                for item in rest_items:
+                time.sleep(1.5)  # Give MPV time to start and initialize IPC
+                logging.info("Standard Flow: Append thread started.")
+                for idx, item in enumerate(rest_items):
                     if not self.is_alive:
                         logging.warning("MPV session ended prematurely. Stopping append thread.")
                         break
+                    
+                    logging.info(f"Standard Flow: Appending item {idx+2}/{len(_url_items_list)}: {item.get('title', 'Unknown')}")
                     h_item, d_item, y_item, u_item, i_item = get_opts(item)
-                    self.append(item, headers=h_item, mode="append", disable_http_persistent=d_item, ytdl_raw_options=y_item, use_ytdl_mpv=u_item, is_youtube=i_item)
+                    try:
+                        resp = self.append(item, headers=h_item, mode="append", disable_http_persistent=d_item, ytdl_raw_options=y_item, use_ytdl_mpv=u_item, is_youtube=i_item)
+                        if resp and resp.get('success'):
+                            logging.info(f"Standard Flow: Append success for item {idx+2}")
+                        else:
+                            logging.warning(f"Standard Flow: Append failed for item {idx+2}: {resp}")
+                    except Exception as e:
+                        logging.error(f"Standard Flow: Exception during append for item {idx+2}: {e}")
+                    
                     time.sleep(0.1) # Tiny delay to prevent IPC flooding
+                logging.info("Standard Flow: Append thread finished.")
 
             threading.Thread(target=append_remaining_items, daemon=True).start()
+        elif not rest_items:
+            logging.info("Standard Flow: No remaining items to append.")
+        else:
+            logging.error("Standard Flow: MPV launch failed, cannot append remaining items.")
 
         return launch_result
 

@@ -172,8 +172,56 @@ export async function handleIsMpvRunning() {
     return _callNativeHost({ action: 'is_mpv_running' });
 }
 
-export async function handlePlay(request) { // This will now accept a single url_item to play immediately
-    const { url_item, folderId } = request;
+export async function handlePlay(request) {
+    const { url_item, folderId, custom_mpv_flags, geometry, custom_width, custom_height, start_paused } = request;
+
+    let m3u_data = null;
+    let effective_folder_id = folderId;
+
+    if (url_item) {
+        // If a single url_item is provided, construct a minimal M3U for it
+        m3u_data = {
+            type: "content",
+            value: `#EXTM3U\n#EXTINF:-1,${url_item.title || url_item.url}\n${url_item.url}`
+        };
+        effective_folder_id = folderId || "default_single_item_playback"; // Assign a default if none provided
+        _broadcastLog({ text: `[Background]: Received 'play' request for single item: ${url_item.title || url_item.url}`, type: 'info' });
+    } else if (folderId) {
+        const data = await _storage.get();
+        const folder = data.folders[folderId];
+        if (!folder || !folder.playlist || folder.playlist.length === 0) {
+            return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
+        }
+
+        _broadcastLog({ text: `[Background]: Constructing M3U for playlist '${folderId}' (${folder.playlist.length} items).`, type: 'info' });
+        
+        // Construct a basic M3U string. Native host will dynamically add headers/ytdl options.
+        const m3u_lines = ["#EXTM3U"];
+        folder.playlist.forEach(item => {
+            m3u_lines.push(`#EXTINF:-1,${item.title || item.url}`);
+            m3u_lines.push(item.url);
+        });
+        m3u_data = { type: "content", value: m3u_lines.join("\n") };
+        effective_folder_id = folderId;
+    } else {
+        return { success: false, error: 'No URL item or Folder ID provided to play.' };
+    }
+
+    // Delegate to the new handlePlayM3U function
+    return handlePlayM3U({ 
+        m3u_data: m3u_data, 
+        folderId: effective_folder_id,
+        custom_mpv_flags: custom_mpv_flags,
+        geometry: geometry,
+        custom_width: custom_width,
+        custom_height: custom_height,
+        start_paused: start_paused,
+        clear_on_completion: request.clear_on_completion // Pass along if present
+    });
+}
+
+export async function handlePlayM3U(request) {
+    const { m3u_data, folderId, custom_mpv_flags, geometry, custom_width, custom_height, start_paused, clear_on_completion } = request;
 
     // Reset queue and playback state for a new 'play' request
     playbackQueueInstance.queue = [];
@@ -181,54 +229,37 @@ export async function handlePlay(request) { // This will now accept a single url
     playbackQueueInstance.isProcessingQueue = false;
     playbackQueueInstance.currentPlayingItem = null;
 
-    if (url_item) {
-        // Push the single item to the queue
-        playbackQueueInstance.queue.push({ urlItem: url_item, folderId: folderId, isLastInFolder: false });
-        _broadcastLog({ text: `[Background]: Received 'play' request for: ${url_item.title || url_item.url}`, type: 'info' });
-        playbackQueueInstance.processQueue();
-        return { success: true, message: `Playing ${url_item.title || url_item.url}` };
-    } else if (folderId) {
-        // Fallback: Play the entire folder if no specific item is provided
-        const data = await _storage.get();
-        const folder = data.folders[folderId];
-        if (!folder || !folder.playlist || folder.playlist.length === 0) {
-            return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
-        }
-        
-        _broadcastLog({ text: `[Background]: Sending playlist '${folderId}' (${folder.playlist.length} items) to MPV.`, type: 'info' });
-        
-        const globalPrefs = data.settings.ui_preferences.global;
-        const response = await _callNativeHost({
-            action: 'play_batch',
-            playlist: folder.playlist,
-            folderId: folderId,
-            geometry: globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry,
-            custom_width: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null,
-            custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
-            custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
-            automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
-            clear_on_completion: globalPrefs.clear_on_completion ?? false,
-            start_paused: false,
-            bypassScripts: globalPrefs.bypassScripts || {}
-        });
+    const data = await _storage.get();
+    const globalPrefs = data.settings.ui_preferences.global;
 
-        if (response.success) {
-            playbackQueueInstance.isPlaying = true;
-            // Set currentPlayingItem to the last item so "Clear on Completion" works if MPV exits after this batch.
-            playbackQueueInstance.currentPlayingItem = { 
-                urlItem: folder.playlist[folder.playlist.length - 1], 
-                folderId: folderId, 
-                isLastInFolder: true 
-            };
-            // Resync immediately so the UI gets the IDs assigned by the native host.
-            // This ensures live reordering works even for items that didn't have IDs before playing.
-            _resyncDataFromNativeHostFile();
-            return { success: true, message: `Playing playlist '${folderId}'` };
-        } else {
-            return response;
+    _broadcastLog({ text: `[Background]: Sending 'play_m3u' command to native host for folder '${folderId}'.`, type: 'info' });
+
+    const response = await _callNativeHost({
+        action: 'play_m3u',
+        m3u_data: m3u_data, // Can be type 'content', 'url', or 'path'
+        folderId: folderId,
+        geometry: geometry || (globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry),
+        custom_width: custom_width || (globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null),
+        custom_height: custom_height || (globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null),
+        custom_mpv_flags: custom_mpv_flags || globalPrefs.custom_mpv_flags || '',
+        automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
+        clear_on_completion: clear_on_completion ?? (globalPrefs.clear_on_completion ?? false),
+        start_paused: start_paused ?? false,
+        bypassScripts: globalPrefs.bypassScripts || {} // Pass bypass scripts config (though less relevant now with dynamic analysis)
+    });
+
+    if (response.success) {
+        playbackQueueInstance.isPlaying = true;
+        // The native host will return the playlist with IDs. Update storage.
+        if (response.playlist_items) {
+            data.folders[folderId].playlist = response.playlist_items;
+            await _storage.set(data);
         }
+        _resyncDataFromNativeHostFile(); // Resync for consistency
+
+        return { success: true, message: `Playback initiated for playlist '${folderId}'.` };
     } else {
-        return { success: false, error: 'No URL item or Folder ID provided to play.' };
+        return response;
     }
 }
 

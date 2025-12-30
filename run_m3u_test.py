@@ -35,13 +35,16 @@ def mock_get_mpv_executable():
 
 def mock_log_stream(stream, log_func, folder_id):
     for line in iter(stream.readline, b''):
-        log_func(f"MPV STDERR [{folder_id}]: {line.decode('utf-8', errors='ignore').strip()}")
+        line_decoded = line.decode('utf-8', errors='ignore').strip()
+        if line_decoded:
+            print(f"MPV STDERR [{folder_id}]: {line_decoded}")
+            sys.stdout.flush()
 
 def mock_send_message(message):
     logger.info(f"Mock: send_message called with: {message}")
 
-MOCK_SCRIPT_DIR = os.path.join(os.path.dirname(__file__), 'mpv_scripts') # Assuming mpv_scripts is a sibling
-MOCK_TEMP_PLAYLISTS_DIR = os.path.join(os.path.dirname(__file__), 'temp_playlists')
+MOCK_SCRIPT_DIR = os.path.dirname(__file__) # Project root
+MOCK_TEMP_PLAYLISTS_DIR = os.path.join(MOCK_SCRIPT_DIR, 'temp_playlists')
 os.makedirs(MOCK_TEMP_PLAYLISTS_DIR, exist_ok=True)
 
 
@@ -136,29 +139,63 @@ def main():
         session_file = os.path.join(MOCK_TEMP_PLAYLISTS_DIR, "test_mpv_session.json")
         mpv_session_manager = MpvSessionManager(session_file, mock_dependencies)
 
-        logger.info(f"Launching MPV with M3U playlist from: {m3u_url}")
+        logger.info(f"Step 1: Enrichment Phase for: {m3u_url}")
 
-        # 3. Call MpvSessionManager.start with the M3U URL
+        # 3. Call MpvSessionManager.start with the M3U URL (Enrichment Phase)
+        enrichment_result = mpv_session_manager.start(
+            url_items_or_m3u=m3u_url,
+            folder_id="test_m3u_playlist",
+            settings=mock_settings,
+            file_io=mock_file_io,
+            custom_mpv_flags="--vo=null --ao=null --msg-level=all=v,ytdl_hook=debug", # Use null output for tests # Use null output for tests # Use null output for tests # Use null output for tests
+            automatic_mpv_flags=[]
+        )
+
+        if not enrichment_result["success"]:
+            logger.error(f"Failed enrichment phase: {enrichment_result.get('error')}")
+            sys.exit(1)
+        
+        logger.info("Step 2: Updating test_playlist.m3u with enriched content...")
+        # In a real app, the server would serve this. Here we overwrite the file being served.
+        with open('test_playlist.m3u', 'w', encoding='utf-8') as f:
+            f.write(enrichment_result['enriched_m3u_content'])
+
+        logger.info(f"Step 3: Launch Phase with enriched items...")
+
+        first_item = enrichment_result['enriched_url_items'][0] if enrichment_result['enriched_url_items'] else {}
+
+        # 4. Call start AGAIN with enriched_items_list (Launch Phase)
         mpv_start_result = mpv_session_manager.start(
             url_items_or_m3u=m3u_url,
             folder_id="test_m3u_playlist",
             settings=mock_settings,
             file_io=mock_file_io,
-            custom_mpv_flags="--no-terminal", # Example flag, adjust as needed
-            automatic_mpv_flags=[]
+            custom_mpv_flags="--vo=null --ao=null --msg-level=all=v,ytdl_hook=debug", # Use null output for tests # Use null output for tests
+            automatic_mpv_flags=[],
+            enriched_items_list=enrichment_result['enriched_url_items'],
+            headers=first_item.get('headers'),
+            ytdl_raw_options=first_item.get('ytdl_raw_options'),
+            use_ytdl_mpv=first_item.get('use_ytdl_mpv', False),
+            is_youtube=first_item.get('is_youtube', False)
         )
 
         if not mpv_start_result["success"]:
-            logger.error(f"Failed to start MPV: {mpv_start_result['error']}")
+            logger.error(f"Failed to start MPV in launch phase: {mpv_start_result['error']}")
             sys.exit(1)
         
         logger.info("MPV started successfully. Waiting for MPV to finish or for manual termination...")
 
         # Keep the main thread alive until MPV process finishes
-        while mpv_session_manager.is_alive:
+        # Timeout after 30 seconds for safety
+        test_start_time = time.time()
+        while mpv_session_manager.is_alive and (time.time() - test_start_time < 30):
             time.sleep(1)
         
-        logger.info("MPV session has ended.")
+        if mpv_session_manager.is_alive:
+            logger.info("Test timeout reached, closing MPV.")
+            mpv_session_manager.close()
+        else:
+            logger.info("MPV session has ended naturally.")
 
     except Exception as e:
         logger.error(f"An error occurred during MPV playback: {e}")

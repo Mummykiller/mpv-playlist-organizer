@@ -6,6 +6,9 @@ import sys
 import argparse
 import os
 
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+sys.dont_write_bytecode = True
+
 # AniList GraphQL API endpoint
 ANILIST_API_URL = "https://graphql.anilist.co"
 
