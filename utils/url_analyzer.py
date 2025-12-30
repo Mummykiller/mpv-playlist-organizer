@@ -4,6 +4,7 @@ import subprocess
 import os
 import re # Add re import
 import platform # Add platform import
+import logging
 
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
@@ -37,21 +38,49 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
         }
 
     # --- Case 2: YouTube URLs (YOUTUBE_RE) ---
-    # Disabled to force external resolution and avoid mpv edl:// errors
-    # if YOUTUBE_RE.search(url):
-    #    # Based on stuff.py, these should use MPV's internal yt-dlp with specific options.
-    #    ytdl_options = ['cookies-from-browser='+browser]
-    #    if youtube_enabled.lower() == 'true':
-    #        ytdl_options.append('mark-watched=') # Add mark-watched if enabled
-    #
-    #    return {
-    #        "success": True,
-    #        "url": url, # MPV will process the original URL via yt-dlp
-    #        "headers": None, # Let yt-dlp handle headers for YouTube to avoid 403s
-    #        "ytdl_raw_options": ','.join(ytdl_options), # Comma-separated as expected by MPV --ytdl-raw-options
-    #        "use_ytdl_mpv": True, # Explicitly set to True for YouTube
-    #        "is_youtube": True
-    #    }
+    if YOUTUBE_RE.search(url):
+        # Detect if it's a playlist or a video with a playlist attached
+        if "list=" in url:
+            try:
+                logging.info(f"Expanding YouTube playlist: {url}")
+                cmd = [
+                    'yt-dlp',
+                    '--flat-playlist',
+                    '--print', '%(title)s|%(webpage_url)s',
+                    '--no-warnings'
+                ]
+                if browser and browser != "None":
+                    cmd.extend(['--cookies-from-browser', browser])
+                cmd.append(url)
+
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                lines = result.stdout.strip().split('\n')
+                
+                entries = []
+                for line in lines:
+                    if '|' in line:
+                        title, webpage_url = line.split('|', 1)
+                        entries.append({
+                            "title": title,
+                            "url": webpage_url,
+                            "is_youtube": True
+                        })
+                
+                if entries:
+                    return {
+                        "success": True,
+                        "is_playlist": True,
+                        "entries": entries,
+                        "url": url, # Keep original URL as fallback
+                        "use_ytdl_mpv": False
+                    }
+            except Exception as e:
+                logging.warning(f"Failed to expand YouTube playlist: {e}")
+                # Fall through to single video resolution
+
+        # For single videos, we still want to resolve them externally to avoid edl:// errors
+        # (Fall through to Case 3 logic below)
+        pass
 
     # --- Case 3: Other URLs (use yt-dlp --get-url to resolve direct URL) ---
     try:

@@ -40,7 +40,8 @@ class HandlerManager:
     def _process_url_item(self, url_item, folder_id, bypass_scripts_config, all_folders):
         """
         Helper to process a single URL item: resolves/assigns ID and applies bypass scripts.
-        Returns the updated `url_item`, `script_headers`, `ytdl_options`, `use_ytdl_mpv`, `is_youtube`, and `all_folders`.
+        If the item is a playlist, it expands it and processes each entry.
+        Returns a list of updated `url_items` and the updated `all_folders`.
         """
         # Ensure item is a dict
         if isinstance(url_item, str): 
@@ -49,20 +50,37 @@ class HandlerManager:
         # Call the refactored _resolve_or_assign_item_id
         url_item, all_folders = self._resolve_or_assign_item_id(url_item, folder_id, all_folders)
         
-        # New return signature from apply_bypass_script (5 values)
-        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag = self.services.apply_bypass_script(
+        # New return signature from apply_bypass_script (6 values)
+        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, entries = self.services.apply_bypass_script(
             url_item, self.send_message
         )
+
+        if entries:
+            # Expansion occurred!
+            processed_entries = []
+            for entry in entries:
+                # Assign ID to new entry and add to folder
+                entry, all_folders = self._resolve_or_assign_item_id(entry, folder_id, all_folders)
+                # Ensure entries are treated as YouTube but resolved individually
+                entry['is_youtube'] = True
+                entry['use_ytdl_mpv'] = False
+                processed_entries.append(entry)
+            
+            # Remove the original "playlist container" item from the folder
+            if 'playlist' in all_folders[folder_id]:
+                all_folders[folder_id]['playlist'] = [i for i in all_folders[folder_id]['playlist'] if i.get('id') != url_item.get('id')]
+            
+            return processed_entries, all_folders
+
+        # Single item processing
         url_item['url'] = processed_url # Update URL with processed one
         if script_headers: url_item['headers'] = script_headers
         if ytdl_options: url_item['ytdl_raw_options'] = ytdl_options
-        # Store these flags in url_item for consistency if needed later, e.g., in batch processing
         url_item['use_ytdl_mpv'] = use_ytdl_mpv_flag
         url_item['is_youtube'] = is_youtube_flag
-
         url_item['disable_http_persistent'] = True if (script_headers and not ytdl_options) else False
         
-        return url_item, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, all_folders
+        return [url_item], all_folders
 
     def _prepare_mpv_flags(self, message, script_headers, ytdl_options):
         """
@@ -132,8 +150,8 @@ class HandlerManager:
 
         # Prepare URL item (resolve ID, apply bypass scripts)
         bypass_scripts_config = message.get('bypassScripts', {})
-        url_item, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, all_folders = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
-        logging.debug(f"handle_play: url_item after processing: {url_item}")
+        url_items, all_folders = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
+        logging.debug(f"handle_play: items after processing: {url_items}")
 
         # Write changes to all_folders back to file
         self.file_io.write_folders_file(all_folders)
@@ -141,23 +159,16 @@ class HandlerManager:
         # Get settings from config file
         settings = self.file_io.get_settings()
 
-        # Prepare MPV flags
-        custom_mpv_flags, disable_http_persistent = self._prepare_mpv_flags(message, script_headers, ytdl_options)
-
         # Run synchronously to ensure MPV is ready before returning success
+        # Note: If it's a list, start() will handle it.
         result = self.mpv_session.start(
-            url_item, folder_id, settings, self.file_io,
+            url_items, folder_id, settings, self.file_io,
             geometry=message.get('geometry'), 
             custom_width=message.get('custom_width'), 
             custom_height=message.get('custom_height'), 
-            custom_mpv_flags=custom_mpv_flags, 
+            custom_mpv_flags=message.get('custom_mpv_flags'), 
             automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-            start_paused=message.get('start_paused', False), 
-            headers=script_headers, 
-            disable_http_persistent=disable_http_persistent,
-            ytdl_raw_options=ytdl_options,
-            use_ytdl_mpv=use_ytdl_mpv_flag, # NEW
-            is_youtube=is_youtube_flag      # NEW
+            start_paused=message.get('start_paused', False)
         )
         return result if result else {"success": False, "error": "Failed to start MPV session."}
 
@@ -191,11 +202,12 @@ class HandlerManager:
 
         logging.info(f"Enriching {len(playlist)} batch items in parallel...")
         with ThreadPoolExecutor(max_workers=10) as executor:
-            # Note: _process_url_item now expects all_folders to be updated.
-            # We pass a copy of the list to ensure order.
+            # Lambda returns a tuple (processed_items_list, all_folders)
             results = list(executor.map(lambda item: self._process_url_item(item, folder_id, bypass_scripts_config, all_folders), playlist))
             
-        processed_items = [r[0] for r in results]
+        processed_items = []
+        for r in results:
+            processed_items.extend(r[0])
             
         self.file_io.write_folders_file(all_folders) # Write changes to all_folders once
 
@@ -243,18 +255,32 @@ class HandlerManager:
 
         # Prepare URL item (resolve ID, apply bypass scripts)
         bypass_scripts_config = message.get('bypassScripts', {})
-        url_item, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, all_folders = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
-        logging.debug(f"handle_append: url_item after processing: {url_item}")
+        url_items, all_folders = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
+        logging.debug(f"handle_append: items after processing: {url_items}")
 
         # Write changes to all_folders back to file, as ID resolution and processing are done
         self.file_io.write_folders_file(all_folders)
 
-        disable_http_persistent = True if (script_headers and not ytdl_options) else False
+        if len(url_items) > 1:
+            # It's a playlist, append everything as a batch
+            return self.mpv_session.append_batch(url_items)
+        
+        # Single item logic
+        url_item = url_items[0]
+        disable_http_persistent = url_item.get('disable_http_persistent', False)
         
         # Retry logic for append to handle transient IPC busy states
         max_retries = 3
         for attempt in range(max_retries):
-            response = self.mpv_session.append(url_item, headers=script_headers, mode="append", disable_http_persistent=disable_http_persistent, ytdl_raw_options=ytdl_options, use_ytdl_mpv=use_ytdl_mpv_flag, is_youtube=is_youtube_flag)
+            response = self.mpv_session.append(
+                url_item, 
+                headers=url_item.get('headers'), 
+                mode="append", 
+                disable_http_persistent=disable_http_persistent, 
+                ytdl_raw_options=url_item.get('ytdl_raw_options'), 
+                use_ytdl_mpv=url_item.get('use_ytdl_mpv', False), 
+                is_youtube=url_item.get('is_youtube', False)
+            )
             if response and response.get("success"):
                 return response
             logging.warning(f"Append failed (attempt {attempt+1}/{max_retries}). Retrying in 0.5s...")
@@ -384,25 +410,25 @@ class HandlerManager:
 
     def _start_local_m3u_server(self, m3u_content):
         """
-        Starts playlist_server.py as a subprocess to serve dynamic M3U content.
+        Starts or reuses playlist_server.py to serve dynamic M3U content.
         Returns the URL of the served M3U.
         """
-        if self.playlist_server_process and self.playlist_server_process.poll() is None:
-            logging.info("Local M3U server already running. Stopping to update content.")
-            self._stop_local_m3u_server() 
-            time.sleep(0.1) # Give it a moment to release port
+        # Ensure we have a stable path for the server to serve within this instance
+        if not self.temp_m3u_file_for_server:
+            temp_m3u_filename = f"active_server_playlist_{uuid.uuid4().hex[:8]}.m3u"
+            self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, temp_m3u_filename)
 
-        # Create a unique temporary M3U file for the server to serve
-        temp_m3u_filename = f"temp_playlist_{uuid.uuid4().hex}.m3u"
-        self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, temp_m3u_filename)
-        
-        logging.info(f"DEBUG: Writing M3U content to {self.temp_m3u_file_for_server}:\n{m3u_content}")
-
+        # Update the file content on disk. The running server reads this on every request.
+        logging.info(f"Updating M3U content for server at {self.temp_m3u_file_for_server}")
         with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
             f.write(m3u_content)
-        
-        logging.info(f"Created temporary M3U file: {self.temp_m3u_file_for_server}")
 
+        # Check if we can reuse the existing server process
+        if self.playlist_server_process and self.playlist_server_process.poll() is None:
+            logging.info(f"Reusing existing playlist server on port {self.playlist_server_port}.")
+            return f"http://localhost:{self.playlist_server_port}/playlist.m3u"
+
+        # If not running (e.g. first launch or crashed), start it
         server_path = os.path.join(self.script_dir, "playlist_server.py")
         if not os.path.exists(server_path):
             logging.error(f"playlist_server.py not found at {server_path}")
@@ -410,11 +436,11 @@ class HandlerManager:
 
         logging.info("Launching local M3U server process...")
         server_env = os.environ.copy()
-        server_env["PYTHONDONTWRITEBYTECODE"] = "1" # Prevent __pycache__ for server
+        server_env["PYTHONDONTWRITEBYTECODE"] = "1"
         
         try:
             self.playlist_server_process = subprocess.Popen(
-                [sys.executable, server_path, '--port', '8000', '--file', self.temp_m3u_file_for_server], # Pass temp M3U file
+                [sys.executable, server_path, '--port', '8000', '--file', self.temp_m3u_file_for_server],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -422,72 +448,56 @@ class HandlerManager:
                 env=server_env
             )
 
-            # Read stderr line by line to find the actual port and confirm readiness
-            port_found_timeout = 10 # seconds
+            # ... (read actual port from stderr) ...
+            port_found_timeout = 5
             start_time = time.time()
-            
             while time.time() - start_time < port_found_timeout:
-                line = self.playlist_server_process.stderr.readline() # Read from stderr
-                if not line:
-                    if self.playlist_server_process.poll() is not None: # Process exited
-                        break
-                    time.sleep(0.1)
-                    continue
-
+                line = self.playlist_server_process.stderr.readline()
+                if not line: break
                 logging.info(f"Server process stderr output: {line.strip()}")
                 match = re.search(r"Serving M3U playlist on port (\d+)", line)
                 if match:
                     self.playlist_server_port = int(match.group(1))
-                    logging.info(f"Playlist server bound to port {self.playlist_server_port}.")
                     break
             
             if self.playlist_server_port is None:
-                raise RuntimeError("Could not determine playlist server port from its output.")
+                raise RuntimeError("Could not determine playlist server port.")
 
-            m3u_url = f"http://localhost:{self.playlist_server_port}/{os.path.basename(self.temp_m3u_file_for_server)}"
-
-            # Check if the server process exited immediately after reporting its port
-            if self.playlist_server_process.poll() is not None: # Server exited before readiness check
-                stdout, stderr = self.playlist_server_process.communicate()
-                logging.error(f"Playlist server process exited prematurely after port reporting. Stdout:\n{stdout}\nStderr:\n{stderr}")
-                return None
-
-            # Final readiness check by trying to connect
-            max_retries = 20 # 20 retries * 0.5 sec = 10 seconds timeout
-            for i in range(max_retries):
+            fetch_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u"
+            # Readiness check
+            for _ in range(30):
                 try:
-                    # Note: We are trying to fetch the file from the root path for the server (e.g. /temp_playlist_ABC.m3u)
-                    # The playlist_server.py serves 'playlist.m3u' currently so we need to ensure that the request path is also 'playlist.m3u'.
-                    # We will update playlist_server.py to handle arbitrary paths to the served file
-                    # Or modify _start_local_m3u_server to make it always request /playlist.m3u.
-                    # For now, let's stick to /playlist.m3u and modify playlist_server.py to use this.
-                    fetch_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u"
-                    with urlopen(fetch_url, timeout=0.5) as response:
-                        if response.getcode() == 200:
-                            logging.info(f"Playlist server is ready after {i+1} attempts.")
-                            return fetch_url # Return the URL for the M3U
-                except Exception as e:
-                    logging.debug(f"Attempt {i+1}: Server not ready yet ({e}). Retrying...")
-                time.sleep(0.5)
+                    with urlopen(fetch_url, timeout=0.2) as r:
+                        if r.getcode() == 200: return fetch_url
+                except: pass
+                time.sleep(0.2)
             
-            raise RuntimeError("Playlist server did not become ready within the timeout.")
+            raise RuntimeError("Playlist server timed out.")
 
         except Exception as e:
             logging.error(f"Failed to start local M3U server: {e}", exc_info=True)
-            self._stop_local_m3u_server() # Ensure cleanup on failure
+            self._stop_local_m3u_server()
             return None
+
 
     def _stop_local_m3u_server(self):
         """Stops the local M3U server subprocess and cleans up temp files."""
-        if self.playlist_server_process and self.playlist_server_process.poll() is None:
-            logging.info("Terminating local M3U server process.")
-            self.playlist_server_process.terminate()
+        if self.playlist_server_process:
+            logging.info(f"Terminating local M3U server process (PID: {self.playlist_server_process.pid}).")
             try:
-                self.playlist_server_process.wait(timeout=5)
+                self.playlist_server_process.terminate()
+                self.playlist_server_process.wait(timeout=2)
             except subprocess.TimeoutExpired:
+                logging.warning("Server process didn't terminate, killing it.")
                 self.playlist_server_process.kill()
+                self.playlist_server_process.wait()
+            except Exception as e:
+                logging.error(f"Error stopping local server: {e}")
+            
             self.playlist_server_process = None
             self.playlist_server_port = None
+            # Small sleep to ensure OS releases the socket
+            time.sleep(0.2)
         
         if self.temp_m3u_file_for_server and os.path.exists(self.temp_m3u_file_for_server):
             try:
@@ -596,9 +606,8 @@ class HandlerManager:
             global_use_ytdl_mpv = first_item.get('use_ytdl_mpv', False)
             global_is_youtube = first_item.get('is_youtube', False)
 
-            # --- STEP 2: Start Local Server ---
-            logging.info("Step 2: Starting local M3U server with enriched content.")
-            self._stop_local_m3u_server() # Ensure clean state
+            # --- STEP 2: Start or Reuse Local Server ---
+            logging.info("Step 2: Starting or reusing local M3U server with enriched content.")
             local_server_url = self._start_local_m3u_server(enriched_m3u_content)
 
             if not local_server_url:

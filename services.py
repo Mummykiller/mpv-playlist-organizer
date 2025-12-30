@@ -267,6 +267,14 @@ class MpvCommandBuilder:
                 logging.info(f"MPV will load adaptive headers script: {lua_script_path}")
         return self
 
+    def with_fix_thumbnailer_script(self, script_dir):
+        if script_dir:
+            lua_script_path = os.path.join(script_dir, "mpv_scripts", "fix_thumbnailer_playlist.lua")
+            if os.path.exists(lua_script_path):
+                self.mpv_args.append(f'--script={lua_script_path}')
+                logging.info(f"MPV will load thumbnailer fix script: {lua_script_path}")
+        return self
+
     def with_title(self, title):
         if title:
             # Set the initial title for the first file loaded
@@ -408,6 +416,7 @@ def construct_mpv_command(
         .with_idle(idle) \
         .with_completion_script(script_dir if load_on_completion_script else None) \
         .with_adaptive_headers_script(script_dir) \
+        .with_fix_thumbnailer_script(script_dir) \
         .with_title(title) \
         .with_automatic_flags(automatic_mpv_flags) \
         .with_headers(headers) \
@@ -456,7 +465,7 @@ def apply_bypass_script(url_item, send_message_func):
 
     # The default fallback return values
     is_youtube = "youtube.com/" in original_url or "youtu.be/" in original_url
-    default_return_tuple = (original_url, None, None, False, is_youtube)
+    default_return_tuple = (original_url, None, None, False, is_youtube, None)
 
     if not enable_url_analysis:
         return default_return_tuple
@@ -481,14 +490,17 @@ def apply_bypass_script(url_item, send_message_func):
         headers_for_mpv = result.get("headers")
         ytdl_raw_options_for_mpv = result.get("ytdl_raw_options")
         use_ytdl_mpv_flag = result.get("use_ytdl_mpv", False)
-        is_youtube_flag_from_script = result.get("is_youtube", False)
+        # FORCE is_youtube to False if we are not using internal ytdl hook, 
+        # to prevent mpv from trying to use it anyway.
+        is_youtube_flag_from_script = result.get("is_youtube", False) if use_ytdl_mpv_flag else False
+        entries = result.get("entries")
 
-        return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script)
+        return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script, entries)
 
     except Exception as e:
         logging.error(f"Error during URL analysis: {e}")
         send_message_func({"action": "log_from_native_host", "log": {"text": f"URL analysis failed with exception: {e}. Playing original URL.", "type": "error"}})
-        return default_return_tuple
+        return (original_url, None, None, False, is_youtube, None) # Return 6-tuple here too
 
 # --- AniList Service ---
 
