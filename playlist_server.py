@@ -62,7 +62,9 @@ def start_playlist_server(start_port=8000, max_port_attempts=10, m3u_file_to_ser
     httpd = None
     actual_port = start_port
 
-    for _ in range(max_port_attempts):
+    socketserver.TCPServer.allow_reuse_address = True
+
+    for _ in range(50): # Increased from 10 to 50 attempts
         try:
             httpd = socketserver.TCPServer(("", actual_port), Handler)
             break # Successfully bound to a port
@@ -90,6 +92,21 @@ def start_playlist_server(start_port=8000, max_port_attempts=10, m3u_file_to_ser
         if httpd: httpd.server_close()
         return None, None, None
 
+def suicide_watch():
+    """
+    Periodically checks if the parent process is still alive.
+    If not, shuts down the server and exits.
+    """
+    parent_pid = os.getppid()
+    while True:
+        try:
+            # os.kill(pid, 0) checks if the process is alive
+            os.kill(parent_pid, 0)
+        except OSError:
+            logging.warning("Parent process died. Shutting down playlist server.")
+            os._exit(0)
+        time.sleep(2)
+
 def stop_playlist_server(httpd):
     """
     Stops the HTTP server.
@@ -111,6 +128,10 @@ if __name__ == "__main__":
     if server is None:
         logging.error("Server failed to start. Exiting.")
         sys.exit(1)
+
+    # Start suicide watch to prevent orphan processes
+    watch_thread = threading.Thread(target=suicide_watch, daemon=True)
+    watch_thread.start()
 
     print(f"Playlist server running at http://localhost:{actual_port}/playlist.m3u")
     print("Press Ctrl+C to stop the server and exit.")

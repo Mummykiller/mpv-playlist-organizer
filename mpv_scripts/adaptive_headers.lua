@@ -93,6 +93,11 @@ mp.add_hook("on_load", 1, function()
         else
             debug_log("AdaptiveHeaders: No per-URL ytdl-raw-options, keeping current.")
         end
+
+        -- Store original URL for other scripts (e.g. thumbnailer fix)
+        if opts.original_url then
+            mp.set_property("user-data/original-url", opts.original_url)
+        end
         
         last_applied_url = path
     end

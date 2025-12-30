@@ -129,7 +129,8 @@ class MpvSessionManager:
                 "title": item.get('title'),
                 "headers": item.get('headers'),
                 "ytdl_raw_options": item.get('ytdl_raw_options'),
-                "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False)
+                "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
+                "original_url": item.get('original_url') or item.get('url')
             }
             self.ipc_manager.send({"command": ["script-message", "set_url_options", item['url'], json.dumps(lua_options)]})
             
@@ -410,7 +411,8 @@ class MpvSessionManager:
                         "title": item.get('title'),
                         "headers": item_headers,
                         "ytdl_raw_options": item_ytdl_raw_options,
-                        "use_ytdl_mpv": item_use_ytdl_mpv
+                        "use_ytdl_mpv": item_use_ytdl_mpv,
+                        "original_url": item.get('original_url') or item.get('url')
                     }
                     self.ipc_manager.send({"command": ["script-message", "set_url_options", item['url'], json.dumps(lua_options)]})
                 logging.info(f"Registered options for {len(self.playlist)} items with adaptive_headers.lua")
@@ -512,8 +514,11 @@ class MpvSessionManager:
                 return {"success": False, "error": "M3U content could not be loaded."}
         elif isinstance(url_items_or_m3u, list):
             _url_items_list = url_items_or_m3u
+            if enriched_items_list is None:
+                m3u_input_was_raw_content_or_items = True
         elif isinstance(url_items_or_m3u, dict):
             _url_items_list = [url_items_or_m3u]
+            m3u_input_was_raw_content_or_items = True
         else:
             return {"success": False, "error": "Invalid type for url_items_or_m3u. Expected list, dict, or string (M3U path/URL)."}
 
@@ -527,9 +532,17 @@ class MpvSessionManager:
             from concurrent.futures import ThreadPoolExecutor
 
             def enrich_item(item):
+                # If item is already resolved, skip
+                if item.get('enriched'):
+                    return item
+
                 # Ensure item has an ID
                 if not item.get('id'):
                     item['id'] = str(uuid.uuid4())
+
+                # Store the original URL before it potentially gets replaced
+                if not item.get('original_url'):
+                    item['original_url'] = item.get('url')
 
                 # item.get('url') is used here, but it's important to pass a dictionary
                 # that apply_bypass_script can work with.
@@ -540,7 +553,8 @@ class MpvSessionManager:
                     headers_for_mpv,
                     ytdl_raw_options_for_mpv,
                     use_ytdl_mpv_flag,
-                    is_youtube_flag_from_script
+                    is_youtube_flag_from_script,
+                    entries
                 ) = apply_bypass_script(url_dict_for_analysis, self.send_message)
                 
                 # Update the original item with the enriched data
@@ -576,6 +590,7 @@ class MpvSessionManager:
 
                 item['use_ytdl_mpv'] = use_ytdl_mpv_flag
                 item['is_youtube'] = is_youtube_flag_from_script
+                item['enriched'] = True
                 return item
 
             logging.info(f"Enriching {len(_url_items_list)} items in parallel...")
@@ -663,9 +678,9 @@ class MpvSessionManager:
                 logging.info(f"Session for folder '{folder_id}' is already active. Launch skipped.")
                 return {"success": True, "message": "MPV session already active.", "already_active": True}
             else:
-                error_message = f"An MPV instance is already running for folder '{self.owner_folder_id}'. Please close it to play from '{folder_id}'."
-                logging.warning(error_message)
-                return {"success": False, "error": error_message}
+                logging.info(f"Switching from folder '{self.owner_folder_id}' to '{folder_id}'. Closing current session.")
+                self.close()
+                # After close(), self.pid is None and state is cleared, so we proceed to launch the new session.
 
         h, d, y, u, i = get_opts(launch_item)
         logging.info(f"Standard Flow: Launching MPV with item 1/{len(_url_items_list)}: {launch_item.get('title', 'Unknown')}")
