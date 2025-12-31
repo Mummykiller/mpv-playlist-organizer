@@ -50,8 +50,8 @@ class HandlerManager:
         # Call the refactored _resolve_or_assign_item_id
         url_item, all_folders = self._resolve_or_assign_item_id(url_item, folder_id, all_folders)
         
-        # New return signature from apply_bypass_script (6 values)
-        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, entries = self.services.apply_bypass_script(
+        # New return signature from apply_bypass_script (8 values)
+        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, entries, disable_http_persistent_flag, cookies_file = self.services.apply_bypass_script(
             url_item, self.send_message
         )
 
@@ -64,6 +64,9 @@ class HandlerManager:
                 # Ensure entries are treated as YouTube but resolved individually
                 entry['is_youtube'] = True
                 entry['use_ytdl_mpv'] = False
+                # Pass the flag to children if they were part of a playlist that triggered it
+                if disable_http_persistent_flag:
+                    entry['disable_http_persistent'] = True
                 processed_entries.append(entry)
             
             # Remove the original "playlist container" item from the folder
@@ -78,7 +81,10 @@ class HandlerManager:
         if ytdl_options: url_item['ytdl_raw_options'] = ytdl_options
         url_item['use_ytdl_mpv'] = use_ytdl_mpv_flag
         url_item['is_youtube'] = is_youtube_flag
-        url_item['disable_http_persistent'] = True if (script_headers and not ytdl_options) else False
+        url_item['cookies_file'] = cookies_file # Store cookie path
+        
+        # Respect the flag from url_analyzer or fallback to header-based logic
+        url_item['disable_http_persistent'] = disable_http_persistent_flag or (True if (script_headers and not ytdl_options) else False)
         
         return [url_item], all_folders
 
@@ -159,6 +165,9 @@ class HandlerManager:
         # Get settings from config file
         settings = self.file_io.get_settings()
 
+        # Prepare MPV flags
+        custom_mpv_flags, disable_http_persistent = self._prepare_mpv_flags(message, None, None) # Passed later via item
+
         # Run synchronously to ensure MPV is ready before returning success
         # Note: If it's a list, start() will handle it.
         result = self.mpv_session.start(
@@ -168,7 +177,8 @@ class HandlerManager:
             custom_height=message.get('custom_height'), 
             custom_mpv_flags=message.get('custom_mpv_flags'), 
             automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-            start_paused=message.get('start_paused', False)
+            start_paused=message.get('start_paused', False),
+            disable_http_persistent=disable_http_persistent
         )
         return result if result else {"success": False, "error": "Failed to start MPV session."}
 
@@ -605,6 +615,7 @@ class HandlerManager:
             global_ytdl_raw_options = first_item.get('ytdl_raw_options')
             global_use_ytdl_mpv = first_item.get('use_ytdl_mpv', False)
             global_is_youtube = first_item.get('is_youtube', False)
+            global_disable_http_persistent = first_item.get('disable_http_persistent', False)
 
             # --- STEP 2: Start or Reuse Local Server ---
             logging.info("Step 2: Starting or reusing local M3U server with enriched content.")
@@ -633,7 +644,8 @@ class HandlerManager:
                 headers=global_headers, # Adaptive: Baseline headers for the first item
                 ytdl_raw_options=global_ytdl_raw_options,
                 use_ytdl_mpv=global_use_ytdl_mpv,
-                is_youtube=global_is_youtube
+                is_youtube=global_is_youtube,
+                disable_http_persistent=global_disable_http_persistent
             )
             return final_launch_result if final_launch_result else {"success": False, "error": "Failed to start MPV session with M3U."}
 

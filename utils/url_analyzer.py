@@ -63,7 +63,10 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
                         entries.append({
                             "title": title,
                             "url": webpage_url,
-                            "is_youtube": True
+                            "is_youtube": True,
+                            "use_ytdl_mpv": False,
+                            "disable_http_persistent": True,
+                            "headers": {"User-Agent": effective_user_agent} # Pass UA to children
                         })
                 
                 if entries:
@@ -71,39 +74,65 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
                         "success": True,
                         "is_playlist": True,
                         "entries": entries,
-                        "url": url, # Keep original URL as fallback
-                        "use_ytdl_mpv": False
+                        "url": url,
+                        "use_ytdl_mpv": False,
+                        "headers": {"User-Agent": effective_user_agent} # Pass UA
                     }
             except Exception as e:
                 logging.warning(f"Failed to expand YouTube playlist: {e}")
-                # Fall through to single video resolution
 
-        # For single videos, we still want to resolve them externally to avoid edl:// errors
-        # (Fall through to Case 3 logic below)
+        # Fall through to Case 3 for external resolution
         pass
 
     # --- Case 3: Other URLs (use yt-dlp --get-url to resolve direct URL) ---
     try:
+        # Detect if this is a YouTube URL that fell through
+        is_yt = YOUTUBE_RE.search(url)
+        
+        # We can go back to best quality because we are going to fix the cookie issue
+        ytdl_format = 'best' if is_yt else 'best[ext=mp4]/best'
+
         cmd = [
             'yt-dlp',
-            '--format', 'best[ext=mp4]/best', # Prioritize mp4, then best available
+            '--format', ytdl_format,
             '--get-url',
             '--no-warnings',
-            '--geo-bypass-country', 'US', # Common geo-bypass for many services
+            '--geo-bypass-country', 'US',
             '--default-search', 'auto',
-            '--user-agent', effective_user_agent, # Pass User-Agent to yt-dlp
+            '--user-agent', effective_user_agent,
             url
         ]
 
+        cookies_file_path = None
         if browser and browser != "None":
             cmd.extend(['--cookies-from-browser', browser])
             
+            # For YouTube, we also want to extract the cookies to a file for MPV
+            if is_yt:
+                try:
+                    import tempfile
+                    # Create a temporary file for cookies
+                    # We use a semi-predictable name based on URL to reuse it or just let it be random
+                    fd, temp_path = tempfile.mkstemp(suffix='.txt', prefix='mpv_cookies_')
+                    os.close(fd)
+                    
+                    # Run a separate yt-dlp call just to dump cookies
+                    cookie_cmd = [
+                        'yt-dlp',
+                        '--cookies-from-browser', browser,
+                        '--cookies', temp_path,
+                        '--simulate',
+                        url
+                    ]
+                    subprocess.run(cookie_cmd, capture_output=True, check=False)
+                    cookies_file_path = temp_path
+                except Exception as e:
+                    logging.warning(f"Failed to extract cookies for MPV: {e}")
+
         # Add mark-watched for YouTube if enabled (since we disabled Case 2)
-        if youtube_enabled.lower() == 'true' and YOUTUBE_RE.search(url):
+        if youtube_enabled.lower() == 'true' and is_yt:
             cmd.append('--mark-watched')
         
-        # Note: youtube_enabled and is_youtube are now handled in Case 2.
-
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         resolved_url = result.stdout.strip()
 
@@ -113,10 +142,12 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
         return {
             "success": True,
             "url": resolved_url,
-            "headers": None,  # No specific headers for MPV needed for direct resolved URL
+            "headers": {"User-Agent": effective_user_agent},
             "ytdl_raw_options": None,
-            "use_ytdl_mpv": False, # No yt-dlp for MPV for these, as URL is pre-resolved
-            "is_youtube": False
+            "use_ytdl_mpv": False,
+            "is_youtube": is_yt is not None,
+            "disable_http_persistent": is_yt is not None,
+            "cookies_file": cookies_file_path # Return the path to the cookies file
         }
 
     except subprocess.CalledProcessError as e:
