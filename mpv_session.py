@@ -130,7 +130,9 @@ class MpvSessionManager:
                 "headers": item.get('headers'),
                 "ytdl_raw_options": item.get('ytdl_raw_options'),
                 "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
-                "original_url": item.get('original_url') or item.get('url')
+                "original_url": item.get('original_url') or item.get('url'),
+                "disable_http_persistent": item.get('disable_http_persistent', False),
+                "cookies_file": item.get('cookies_file')
             }
             self.ipc_manager.send({"command": ["script-message", "set_url_options", item['url'], json.dumps(lua_options)]})
             
@@ -257,7 +259,10 @@ class MpvSessionManager:
                     "title": url_item.get('title'),
                     "headers": effective_headers,
                     "ytdl_raw_options": effective_ytdl_raw_options,
-                    "use_ytdl_mpv": effective_use_ytdl_mpv or effective_is_youtube
+                    "use_ytdl_mpv": effective_use_ytdl_mpv or effective_is_youtube,
+                    "original_url": url_item.get('original_url') or url_item.get('url'),
+                    "disable_http_persistent": url_item.get('disable_http_persistent', False) or disable_http_persistent,
+                    "cookies_file": url_item.get('cookies_file')
                 }
                 robust_send({"command": ["script-message", "set_url_options", url_to_add, json.dumps(lua_options)]})
 
@@ -412,7 +417,9 @@ class MpvSessionManager:
                         "headers": item_headers,
                         "ytdl_raw_options": item_ytdl_raw_options,
                         "use_ytdl_mpv": item_use_ytdl_mpv,
-                        "original_url": item.get('original_url') or item.get('url')
+                        "original_url": item.get('original_url') or item.get('url'),
+                        "disable_http_persistent": item.get('disable_http_persistent', False) or disable_http_persistent,
+                        "cookies_file": item.get('cookies_file')
                     }
                     self.ipc_manager.send({"command": ["script-message", "set_url_options", item['url'], json.dumps(lua_options)]})
                 logging.info(f"Registered options for {len(self.playlist)} items with adaptive_headers.lua")
@@ -554,7 +561,9 @@ class MpvSessionManager:
                     ytdl_raw_options_for_mpv,
                     use_ytdl_mpv_flag,
                     is_youtube_flag_from_script,
-                    entries
+                    entries,
+                    disable_http_persistent_flag,
+                    cookies_file
                 ) = apply_bypass_script(url_dict_for_analysis, self.send_message)
                 
                 # Update the original item with the enriched data
@@ -590,6 +599,8 @@ class MpvSessionManager:
 
                 item['use_ytdl_mpv'] = use_ytdl_mpv_flag
                 item['is_youtube'] = is_youtube_flag_from_script
+                item['disable_http_persistent'] = disable_http_persistent_flag # Pass the flag
+                item['cookies_file'] = cookies_file
                 item['enriched'] = True
                 return item
 

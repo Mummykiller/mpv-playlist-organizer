@@ -465,7 +465,7 @@ def apply_bypass_script(url_item, send_message_func):
 
     # The default fallback return values
     is_youtube = "youtube.com/" in original_url or "youtu.be/" in original_url
-    default_return_tuple = (original_url, None, None, False, is_youtube, None)
+    default_return_tuple = (original_url, None, None, False, is_youtube, None, False, None)
 
     if not enable_url_analysis:
         return default_return_tuple
@@ -494,14 +494,15 @@ def apply_bypass_script(url_item, send_message_func):
         # to prevent mpv from trying to use it anyway.
         is_youtube_flag_from_script = result.get("is_youtube", False) if use_ytdl_mpv_flag else False
         entries = result.get("entries")
+        disable_http_persistent = result.get("disable_http_persistent", False)
+        cookies_file = result.get("cookies_file")
 
-        return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script, entries)
+        return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script, entries, disable_http_persistent, cookies_file)
 
     except Exception as e:
         logging.error(f"Error during URL analysis: {e}")
         send_message_func({"action": "log_from_native_host", "log": {"text": f"URL analysis failed with exception: {e}. Playing original URL.", "type": "error"}})
-        return (original_url, None, None, False, is_youtube, None) # Return 6-tuple here too
-
+        return (original_url, None, None, False, is_youtube, None, False, None) # Return 8-tuple here too
 # --- AniList Service ---
 
 class AniListCache:

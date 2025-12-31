@@ -69,18 +69,33 @@ mp.add_hook("on_load", 1, function()
         -- Apply HTTP Headers
         if opts.headers then
             local header_list = {}
+            local has_special_headers = (opts.headers["Referer"] or opts.headers["Origin"])
+            
             for k, v in pairs(opts.headers) do
                 -- Sanitize value (remove commas)
                 local clean_v = tostring(v):gsub(",", "")
                 table.insert(header_list, k .. ": " .. clean_v)
             end
-            if #header_list > 0 then
+
+            -- Only apply global http-header-fields if we have something beyond just User-Agent,
+            -- or if it's explicitly required. For YouTube, we prefer setting user-agent property.
+            if #header_list > 0 and has_special_headers then
                 local headers_str = table.concat(header_list, ",")
                 debug_log("AdaptiveHeaders: Applying headers: " .. headers_str)
                 mp.set_property("http-header-fields", headers_str)
-                -- Also set UA and Referer directly as fallback
-                if opts.headers["User-Agent"] then mp.set_property("user-agent", opts.headers["User-Agent"]) end
-                if opts.headers["Referer"] then mp.set_property("referrer", opts.headers["Referer"]) end
+            else
+                debug_log("AdaptiveHeaders: Skipping global http-header-fields (simple headers).")
+                mp.set_property("http-header-fields", "")
+            end
+
+            -- ALWAYS set UA and Referer properties if they exist in opts
+            if opts.headers["User-Agent"] then 
+                debug_log("AdaptiveHeaders: Setting user-agent: " .. opts.headers["User-Agent"])
+                mp.set_property("user-agent", opts.headers["User-Agent"]) 
+            end
+            if opts.headers["Referer"] then 
+                debug_log("AdaptiveHeaders: Setting referrer: " .. opts.headers["Referer"])
+                mp.set_property("referrer", opts.headers["Referer"]) 
             end
         else
             debug_log("AdaptiveHeaders: No per-URL headers, keeping current.")
@@ -92,6 +107,22 @@ mp.add_hook("on_load", 1, function()
             mp.set_property("ytdl-raw-options", opts.ytdl_raw_options)
         else
             debug_log("AdaptiveHeaders: No per-URL ytdl-raw-options, keeping current.")
+        end
+
+        -- Disable HTTP Persistent (keepalive) if requested
+        if opts.disable_http_persistent then
+            debug_log("AdaptiveHeaders: Disabling HTTP persistent connections.")
+            mp.set_property("demuxer-lavf-o", "http_persistent=0")
+        else
+            mp.set_property("demuxer-lavf-o", "")
+        end
+
+        -- Apply cookies file if provided
+        if opts.cookies_file then
+            debug_log("AdaptiveHeaders: Applying cookies-file: " .. opts.cookies_file)
+            mp.set_property("cookies-file", opts.cookies_file)
+        else
+            mp.set_property("cookies-file", "")
         end
 
         -- Store original URL for other scripts (e.g. thumbnailer fix)
