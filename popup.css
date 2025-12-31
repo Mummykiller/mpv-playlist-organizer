@@ -943,15 +943,24 @@ button:disabled {
 }
 
 .filter-pill:hover {
-    background-color: var(--accent-danger);
+    background-color: var(--accent-primary-hover);
     transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+}
+
+.filter-pill:active {
+    transform: translateY(0) scale(0.96);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+#mpv-flags-list-container .filter-pill:hover {
+    background-color: var(--accent-danger);
 }
 
 .filter-pill.disabled:hover {
-    background-color: var(--bg-tertiary);
-    transform: none;
-    box-shadow: none;
+    background-color: #383c42; /* Slightly lighter than disabled background */
+    color: var(--text-primary);
+    transform: translateY(-1px);
 }
 
 .filter-pill.readonly {

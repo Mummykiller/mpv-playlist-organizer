@@ -65,6 +65,7 @@ SAFE_MPV_FLAGS_ALLOWLIST = {
     '--no-video',
     '--force-window',
     '--cursor-autohide',
+    '--terminal',
 }
 
 
@@ -233,6 +234,7 @@ class MpvCommandBuilder:
         self.mpv_exe = mpv_exe
         self.mpv_args = [mpv_exe]
         self.has_terminal_flag = False
+        self.is_forced_terminal = False
         self.url = None
         self.headers_from_bypass = None # This is still kept for legacy/specific cases if needed
         self.ytdl_raw_options_from_bypass = None # This is still kept for legacy/specific cases if needed
@@ -285,10 +287,16 @@ class MpvCommandBuilder:
         if automatic_mpv_flags:
             for flag_info in automatic_mpv_flags:
                 if flag_info.get('enabled'):
-                    if flag_info.get('flag') == 'terminal':
+                    if flag_info.get('flag') == '--terminal':
                         self.has_terminal_flag = True
                     elif flag_info.get('flag'):
                         self.mpv_args.append(flag_info.get('flag'))
+        return self
+
+    def with_force_terminal(self, force):
+        if force:
+            self.has_terminal_flag = True
+            self.is_forced_terminal = True
         return self
 
     def with_headers(self, headers):
@@ -337,31 +345,27 @@ class MpvCommandBuilder:
     def with_youtube_options(self, original_is_youtube, ytdl_raw_options):
         # The use_ytdl_mpv and is_youtube_override flags are now set directly in the constructor
         # from the result of url_analyzer, so we use those directly.
-        if self.use_ytdl_mpv or self.is_youtube_override:
+        # ONLY enable ytdl if we actually want MPV to do the resolution.
+        if self.use_ytdl_mpv:
             self.mpv_args.append('--ytdl=yes')
             effective_ytdl_opts = ytdl_raw_options or self.ytdl_raw_options_from_bypass
             
             if effective_ytdl_opts:
                 self.mpv_args.append(f'--ytdl-raw-options={effective_ytdl_opts}')
-            elif original_is_youtube:
-                # If it's a known YT URL but has no options yet, apply global baseline immediately
-                settings = file_io.get_settings()
-                browser = settings.get("browser_for_url_analysis", "chrome")
-                self.mpv_args.append(f'--ytdl-raw-options=cookies-from-browser={browser}')
         # Original is_youtube flag is only used if not overridden by url_analyzer result
-        elif original_is_youtube:
+        elif original_is_youtube and not self.is_youtube_override:
+            # This is for the case where analyzer didn't run or didn't override
             self.mpv_args.append('--ytdl=yes')
             if ytdl_raw_options:
                 self.mpv_args.append(f'--ytdl-raw-options={ytdl_raw_options}')
-            else:
-                settings = file_io.get_settings()
-                browser = settings.get("browser_for_url_analysis", "chrome")
-                self.mpv_args.append(f'--ytdl-raw-options=cookies-from-browser={browser}')
         return self
 
     def build(self):
-        if '--terminal' in self.mpv_args:
+        # Detect if --terminal was added via custom flags or automatic flags
+        if '--terminal' in self.mpv_args or 'terminal' in self.mpv_args:
             self.has_terminal_flag = True
+            # Remove the literal flag from the args list as we'll use a wrapper instead
+            self.mpv_args = [arg for arg in self.mpv_args if arg != '--terminal' and arg != 'terminal']
 
         # Only add the separator and URL if a URL is actually provided
         if self.url:
@@ -372,15 +376,61 @@ class MpvCommandBuilder:
         logging.info(f"Constructed MPV command: {' '.join(shlex.quote(arg) for arg in full_command)}")
 
         if platform.system() != "Windows" and self.has_terminal_flag:
+            # We use a shell wrapper inside the terminal to ensure it stays open 
+            # if the terminal emulator itself forks and exits immediately.
+            inner_cmd_str = ' '.join(shlex.quote(arg) for arg in full_command)
+            
+            if self.is_forced_terminal:
+                # Forced terminal stays open for 10s or requires manual close (hold)
+                wrapped_cmd_str = f"{inner_cmd_str}; echo ''; echo '--- Process Finished. Closing in 10s... ---'; sleep 10"
+            else:
+                # Standard terminal flag closes immediately
+                wrapped_cmd_str = f"{inner_cmd_str}"
+            
             term_cmd = []
-            if shutil.which('x-terminal-emulator'): term_cmd = ['x-terminal-emulator', '-e']
-            elif shutil.which('gnome-terminal'): term_cmd = ['gnome-terminal', '--wait', '--']
-            elif shutil.which('konsole'): term_cmd = ['konsole', '-e']
-            elif shutil.which('xfce4-terminal'): term_cmd = ['xfce4-terminal', '--disable-server', '-x']
-            elif shutil.which('xterm'): term_cmd = ['xterm', '-e']
+            
+            # 1. Try modern/generic wrappers first
+            if shutil.which('xdg-terminal-exec'):
+                logging.info("Terminal Wrapper: Using xdg-terminal-exec")
+                term_cmd = ['xdg-terminal-exec', 'sh', '-c', wrapped_cmd_str]
+            elif shutil.which('x-terminal-emulator'):
+                logging.info("Terminal Wrapper: Using x-terminal-emulator")
+                term_cmd = ['x-terminal-emulator', '-e', 'sh', '-c', wrapped_cmd_str]
+            
+            # 2. Modern Terminals (Modern Konsole, Gnome, Kitty, Alacritty, etc. all support --)
+            if not term_cmd:
+                modern_terminals = ['gnome-terminal', 'kitty', 'alacritty', 'tilix', 'foot', 'wezterm']
+                for t in modern_terminals:
+                    t_path = shutil.which(t)
+                    if t_path:
+                        logging.info(f"Terminal Wrapper: Using modern terminal syntax for {t} at {t_path}")
+                        term_cmd = [t_path, '--', 'sh', '-c', wrapped_cmd_str]
+                        break
+            
+            # 3. Classic Terminals (Legacy/X11 style using -e)
+            if not term_cmd:
+                classic_terminals = ['konsole', 'xfce4-terminal', 'urxvt', 'rxvt', 'termit', 'terminology', 'xterm']
+                for t in classic_terminals:
+                    t_path = shutil.which(t)
+                    if t_path:
+                        logging.info(f"Terminal Wrapper: Using classic terminal syntax for {t} at {t_path}")
+                        if t == 'konsole':
+                            if self.is_forced_terminal:
+                                # Forced Konsole uses native --hold
+                                term_cmd = [t_path, '--hold', '-e'] + full_command
+                            else:
+                                # Standard Konsole closes on exit
+                                term_cmd = [t_path, '-e'] + full_command
+                        elif t == 'xfce4-terminal':
+                            term_cmd = [t_path, '--disable-server', '-x', 'sh', '-c', wrapped_cmd_str]
+                        else:
+                            term_cmd = [t_path, '-e', 'sh', '-c', wrapped_cmd_str]
+                        break
             
             if term_cmd:
-                full_command = term_cmd + full_command
+                full_command = term_cmd
+            else:
+                logging.warning("Terminal Wrapper: No supported terminal emulator found in PATH. Launching without terminal.")
 
         return full_command, self.has_terminal_flag
 
@@ -403,7 +453,8 @@ def construct_mpv_command(
     title=None,
     use_ytdl_mpv=False,
     is_youtube_override=False,
-    idle=False # Added parameter
+    idle=False, # Added parameter
+    force_terminal=False
 ):
     """Constructs the MPV command line arguments using MpvCommandBuilder."""
     builder = MpvCommandBuilder(
@@ -414,6 +465,7 @@ def construct_mpv_command(
         .with_ipc_path(ipc_path) \
         .with_url(url) \
         .with_idle(idle) \
+        .with_force_terminal(force_terminal) \
         .with_completion_script(script_dir if load_on_completion_script else None) \
         .with_adaptive_headers_script(script_dir) \
         .with_fix_thumbnailer_script(script_dir) \

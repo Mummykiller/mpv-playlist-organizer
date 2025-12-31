@@ -187,6 +187,10 @@
                         <option value="custom">Custom</option>
                     </select>
                 </div>
+                <div class="control-group">
+                    <label for="force-terminal-checkbox" class="settings-label">Always show terminal:</label>
+                    <input type="checkbox" id="force-terminal-checkbox" class="settings-checkbox" title="If checked, MPV will always launch in a separate terminal window.">
+                </div>
                 <div id="custom-geometry-container" class="control-group custom-geometry-container" style="display: none;">
                     <input type="text" id="custom-width" class="custom-geometry-input" placeholder="Width" pattern="[0-9]{1,4}" maxlength="4" title="Custom window width in pixels.">
                     <span class="custom-geometry-separator">&times;</span>
@@ -364,6 +368,10 @@
                 <div class="control-group">
                     <label for="confirm-play-new-checkbox" class="settings-label">Confirm "Play New":</label>
                     <input type="checkbox" id="confirm-play-new-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before launching a new MPV instance.">
+                </div>
+                <div class="control-group">
+                    <label for="confirm-folder-switch-checkbox" class="settings-label">Confirm Switch Folder:</label>
+                    <input type="checkbox" id="confirm-folder-switch-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before switching playback to a different folder.">
                 </div>
             </div>
         </details>

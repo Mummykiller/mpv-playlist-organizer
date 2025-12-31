@@ -4,7 +4,6 @@ let _storage;
 let _broadcastLog;
 let _broadcastToTabs;
 let _callNativeHost;
-let _resyncDataFromNativeHostFile;
 let _debouncedSyncToNativeHostFile;
 
 const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;
@@ -35,6 +34,7 @@ class PlaybackQueue {
             custom_height: globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null,
             custom_mpv_flags: globalPrefs.custom_mpv_flags || '',
             automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
+            force_terminal: globalPrefs.force_terminal ?? false,
             clear_on_completion: globalPrefs.clear_on_completion ?? false,
             start_paused: false, // Default to not paused when playing sequentially
             bypassScripts: globalPrefs.bypassScripts || {} // Pass bypass scripts config
@@ -125,7 +125,6 @@ export function init(dependencies) {
     _broadcastLog = dependencies.broadcastLog;
     _broadcastToTabs = dependencies.broadcastToTabs;
     _callNativeHost = dependencies.callNativeHost;
-    _resyncDataFromNativeHostFile = dependencies.resyncDataFromNativeHostFile;
     _debouncedSyncToNativeHostFile = dependencies.debouncedSyncToNativeHostFile;
 }
 
@@ -150,6 +149,14 @@ export async function handleMpvExited(data) {
             if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
                 const completionType = 'naturally completed (custom exit code 99)';
                 _broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' ${completionType}. Auto-clearing playlist as per settings.`, type: 'info' });
+                
+                // Perform the clearing in the extension's storage (Source of Truth)
+                if (storageData.folders[folderId]) {
+                    storageData.folders[folderId].playlist = [];
+                    await _storage.set(storageData);
+                    _debouncedSyncToNativeHostFile(); // Sync the empty playlist back to the disk
+                    _broadcastToTabs({ action: 'render_playlist', folderId: folderId, playlist: [] });
+                }
             } else {
                 // If the user quits manually (e.g., 'q') or MPV exits with any other code,
                 // we assume it's not a natural completion for clearing purposes.
@@ -160,10 +167,6 @@ export async function handleMpvExited(data) {
         }
     }
     
-    // After all potential clearing, always resync the browser's storage
-    // from the native host's folders.json to ensure consistency.
-    await _resyncDataFromNativeHostFile();
-
     // We don't need to trigger processQueue here because we drain the queue immediately.
     // However, if the user adds items *after* MPV exits, processQueue will be triggered by the 'play' action.
 }
@@ -172,20 +175,108 @@ export async function handleIsMpvRunning() {
     return _callNativeHost({ action: 'is_mpv_running' });
 }
 
+/**
+ * Checks if MPV is currently playing a different folder and asks for confirmation if enabled.
+ * @param {string} targetFolderId The ID of the folder we want to play.
+ * @returns {Promise<boolean>} True if we should proceed with playback, false otherwise.
+ */
+async function checkAndConfirmFolderSwitch(targetFolderId) {
+    try {
+        const statusResponse = await handleIsMpvRunning();
+        // Be explicit: only proceed freely if we are CERTAIN MPV is not running.
+        // If statusResponse is malformed or false, we don't assume it's safe to skip confirmation if it was otherwise needed.
+        if (statusResponse?.success === false || statusResponse?.is_running === false) return true;
+
+        // Determine currently playing folder from native host or local state fallback
+        const currentFolderId = statusResponse.folderId || playbackQueueInstance.currentPlayingItem?.folderId;
+        
+        if (currentFolderId && currentFolderId !== targetFolderId) {
+            const data = await _storage.get();
+            const shouldConfirm = data.settings.ui_preferences.global.confirm_folder_switch ?? true;
+
+            if (shouldConfirm) {
+                _broadcastLog({ text: `[Background]: Prompting user for folder switch from "${currentFolderId}" to "${targetFolderId}".`, type: 'info' });
+                
+                const confirmationPayload = {
+                    action: 'show_popup_confirmation',
+                    message: `MPV is currently playing folder "${currentFolderId}". Switch to "${targetFolderId}"?`
+                };
+
+                // 1. Try sending to popup first
+                let response = await _sendMessageAsync(confirmationPayload);
+                
+                // 2. Fallback to active tab if popup didn't respond
+                if (response === null) {
+                    _broadcastLog({ text: `[Background]: Popup not available for confirmation. Falling back to active tab.`, type: 'info' });
+                    const [activeTab] = await new Promise(resolve => chrome.tabs.query({ active: true, currentWindow: true }, resolve));
+                    if (activeTab?.id) {
+                        // Change action name for content script
+                        confirmationPayload.action = 'show_confirmation';
+                        response = await new Promise(resolve => {
+                            chrome.tabs.sendMessage(activeTab.id, confirmationPayload, (res) => {
+                                if (chrome.runtime.lastError) resolve(null);
+                                else resolve(res);
+                            });
+                        });
+                    }
+                }
+                
+                const confirmed = !!response?.confirmed;
+                if (!confirmed) {
+                    _broadcastLog({ text: `[Background]: Folder switch to "${targetFolderId}" cancelled by user or prompt failed.`, type: 'info' });
+                }
+                return confirmed;
+            }
+        }
+    } catch (e) {
+        _broadcastLog({ text: `[Background]: Error during folder switch check: ${e.message}`, type: 'error' });
+        return false; // Fail safe: don't switch if we can't determine status or prompt
+    }
+    return true;
+}
+
+// Internal helper for background-to-popup/tab messaging
+const _sendMessageAsync = (payload) => new Promise((resolve) => {
+    chrome.runtime.sendMessage(payload, (response) => {
+        if (chrome.runtime.lastError) resolve(null);
+        else resolve(response);
+    });
+});
+
 export async function handlePlay(request) {
     const { url_item, folderId, custom_mpv_flags, geometry, custom_width, custom_height, start_paused } = request;
 
-    let m3u_data = null;
-    let effective_folder_id = folderId;
-
     if (url_item) {
-        // If a single url_item is provided, construct a minimal M3U for it
-        m3u_data = {
-            type: "content",
-            value: `#EXTM3U\n#EXTINF:-1,${url_item.title || url_item.url}\n${url_item.url}`
-        };
-        effective_folder_id = folderId || "default_single_item_playback"; // Assign a default if none provided
+        if (folderId && !await checkAndConfirmFolderSwitch(folderId)) {
+            return { success: true, message: "Folder switch cancelled by user." };
+        }
+        
+        // If a single url_item is provided, use the direct playback flow (not via M3U)
         _broadcastLog({ text: `[Background]: Received 'play' request for single item: ${url_item.title || url_item.url}`, type: 'info' });
+        
+        const data = await _storage.get();
+        const globalPrefs = data.settings.ui_preferences.global;
+
+        const response = await _callNativeHost({
+            action: 'play',
+            url_item: url_item,
+            folderId: folderId,
+            geometry: geometry || (globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry),
+            custom_width: custom_width || (globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_width : null),
+            custom_height: custom_height || (globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null),
+            custom_mpv_flags: custom_mpv_flags || globalPrefs.custom_mpv_flags || '',
+            automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
+            force_terminal: globalPrefs.force_terminal ?? false,
+            clear_on_completion: request.clear_on_completion ?? (globalPrefs.clear_on_completion ?? false),
+            start_paused: start_paused ?? false,
+            bypassScripts: globalPrefs.bypassScripts || {}
+        });
+
+        if (response.success) {
+            playbackQueueInstance.isPlaying = true;
+            playbackQueueInstance.currentPlayingItem = { urlItem: url_item, folderId: folderId, isLastInFolder: true };
+        }
+        return response;
     } else if (folderId) {
         const data = await _storage.get();
         const folder = data.folders[folderId];
@@ -193,35 +284,37 @@ export async function handlePlay(request) {
             return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
         }
 
-        _broadcastLog({ text: `[Background]: Constructing M3U for playlist '${folderId}' (${folder.playlist.length} items).`, type: 'info' });
+        _broadcastLog({ text: `[Background]: Preparing playback for playlist '${folderId}' (${folder.playlist.length} items).`, type: 'info' });
         
-        // Construct a basic M3U string. Native host will dynamically add headers/ytdl options.
-        const m3u_lines = ["#EXTM3U"];
-        folder.playlist.forEach(item => {
-            m3u_lines.push(`#EXTINF:-1,${item.title || item.url}`);
-            m3u_lines.push(item.url);
+        // Send the actual playlist items directly to preserve IDs and avoid anonymous M3U re-generation
+        const m3u_data = { 
+            type: "items", 
+            value: folder.playlist 
+        };
+        const effective_folder_id = folderId;
+
+        // Delegate to handlePlayM3U for folder playback
+        return handlePlayM3U({ 
+            m3u_data: m3u_data, 
+            folderId: effective_folder_id,
+            custom_mpv_flags: custom_mpv_flags,
+            geometry: geometry,
+            custom_width: custom_width,
+            custom_height: custom_height,
+            start_paused: start_paused,
+            clear_on_completion: request.clear_on_completion
         });
-        m3u_data = { type: "content", value: m3u_lines.join("\n") };
-        effective_folder_id = folderId;
     } else {
         return { success: false, error: 'No URL item or Folder ID provided to play.' };
     }
-
-    // Delegate to the new handlePlayM3U function
-    return handlePlayM3U({ 
-        m3u_data: m3u_data, 
-        folderId: effective_folder_id,
-        custom_mpv_flags: custom_mpv_flags,
-        geometry: geometry,
-        custom_width: custom_width,
-        custom_height: custom_height,
-        start_paused: start_paused,
-        clear_on_completion: request.clear_on_completion // Pass along if present
-    });
 }
 
 export async function handlePlayM3U(request) {
     const { m3u_data, folderId, custom_mpv_flags, geometry, custom_width, custom_height, start_paused, clear_on_completion } = request;
+
+    if (folderId && !await checkAndConfirmFolderSwitch(folderId)) {
+        return { success: true, message: "Folder switch cancelled by user." };
+    }
 
     // Reset queue and playback state for a new 'play' request
     playbackQueueInstance.queue = [];
@@ -243,6 +336,7 @@ export async function handlePlayM3U(request) {
         custom_height: custom_height || (globalPrefs.launch_geometry === 'custom' ? globalPrefs.custom_geometry_height : null),
         custom_mpv_flags: custom_mpv_flags || globalPrefs.custom_mpv_flags || '',
         automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
+        force_terminal: globalPrefs.force_terminal ?? false,
         clear_on_completion: clear_on_completion ?? (globalPrefs.clear_on_completion ?? false),
         start_paused: start_paused ?? false,
         bypassScripts: globalPrefs.bypassScripts || {} // Pass bypass scripts config (though less relevant now with dynamic analysis)
@@ -250,12 +344,7 @@ export async function handlePlayM3U(request) {
 
     if (response.success) {
         playbackQueueInstance.isPlaying = true;
-        // The native host will return the playlist with IDs. Update storage.
-        if (response.playlist_items) {
-            data.folders[folderId].playlist = response.playlist_items;
-            await _storage.set(data);
-        }
-        _resyncDataFromNativeHostFile(); // Resync for consistency
+        playbackQueueInstance.currentPlayingItem = { folderId: folderId, isLastInFolder: true }; // Mark as playing this folder
 
         return { success: true, message: `Playback initiated for playlist '${folderId}'.` };
     } else {

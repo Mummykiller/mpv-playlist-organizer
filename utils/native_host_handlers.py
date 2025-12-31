@@ -59,9 +59,11 @@ class HandlerManager:
             # Expansion occurred!
             processed_entries = []
             for entry in entries:
-                # Assign ID to new entry and add to folder
+                # Assign unique ID to every new entry
+                entry['id'] = str(uuid.uuid4())
                 entry, all_folders = self._resolve_or_assign_item_id(entry, folder_id, all_folders)
-                # Ensure entries are treated as YouTube but resolved individually
+                
+                # Ensure entries are treated as YouTube but resolved externally
                 entry['is_youtube'] = True
                 entry['use_ytdl_mpv'] = False
                 # Pass the flag to children if they were part of a playlist that triggered it
@@ -84,7 +86,7 @@ class HandlerManager:
         url_item['cookies_file'] = cookies_file # Store cookie path
         
         # Respect the flag from url_analyzer or fallback to header-based logic
-        url_item['disable_http_persistent'] = disable_http_persistent_flag or (True if (script_headers and not ytdl_options) else False)
+        url_item['disable_http_persistent'] = disable_http_persistent_flag
         
         return [url_item], all_folders
 
@@ -93,29 +95,21 @@ class HandlerManager:
         Helper to construct MPV flags based on message parameters and bypass script outputs.
         Returns the updated custom_mpv_flags and the disable_http_persistent flag.
         """
-        disable_http_persistent = True if (script_headers and not ytdl_options) else False
+        # We no longer force http_persistent=0 automatically as it can break edl://
+        disable_http_persistent = False 
         custom_mpv_flags = message.get('custom_mpv_flags')
-        if disable_http_persistent:
-            persistent_flag = "--demuxer-lavf-o=http_persistent=0"
-            custom_mpv_flags = (custom_mpv_flags + " " + persistent_flag) if custom_mpv_flags else persistent_flag
         
         return custom_mpv_flags, disable_http_persistent
 
     def _resolve_or_assign_item_id(self, url_item, folder_id, all_folders):
         """
-        Ensures a url_item has a stable ID. If the item (by URL) already exists
-        in folders.json within the specified folder, its existing ID is used.
-        Otherwise, a new UUID is assigned, and the item is added to the folder's playlist
-        in folders.json.
-        Takes `all_folders` and returns the updated `all_folders` object along with the url_item.
-        The caller is responsible for writing `all_folders` to file if `persist` is True.
+        Ensures a url_item has a stable ID. 
+        If the item already has an ID, we check if it exists in the folder to update it.
+        Otherwise, a new UUID is assigned.
+        URL-based deduplication is removed to allow multiple entries of the same URL.
         """
         logging.debug(f"ResolveOrAssignId: Processing url_item: {url_item.get('title') or url_item['url']}, folder_id: {folder_id}")
         
-        # If all_folders is not provided, fetch it. This maintains flexibility for callers.
-        # However, for the pure function concept, the expectation is `all_folders` is always passed.
-        # Removing the auto-fetch for simplicity as per the "pure function" goal.
-
         if folder_id not in all_folders:
             all_folders[folder_id] = {"playlist": []}
             logging.debug(f"ResolveOrAssignId: Created new folder '{folder_id}'.")
@@ -123,24 +117,25 @@ class HandlerManager:
         folder_data = all_folders[folder_id]
         playlist = folder_data.get("playlist", [])
 
-        # Check if item already exists by URL
-        for stored_item in playlist:
-            if stored_item.get('url') == url_item['url']:
-                # If found, use its ID. Ensure the item in url_item has this ID.
-                url_item['id'] = stored_item.get('id', str(uuid.uuid4()))
-                logging.debug(f"ResolveOrAssignId: Found existing item. Assigned ID: {url_item['id']}")
-                # Also, update the existing item in storage with potentially new title/settings from url_item
-                stored_item.update(url_item)
-                return url_item, all_folders
+        item_id = url_item.get('id')
+
+        if item_id:
+            # Check if this specific ID already exists in the playlist to update it
+            for stored_item in playlist:
+                if stored_item.get('id') == item_id:
+                    logging.debug(f"ResolveOrAssignId: Found existing item by ID: {item_id}. Updating.")
+                    stored_item.update(url_item)
+                    return url_item, all_folders
+        else:
+            # No ID provided, generate a new one
+            item_id = str(uuid.uuid4())
+            url_item['id'] = item_id
+            logging.debug(f"ResolveOrAssignId: Assigned new ID: {item_id}")
         
-        # If not found, assign a new ID and add it to the playlist in storage
-        if 'id' not in url_item:
-            url_item['id'] = str(uuid.uuid4())
-            logging.debug(f"ResolveOrAssignId: Assigned new ID: {url_item['id']}")
-        
+        # If we reach here, it's a new entry (even if URL is same as another)
         playlist.append(url_item)
         folder_data["playlist"] = playlist
-        logging.debug(f"ResolveOrAssignId: Added new item to folder '{folder_id}'. Item ID: {url_item['id']}")
+        logging.debug(f"ResolveOrAssignId: Added item to folder '{folder_id}'. Item ID: {item_id}")
         return url_item, all_folders
 
     def handle_play(self, message):
@@ -151,35 +146,54 @@ class HandlerManager:
 
         logging.debug(f"handle_play: Original url_item from extension: {url_item}")
         
-        # Fetch all_folders once
-        all_folders = self.file_io.get_all_folders_from_file()
-
-        # Prepare URL item (resolve ID, apply bypass scripts)
-        bypass_scripts_config = message.get('bypassScripts', {})
-        url_items, all_folders = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
-        logging.debug(f"handle_play: items after processing: {url_items}")
-
-        # Write changes to all_folders back to file
-        self.file_io.write_folders_file(all_folders)
-
         # Get settings from config file
         settings = self.file_io.get_settings()
 
-        # Prepare MPV flags
-        custom_mpv_flags, disable_http_persistent = self._prepare_mpv_flags(message, None, None) # Passed later via item
-
-        # Run synchronously to ensure MPV is ready before returning success
-        # Note: If it's a list, start() will handle it.
-        result = self.mpv_session.start(
-            url_items, folder_id, settings, self.file_io,
+        # --- STEP 1: Process and Enrich ---
+        # Call mpv_session.start() with the raw item to trigger enrichment.
+        first_call_result = self.mpv_session.start(
+            url_item, 
+            folder_id, 
+            settings, 
+            self.file_io,
             geometry=message.get('geometry'), 
             custom_width=message.get('custom_width'), 
             custom_height=message.get('custom_height'), 
             custom_mpv_flags=message.get('custom_mpv_flags'), 
             automatic_mpv_flags=message.get('automatic_mpv_flags'), 
             start_paused=message.get('start_paused', False),
-            disable_http_persistent=disable_http_persistent
+            force_terminal=message.get('force_terminal', False)
         )
+        
+        if not first_call_result["success"]:
+            return first_call_result
+
+        enriched_url_items = first_call_result["enriched_url_items"]
+        enriched_item = enriched_url_items[0]
+
+        # --- STEP 2: Direct Launch ---
+        # Launch MPV with the enriched item's direct URL.
+        # This avoids the M3U HTTP server and thus avoids protocol restrictions for EDL.
+        result = self.mpv_session.start(
+            enriched_item, # Launch with the single enriched item
+            folder_id, 
+            settings, 
+            self.file_io,
+            geometry=message.get('geometry'), 
+            custom_width=message.get('custom_width'), 
+            custom_height=message.get('custom_height'), 
+            custom_mpv_flags=message.get('custom_mpv_flags'), 
+            automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+            start_paused=message.get('start_paused', False),
+            enriched_items_list=enriched_url_items,
+            headers=enriched_item.get('headers'),
+            ytdl_raw_options=enriched_item.get('ytdl_raw_options'),
+            use_ytdl_mpv=enriched_item.get('use_ytdl_mpv', False),
+            is_youtube=enriched_item.get('is_youtube', False),
+            disable_http_persistent=enriched_item.get('disable_http_persistent', False),
+            force_terminal=message.get('force_terminal', False)
+        )
+        
         return result if result else {"success": False, "error": "Failed to start MPV session."}
 
     def handle_play_batch(self, message):
@@ -191,51 +205,59 @@ class HandlerManager:
         logging.info(f"Processing play_batch request for folder '{folder_id}' with {len(playlist)} items.")
         
         settings = self.file_io.get_settings()
-        bypass_scripts_config = message.get('bypassScripts', {})
-        
-        # Optimization: Read folders file once, update all IDs, write once.
-        all_folders = self.file_io.get_all_folders_from_file()
-        
-        from concurrent.futures import ThreadPoolExecutor
-        
-        def process_item_parallel(item):
-            # We need to be careful with all_folders here as it's not thread-safe for writing.
-            # But _process_url_item mostly reads from it or appends if missing.
-            # Since we are using the same all_folders object, we should ideally lock it
-            # or just do the ID assignment sequentially first.
-            return self._process_url_item(item, folder_id, bypass_scripts_config, all_folders)
 
-        # Do ID assignment sequentially first to avoid race conditions in all_folders
-        for item in playlist:
-            if isinstance(item, str): item = {'url': item}
-            _, all_folders = self._resolve_or_assign_item_id(item, folder_id, all_folders)
-
-        logging.info(f"Enriching {len(playlist)} batch items in parallel...")
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            # Lambda returns a tuple (processed_items_list, all_folders)
-            results = list(executor.map(lambda item: self._process_url_item(item, folder_id, bypass_scripts_config, all_folders), playlist))
-            
-        processed_items = []
-        for r in results:
-            processed_items.extend(r[0])
-            
-        self.file_io.write_folders_file(all_folders) # Write changes to all_folders once
-
-        # MPV flags (geometry, custom_mpv_flags, etc.) are passed as part of the main start call,
-        # not per item in batch. So we extract them from the message directly.
-        # disable_http_persistent for batch is tricky: if any item triggers it, should all items have it?
-        # The mpv_session.start method handles passing item-specific headers and ytdl_raw_options.
-        # disable_http_persistent can also be set per item. We will rely on item's own flags.
-        
-        result = self.mpv_session.start(
-            processed_items, folder_id, settings, self.file_io,
+        # --- STEP 1: Process and Enrich ---
+        # Call mpv_session.start() with the list to trigger parallel enrichment.
+        first_call_result = self.mpv_session.start(
+            playlist, 
+            folder_id, 
+            settings, 
+            self.file_io,
             geometry=message.get('geometry'), 
             custom_width=message.get('custom_width'), 
             custom_height=message.get('custom_height'), 
             custom_mpv_flags=message.get('custom_mpv_flags'), 
             automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-            start_paused=message.get('start_paused', False)
+            start_paused=message.get('start_paused', False),
+            force_terminal=message.get('force_terminal', False)
         )
+        
+        if not first_call_result["success"]:
+            return first_call_result
+
+        enriched_url_items = first_call_result["enriched_url_items"]
+
+        # Baseline flags from first item
+        first_item = enriched_url_items[0] if enriched_url_items else {}
+        global_headers = first_item.get('headers')
+        global_ytdl_raw_options = first_item.get('ytdl_raw_options')
+        global_use_ytdl_mpv = any(item.get('use_ytdl_mpv', False) for item in enriched_url_items)
+        global_is_youtube = any(item.get('is_youtube', False) for item in enriched_url_items)
+        global_disable_http_persistent = first_item.get('disable_http_persistent', False)
+
+        # --- STEP 2: Direct Launch ---
+        # Launch MPV with the first item's direct URL, others will be appended via IPC.
+        # This avoids the M3U HTTP server.
+        result = self.mpv_session.start(
+            enriched_url_items, # Launch with the full enriched list
+            folder_id, 
+            settings, 
+            self.file_io,
+            geometry=message.get('geometry'), 
+            custom_width=message.get('custom_width'), 
+            custom_height=message.get('custom_height'), 
+            custom_mpv_flags=message.get('custom_mpv_flags'), 
+            automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+            start_paused=message.get('start_paused', False),
+            enriched_items_list=enriched_url_items,
+            headers=global_headers,
+            ytdl_raw_options=global_ytdl_raw_options,
+            use_ytdl_mpv=global_use_ytdl_mpv,
+            is_youtube=global_is_youtube,
+            disable_http_persistent=global_disable_http_persistent,
+            force_terminal=message.get('force_terminal', False)
+        )
+        
         return result
 
     def handle_remove_item_live(self, message):
@@ -265,11 +287,8 @@ class HandlerManager:
 
         # Prepare URL item (resolve ID, apply bypass scripts)
         bypass_scripts_config = message.get('bypassScripts', {})
-        url_items, all_folders = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
+        url_items, _ = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
         logging.debug(f"handle_append: items after processing: {url_items}")
-
-        # Write changes to all_folders back to file, as ID resolution and processing are done
-        self.file_io.write_folders_file(all_folders)
 
         if len(url_items) > 1:
             # It's a playlist, append everything as a batch
@@ -349,7 +368,11 @@ class HandlerManager:
         if not is_running and self.mpv_session.pid:
             self.mpv_session.clear()
         logging.info(f"MPV running status check: {is_running} (Path: {self.mpv_session.ipc_path})")
-        return {"success": True, "is_running": is_running}
+        return {
+            "success": True, 
+            "is_running": is_running,
+            "folderId": self.mpv_session.owner_folder_id if is_running else None
+        }
 
     def handle_export_data(self, message):
         data = message.get('data')
@@ -415,7 +438,7 @@ class HandlerManager:
     def handle_get_default_automatic_flags(self, message):
         return {"success": True, "flags": [
             {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
-            {"flag": "terminal", "description": "Show a terminal window.", "enabled": False}
+            {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False}
         ]}
 
     def _start_local_m3u_server(self, m3u_content):
@@ -537,7 +560,6 @@ class HandlerManager:
         settings = self.file_io.get_settings()
         
         try:
-            # --- STEP 1: Process and Enrich the M3U Content ---
             # Call mpv_session.start() with the raw M3U content/URL/path.
             # This call will return the enriched M3U content and enriched items list.
             logging.info(f"Step 1: Processing and enriching M3U from type '{m3u_type}'.")
@@ -547,14 +569,27 @@ class HandlerManager:
                 folder_id, 
                 settings, 
                 self.file_io,
-                headers=message.get('headers') # Pass headers for initial M3U fetch
+                geometry=message.get('geometry'), 
+                custom_width=message.get('custom_width'), 
+                custom_height=message.get('custom_height'), 
+                custom_mpv_flags=message.get('custom_mpv_flags'), 
+                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+                start_paused=message.get('start_paused', False),
+                headers=message.get('headers'), # Pass headers for initial M3U fetch
+                force_terminal=message.get('force_terminal', False)
             )
             
             if not first_call_result["success"]:
                 return first_call_result # Propagate error from first call
 
-            enriched_m3u_content = first_call_result["enriched_m3u_content"]
             enriched_url_items = first_call_result["enriched_url_items"]
+
+            # --- NEW: Check if playback was already handled directly (Standard Flow optimization) ---
+            if first_call_result.get("handled_directly"):
+                logging.info(f"Step 1: Playback handled directly by Standard Flow. Skipping M3U server.")
+                return first_call_result
+
+            enriched_m3u_content = first_call_result["enriched_m3u_content"]
 
             # --- LINKED PLAYLIST LOGIC ---
             # Check if we are already playing this folder.
@@ -563,15 +598,14 @@ class HandlerManager:
                 logging.info(f"Linked Playlist: Folder '{folder_id}' is already active. Syncing new items.")
                 
                 # Identify items that are in the new list but not in the active session
-                # We use ID as the primary unique identifier, falling back to URL.
+                # We use ID as the SOLE unique identifier.
                 current_ids = {item['id'] for item in self.mpv_session.playlist if 'id' in item}
-                current_urls = {item['url'] for item in self.mpv_session.playlist if 'url' in item}
                 
                 new_items = []
                 for item in enriched_url_items:
                     item_id = item.get('id')
-                    item_url = item.get('url')
-                    if (item_id and item_id in current_ids) or (not item_id and item_url in current_urls):
+                    # Skip only if this exact ID is already in the session
+                    if item_id and item_id in current_ids:
                         continue
                     new_items.append(item)
                 
@@ -598,10 +632,12 @@ class HandlerManager:
             with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
                 f.write(enriched_m3u_content)
 
-            # Extract common headers/options from the first item to apply globally.
-            # This is "adaptive": we use the first item's requirements as the global baseline.
-            # For homogeneous playlists (like all AnimePahe), this is perfect.
-            # For mixed playlists (YT + AnimePahe), YT usually works fine with extra headers.
+            # Extract common headers/options from the items to apply globally.
+            # We use a "greedy" approach for ytdl: if ANY item needs it, enable it.
+            global_use_ytdl_mpv = any(item.get('use_ytdl_mpv', False) for item in enriched_url_items)
+            global_is_youtube = any(item.get('is_youtube', False) for item in enriched_url_items)
+            
+            # For headers and other flags, we still baseline from the first item
             first_item = enriched_url_items[0] if enriched_url_items else {}
             
             # Reformat headers for MPV command line
@@ -613,8 +649,6 @@ class HandlerManager:
                 global_headers_str = None
 
             global_ytdl_raw_options = first_item.get('ytdl_raw_options')
-            global_use_ytdl_mpv = first_item.get('use_ytdl_mpv', False)
-            global_is_youtube = first_item.get('is_youtube', False)
             global_disable_http_persistent = first_item.get('disable_http_persistent', False)
 
             # --- STEP 2: Start or Reuse Local Server ---
@@ -645,8 +679,13 @@ class HandlerManager:
                 ytdl_raw_options=global_ytdl_raw_options,
                 use_ytdl_mpv=global_use_ytdl_mpv,
                 is_youtube=global_is_youtube,
-                disable_http_persistent=global_disable_http_persistent
+                disable_http_persistent=global_disable_http_persistent,
+                force_terminal=message.get('force_terminal', False)
             )
+            
+            if final_launch_result and final_launch_result.get("success"):
+                final_launch_result["playlist_items"] = enriched_url_items
+                
             return final_launch_result if final_launch_result else {"success": False, "error": "Failed to start MPV session with M3U."}
 
         except Exception as e:

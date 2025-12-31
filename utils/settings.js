@@ -17,6 +17,7 @@ class OptionsManager {
             { key: 'launch_geometry', elementId: 'geometry-select', type: 'select' },
             { key: 'custom_geometry_width', elementId: 'custom-width', type: 'input' },
             { key: 'custom_geometry_height', elementId: 'custom-height', type: 'input' },
+            { key: 'force_terminal', elementId: 'force-terminal-checkbox', type: 'checkbox' },
             { key: 'show_play_new_button', elementId: 'show-play-new-button-checkbox', type: 'checkbox' },
             { key: 'duplicate_url_behavior', elementId: 'duplicate-behavior-select', type: 'select' },
             { key: 'one_click_add', elementId: 'one-click-add-checkbox', type: 'checkbox' },
@@ -25,6 +26,7 @@ class OptionsManager {
             { key: 'confirm_clear_playlist', elementId: 'confirm-clear-playlist-checkbox', type: 'checkbox' },
             { key: 'confirm_close_mpv', elementId: 'confirm-close-mpv-checkbox', type: 'checkbox' },
             { key: 'confirm_play_new', elementId: 'confirm-play-new-checkbox', type: 'checkbox' },
+            { key: 'confirm_folder_switch', elementId: 'confirm-folder-switch-checkbox', type: 'checkbox' },
             { key: 'clear_on_completion', elementId: 'clear-on-completion-checkbox', type: 'checkbox' },
             { key: 'autofocus_new_folder', elementId: 'autofocus-new-folder-checkbox', type: 'checkbox' },
             { key: 'enable_dblclick_copy', elementId: 'enable-dblclick-copy-checkbox', type: 'checkbox' },
@@ -179,7 +181,7 @@ class OptionsManager {
             }
             pill.textContent = flagData.flag;
             pill.dataset.flag = flagData.flag;
-            pill.title = flagData.description;
+            pill.title = flagData.description || ''; // Use empty string fallback
             container.appendChild(pill);
         });
     }
@@ -380,7 +382,7 @@ class OptionsManager {
 
     _toggleAutomaticMpvFlag(element) {
         element.classList.toggle('disabled');
-        this.saveAllPreferences();
+        this.debouncedSaveAllPreferences();
     }
 
     async _resetAutomaticMpvFlags() {
