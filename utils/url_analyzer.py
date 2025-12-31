@@ -86,7 +86,8 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
             },
             "ytdl_raw_options": None, # No yt-dlp options needed
             "use_ytdl_mpv": False, # Explicitly set to False as per stuff.py
-            "is_youtube": False
+            "is_youtube": False,
+            "disable_http_persistent": True # Added to fix 'End of file' errors
         }
 
     # --- Case 1b: Generic Direct Stream Detection ---

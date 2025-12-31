@@ -134,11 +134,14 @@ mp.add_hook("on_load", 1, function()
             reconnect = "1",
             reconnect_at_eof = "1",
             reconnect_streamed = "1",
-            reconnect_delay_max = "5"
+            reconnect_delay_max = "2", -- Reduced for faster recovery
+            hls_segment_parallel_downloads = "8" -- Parallel segment downloading (FFmpeg option)
         }
         
         if opts.disable_http_persistent then
             lavf_dict.http_persistent = "0"
+        else
+            lavf_dict.http_persistent = "1"
         end
         
         local lavf_pairs = {}

@@ -232,7 +232,15 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func):
 class MpvCommandBuilder:
     def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False):
         self.mpv_exe = mpv_exe
-        self.mpv_args = [mpv_exe]
+        self.mpv_args = [
+            mpv_exe,
+            '--cache=yes',
+            '--demuxer-max-bytes=1G',
+            '--demuxer-max-back-bytes=500M',
+            '--cache-secs=300',
+            '--demuxer-readahead-secs=300',
+            '--stream-buffer-size=5M'
+        ]
         self.has_terminal_flag = False
         self.is_forced_terminal = False
         self.url = None

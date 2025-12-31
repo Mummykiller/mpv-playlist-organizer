@@ -50,14 +50,33 @@
 - **Issue**: User preferences (terminal, geometry, flags) were being ignored when playing YouTube playlists because the initial "expansion" call to `mpv_session.start` was missing those parameters.
 - **Fix**: Updated `native_host_handlers.py` to pass all playback parameters to the initial `start` call, ensuring that direct launches (Standard Flow) respect user settings.
 
+### 10. Animepahe Reliability & Performance (✅ OPTIMIZED)
+- **Issue**: Some Animepahe streams were failing to load or loading very slowly due to frequent "End of file" errors and slow reconnect cycles.
+- **Fixes**:
+    - **Reliability**: Enabled `disable_http_persistent` specifically for Animepahe URLs. This fixes the "failed to load" issue by forcing a new connection for each HLS segment.
+    - **Recovery Speed**: Reduced `reconnect_delay_max` from 5s to 2s in `adaptive_headers.lua` for faster error recovery.
+    - **Multithreading**: Enabled `hls_segment_parallel_downloads=8` within `adaptive_headers.lua` (FFmpeg demuxer option). This provides a high-speed download experience.
+    - **Aggressive Buffering**: Increased default cache and buffer sizes (`--demuxer-max-bytes=1G`, `--cache-secs=300`, `--stream-buffer-size=5M`) to ensure smooth playback and high-speed readahead.
+
+### 11. IPC Robustness & Deadlock Fix (✅ FIXED)
+- **Issue**: Intermittent "Failed to connect to MPV IPC" errors, especially during terminal launches.
+- **Root Causes**: 
+    1. **Deadlock**: The MPV process could hang on startup if its stdout/stderr pipe buffer filled up before the Python backend started reading it (which was happening *after* the IPC connection attempt).
+    2. **Timeout**: 10 seconds was sometimes insufficient for slow terminal emulators to initialize MPV.
+- **Fixes**:
+    - **Buffer Draining**: Moved the log reader thread (`stderr_thread`) to start **before** the IPC connection attempt, ensuring the process never hangs on a full pipe.
+    - **Increased Timeout**: Increased the connection timeout to 15 seconds.
+    - **Resilient Retry**: Updated `IPCSocketManager.connect` to be more resilient to transient errors during the retry loop.
+
 ## ⚠️ Environment Info
 - **OS**: Linux (Brave/Konsole environment)
 - **MPV**: v0.41.0 (Arch Linux)
 - **yt-dlp**: 2025.12.08
 
 ## 📂 Key Files Modified
-- `mpv_session.py`: Optimized for background resolution and completion detection.
+- `mpv_session.py`: Optimized for background resolution, completion detection, and deadlock prevention.
 - `background/handlers/playback.js`: Fixed switch confirmation and authoritative clearing.
 - `utils/url_analyzer.py`: Optimized for direct streams and YouTube expansion.
-- `data/on_completion.lua`: Improved end-of-playlist detection.
-- `services.py`: Expanded terminal support (Currently failing).
+- `services.py`: Expanded terminal support (Konsole optimized) and robust path resolution.
+- `utils/ipc_utils.py`: Improved IPC connection resilience and timeout handling.
+- `mpv_scripts/adaptive_headers.lua`: Implemented parallel HLS downloads and fast recovery.

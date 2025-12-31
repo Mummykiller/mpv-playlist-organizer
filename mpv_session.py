@@ -393,8 +393,14 @@ class MpvSessionManager:
             # Launch MPV
             self.process = subprocess.Popen(full_command, env=env, **popen_kwargs)
             self.ipc_path = ipc_path
+
+            # Start reading logs immediately to prevent pipe buffer deadlock
+            stderr_thread = threading.Thread(target=self.log_stream, args=(self.process.stdout, logging.warning, folder_id))
+            stderr_thread.daemon = True
+            stderr_thread.start()
+
             self.ipc_manager = ipc_utils.IPCSocketManager()
-            if not self.ipc_manager.connect(self.ipc_path):
+            if not self.ipc_manager.connect(self.ipc_path, timeout=15.0):
                 raise RuntimeError(f"Failed to connect to MPV IPC at {self.ipc_path}")
 
             self.playlist = full_playlist if full_playlist is not None else [url_item]
@@ -452,10 +458,6 @@ class MpvSessionManager:
                             self.pid = actual_mpv_pid
                 except Exception as e:
                     logging.error(f"Error while trying to get MPV's real PID from terminal launch: {e}")
-
-            stderr_thread = threading.Thread(target=self.log_stream, args=(self.process.stdout, logging.warning, folder_id))
-            stderr_thread.daemon = True
-            stderr_thread.start()
 
             def process_waiter(proc, f_id):
                 return_code = proc.wait()
