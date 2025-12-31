@@ -105,8 +105,10 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
 
     # --- Case 2: YouTube URLs (YOUTUBE_RE) ---
     is_yt = YOUTUBE_RE.search(url)
+    is_yt_enabled = str(youtube_enabled).lower() == "true"
+
     if is_yt:
-        # 2a. Handle Playlist Expansion
+        # 2a. Handle Playlist Expansion (Always allowed if it's a playlist URL)
         if "list=" in url:
             try:
                 logging.info(f"Expanding YouTube playlist: {url}")
@@ -148,48 +150,41 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
             except Exception as e:
                 logging.warning(f"Failed to expand YouTube playlist: {e}")
 
-        # 2b. External Resolution for Single YouTube Video
+        # 2b. Handle Single YouTube Video
+        if not is_yt_enabled:
+            logging.info(f"YouTube resolution disabled in settings. Passing original URL to MPV: {url}")
+            return {
+                "success": True,
+                "url": url,
+                "headers": {"User-Agent": effective_user_agent},
+                "use_ytdl_mpv": True,
+                "is_youtube": True,
+                "disable_http_persistent": True
+            }
+
         try:
             cookies_file = None
             if browser and browser != "None":
                 cookies_file = get_cookies_file(browser, url)
 
-            # Resolve the direct stream URL in Python
-            # We use a combined format to ensure it works without EDL
-            ytdl_format = 'best[ext=mp4]/best'
-            cmd = [
-                'yt-dlp',
-                '--force-ipv4',
-                '--format', ytdl_format,
-                '--get-url',
-                '--user-agent', effective_user_agent,
-                url
-            ]
-            if cookies_file:
-                cmd.extend(['--cookies', cookies_file])
-            
-            logging.info(f"Resolving YouTube URL externally: {url} with format {ytdl_format}")
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
-            resolved_url = result.stdout.strip()
-
-            if not resolved_url:
-                raise ValueError("yt-dlp returned no URL.")
-
-            logging.info(f"Successfully resolved YouTube URL to: {resolved_url[:50]}...")
+            # Instead of resolving to a direct URL in Python (which limits quality to single-file formats),
+            # we return the original URL but tell MPV to use its internal ytdl hook with the cookies file.
+            # This allows MPV to handle high-quality DASH/HLS streams natively.
+            logging.info(f"YouTube resolution enabled. Using original URL with cookies for MPV: {url}")
 
             return {
                 "success": True,
-                "url": resolved_url,
+                "url": url,
                 "headers": {"User-Agent": effective_user_agent},
-                "ytdl_raw_options": None,
-                "use_ytdl_mpv": False, # MPV will NOT use ytdl hook
-                "is_youtube": False, # Set to False since it's already a direct stream
+                "ytdl_raw_options": f"cookies={cookies_file}" if cookies_file else None,
+                "use_ytdl_mpv": True, # MPV WILL use ytdl hook
+                "is_youtube": True,
                 "disable_http_persistent": True,
                 "cookies_file": cookies_file,
                 "original_url": url
             }
         except Exception as e:
-            logging.warning(f"External YouTube resolution failed: {e}. Falling back to original URL.")
+            logging.warning(f"YouTube cookie extraction failed: {e}. Falling back to original URL.")
             # Fallback to original URL if resolution fails for some reason
             return {
                 "success": True,
@@ -201,7 +196,9 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
 
     # --- Case 3: Other URLs (External resolution as fallback) ---
     try:
-        ytdl_format = 'best[ext=mp4]/best'
+        # For non-YouTube sites, we still resolve to a direct URL to speed up loading,
+        # but we use 'best' instead of forcing MP4, allowing for better quality if available.
+        ytdl_format = 'best'
 
         cmd = [
             'yt-dlp',
@@ -217,6 +214,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
         if browser and browser != "None":
             cmd.extend(['--cookies-from-browser', browser])
         
+        logging.info(f"Resolving non-YouTube URL externally: {url} with format {ytdl_format}")
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
         resolved_url = result.stdout.strip()
 

@@ -213,9 +213,6 @@ const actionHandlers = {
     'ytdlp_update_check': dependency_anilist_handlers.handleYtdlpUpdateCheck,
     'user_confirmed_ytdlp_update': dependency_anilist_handlers.handleUserConfirmedYtdlpUpdate,
     'manual_ytdlp_update': dependency_anilist_handlers.handleManualYtdlpUpdate,
-    'get_dependency_status': dependency_anilist_handlers.handleGetDependencyStatus,
-
-    'log_from_scanner': m3u8_scanner_handlers.handleLogFromScanner,
 };
 
 // New handler for the unsolicited 'session_restored' message from the native host
@@ -234,7 +231,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         (async () => {
             try {
                 const response = await handler(request, sender);
-                // Some handlers might not return a value (e.g., log_from_scanner).
                 // Only send a response if one was returned.
                 if (response !== undefined) {
                     sendResponse(response);
@@ -260,7 +256,6 @@ chrome.runtime.onInstalled.addListener(async () => {
     await storage.initialize();
 
     await updateContextMenus(storage);
-    await syncDataToNativeHostFile();
 
     console.log("MPV Handler extension installed and initialized.");
 });

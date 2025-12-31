@@ -1,8 +1,6 @@
 import logging
 import threading
 import time
-import uuid
-import json
 import sys
 import os
 
@@ -103,7 +101,6 @@ class PlaylistTracker:
                 if self.ipc_manager.connect(self.ipc_path):
                     logging.info("Tracker reconnected. Re-observing properties.")
                     self.ipc_manager.send({"command": ["observe_property", 1, "path"]})
-                    self.ipc_manager.send({"command": ["observe_property", 2, "playlist-pos"]})
                 else:
                     time.sleep(2)
                     continue

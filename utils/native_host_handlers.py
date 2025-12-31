@@ -1,5 +1,4 @@
 import logging
-import json
 import os
 import time
 import uuid
@@ -89,17 +88,6 @@ class HandlerManager:
         url_item['disable_http_persistent'] = disable_http_persistent_flag
         
         return [url_item], all_folders
-
-    def _prepare_mpv_flags(self, message, script_headers, ytdl_options):
-        """
-        Helper to construct MPV flags based on message parameters and bypass script outputs.
-        Returns the updated custom_mpv_flags and the disable_http_persistent flag.
-        """
-        # We no longer force http_persistent=0 automatically as it can break edl://
-        disable_http_persistent = False 
-        custom_mpv_flags = message.get('custom_mpv_flags')
-        
-        return custom_mpv_flags, disable_http_persistent
 
     def _resolve_or_assign_item_id(self, url_item, folder_id, all_folders):
         """
@@ -438,7 +426,8 @@ class HandlerManager:
     def handle_get_default_automatic_flags(self, message):
         return {"success": True, "flags": [
             {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
-            {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False}
+            {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
+            {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True}
         ]}
 
     def _start_local_m3u_server(self, m3u_content):

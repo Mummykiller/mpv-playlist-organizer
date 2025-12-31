@@ -130,11 +130,4 @@ class Draggable {
         this.handle.addEventListener('mousedown', this.onMouseDown);
         this.handle.addEventListener('contextmenu', this.onContextMenu);
     }
-
-    detach() {
-        this.handle.removeEventListener('mousedown', this.onMouseDown);
-        this.handle.removeEventListener('contextmenu', this.onContextMenu);
-        document.removeEventListener('mousemove', this.onMouseMove);
-        document.removeEventListener('mouseup', this.onMouseUp);
-    }
 }

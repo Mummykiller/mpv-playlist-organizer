@@ -1644,10 +1644,6 @@ class MpvController {
     // Create a single, authoritative instance of the controller.
     const controller = new MpvController();
     // Expose the controller instance to the window for debugging from the console.
-    // Get tabId for this content script
-    sendMessageAsync({ action: 'get_tab_id' }).then(response => {
-        if (response && response.tabId) controller.tabId = response.tabId;
-    });
 
     // Initialize the controller.
     controller.init();

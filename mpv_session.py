@@ -378,7 +378,7 @@ class MpvSessionManager:
                 load_on_completion_script=True,
                 title=url_item.get('title'),
                 use_ytdl_mpv=use_ytdl_mpv,
-                is_youtube_override=is_youtube,
+                is_youtube_override=use_ytdl_mpv,
                 idle="once", # Use 'once' so mpv waits for the first file but exits on error/finish
                 force_terminal=force_terminal
             )
