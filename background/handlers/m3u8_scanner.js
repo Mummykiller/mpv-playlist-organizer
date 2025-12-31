@@ -247,8 +247,3 @@ export async function findM3u8InUrl(url, originalTab) {
 export function handleGetDetectedUrlForTab(tabId) {
     return _detectedUrlsState[tabId] || null;
 }
-
-export function handleLogFromScanner(request) {
-    _broadcastLog(request.log);
-    // This action doesn't need to send a response back to the scanner.
-}

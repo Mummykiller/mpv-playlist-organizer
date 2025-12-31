@@ -3,7 +3,6 @@ import logging
 import os
 import platform
 import shutil
-import ssl
 import subprocess
 import sys
 
@@ -15,7 +14,6 @@ import time
 import urllib.request
 import shlex
 import re
-from utils import ipc_utils
 from utils import url_analyzer
 import file_io # <--- Added this import
 
@@ -94,9 +92,6 @@ def _get_ytdlp_version(path_to_exe, send_message_func):
         logging.error(error_msg)
         send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
         return None
-
-    send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
-    return None
 
 def _get_linux_sudo_command_prefix(ytdlp_path, send_message_func):
     """
@@ -239,7 +234,8 @@ class MpvCommandBuilder:
             '--demuxer-max-back-bytes=500M',
             '--cache-secs=300',
             '--demuxer-readahead-secs=300',
-            '--stream-buffer-size=5M'
+            '--stream-buffer-size=5M',
+            '--save-position-on-quit'
         ]
         self.has_terminal_flag = False
         self.is_forced_terminal = False
@@ -261,7 +257,7 @@ class MpvCommandBuilder:
 
     def with_completion_script(self, script_dir):
         if script_dir:
-            lua_script_path = os.path.join(script_dir, "data", "on_completion.lua")
+            lua_script_path = os.path.join(script_dir, "mpv_scripts", "on_completion.lua")
             if os.path.exists(lua_script_path):
                 self.mpv_args.append(f'--script={lua_script_path}')
                 logging.info(f"MPV will load completion script: {lua_script_path}")

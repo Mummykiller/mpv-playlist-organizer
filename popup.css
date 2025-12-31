@@ -81,38 +81,6 @@ select {
     appearance: none;
 }
 
-textarea {
-    flex-grow: 1;
-    box-sizing: border-box;
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-primary);
-    color: var(--text-primary);
-    border-radius: var(--radius);
-    padding: 10px;
-    font-size: 13px; /* Slightly smaller for code-like text */
-    font-family: var(--font-mono); /* Use a monospace font */
-    transition: all var(--transition-speed) ease;
-    resize: vertical; /* Allow vertical resize */
-    min-height: 40px;
-}
-
-textarea:hover {
-    background-color: var(--bg-tertiary);
-    border-color: #555;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-
-textarea:focus-visible {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.3);
-}
-
-textarea::placeholder {
-    color: var(--text-secondary);
-    font-family: var(--font-sans); /* Placeholder can be sans-serif */
-}
-
 input:hover, select:hover {
     background-color: var(--bg-tertiary);
     border-color: #555;
@@ -450,10 +418,6 @@ button:disabled {
     flex-basis: 150px; /* Adjust basis to accommodate larger font */
     flex-shrink: 0;
     flex-grow: 0; /* Prevent labels from growing and taking up extra space */
-}
-.list-item .btn-copy-item {
-    flex-shrink: 0;
-    margin-right: 6px;
 }
 
 /* New styles for stacked controls */

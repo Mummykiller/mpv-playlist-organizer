@@ -311,29 +311,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     /**
-     * Asks the content script on the active tab to show a page-level confirmation.
-     * This unifies the confirmation experience.
-     * @param {string} message The message to display in the modal.
-     * @returns {Promise<boolean>} A promise that resolves to true if confirmed, false if cancelled.
-     */
-    async function showConfirmationOnActiveTab(message) {
-        try {
-            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!activeTab || !activeTab.id) {
-                // Fallback to the popup's own confirmation if no active tab is found.
-                return await showPopupConfirmation(message);
-            }
-            const response = await sendMessageAsync({
-                action: 'show_confirmation',
-                message: message,
-                tabId: activeTab.id // Explicitly target the active tab
-            });
-            return response?.confirmed || false;
-        } catch (error) {
-            return await showPopupConfirmation(message); // Fallback on error
-        }
-    }
-    /**
      * Fetches all folder IDs and populates all folder dropdowns in the popup.
      */
     function populateFolderDropdowns() {

@@ -69,7 +69,6 @@ try:
     import time
     import signal
     import threading
-    import argparse
     import shutil
     import urllib.request
     import platform

@@ -12,28 +12,6 @@ export function init(dependencies) {
     _callNativeHost = dependencies.callNativeHost;
 }
 
-/**
- * Checks MPV and yt-dlp dependencies via the native host and stores the results.
- * Also broadcasts a message to update UI components.
- */
-async function _checkDependenciesAndStore() {
-    _broadcastLog({ text: `[Background]: Checking MPV and yt-dlp dependencies...`, type: 'info' });
-    const response = await _callNativeHost({ action: 'check_dependencies' });
-
-    if (response.success) {
-        const data = await _storage.get();
-        data.settings.ui_preferences.global.dependencyStatus = {
-            mpv: response.mpv,
-            ytdlp: response.ytdlp
-        };
-        await _storage.set(data);
-        _broadcastLog({ text: `[Background]: Dependency check completed.`, type: 'info' });
-        _broadcastToTabs({ action: 'dependencies_status_changed', status: data.settings.ui_preferences.global.dependencyStatus });
-    } else {
-        _broadcastLog({ text: `[Background]: Dependency check failed: ${response.error}`, type: 'error' });
-    }
-}
-
 export async function handleGetAnilistReleases(request) {
     // All caching logic is now handled by the native host.
     const forceRefresh = request.force ?? false;
@@ -110,10 +88,4 @@ export async function handleUserConfirmedYtdlpUpdate() {
 export async function handleManualYtdlpUpdate() {
     _broadcastLog({ text: `[Background]: Manual yt-dlp update triggered from settings.`, type: 'info' });
     return _callNativeHost({ action: 'run_ytdlp_update' });
-}
-
-export async function handleGetDependencyStatus() {
-    await _checkDependenciesAndStore(); // Ensure dependencies are checked before returning status
-    const data = await _storage.get();
-    return { success: true, status: data.settings.ui_preferences.global.dependencyStatus };
 }
