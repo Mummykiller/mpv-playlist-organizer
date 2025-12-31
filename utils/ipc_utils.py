@@ -34,7 +34,7 @@ class IPCSocketManager:
     def is_connected(self):
         return self._sock is not None
 
-    def connect(self, ipc_path, timeout=10.0):
+    def connect(self, ipc_path, timeout=15.0):
         """
         Connects to the MPV IPC server.
         Retries connection attempts for a specified timeout duration.
@@ -70,11 +70,12 @@ class IPCSocketManager:
                 logging.debug(f"IPC connection failed (will retry): {e}")
                 if self._sock: # Only close if a socket was actually opened
                     self.close() 
-                time.sleep(0.1) # Short delay before next attempt
+                time.sleep(0.2) # Small delay before next attempt
             except Exception as e:
-                logging.error(f"Unexpected error during IPC connection attempt: {e}")
-                self.close()
-                return False
+                logging.error(f"Unexpected error during IPC connection attempt (will retry): {e}")
+                if self._sock:
+                    self.close()
+                time.sleep(0.2)
         
         logging.error(f"Failed to connect to MPV IPC at {ipc_path} after {timeout} seconds.")
         return False
