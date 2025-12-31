@@ -149,6 +149,16 @@ export async function handleSetUiPreferences(request, sender) {
 }
 
 export async function handleGetDefaultAutomaticFlags() {
+    try {
+        const response = await _callNativeHost({ action: 'get_default_automatic_flags' });
+        if (response.success && response.flags) {
+            return { success: true, flags: response.flags };
+        }
+    } catch (e) {
+        _broadcastLog({ text: `[Background]: Failed to fetch default flags from native host: ${e.message}`, type: 'error' });
+    }
+    
+    // Fallback to local defaults if native host is unavailable
     const defaultData = _storage._getDefaultData();
     return { success: true, flags: defaultData.settings.ui_preferences.global.automatic_mpv_flags };
 }

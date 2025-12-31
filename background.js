@@ -86,7 +86,10 @@ const storage = new StorageManager('mpv_organizer_data', broadcastLog);
  * native host to be written to the folders.json file. This keeps the
  * CLI and the extension in sync.
  */
-async function syncDataToNativeHostFile() {
+// Debounce the sync function to avoid rapid-fire writes to the native host.
+// A 1-second delay is reasonable. If multiple changes happen in quick succession,
+// it will only sync once after the user is done.
+const debouncedSyncToNativeHostFile = debounce(async () => {
     const data = await storage.get();
     try {
         await callNativeHost({
@@ -98,43 +101,7 @@ async function syncDataToNativeHostFile() {
         console.error(errorMessage);
         broadcastLog({ text: `[Background]: ${errorMessage}`, type: 'error' });
     }
-}
-
-// Debounce the sync function to avoid rapid-fire writes to the native host.
-// A 1-second delay is reasonable. If multiple changes happen in quick succession,
-// it will only sync once after the user is done.
-const debouncedSyncToNativeHostFile = debounce(syncDataToNativeHostFile, 1000);
-
-/**
- * Resyncs the browser extension's storage from the native host's folders.json file.
- * This is crucial when the native host has modified folders.json directly.
- */
-async function resyncDataFromNativeHostFile() {
-    try {
-        broadcastLog({ text: `[Background]: Requesting folders data from native host...`, type: 'info' });
-        const response = await callNativeHost({ action: 'get_all_folders' });
-        if (response.success) {
-            const data = await storage.get(); // Get current browser storage
-            const oldFolders = JSON.stringify(data.folders); // Stringify for comparison
-            data.folders = response.folders; // Update folders with data from native host
-            await storage.set(data); // Persist updated data to browser storage
-            broadcastLog({ text: `[Background]: Successfully resynced folders from native host.`, type: 'info' });
-            
-            // Only broadcast 'foldersChanged' if actual folder data has changed to prevent unnecessary UI refreshes.
-            if (oldFolders !== JSON.stringify(data.folders)) {
-                broadcastToTabs({ foldersChanged: true }); // Notify UI to refresh
-            }
-        } else {
-            const errorMessage = `Failed to resync folders from native host: ${response.error || 'Unknown error'}`;
-            console.error(errorMessage);
-            broadcastLog({ text: `[Background]: ${errorMessage}`, type: 'error' });
-        }
-    } catch (e) {
-        const errorMessage = `Error during resync from native host: ${e.message}`;
-        console.error(errorMessage);
-        broadcastLog({ text: `[Background]: ${errorMessage}`, type: 'error' });
-    }
-}
+}, 1000);
 
 // --- Initialize all handlers with shared dependencies ---
 // Dependencies injected here are defined above this point.
@@ -173,7 +140,6 @@ playback_handlers.init({
     broadcastLog,
     broadcastToTabs,
     callNativeHost,
-    resyncDataFromNativeHostFile,
     debouncedSyncToNativeHostFile,
 });
 
@@ -282,9 +248,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
-    // If no handler is found, send a generic error response.
-    sendResponse({ success: false, error: `Unknown action: '${request.action}'` });
-    return false; // No async response will be sent.
+    // Do NOT send a response here. This allows other listeners (like the popup)
+    // to potentially handle the message if it's not a background action.
+    return false; 
 });
 
 // --- Initial Setup ---

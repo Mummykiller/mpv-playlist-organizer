@@ -39,13 +39,11 @@ export class StorageManager {
                         custom_mpv_flags: '',
                         automatic_mpv_flags: [
                             { flag: '--force-window=yes', description: 'Create a video output window even if there is no video.', enabled: true },
-                            { flag: '--save-position-on-quit', description: 'Always save the current playback position on quit.', enabled: true },
-                            { flag: '--write-filename-in-watch-later-config', description: 'Prepend the filename to the watch later config.', enabled: true },
-                            { flag: '--no-terminal', description: 'Do not print messages to the console.', enabled: true }
+                            { flag: '--save-position-on-quit', description: 'Always save the current playback position on quit.', enabled: true }
                         ],
                         show_play_new_button: false, duplicate_url_behavior: 'ask', one_click_add: false,
                         stream_scanner_timeout: 60, confirm_remove_folder: true, confirm_clear_playlist: true,
-                        confirm_close_mpv: true, confirm_play_new: true, clear_on_completion: false,
+                        confirm_close_mpv: true, confirm_play_new: true, confirm_folder_switch: true, clear_on_completion: false,
                         autofocus_new_folder: false,
                         anilistPanelVisible: false,
                         enable_dblclick_copy: false,

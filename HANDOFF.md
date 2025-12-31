@@ -1,54 +1,63 @@
-# MPV Playlist Organizer - Session Handoff (Dec 30, 2025)
+# MPV Playlist Organizer - Session Handoff (Dec 31, 2025 - Turn 2)
 
-## 🛠 Fixes Implemented
+## 🛠 Fixes & Refactors Implemented
 
-### 1. MPV Hanging Fix
-- **Issue**: MPV would stay open in an "idle" state after a playback error or playlist finish.
-- **Fix**: Changed `--idle=yes` to `--idle=once`. Updated `services.py` to support string values for the `idle` argument.
-- **Result**: MPV now closes automatically on failure or completion.
+### 1. Robust Folder Switch Confirmation (✅ FIXED)
+- **Status**: Feature is now reliable and verified.
+- **Improvements**:
+    - **Fallback Prompting**: Added logic to send the confirmation prompt to the **active browser tab** if the extension popup is closed.
+    - **Race Condition Fixes**: Improved MPV status detection to prevent accidental bypasses due to communication lags.
+    - **Double Prompt Fix**: Refactored `handlePlay` to ensure only one prompt appears when starting folder playback.
 
-### 2. YouTube Playback & 403/400 Errors
-- **Root Cause**: The system `mpv` (v0.40.0-dirty) lacks `edl` protocol support, breaking the internal `ytdl` hook.
+### 2. Optimized YouTube Playlist Support (✅ FIXED)
+- **Logic**: Implemented a "Titles First, Resolve Later" strategy.
+- **Result**: 
+    - **Instant Titles**: Webpage URLs and titles are batch-appended immediately for instant visibility in the MPV playlist.
+    - **Fast Launch**: The first item resolves and starts playing right away.
+    - **Background Resolution**: Subsequent items are resolved individually in a background thread, and their URLs are updated in MPV via IPC.
+    - **Failover**: Unresolved items use MPV's internal YTDL hook if the user skips ahead before background resolution finishes.
+
+### 3. Extension as Absolute Source of Truth (✅ FIXED)
+- **Refactor**: Removed all destructive "Full Resync" logic that previously allowed the Python backend to overwrite the user's UI state.
+- **Clearing Logic**: The "Clear on Completion" feature now lives entirely in the Extension (`playback.js`), triggering only on natural completion (Exit Code 99) if enabled by the user.
+
+### 4. AnimePahe & Direct Stream Performance (✅ FIXED)
+- **Fix**: Updated `url_analyzer.py` to recognize direct `.m3u8` and `.mp4` links.
+- **Result**: Bypasses slow `yt-dlp` resolution for already-direct streams, resulting in near-instant loading for AnimePahe vault links.
+
+### 5. Natural Completion Detection (✅ FIXED)
+- **Fixes**:
+    - **Lua Script**: Updated `on_completion.lua` to handle `playlist-pos: -1` and correctly identify end-of-playlist states.
+    - **Python Backend**: Added a robust fallback that checks for a physical `.flag` file written by Lua to override the exit code to 99 if MPV exits with 0.
+
+### 6. Terminal Launch (✅ FIXED)
+- **Issue**: Support for launching MPV in a visible terminal (specifically **Konsole**) was failing.
 - **Fix**: 
-    - Moved resolution from MPV to the Python backend (`url_analyzer.py`).
-    - Fixed **400 Bad Request** by disabling HLS keepalive (`http_persistent=0`).
-    - Fixed **403 Forbidden** by extracting browser cookies (Brave) and synchronizing the **User-Agent** between `yt-dlp` and `mpv`.
-    - Resolution is handled via `adaptive_headers.lua` injecting `cookies-file`.
+    - **Syntax**: Forced `konsole` to use `-e` (Classic mode).
+    - **Environment**: Sanitized environment in `mpv_session.py` to remove conflicting variables before launch.
+    - **Behavior**: Standard `--terminal` flag now auto-closes the window when MPV exits.
+    - **Path Resolution**: Updated `services.py` to use absolute paths.
 
-### 3. ID-Based Deduplication
-- **Improvement**: Switched deduplication from URL-based to ID-based.
-- **Fix**: Updated `native_host_handlers.py` and `mpv_session.py` (`append`/`append_batch`) to prevent duplicate entries when hitting play multiple times on the same folder.
+### 7. Force Terminal Setting (✅ ADDED)
+- **Feature**: Added a dedicated "Always show terminal" checkbox in the extension settings.
+- **Behavior**: 
+    - Unconditionally forces MPV into a terminal.
+    - **Hold Logic**: Unlike the standard flag, the "Force Terminal" setting keeps the terminal window open (using `--hold` or a sleep wrapper) after MPV exits, which is useful for seeing final output or debugging.
 
-### 4. Performance: Parallel Resolution
-- **Improvement**: Initial playback launch was slow because `yt-dlp` was resolving URLs one-by-one.
-- **Fix**: Implemented `ThreadPoolExecutor` in `mpv_session.py` and `native_host_handlers.py` to resolve all playlist items in parallel.
+### 8. IPC Command Fix: playlist-item-set (✅ FIXED)
 
-### 5. Persistent M3U Server
-- **Issue**: Switching folders caused "Failed to start local M3U server" due to port 8000 being locked by leaked processes.
-- **Fix**: 
-    - Refactored server into a **Persistent Singleton**. It now stays alive and watches a stable file on disk.
-    - Added **Suicide Watch** to `playlist_server.py` so it kills itself if the Host dies.
-    - Implemented **Auto-Switching** logic in `mpv_session.py` to close old instances when a new folder is played.
+### 9. Standard Flow Settings Propagation (✅ FIXED)
+- **Issue**: User preferences (terminal, geometry, flags) were being ignored when playing YouTube playlists because the initial "expansion" call to `mpv_session.start` was missing those parameters.
+- **Fix**: Updated `native_host_handlers.py` to pass all playback parameters to the initial `start` call, ensuring that direct launches (Standard Flow) respect user settings.
 
-### 6. YouTube Playlist Expansion
-- **Improvement**: YouTube playlist URLs only added one item with a generic name.
-- **Fix**: Updated `url_analyzer.py` to use `yt-dlp --flat-playlist` to expand URLs into individual items with correct titles.
-
-### 7. Thumbnailer Bug Patch
-- **Issue**: User's external thumbnailer script had a syntax error (passing `--playlist` after the `--` separator).
-- **Fix**: Created `mpv_scripts/fix_thumbnailer_playlist.lua` to intercept and correct the command-line arguments on the fly.
-
-## ⚠️ Important Environment Info
-- **OS**: Arch Linux
-- **Python**: 3.13 (Bytecode generation disabled via `sys.dont_write_bytecode`).
-- **MPV Build**: `v0.40.0-dirty` - **Missing `edl` support**.
-- **Current Recommendation**: User is falling asleep. Next step is to verify if reinstalling `mpv` or installing `mpv-git` restores `edl` support. If it does, many of the manual "External Resolution" workarounds in `url_analyzer.py` can be reverted to use native `ytdl` hooks for better quality.
+## ⚠️ Environment Info
+- **OS**: Linux (Brave/Konsole environment)
+- **MPV**: v0.41.0 (Arch Linux)
+- **yt-dlp**: 2025.12.08
 
 ## 📂 Key Files Modified
-- `mpv_session.py`: Launch logic, parallel enrichment, auto-switching.
-- `services.py`: Command building, 8-tuple resolution return.
-- `utils/url_analyzer.py`: YouTube expansion and external resolution.
-- `utils/native_host_handlers.py`: Persistent server management and sync logic.
-- `mpv_scripts/adaptive_headers.lua`: Header/Cookie/Keepalive injection.
-- `mpv_scripts/fix_thumbnailer_playlist.lua`: Subprocess interception.
-- `playlist_server.py`: Added suicide watch and persistence support.
+- `mpv_session.py`: Optimized for background resolution and completion detection.
+- `background/handlers/playback.js`: Fixed switch confirmation and authoritative clearing.
+- `utils/url_analyzer.py`: Optimized for direct streams and YouTube expansion.
+- `data/on_completion.lua`: Improved end-of-playlist detection.
+- `services.py`: Expanded terminal support (Currently failing).
