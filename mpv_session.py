@@ -208,6 +208,18 @@ class MpvSessionManager:
             threading.Thread(target=cleanup, daemon=True).start()
 
             if res and res.get("error") == "success":
+                # If MPV is currently idle (e.g. finished the playlist), 
+                # appending won't automatically start playback. We force it.
+                idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]})
+                if idle_resp and idle_resp.get("data") == True:
+                    logging.info("MPV is idle. Forcing playback to start after append.")
+                    self.ipc_manager.send({"command": ["set_property", "pause", False]})
+                    self.ipc_manager.send({"command": ["playlist-next", "weak"]})
+                
+                # Show OSD feedback
+                msg = f"Appended {len(items)} new item{'s' if len(items) > 1 else ''}"
+                self.ipc_manager.send({"command": ["show-text", msg, 3000]})
+                
                 return {"success": True, "message": f"Appended {len(items)} items to active session."}
             else:
                 raise RuntimeError(f"MPV rejected loadlist command: {res}")
@@ -372,7 +384,17 @@ class MpvSessionManager:
                 logging.info(f"Registered options for {len(self.playlist)} items with adaptive_headers.lua")
 
             # Now start playback of the actual URL
-            self.ipc_manager.send({"command": ["loadfile", url_item['url'], "replace"]})
+            loadfile_opts = {}
+            if settings.get('enable_precise_resume') and url_item.get('resume_time'):
+                resume_time = url_item.get('resume_time')
+                if resume_time > 0:
+                    logging.info(f"Precise Resume: Resuming from {resume_time}s.")
+                    loadfile_opts["start"] = f"{resume_time}"
+
+            if loadfile_opts:
+                self.ipc_manager.send({"command": ["loadfile", url_item['url'], "replace", loadfile_opts]})
+            else:
+                self.ipc_manager.send({"command": ["loadfile", url_item['url'], "replace"]})
 
             self.pid = self.process.pid
             self.owner_folder_id = folder_id
@@ -675,16 +697,27 @@ class MpvSessionManager:
         if self.pid and not ipc_utils.is_process_alive(self.pid, self.ipc_path):
             self.clear()
 
+        # Generate the enriched M3U content for the caller (Step 1 completion)
+        enriched_m3u_lines = ["#EXTM3U"]
+        for item in _url_items_list:
+            enriched_m3u_lines.append(f"#EXTINF:-1,{item.get('title', item['url'])}")
+            enriched_m3u_lines.append(item['url'])
+        enriched_m3u_content = "\n".join(enriched_m3u_lines)
+
+        # Check if we should skip the launch because the session is already active
+        if self.pid and folder_id == self.owner_folder_id:
+            logging.info(f"MPV session for folder '{folder_id}' already active. Skipping launch but returning enriched data for sync.")
+            return {
+                "success": True, 
+                "message": "MPV session already active.", 
+                "already_active": True,
+                "enriched_url_items": _url_items_list,
+                "enriched_m3u_content": enriched_m3u_content
+            }
+        
+        # If it's a DIFFERENT folder, we MUST close the old one before launching new
         if self.pid:
-            if folder_id == self.owner_folder_id:
-                return {
-                    "success": True, 
-                    "message": "MPV session already active.", 
-                    "already_active": True,
-                    "enriched_url_items": _url_items_list
-                }
-            else:
-                self.close()
+            self.close()
 
         h, d, y, u, i = get_opts(launch_item)
         logging.info(f"Launching MPV with item 1/{len(_url_items_list)}: {launch_item.get('title', 'Unknown')}")

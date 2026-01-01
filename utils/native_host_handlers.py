@@ -278,8 +278,10 @@ class HandlerManager:
         url_items, _ = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
         logging.debug(f"handle_append: items after processing: {url_items}")
 
-        # Always use append_batch even for single items to ensure consistent 
-        # title/metadata handling via the temporary M3U mechanism.
+        # NOTE FOR FUTURE EDITORS: We always use 'append_batch' (M3U method) even for single items.
+        # This is because 'loadlist' on a temporary M3U is the only IPC mechanism that forces 
+        # MPV to accept our custom titles via #EXTINF. Simple 'loadfile' calls will fail to 
+        # show titles. Do not "optimize" this to a single append call.
         return self.mpv_session.append_batch(url_items)
 
     def _launch_unmanaged_mpv(self, playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags):

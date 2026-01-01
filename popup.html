@@ -246,6 +246,10 @@
                                     <label for="enable-smart-resume-checkbox" class="settings-label">Enable Smart Resume:</label>
                                     <input type="checkbox" id="enable-smart-resume-checkbox" class="settings-checkbox" title="If checked, the extension will reorder the playlist to start with the last-played item. Enhances '--save-position-on-quit'.">
                                 </div>
+                                <div class="control-group" data-setting-name="enable precise resume">
+                                    <label for="enable-precise-resume-checkbox" class="settings-label">Enable Precise Resume:</label>
+                                    <input type="checkbox" id="enable-precise-resume-checkbox" class="settings-checkbox" title="If checked, the extension will track the exact timestamp (time) of your playback and forcefully resume from that second on next launch.">
+                                </div>
                                 <div class="control-group" data-setting-name="highlight active item">
                                     <label for="enable-active-highlight-checkbox" class="settings-label">Highlight active item:</label>
                                     <input type="checkbox" id="enable-active-highlight-checkbox" class="settings-checkbox" title="If checked, the currently playing item will be highlighted in green in the playlist.">
@@ -285,6 +289,14 @@
                                 <div class="control-group" data-setting-name="one-click add">
                                     <label for="one-click-add-checkbox" class="settings-label">One-click Add:</label>
                                     <input type="checkbox" id="one-click-add-checkbox" class="settings-checkbox" title="If checked, the context menu will have a direct option to add to the last used folder.">
+                                </div>
+                                <div class="control-group" data-setting-name="auto-append on add">
+                                    <label for="auto-append-on-add-checkbox" class="settings-label">Add to Active Player Automatically:</label>
+                                    <input type="checkbox" id="auto-append-on-add-checkbox" class="settings-checkbox" title="If checked, when you click 'Add' while MPV is already playing that folder, the new item will be sent to the player immediately.">
+                                </div>
+                                <div class="control-group" data-setting-name="live removal">
+                                    <label for="live-removal-checkbox" class="settings-label">Remove from Active Player Automatically:</label>
+                                    <input type="checkbox" id="live-removal-checkbox" class="settings-checkbox" title="If checked, removing an item from the extension's playlist while it is playing in MPV will also remove it from the player's internal playlist.">
                                 </div>
                                 <div class="control-group" data-setting-name="scanner timeout">
                                     <label for="scanner-timeout-input" class="settings-label">Scanner Timeout (s):</label>
