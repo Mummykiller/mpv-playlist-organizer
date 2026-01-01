@@ -74,51 +74,52 @@ try:
     import platform
     import re
     import uuid # Added for UUID generation
+    from logging.handlers import RotatingFileHandler
+
+    # --- Path Correction for CLI Usage ---
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+    # --- Configuration ---
+    import file_io
+    DATA_DIR = file_io.DATA_DIR
+    LOG_FILE = os.path.join(DATA_DIR, "native_host.log")
+    MAX_LOG_BYTES = 1024 * 1024 * 5 # 5 MB
+    BACKUP_COUNT = 1
+
+    # --- Logging Setup (Must be done BEFORE starting any threads) ---
+    os.makedirs(DATA_DIR, exist_ok=True)
+    root_logger = logging.getLogger()
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+    root_logger.setLevel(logging.DEBUG)
+    
+    # Use standard RotatingFileHandler
+    handler = RotatingFileHandler(LOG_FILE, maxBytes=MAX_LOG_BYTES, backupCount=BACKUP_COUNT, encoding='utf-8')
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    root_logger.addHandler(handler)
+
+    # Prevent logs from propagating to the console (important for clean CLI)
+    root_logger.propagate = False
+
     from mpv_session import MpvSessionManager
     from playlist_tracker import PlaylistTracker
-    import file_io
     import cli
     import services
     from utils import ipc_utils
     from utils.native_host_handlers import HandlerManager
     from utils.janitor import Janitor
-    from logging.handlers import RotatingFileHandler
 
-    # --- Function to get the appropriate user data directory ---
-    def get_user_data_dir():
-        """Returns a platform-specific, user-writable directory for app data."""
-        return file_io.get_user_data_dir()
-
-    # --- Configuration ---
-    DATA_DIR = file_io.DATA_DIR
-    LOG_FILE = os.path.join(DATA_DIR, "native_host.log")
-    MAX_LOG_BYTES = 1024 * 1024 * 5 # 5 MB
-    BACKUP_COUNT = 1
     SESSION_FILE = os.path.join(DATA_DIR, "session.json")
     ANILIST_CACHE_FILE = os.path.join(DATA_DIR, "anilist_cache.json")
     TEMP_PLAYLISTS_DIR = os.path.join(DATA_DIR, "temp_playlists")
 
-    # Ensure the data directory exists before running janitor or setup
-    os.makedirs(DATA_DIR, exist_ok=True)
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-
     # --- Run Janitor Startup Sweep (Threaded) ---
     # This rotates logs, wipes temp files, and cleans up stale IPC/pycache.
-    # We run it in a thread to avoid blocking the initial native messaging handshake.
+    # Now that logging is configured, its output will go to the file.
     janitor = Janitor(DATA_DIR, TEMP_PLAYLISTS_DIR)
     janitor_thread = threading.Thread(target=janitor.run_startup_sweep, kwargs={'extension_root': SCRIPT_DIR}, daemon=True)
     janitor_thread.start()
-
-    root_logger = logging.getLogger()
-    if root_logger.hasHandlers():
-        root_logger.handlers.clear()
-    root_logger.setLevel(logging.DEBUG) # Changed to DEBUG for better visibility
-    
-    # Use standard RotatingFileHandler instead of custom TrimmingFileHandler
-    handler = RotatingFileHandler(LOG_FILE, maxBytes=MAX_LOG_BYTES, backupCount=BACKUP_COUNT, encoding='utf-8')
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    root_logger.addHandler(handler)
 
     def log_stream(stream, log_level, owner_folder_id):
         """Reads from a stream line by line and logs it."""
@@ -200,6 +201,11 @@ try:
 
     def cleanup_ipc_socket(session_manager):
         """Remove the IPC socket file on exit, if it exists (non-Windows)."""
+        # Check if the MPV process is still running. If so, preserve the socket for reconnection.
+        if session_manager.pid and ipc_utils.is_pid_running(session_manager.pid):
+             logging.info(f"Preserving IPC socket {session_manager.ipc_path} because MPV (PID {session_manager.pid}) is still running.")
+             return
+
         if session_manager.ipc_path and platform.system() != "Windows":
             ipc_dir = os.path.dirname(session_manager.ipc_path)
             if os.path.exists(session_manager.ipc_path):
