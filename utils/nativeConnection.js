@@ -93,6 +93,7 @@ function connectToNativeHost() {
         dependencies.broadcastLog({ text: `[Background]: Successfully connected to native host.`, type: 'info' });
         
         // Trigger session restoration immediately upon connection
+        dependencies.broadcastLog({ text: `[Background]: Sending session restoration handshake...`, type: 'info' });
         nativePort.postMessage({ action: 'restore_session' });
         
         resolve();
