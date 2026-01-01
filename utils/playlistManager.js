@@ -118,7 +118,20 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
         await storage.set(data);
         debouncedSyncToNativeHostFile();
 
-        broadcastToTabs({ action: 'render_playlist', folderId: folderId, playlist: data.folders[folderId].playlist, fromContextMenu: true });
+        broadcastToTabs({ 
+            action: 'render_playlist', 
+            folderId: folderId, 
+            playlist: data.folders[folderId].playlist, 
+            last_played_id: data.folders[folderId].last_played_id,
+            fromContextMenu: true 
+        });
+
+        // Attempt to append to live MPV session if running
+        callNativeHost({ 
+            action: 'append', 
+            url_item: newItem, 
+            folderId: folderId 
+        }).catch(() => {});
 
         const logMessage = `[Background]: Added "${title}" to folder '${folderId}'.`;
 
@@ -245,12 +258,18 @@ export async function handleClear(request) {
 export async function handleRemoveItem(request) {
     const data = await storage.get();
     const playlist = data.folders[request.folderId].playlist;
+    const last_played_id = data.folders[request.folderId].last_played_id;
     const indexToRemove = request.data?.index;
     if (typeof indexToRemove === 'number' && indexToRemove >= 0 && indexToRemove < playlist.length) {
         const itemToRemove = playlist[indexToRemove];
         playlist.splice(indexToRemove, 1);
         await storage.set(data);
-        broadcastToTabs({ action: 'render_playlist', folderId: request.folderId, playlist: playlist });
+        broadcastToTabs({ 
+            action: 'render_playlist', 
+            folderId: request.folderId, 
+            playlist: playlist,
+            last_played_id: last_played_id
+        });
         debouncedSyncToNativeHostFile();
 
         // Attempt to remove from live MPV session if running
@@ -303,6 +322,6 @@ export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
 
 export async function handleGetPlaylist(request) {
     const data = await storage.get();
-    const folder = data.folders[request.folderId] || { playlist: [] };
-    return { success: true, list: folder.playlist };
+    const folder = data.folders[request.folderId] || { playlist: [], last_played_id: null };
+    return { success: true, list: folder.playlist, last_played_id: folder.last_played_id };
 }

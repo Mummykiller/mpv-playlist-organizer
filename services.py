@@ -225,18 +225,30 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func):
 # --- MPV Command Construction ---
 
 class MpvCommandBuilder:
-    def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False):
+    def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False, is_youtube=False, settings=None):
         self.mpv_exe = mpv_exe
-        self.mpv_args = [
-            mpv_exe,
-            '--cache=yes',
-            '--demuxer-max-bytes=1G',
-            '--demuxer-max-back-bytes=500M',
-            '--cache-secs=300',
-            '--demuxer-readahead-secs=300',
-            '--stream-buffer-size=5M',
-            '--save-position-on-quit'
-        ]
+        self.mpv_args = [mpv_exe]
+        self.settings = settings
+        
+        if settings:
+            # Apply dynamic networking and buffering flags from settings
+            # Skip if user has requested to use MPV's native defaults
+            if not settings.get('disable_network_overrides', False):
+                cache_enabled = settings.get('enable_cache', True)
+                self.mpv_args.append(f"--cache={'yes' if cache_enabled else 'no'}")
+                
+                if cache_enabled:
+                    if settings.get('demuxer_max_bytes'):
+                        self.mpv_args.append(f"--demuxer-max-bytes={settings['demuxer_max_bytes']}")
+                    if settings.get('demuxer_max_back_bytes'):
+                        self.mpv_args.append(f"--demuxer-max-back-bytes={settings['demuxer_max_back_bytes']}")
+                    if settings.get('cache_secs'):
+                        self.mpv_args.append(f"--cache-secs={settings['cache_secs']}")
+                    if settings.get('demuxer_readahead_secs'):
+                        self.mpv_args.append(f"--demuxer-readahead-secs={settings['demuxer_readahead_secs']}")
+                    if settings.get('stream_buffer_size'):
+                        self.mpv_args.append(f"--stream-buffer-size={settings['stream_buffer_size']}")
+            
         self.has_terminal_flag = False
         self.is_forced_terminal = False
         self.url = None
@@ -315,8 +327,20 @@ class MpvCommandBuilder:
         return self
 
     def with_disable_http_persistent(self, disable_http_persistent):
-        if disable_http_persistent:
-            self.mpv_args.append('--demuxer-lavf-o=http_persistent=0')
+        # Only apply if not overridden by global networking toggle
+        if not (hasattr(self, 'settings') and self.settings and self.settings.get('disable_network_overrides', False)):
+            mode = self.settings.get('http_persistence', 'auto') if self.settings else 'auto'
+            
+            if mode == 'on':
+                # Force persistence ON (do not add the disable flag)
+                pass 
+            elif mode == 'off':
+                # Force persistence OFF
+                self.mpv_args.append('--demuxer-lavf-o=http_persistent=0')
+            else:
+                # 'auto': follow site-specific recommendation
+                if disable_http_persistent:
+                    self.mpv_args.append('--demuxer-lavf-o=http_persistent=0')
         return self
 
     def with_start_paused(self, start_paused):
@@ -327,7 +351,18 @@ class MpvCommandBuilder:
     def with_custom_flags(self, custom_mpv_flags):
         if custom_mpv_flags:
             try:
-                self.mpv_args.extend(shlex.split(custom_mpv_flags))
+                # Handle new format: List of objects [{flag: "--x", enabled: true}, ...]
+                if isinstance(custom_mpv_flags, list):
+                    for flag_info in custom_mpv_flags:
+                        if isinstance(flag_info, dict) and flag_info.get('enabled', True):
+                            flag = flag_info.get('flag')
+                            if flag:
+                                self.mpv_args.extend(shlex.split(flag))
+                        elif isinstance(flag_info, str):
+                            self.mpv_args.extend(shlex.split(flag_info))
+                # Handle legacy format: Plain string
+                elif isinstance(custom_mpv_flags, str):
+                    self.mpv_args.extend(shlex.split(custom_mpv_flags))
             except Exception as e:
                 logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
         return self
@@ -337,6 +372,11 @@ class MpvCommandBuilder:
             self.mpv_args.append(f'--geometry={custom_width}x{custom_height}')
         elif geometry:
             self.mpv_args.append(f'--geometry={geometry}')
+        return self
+    
+    def with_playlist_start(self, index):
+        if index is not None and index > 0:
+            self.mpv_args.append(f'--playlist-start={index}')
         return self
     
     def with_idle(self, idle=True):
@@ -457,14 +497,17 @@ def construct_mpv_command(
     title=None,
     use_ytdl_mpv=False,
     is_youtube_override=False,
-    idle=False, # Added parameter
-    force_terminal=False
+    idle=False,
+    force_terminal=False,
+    settings=None # Added parameter
 ):
     """Constructs the MPV command line arguments using MpvCommandBuilder."""
     builder = MpvCommandBuilder(
         mpv_exe=mpv_exe,
         use_ytdl_mpv=use_ytdl_mpv,
-        is_youtube_override=is_youtube_override
+        is_youtube_override=is_youtube_override,
+        is_youtube=is_youtube,
+        settings=settings
     ) \
         .with_ipc_path(ipc_path) \
         .with_url(url) \

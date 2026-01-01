@@ -377,6 +377,22 @@ select:focus-visible {
     cursor: default; /* Indicate not clickable */
 }
 
+/* --- Highlighting the active (last played) item --- */
+.list-item.active-item {
+    background-color: rgba(87, 242, 135, 0.1); /* Very faint green tint */
+    border-color: var(--accent-success);
+    box-shadow: inset 0 0 4px rgba(87, 242, 135, 0.2);
+}
+
+.list-item.active-item .url-index {
+    color: var(--accent-success);
+    font-weight: 700;
+}
+
+.list-item.active-item:hover {
+    background-color: rgba(87, 242, 135, 0.2);
+}
+
 .url-index {
     color: var(--text-secondary);
     font-family: var(--font-mono);

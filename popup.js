@@ -451,34 +451,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     /**
      * Fetches the playlist for a given folder and renders it.
      */
-    function refreshPlaylist() {
+    async function refreshPlaylist() {
         const folderId = miniFolderSelect.value;
-        if (!folderId) {
-            renderPlaylist([]); // Render an empty state
-            return;
+        if (!folderId) return;
+
+        const response = await sendMessageAsync({ action: 'get_playlist', folderId });
+        if (response?.success) {
+            renderPlaylist(response.list, response.last_played_id);
         }
-        sendMessageAsync({ action: 'get_playlist', folderId }).then(response => {
-            if (response?.success) {
-                renderPlaylist(response.list);
-            }
-        });
     }
 
     /**
      * Renders the playlist items in the popup's playlist container.
      * @param {Array<object>} playlist The array of playlist items.
      */
-    function renderPlaylist(playlist) {
+    async function renderPlaylist(playlist, lastPlayedId) {
         const oldItemCount = playlistContainer.querySelectorAll('.list-item').length;
         const scrollPosition = playlistContainer.scrollTop;
 
         playlistContainer.innerHTML = ''; // Clear existing content
         miniItemCountSpan.textContent = playlist?.length || 0;
 
+        const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
+        const highlightEnabled = prefsResponse?.preferences?.enable_active_item_highlight ?? true;
+
         if (playlist && playlist.length > 0) {
             playlist.forEach((item, index) => {
                 const itemDiv = document.createElement('div');
                 itemDiv.className = 'list-item';
+                if (highlightEnabled && lastPlayedId && item.id === lastPlayedId) {
+                    itemDiv.classList.add('active-item');
+                }
                 itemDiv.draggable = true;
                 itemDiv.title = item.url;
                 itemDiv.dataset.url = item.url;
@@ -1166,7 +1169,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const isMiniView = miniControllerView.style.display === 'flex';
             const currentFolderId = miniFolderSelect.value;
             if (isMiniView && currentFolderId === request.folderId) {
-                renderPlaylist(request.playlist);
+                renderPlaylist(request.playlist, request.last_played_id);
             }
         }
 

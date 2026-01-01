@@ -278,32 +278,9 @@ class HandlerManager:
         url_items, _ = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
         logging.debug(f"handle_append: items after processing: {url_items}")
 
-        if len(url_items) > 1:
-            # It's a playlist, append everything as a batch
-            return self.mpv_session.append_batch(url_items)
-        
-        # Single item logic
-        url_item = url_items[0]
-        disable_http_persistent = url_item.get('disable_http_persistent', False)
-        
-        # Retry logic for append to handle transient IPC busy states
-        max_retries = 3
-        for attempt in range(max_retries):
-            response = self.mpv_session.append(
-                url_item, 
-                headers=url_item.get('headers'), 
-                mode="append", 
-                disable_http_persistent=disable_http_persistent, 
-                ytdl_raw_options=url_item.get('ytdl_raw_options'), 
-                use_ytdl_mpv=url_item.get('use_ytdl_mpv', False), 
-                is_youtube=url_item.get('is_youtube', False)
-            )
-            if response and response.get("success"):
-                return response
-            logging.warning(f"Append failed (attempt {attempt+1}/{max_retries}). Retrying in 0.5s...")
-            time.sleep(0.5)
-            
-        return {"success": False, "error": "Failed to append to MPV playlist after retries."}
+        # Always use append_batch even for single items to ensure consistent 
+        # title/metadata handling via the temporary M3U mechanism.
+        return self.mpv_session.append_batch(url_items)
 
     def _launch_unmanaged_mpv(self, playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags):
         """Helper to launch unmanaged MPV, moved from native_host.py."""
@@ -427,7 +404,11 @@ class HandlerManager:
         return {"success": True, "flags": [
             {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
             {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
-            {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True}
+            {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True},
+            {"flag": "--hwdec=auto", "description": "Enable hardware video decoding.", "enabled": True},
+            {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
+            {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
+            {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
         ]}
 
     def _start_local_m3u_server(self, m3u_content):

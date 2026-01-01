@@ -1,82 +1,73 @@
-# MPV Playlist Organizer - Session Handoff (Dec 31, 2025 - Turn 2)
+# MPV Playlist Organizer - Session Handoff (Jan 1, 2026 - Turn 1)
 
-## 🛠 Fixes & Refactors Implemented
+## 📂 Recent Structural Changes
+- **Searchable UI**: Settings now support `data-section-name` and `data-setting-name` attributes for live filtering.
+- **Improved Settings Model**: Custom MPV flags are now stored as objects `{flag: string, enabled: boolean}` to allow toggling without deletion.
 
-### 1. Robust Folder Switch Confirmation (✅ FIXED)
-- **Status**: Feature is now reliable and verified.
-- **Improvements**:
-    - **Fallback Prompting**: Added logic to send the confirmation prompt to the **active browser tab** if the extension popup is closed.
-    - **Race Condition Fixes**: Improved MPV status detection to prevent accidental bypasses due to communication lags.
-    - **Double Prompt Fix**: Refactored `handlePlay` to ensure only one prompt appears when starting folder playback.
+## 🛠 Features & Reworks Implemented
 
-### 2. Optimized YouTube Playlist Support (✅ FIXED)
-- **Logic**: Implemented a "Titles First, Resolve Later" strategy.
-- **Result**: 
-    - **Instant Titles**: Webpage URLs and titles are batch-appended immediately for instant visibility in the MPV playlist.
-    - **Fast Launch**: The first item resolves and starts playing right away.
-    - **Background Resolution**: Subsequent items are resolved individually in a background thread, and their URLs are updated in MPV via IPC.
-    - **Failover**: Unresolved items use MPV's internal YTDL hook if the user skips ahead before background resolution finishes.
+### 1. Advanced Networking Controls (✅ COMPLETED)
+- **Master Override**: Added "Disable all overrides" toggle. When enabled, the extension stops passing custom buffer/cache/persistence flags, letting MPV use its native defaults.
+- **HTTP Persistence**: Added a dedicated setting (Auto, Always On, Always Off). 
+    - *Auto*: Uses site-specific stability logic (e.g., disabled for YouTube/Animepahe).
+    - *Manual*: Forces connection reuse on or off globally.
+- **Full Stack Sync**: Updated `services.py`, `mpv_session.py`, `adaptive_headers.lua`, and the Popup UI to respect these new toggles.
 
-### 3. Extension as Absolute Source of Truth (✅ FIXED)
-- **Refactor**: Removed all destructive "Full Resync" logic that previously allowed the Python backend to overwrite the user's UI state.
-- **Clearing Logic**: The "Clear on Completion" feature now lives entirely in the Extension (`playback.js`), triggering only on natural completion (Exit Code 99) if enabled by the user.
+### 2. UI Precision & Alignment (✅ COMPLETED)
+- **The 85% Rule**: All settings checkboxes and the new section reload icons are now perfectly aligned at **85% width from the left**.
+- **Reload Icons**: Replaced the bulky "Force Reload Settings" button with subtle sync icons in every section header. 
+- **Visual Feedback**: 
+    - Reload icons spin and turn green during synchronization.
+    - Keybind recorder pulses red while listening for input.
+    - Search results are highlighted with a subtle blue background.
 
-### 4. AnimePahe & Direct Stream Performance (✅ FIXED)
-- **Fix**: Updated `url_analyzer.py` to recognize direct `.m3u8` and `.mp4` links.
-- **Result**: Bypasses slow `yt-dlp` resolution for already-direct streams, resulting in near-instant loading for AnimePahe vault links.
+### 3. Settings Search & Navigation (✅ ADDED)
+- **Search-to-Top**: Added a search bar at the top of the settings. Typing a keyword (e.g., "buffer") instantly pulls matching sections and individual settings to the top of the list.
+- **Auto-Expansion**: Matching sections automatically expand during search.
 
-### 5. Natural Completion Detection (✅ FIXED)
-- **Fixes**:
-    - **Lua Script**: Updated `on_completion.lua` to handle `playlist-pos: -1` and correctly identify end-of-playlist states.
-    - **Python Backend**: Added a robust fallback that checks for a physical `.flag` file written by Lua to override the exit code to 99 if MPV exits with 0.
+### 4. Keybinding Overhaul (✅ ADDED)
+- **Keybind Recorder**: Users no longer type combinations manually. A "Record" button now listens for the next keypress combo (e.g., `Ctrl+Shift+X`) and saves it in the correct format.
+- **New Shortcut**: Added "Play Selected Playlist" keybind (default: `Shift+P`) to trigger playback from anywhere on the page.
 
-### 6. Terminal Launch (✅ FIXED)
-- **Issue**: Support for launching MPV in a visible terminal (specifically **Konsole**) was failing.
-- **Fix**: 
-    - **Syntax**: Forced `konsole` to use `-e` (Classic mode).
-    - **Environment**: Sanitized environment in `mpv_session.py` to remove conflicting variables before launch.
-    - **Behavior**: Standard `--terminal` flag now auto-closes the window when MPV exits.
-    - **Path Resolution**: Updated `services.py` to use absolute paths.
+### 5. MPV Flag Management (✅ OPTIMIZED)
+- **Distinct Colors**: Custom flags are now **Blue**, and Automatic flags are **Green**.
+- **Interactions**: 
+    - Single-click: Toggle (Enable/Disable).
+    - Double-click: Remove (Custom flags only).
+- **Suggestions**: Added a datalist of common safe MPV flags to the input box.
 
-### 7. Force Terminal Setting (✅ ADDED)
-- **Feature**: Added a dedicated "Always show terminal" checkbox in the extension settings.
-- **Behavior**: 
-    - Unconditionally forces MPV into a terminal.
-    - **Hold Logic**: Unlike the standard flag, the "Force Terminal" setting keeps the terminal window open (using `--hold` or a sleep wrapper) after MPV exits, which is useful for seeing final output or debugging.
-
-### 8. IPC Command Fix: playlist-item-set (✅ FIXED)
-
-### 9. Standard Flow Settings Propagation (✅ FIXED)
-- **Issue**: User preferences (terminal, geometry, flags) were being ignored when playing YouTube playlists because the initial "expansion" call to `mpv_session.start` was missing those parameters.
-- **Fix**: Updated `native_host_handlers.py` to pass all playback parameters to the initial `start` call, ensuring that direct launches (Standard Flow) respect user settings.
-
-### 10. Animepahe Reliability & Performance (✅ OPTIMIZED)
-- **Issue**: Some Animepahe streams were failing to load or loading very slowly due to frequent "End of file" errors and slow reconnect cycles.
-- **Fixes**:
-    - **Reliability**: Enabled `disable_http_persistent` specifically for Animepahe URLs. This fixes the "failed to load" issue by forcing a new connection for each HLS segment.
-    - **Recovery Speed**: Reduced `reconnect_delay_max` from 5s to 2s in `adaptive_headers.lua` for faster error recovery.
-    - **Multithreading**: Enabled `hls_segment_parallel_downloads=8` within `adaptive_headers.lua` (FFmpeg demuxer option). This provides a high-speed download experience.
-    - **Aggressive Buffering**: Increased default cache and buffer sizes (`--demuxer-max-bytes=1G`, `--cache-secs=300`, `--stream-buffer-size=5M`) to ensure smooth playback and high-speed readahead.
-
-### 11. IPC Robustness & Deadlock Fix (✅ FIXED)
-- **Issue**: Intermittent "Failed to connect to MPV IPC" errors, especially during terminal launches.
-- **Root Causes**: 
-    1. **Deadlock**: The MPV process could hang on startup if its stdout/stderr pipe buffer filled up before the Python backend started reading it (which was happening *after* the IPC connection attempt).
-    2. **Timeout**: 10 seconds was sometimes insufficient for slow terminal emulators to initialize MPV.
-- **Fixes**:
-    - **Buffer Draining**: Moved the log reader thread (`stderr_thread`) to start **before** the IPC connection attempt, ensuring the process never hangs on a full pipe.
-    - **Increased Timeout**: Increased the connection timeout to 15 seconds.
-    - **Resilient Retry**: Updated `IPCSocketManager.connect` to be more resilient to transient errors during the retry loop.
-
-## ⚠️ Environment Info
-- **OS**: Linux (Brave/Konsole environment)
-- **MPV**: v0.41.0 (Arch Linux)
-- **yt-dlp**: 2025.12.08
+### 6. Visual Button Differentiation (✅ ADDED)
+- **Semantic Coloring**: 
+    - **Export**: Blue (`--accent-export`).
+    - **Import**: Teal (`--accent-import`).
+    - **Open Folder**: Neutral Gray (`--accent-folder`).
+- **Prominent Controls**: The "Show/Hide On-Page Controller" buttons now feature vibrant linear gradients and enhanced hover shadows to stand out as primary actions.
 
 ## 📂 Key Files Modified
-- `mpv_session.py`: Optimized for background resolution, completion detection, and deadlock prevention.
-- `background/handlers/playback.js`: Fixed switch confirmation and authoritative clearing.
-- `utils/url_analyzer.py`: Optimized for direct streams and YouTube expansion.
-- `services.py`: Expanded terminal support (Konsole optimized) and robust path resolution.
-- `utils/ipc_utils.py`: Improved IPC connection resilience and timeout handling.
-- `mpv_scripts/adaptive_headers.lua`: Implemented parallel HLS downloads and fast recovery.
+... (omitted for brevity) ...
+
+## 💡 Technical Implementation Notes (For the next agent)
+
+### 1. The Search-to-Top Logic
+- **Mechanism**: The search feature in `settings.js` does not hide elements. Instead, it calculates a "relevance score" for each section based on `data-section-name` and `data-setting-name` attributes. 
+- **Reordering**: Sections are detached and re-appended to the `settings-sections-wrapper` using `appendChild` in order of their score. 
+- **UX**: Matching sections are automatically set to `open=true` and given a `box-shadow` highlight.
+
+### 2. UI Alignment (The "85% Rule")
+- **Layout**: Checkboxes and reload buttons are vertically aligned using `position: absolute; left: 85%; transform: translateX(-50%);`.
+- **Constraint**: The parent `.control-group` or `summary` must be `position: relative`. 
+- **Safety**: Labels have a `max-width: 75%` and `text-overflow: ellipsis` to prevent collision with the absolute-positioned controls on small screens.
+
+### 3. Keybind Recorder
+- **Format**: Combinations are stored as standardized strings (e.g., `Ctrl+Shift+A`). 
+- **Listening**: Uses a capture-phase `keydown` listener. It prevents default browser actions (like `Ctrl+S` saving the page) while the recorder is active.
+- **Forbidden Keys**: Modifiers alone (`Shift`, `Alt`, etc.) do not trigger a save; it waits for a non-modifier key.
+
+### 4. Custom MPV Flag Objects
+- **Storage Change**: `custom_mpv_flags` was previously a string. It is now an **Array of Objects**: `[{ "flag": "--x", "enabled": true }, ...]`. 
+- **Backend Compatibility**: `services.py` has been updated with a fallback to handle both the new list format and legacy strings seamlessly.
+
+### 5. HTTP Persistence Logic
+- **Precedence**: Site-specific overrides in `url_analyzer.py` (which set `disable_http_persistent: true`) are now **lowest priority**.
+- **User Choice**: If the user selects "Always On" or "Always Off", that choice overrides the site recommendation.
+- **Master Kill-switch**: If "Disable all overrides" is checked, **all** custom networking logic (including persistence) is skipped entirely.

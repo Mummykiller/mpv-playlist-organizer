@@ -47,7 +47,17 @@ local function write_completion_flag()
     end
 end
 
+local manual_quit = false
+mp.register_script_message("manual_quit_initiated", function()
+    manual_quit = true
+    log("Manual quit initiated from controller. Disabling natural completion flag.")
+end)
+
 local function handle_natural_completion()
+    if manual_quit then
+        log("handle_natural_completion called but manual_quit is true. Aborting.")
+        return
+    end
     log("Natural completion detected. Preparing to exit with code 99.")
     write_completion_flag()
     

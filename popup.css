@@ -19,6 +19,12 @@
     --accent-danger: #ed4245;
     --accent-danger-hover: #da3739;
     --accent-success: #57F287;
+    --accent-export: #3498db;
+    --accent-export-hover: #2980b9;
+    --accent-import: #1abc9c;
+    --accent-import-hover: #16a085;
+    --accent-folder: #44484e;
+    --accent-folder-hover: #565b63;
     --border-hover: #5865f2;
     --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     --font-mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
@@ -71,6 +77,19 @@ input, select {
     font-size: 14px;
     transition: all var(--transition-speed) ease;
     min-width: 0; /* Allows the input to shrink below its default minimum size in a flex container */
+}
+
+/* --- Remove arrows/spinners from number inputs --- */
+/* Chrome, Safari, Edge, Opera */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Firefox */
+input[type=number] {
+  -moz-appearance: textfield;
 }
 
 select {
@@ -204,10 +223,28 @@ button:disabled {
     color: var(--text-secondary);
 }
 
-.icon-button:hover {
-    background-color: var(--bg-tertiary);
-    border-color: var(--accent-primary);
-    color: var(--text-primary);
+.icon-button.recording {
+    color: var(--accent-danger);
+    border-color: var(--accent-danger);
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+.settings-input.recording-active {
+    border-color: var(--accent-danger);
+    color: var(--accent-danger);
+    font-weight: bold;
+}
+
+.control-group, .setting-item {
+    transition: background-color 0.3s ease;
+    padding: 4px;
+    border-radius: var(--radius);
 }
 
 #btn-show-on-page-controller {
@@ -321,7 +358,7 @@ button:disabled {
     color: var(--text-secondary);
 }
 
-/* Style for the secondary action button */
+/* Style for the secondary action button (Base class) */
 .secondary-action {
     background-color: var(--accent-primary);
     border: none;
@@ -330,11 +367,70 @@ button:disabled {
     /* Use flex: 1 to make buttons share space equally in their flex container. */
     flex: 1;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    transition: all var(--transition-speed) ease;
 }
 
 .secondary-action:hover {
     background-color: var(--accent-primary-hover);
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
+    transform: translateY(-1px);
+}
+
+.secondary-action:active {
+    transform: translateY(0);
+}
+
+/* Semantic Overrides */
+.btn-export {
+    background-color: var(--accent-export) !important;
+}
+.btn-export:hover {
+    background-color: var(--accent-export-hover) !important;
+}
+
+.btn-import {
+    background-color: var(--accent-import) !important;
+}
+.btn-import:hover {
+    background-color: var(--accent-import-hover) !important;
+}
+
+.btn-open-folder {
+    background-color: var(--accent-folder) !important;
+}
+.btn-open-folder:hover {
+    background-color: var(--accent-folder-hover) !important;
+}
+
+#btn-show-on-page-controller {
+    margin-top: 12px;
+    background: linear-gradient(135deg, var(--accent-success) 0%, #45a062 100%) !important;
+    color: #000 !important;
+    flex: initial; /* Override flex: 1 from .secondary-action class */
+    padding: 12px;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+    border: 1px solid rgba(0,0,0,0.1);
+}
+#btn-show-on-page-controller:hover {
+    background: linear-gradient(135deg, #6ef79a 0%, #4db36e 100%) !important;
+    box-shadow: 0 6px 16px rgba(87, 242, 135, 0.4);
+    transform: translateY(-2px); /* Lift effect */
+}
+
+#btn-hide-on-page-controller {
+    margin-top: 16px;
+    background: linear-gradient(135deg, var(--accent-primary) 0%, #434dbd 100%) !important;
+    flex: initial;
+    padding: 12px;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+    border: 1px solid rgba(0,0,0,0.1);
+}
+#btn-hide-on-page-controller:hover {
+    background: linear-gradient(135deg, #6975f3 0%, #4f5bda 100%) !important;
+    box-shadow: 0 6px 16px rgba(88, 101, 242, 0.4);
+    transform: translateY(-2px);
 }
 
 /* Additional styles for folder management in mini-controller */
@@ -410,14 +506,18 @@ button:disabled {
 
 /* --- Settings Controls --- */
 .settings-label {
-    white-space: nowrap;
+    white-space: normal; /* Allow text to wrap if it's too long */
     align-self: center;
     color: var(--text-secondary);
-    font-weight: 500; /* Use normal weight for a cleaner look */
-    font-size: 15px; /* Increase font size for better readability */
-    flex-basis: 150px; /* Adjust basis to accommodate larger font */
-    flex-shrink: 0;
-    flex-grow: 0; /* Prevent labels from growing and taking up extra space */
+    font-weight: 500;
+    font-size: 15px;
+    flex-basis: 150px;
+    flex-shrink: 1;
+    flex-grow: 1;
+    max-width: 75%; /* Ensure it doesn't collide with the 85% aligned controls */
+    line-height: 1.3;
+    padding-top: 2px;
+    padding-bottom: 2px;
 }
 
 /* New styles for stacked controls */
@@ -444,13 +544,53 @@ button:disabled {
     flex-grow: 1;
 }
 
+/* --- Networking Section Adjustments --- */
+.networking-small-input {
+    max-width: 100px; /* Make inputs smaller */
+    margin-left: auto; /* Push to the right */
+    text-align: center; /* Center value text */
+    padding: 6px 10px; /* Tighter padding */
+}
+
+.help-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 700;
+    margin-left: 4px;
+    cursor: help;
+    border: 1px solid var(--border-primary);
+    transition: all 0.2s ease;
+}
+
+.help-icon:hover {
+    background-color: var(--accent-primary);
+    color: white;
+    border-color: var(--accent-primary);
+}
+
+.control-group {
+    display: flex;
+    gap: 8px;
+    position: relative; /* For absolute positioning of children like checkboxes */
+}
+
 .settings-checkbox {
+    position: absolute;
+    left: 85%;
+    transform: translateX(-50%);
     flex-grow: 0; /* Don't stretch */
-    margin-right: auto; /* Push to the left side of the available space */
     align-self: center;
     width: 18px;
     height: 18px;
     accent-color: var(--accent-primary); /* Style the checkbox color */
+    cursor: pointer;
 }
 
 /* --- Generic Modals (Export, Import, Rename) --- */
@@ -612,10 +752,15 @@ button:disabled {
     justify-content: space-between;
     align-items: center;
     transition: background-color var(--transition-speed) ease;
+    position: relative;
 }
 
-.settings-section summary:hover {
-    background-color: var(--bg-tertiary);
+.settings-section summary span {
+    max-width: 75%;
+    white-space: normal;
+    line-height: 1.2;
+    padding-top: 2px;
+    padding-bottom: 2px;
 }
 
 .settings-section summary::-webkit-details-marker {
@@ -850,6 +995,45 @@ button:disabled {
     100% { transform: rotate(360deg); }
 }
 
+.spin-animation {
+    animation: spin 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.section-reload-btn.reloading svg {
+    animation: spin 1s linear infinite;
+    color: var(--accent-success);
+}
+
+.section-reload-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-speed) ease;
+    box-shadow: none;
+    margin-right: 8px; /* Space between icon and arrow */
+    opacity: 0.6;
+}
+
+.section-reload-btn:hover {
+    background-color: var(--bg-tertiary);
+    color: var(--accent-primary);
+    opacity: 1;
+}
+
+.header-actions {
+    position: absolute;
+    left: 85%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+}
+
 /* --- AniList Refresh Button --- */
 .anilist-refresh-btn {
     background: none;
@@ -904,27 +1088,48 @@ button:disabled {
     cursor: pointer;
     transition: all var(--transition-speed) ease;
     box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    user-select: none; /* Prevent text selection on toggle */
 }
 
-.filter-pill:hover {
-    background-color: var(--accent-primary-hover);
-    transform: translateY(-1px);
+/* Custom Flags (Removable/Toggleable) - Using a distinct Blue/Cyan */
+#mpv-flags-list-container .filter-pill {
+    background-color: #00bcd4;
+    border: 1px solid #00acc1;
+}
+
+#mpv-flags-list-container .filter-pill:hover {
+    background-color: #26c6da;
     box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+}
+
+#mpv-flags-list-container .filter-pill.disabled {
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    text-decoration: line-through;
+    border-color: var(--border-primary);
+    opacity: 0.6;
+}
+
+/* Automatic Flags (Core Toggles) - Using Green */
+#automatic-mpv-flags-list-container .filter-pill {
+    background-color: #4caf50;
+    border: 1px solid #43a047;
+}
+
+#automatic-mpv-flags-list-container .filter-pill:hover {
+    background-color: #66bb6a;
+}
+
+#automatic-mpv-flags-list-container .filter-pill.disabled {
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    text-decoration: line-through;
+    border-color: var(--border-primary);
 }
 
 .filter-pill:active {
     transform: translateY(0) scale(0.96);
     box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-}
-
-#mpv-flags-list-container .filter-pill:hover {
-    background-color: var(--accent-danger);
-}
-
-.filter-pill.disabled:hover {
-    background-color: #383c42; /* Slightly lighter than disabled background */
-    color: var(--text-primary);
-    transform: translateY(-1px);
 }
 
 .filter-pill.readonly {
@@ -934,12 +1139,16 @@ button:disabled {
     box-shadow: none;
 }
 
-.filter-pill.disabled {
-    background-color: var(--bg-tertiary);
-    color: var(--text-secondary);
-    cursor: pointer;
-    box-shadow: none;
-    text-decoration: line-through;
+/* Networking Section Gray-out Effect */
+.settings-section-content.disabled-overlay {
+    opacity: 0.5;
+    pointer-events: none;
+    filter: grayscale(0.5);
+}
+
+.settings-section-content.disabled-overlay input,
+.settings-section-content.disabled-overlay select {
+    background-color: #1a1a1a !important;
 }
 
 .setting-item > small {
@@ -984,6 +1193,22 @@ button:disabled {
 .playlist-container .list-item:hover {
     background-color: #44484e; /* Slightly darker tertiary */
     border-color: var(--border-hover);
+}
+
+/* --- Highlighting the active (last played) item --- */
+.playlist-container .list-item.active-item {
+    background-color: rgba(87, 242, 135, 0.1);
+    border-color: var(--accent-success);
+    box-shadow: inset 0 0 5px rgba(87, 242, 135, 0.2);
+}
+
+.playlist-container .list-item.active-item .url-index {
+    color: var(--accent-success);
+    font-weight: 700;
+}
+
+.playlist-container .list-item.active-item:hover {
+    background-color: rgba(87, 242, 135, 0.2);
 }
 
 .playlist-container .list-item.dragging {

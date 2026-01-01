@@ -34,8 +34,9 @@ class PlaylistUI {
     /**
      * Renders the playlist items in the UI and updates counts.
      * @param {Array<object>} playlist - The array of playlist items.
+     * @param {string} [lastPlayedId] - The ID of the last played item to highlight.
      */
-    render(playlist) {
+    render(playlist, lastPlayedId) {
         // Update compact UI count
         if (this.itemCountSpan) this.itemCountSpan.textContent = playlist?.length || 0;
 
@@ -54,9 +55,13 @@ class PlaylistUI {
         this.fullContainer.innerHTML = ''; // Clear existing content
 
         if (playlist && playlist.length > 0) {
+            const highlightEnabled = this.controller.settings?.enable_active_item_highlight ?? true;
             playlist.forEach((item, index) => {
                 const itemDiv = document.createElement('div');
                 itemDiv.className = 'list-item';
+                if (highlightEnabled && lastPlayedId && item.id === lastPlayedId) {
+                    itemDiv.classList.add('active-item');
+                }
                 itemDiv.draggable = true;
                 itemDiv.title = item.url;
                 itemDiv.dataset.url = item.url;

@@ -106,7 +106,11 @@ const debouncedSyncToNativeHostFile = debounce(async () => {
 // --- Initialize all handlers with shared dependencies ---
 // Dependencies injected here are defined above this point.
 
-injectNativeConnectionDependencies({ broadcastLog, handleMpvExited: playback_handlers.handleMpvExited });
+injectNativeConnectionDependencies({ 
+    broadcastLog, 
+    handleMpvExited: playback_handlers.handleMpvExited,
+    handleUpdateLastPlayed: playback_handlers.handleUpdateLastPlayed
+});
 
 playlistManager.injectDependencies({
     storage,

@@ -42,8 +42,9 @@ HOST_NAME = "com.mpv_playlist_organizer.handler"
 HOST_DESCRIPTION = "MPV Playlist Organizer Native Host"
 SCRIPT_NAME = "native_host.py"
 INSTALL_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(INSTALL_DIR, "data")
-CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+# Use the centralized DATA_DIR from file_io to ensure consistency across all scripts.
+DATA_DIR = file_io.DATA_DIR
+CONFIG_FILE = file_io.CONFIG_FILE
 
 # --- Helper to generate User-Agent string ---
 def _generate_user_agent(browser_name, os_name):

@@ -130,29 +130,42 @@ mp.add_hook("on_load", 1, function()
                 
         -- Reconnect and HTTP Persistent settings
         -- We add reconnect options for direct streams to handle transient errors
-        local lavf_dict = {
-            reconnect = "1",
-            reconnect_at_eof = "1",
-            reconnect_streamed = "1",
-            reconnect_delay_max = "2", -- Reduced for faster recovery
-            hls_segment_parallel_downloads = "8" -- Parallel segment downloading (FFmpeg option)
-        }
-        
-        if opts.disable_http_persistent then
-            lavf_dict.http_persistent = "0"
+        -- Skip if user has requested to use MPV's native defaults
+        if not opts.disable_network_overrides then
+            local lavf_dict = {
+                reconnect = "1",
+                reconnect_at_eof = "1",
+                reconnect_streamed = "1",
+                reconnect_delay_max = "2", -- Reduced for faster recovery
+                hls_segment_parallel_downloads = "8" -- Parallel segment downloading (FFmpeg option)
+            }
+            
+            local force_persist = opts.http_persistence or "auto"
+            if force_persist == "on" then
+                lavf_dict.http_persistent = "1"
+            elseif force_persist == "off" then
+                lavf_dict.http_persistent = "0"
+            else
+                -- auto
+                if opts.disable_http_persistent then
+                    lavf_dict.http_persistent = "0"
+                else
+                    lavf_dict.http_persistent = "1"
+                end
+            end
+            
+            local lavf_pairs = {}
+            for k, v in pairs(lavf_dict) do
+                table.insert(lavf_pairs, k .. "=" .. v)
+            end
+            local lavf_opts = table.concat(lavf_pairs, ",")
+            
+            if mp.get_property("demuxer-lavf-o") ~= lavf_opts then
+                debug_log("AdaptiveHeaders: Setting demuxer-lavf-o: " .. lavf_opts)
+                mp.set_property("demuxer-lavf-o", lavf_opts)
+            end
         else
-            lavf_dict.http_persistent = "1"
-        end
-        
-        local lavf_pairs = {}
-        for k, v in pairs(lavf_dict) do
-            table.insert(lavf_pairs, k .. "=" .. v)
-        end
-        local lavf_opts = table.concat(lavf_pairs, ",")
-        
-        if mp.get_property("demuxer-lavf-o") ~= lavf_opts then
-            debug_log("AdaptiveHeaders: Setting demuxer-lavf-o: " .. lavf_opts)
-            mp.set_property("demuxer-lavf-o", lavf_opts)
+            debug_log("AdaptiveHeaders: Network overrides disabled by user. Skipping demuxer-lavf-o.")
         end
                 
 

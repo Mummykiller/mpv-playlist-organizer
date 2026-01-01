@@ -66,7 +66,10 @@ def _migrate_legacy_data(raw_folders):
             if playlist and isinstance(playlist[0], str):
                  needs_resave = True
                  playlist = [{"url": url, "title": url} for url in playlist]
-            converted_folders[folder_id] = {"playlist": playlist}
+            
+            # Preserve all existing keys (like last_played_id) and update playlist
+            converted_folders[folder_id] = folder_content
+            converted_folders[folder_id]["playlist"] = playlist
             
         # Legacy format: List of strings directly
         elif isinstance(folder_content, list):
@@ -174,6 +177,25 @@ def get_settings():
         "browser_for_url_analysis": "chrome", # Default browser for UA/cookies
         "enable_youtube_analysis": False,
         "user_agent_string": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", # Default UA
+        "enable_smart_resume": True,
+        "enable_active_item_highlight": True,
+        "disable_network_overrides": False,
+        "enable_cache": True,
+        "http_persistence": "auto",
+        "demuxer_max_bytes": "1G",
+        "demuxer_max_back_bytes": "500M",
+        "cache_secs": 500,
+        "demuxer_readahead_secs": 500,
+        "stream_buffer_size": "10M",
+        "automatic_mpv_flags": [
+            {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
+            {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
+            {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True},
+            {"flag": "--hwdec=auto", "description": "Enable hardware video decoding.", "enabled": True},
+            {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
+            {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
+            {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
+        ]
     }
 
     current_settings = {}
@@ -190,6 +212,23 @@ def get_settings():
     
     # Merge current settings with defaults, prioritizing current_settings
     settings = {**default_settings, **current_settings}
+
+    # --- NEW: Auto-sync Automatic MPV Flags ---
+    # This ensures new flags added to the code show up in the UI automatically
+    # without overriding the user's existing enabled/disabled choices.
+    if "automatic_mpv_flags" in current_settings:
+        current_flags = {f["flag"]: f for f in current_settings["automatic_mpv_flags"]}
+        updated_flags = []
+        
+        for default_f in default_settings["automatic_mpv_flags"]:
+            if default_f["flag"] in current_flags:
+                # Keep the user's existing choice (enabled/disabled)
+                updated_flags.append(current_flags[default_f["flag"]])
+            else:
+                # Add the new flag from the default list
+                updated_flags.append(default_f)
+        
+        settings["automatic_mpv_flags"] = updated_flags
 
     # Ensure mpv_path default is platform-appropriate
     if settings["mpv_path"] is None:

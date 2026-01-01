@@ -34,6 +34,7 @@ class MpvSessionManager:
         self.is_alive = False
         self.ipc_manager = None
         self.playlist_tracker = None # New attribute to hold the PlaylistTracker instance
+        self.manual_quit = False # Track if the session was closed by the user
 
         # --- Injected Dependencies ---
         self.get_all_folders_from_file = dependencies['get_all_folders_from_file']
@@ -67,6 +68,7 @@ class MpvSessionManager:
         self.ipc_path = None
         self.playlist = None
         self.owner_folder_id = None
+        self.manual_quit = False # Reset manual quit flag for the next session
         if os.path.exists(self.session_file):
             try:
                 os.remove(self.session_file)
@@ -99,9 +101,26 @@ class MpvSessionManager:
 
                 self.pid = pid
                 self.ipc_path = ipc_path
-                self.playlist = [item['url'] if isinstance(item, dict) else item for item in folder_data["playlist"]]
+                self.playlist = folder_data.get("playlist", [])
                 self.owner_folder_id = owner_folder_id
-                logging.info(f"Successfully restored session for MPV process (PID: {pid}) owned by folder '{owner_folder_id}'.")
+                
+                # Restart the tracker for the restored session
+                all_settings = self.dependencies['get_all_folders_from_file']() # Wait, need settings
+                # Actually, we need to get settings from file_io
+                import file_io
+                settings = file_io.get_settings()
+                
+                self.playlist_tracker = PlaylistTracker(
+                    owner_folder_id, 
+                    self.playlist, 
+                    file_io, 
+                    settings, 
+                    self.ipc_path, 
+                    self.dependencies['send_message']
+                )
+                self.playlist_tracker.start_tracking()
+
+                logging.info(f"Successfully restored session and tracker for MPV process (PID: {pid}) owned by folder '{owner_folder_id}'.")
                 return {"was_stale": False}
             else:
                 logging.warning(f"Stale session for PID {pid} found. Cleaning up.")
@@ -124,6 +143,8 @@ class MpvSessionManager:
         logging.info(f"Linked Playlist: Preparing to append {len(items)} items.")
 
         # 1. Register options for all items with the Lua script first
+        import file_io
+        settings = file_io.get_settings()
         for item in items:
             lua_options = {
                 "id": item.get('id'), # Pass the ID for live deduplication
@@ -133,7 +154,9 @@ class MpvSessionManager:
                 "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
                 "original_url": item.get('original_url') or item.get('url'),
                 "disable_http_persistent": item.get('disable_http_persistent', False),
-                "cookies_file": item.get('cookies_file')
+                "cookies_file": item.get('cookies_file'),
+                "disable_network_overrides": settings.get('disable_network_overrides', False),
+                "http_persistence": settings.get('http_persistence', 'auto')
             }
             self.ipc_manager.send({"command": ["script-message", "set_url_options", item['url'], json.dumps(lua_options)]})
             
@@ -192,86 +215,6 @@ class MpvSessionManager:
         except Exception as e:
             logging.error(f"Failed to append batch via delta M3U: {e}")
             return {"success": False, "error": str(e)}
-
-    def append(self, url_item, headers=None, mode="append", disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False):
-        """Attempts to append a single new URL to an already running MPV instance."""
-        with self.sync_lock:
-            logging.info(f"Entering append for URL: {url_item.get('url')}")
-            # First, check if the session is still active before trying to append.
-            if not self.is_alive:
-                logging.warning("Attempted to append to an inactive MPV session. Aborting append.")
-                return {"success": False, "error": "Cannot append: MPV session is not active."}
-
-            logging.info(f"MPV is running. Attempting to append item (mode: {mode}).")
-            url_to_add = url_item['url']
-            item_id = url_item.get('id')
-            original_url = url_item.get('original_url')
-            
-            # Helper to send commands robustly
-            def robust_send(command, timeout=1.0):
-                result = self.ipc_manager.send(command, expect_response=True, timeout=timeout)
-                if result is None:
-                    if self.ipc_manager.connect(self.ipc_path):
-                        return self.ipc_manager.send(command, expect_response=True, timeout=timeout)
-                return result
-
-            # --- STEP 1: Deep Live Check (Strict ID-Only) ---
-            # Instead of just checking our local list, we ask MPV for the real truth.
-            # We ONLY deduplicate if the exact same item ID is already in the player.
-            is_duplicate = False
-            if item_id:
-                playlist_resp = robust_send({"command": ["get_property", "playlist"]}, timeout=2.0)
-                
-                if playlist_resp and playlist_resp.get("error") == "success":
-                    mpv_playlist = playlist_resp.get("data", [])
-                    
-                    # We check every item in the LIVE playlist
-                    for i, _ in enumerate(mpv_playlist):
-                        # Check ID from user-data (The ONLY source of truth now)
-                        id_resp = robust_send({"command": ["get_property", f"playlist/{i}/user-data/id"]}, timeout=0.5)
-                        if id_resp and id_resp.get("data") == item_id:
-                            is_duplicate = True
-                            break
-
-            if is_duplicate:
-                logging.info(f"Deep Check: Item ID '{item_id}' already in live MPV playlist. Skipping.")
-                # Sync our local list if needed
-                if self.playlist is None: self.playlist = []
-                if not any(i.get('id') == item_id for i in self.playlist):
-                    self.playlist.append(url_item)
-                return {"success": True, "message": "Item already in playlist.", "skipped": True}
-
-            try:
-                # Construct options for the item
-                lua_options = {
-                    "id": item_id,
-                    "title": url_item.get('title'),
-                    "headers": url_item.get('headers') or headers,
-                    "ytdl_raw_options": url_item.get('ytdl_raw_options') or ytdl_raw_options,
-                    "use_ytdl_mpv": url_item.get('use_ytdl_mpv', use_ytdl_mpv),
-                    "original_url": original_url or url_to_add,
-                    "disable_http_persistent": url_item.get('disable_http_persistent', disable_http_persistent),
-                    "cookies_file": url_item.get('cookies_file')
-                }
-                robust_send({"command": ["script-message", "set_url_options", url_to_add, json.dumps(lua_options)]})
-
-                # Simple loadfile command
-                ipc_command = {"command": ["loadfile", url_to_add, mode]}
-                load_resp = robust_send(ipc_command)
-                
-                if load_resp and load_resp.get("error") == "success":
-                    if self.playlist is None: self.playlist = []
-                    self.playlist.append(url_item)
-                    if self.playlist_tracker: self.playlist_tracker.add_item(url_item)
-                    return {"success": True, "message": f"Added '{url_to_add}' to the MPV playlist."}
-                else:
-                    raise RuntimeError(f"Failed to send loadfile command via IPC: {load_resp}")
-
-            except Exception as e:
-                logging.warning(f"Live playlist append failed unexpectedly: {e}.")
-                if self.pid and not ipc_utils.is_process_alive(self.pid, self.ipc_path):
-                    self.clear()
-                return None
 
     def remove(self, item_id, folder_id):
         """Removes an item from the active MPV playlist by ID."""
@@ -380,7 +323,8 @@ class MpvSessionManager:
                 use_ytdl_mpv=use_ytdl_mpv,
                 is_youtube_override=use_ytdl_mpv,
                 idle="once", # Use 'once' so mpv waits for the first file but exits on error/finish
-                force_terminal=force_terminal
+                force_terminal=force_terminal,
+                settings=settings
             )
 
             popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
@@ -413,13 +357,16 @@ class MpvSessionManager:
                     item_use_ytdl_mpv = item.get('use_ytdl_mpv', False) or item.get('is_youtube', False)
                     
                     lua_options = {
+                        "id": item.get('id'), # Crucial for tracking!
                         "title": item.get('title'),
                         "headers": item_headers,
                         "ytdl_raw_options": item_ytdl_raw_options,
                         "use_ytdl_mpv": item_use_ytdl_mpv,
                         "original_url": item.get('original_url') or item.get('url'),
                         "disable_http_persistent": item.get('disable_http_persistent', False) or disable_http_persistent,
-                        "cookies_file": item.get('cookies_file')
+                        "cookies_file": item.get('cookies_file'),
+                        "disable_network_overrides": settings.get('disable_network_overrides', False),
+                        "http_persistence": settings.get('http_persistence', 'auto')
                     }
                     self.ipc_manager.send({"command": ["script-message", "set_url_options", item['url'], json.dumps(lua_options)]})
                 logging.info(f"Registered options for {len(self.playlist)} items with adaptive_headers.lua")
@@ -470,8 +417,12 @@ class MpvSessionManager:
                     logging.info(f"Checking for natural completion flag at: {flag_file}")
                     
                     if os.path.exists(flag_file):
-                        logging.info(f"Natural completion flag FOUND for folder '{f_id}'. Overriding return code to 99.")
-                        return_code = 99
+                        if getattr(self, 'manual_quit', False):
+                            logging.info(f"Natural completion flag found, but manual_quit is TRUE. Ignoring flag for folder '{f_id}'.")
+                        else:
+                            logging.info(f"Natural completion flag FOUND for folder '{f_id}'. Overriding return code to 99.")
+                            return_code = 99
+                        
                         try:
                             os.remove(flag_file)
                         except Exception as e: 
@@ -497,7 +448,7 @@ class MpvSessionManager:
             logging.error(f"An error occurred while trying to launch mpv: {e}")
             return {"success": False, "error": f"Error launching mpv: {e}"}
 
-    def enrich_single_item(self, item):
+    def enrich_single_item(self, item, folder_id=None):
         """Enriches a single item with playback options (direct URL, headers, etc.)."""
         # If item is already resolved, skip
         if item.get('enriched'):
@@ -511,7 +462,7 @@ class MpvSessionManager:
         if not item.get('original_url'):
             item['original_url'] = item.get('url')
 
-        url_dict_for_analysis = {'url': item.get('url'), 'title': item.get('title'), 'id': item.get('id')}
+        url_dict_for_analysis = {'url': item.get('url'), 'title': item.get('title'), 'id': item.get('id'), 'folder_id': folder_id}
         
         (
             processed_url,
@@ -649,10 +600,30 @@ class MpvSessionManager:
             # Otherwise, for M3U flow (local files, non-YT URLs), resolve everything in parallel.
             is_definitely_m3u_flow = m3u_content is not None or (isinstance(url_items_or_m3u, str) and not is_youtube_playlist)
             
+            # --- Smart Resume: Check for last played item ---
+            enable_smart_resume = settings.get("enable_smart_resume", True)
+            all_folders = file_io.get_all_folders_from_file()
+            folder_metadata = all_folders.get(folder_id, {})
+            last_played_id = folder_metadata.get("last_played_id")
+
+            if enable_smart_resume and last_played_id:
+                # Find the index of the last played item
+                target_idx = -1
+                for idx, item in enumerate(_url_items_list):
+                    if item.get('id') == last_played_id:
+                        target_idx = idx
+                        break
+                
+                if target_idx > 0:
+                    logging.info(f"Smart Resume: Found last_played_id '{last_played_id}' at index {target_idx}. Reordering list.")
+                    # Move the last played item and all following items to the front
+                    _url_items_list = _url_items_list[target_idx:] + _url_items_list[:target_idx]
+
             if is_definitely_m3u_flow:
                 logging.info(f"M3U-Flow suspected. Enriching ALL {len(_url_items_list)} items in parallel...")
                 with ThreadPoolExecutor(max_workers=10) as executor:
-                    results = list(executor.map(self.enrich_single_item, _url_items_list))
+                    # Pass folder_id to enrichment for metadata sync
+                    results = list(executor.map(lambda x: self.enrich_single_item(x, folder_id), _url_items_list))
                 _url_items_list = [item for sublist in results for item in sublist]
 
                 # Generate Enriched M3U Content
@@ -678,7 +649,7 @@ class MpvSessionManager:
             else:
                 # Standard Flow optimization: Just resolve the first item now.
                 logging.info("Standard-Flow suspected. Resolving first item only for quick launch.")
-                first_item_list = self.enrich_single_item(_url_items_list[0])
+                first_item_list = self.enrich_single_item(_url_items_list[0], folder_id)
                 _url_items_list = first_item_list + _url_items_list[1:]
                 # Proceed to Launch Logic below instead of returning early.
 
@@ -706,7 +677,12 @@ class MpvSessionManager:
 
         if self.pid:
             if folder_id == self.owner_folder_id:
-                return {"success": True, "message": "MPV session already active.", "already_active": True}
+                return {
+                    "success": True, 
+                    "message": "MPV session already active.", 
+                    "already_active": True,
+                    "enriched_url_items": _url_items_list
+                }
             else:
                 self.close()
 
@@ -759,7 +735,9 @@ class MpvSessionManager:
                             "use_ytdl_mpv": enriched_item.get('use_ytdl_mpv', False),
                             "original_url": enriched_item.get('original_url') or enriched_item.get('url'),
                             "disable_http_persistent": enriched_item.get('disable_http_persistent', False),
-                            "cookies_file": enriched_item.get('cookies_file')
+                            "cookies_file": enriched_item.get('cookies_file'),
+                            "disable_network_overrides": settings.get('disable_network_overrides', False),
+                            "http_persistence": settings.get('http_persistence', 'auto')
                         }
                         self.ipc_manager.send({"command": ["script-message", "set_url_options", enriched_item['url'], json.dumps(lua_options)]})
                         
@@ -805,12 +783,17 @@ class MpvSessionManager:
             self.clear()
             return {"success": True, "message": "No running MPV instance was found."}
 
+        # Mark that we are intentionally closing MPV
+        self.manual_quit = True
+
         try:
             if ipc_path_to_use:
                 try:
                     logging.info(f"Attempting to close MPV (PID: {pid_to_close}) via IPC: {ipc_path_to_use}")
                     # Use the manager's send method for consistency.
                     if self.ipc_manager:
+                        # Inform our Lua scripts that this is a manual quit to prevent natural completion flags
+                        self.ipc_manager.send({"command": ["script-message", "manual_quit_initiated"]}, expect_response=False)
                         self.ipc_manager.send({"command": ["quit"]}, expect_response=False)
                     else:
                         logging.warning("IPC manager not available during close, attempting fallback quit command.")

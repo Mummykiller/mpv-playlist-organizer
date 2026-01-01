@@ -86,21 +86,26 @@ class PlaylistTracker:
             logging.error(f"Tracker failed to connect to IPC at {self.ipc_path}")
             return
 
-        # Observe the 'path' property to detect when a file finishes
-        self.ipc_manager.send({"command": ["observe_property", 1, "path"]})
+        # Observe 'user-data/id' to detect when the active file changes.
+        # This is set by adaptive_headers.lua and is more reliable than 'path'.
+        self.ipc_manager.send({"command": ["observe_property", 1, "user-data/id"]})
 
-        current_path = None
-        response = self.ipc_manager.send({"command": ["get_property", "path"]}, expect_response=True)
+        current_id = None
+        response = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True)
         if response and 'data' in response:
-            current_path = response['data']
-        logging.info(f"Tracker: Initial current_path: {current_path}")
+            current_id = response['data']
+            if current_id:
+                logging.info(f"Tracker: Initial current_id detected: {current_id}")
+                self._update_last_played(current_id)
+        
+        logging.info(f"Tracker: Starting event loop. Initial current_id: {current_id}")
 
         while self.is_tracking:
             if not self.ipc_manager.is_connected():
                 logging.warning("Tracker IPC disconnected. Attempting to reconnect...")
                 if self.ipc_manager.connect(self.ipc_path):
                     logging.info("Tracker reconnected. Re-observing properties.")
-                    self.ipc_manager.send({"command": ["observe_property", 1, "path"]})
+                    self.ipc_manager.send({"command": ["observe_property", 1, "user-data/id"]})
                 else:
                     time.sleep(2)
                     continue
@@ -108,37 +113,34 @@ class PlaylistTracker:
             try:
                 event = self.ipc_manager.receive_event(timeout=1.0)
                 if not event:
-                    time.sleep(0.5) # Prevent tight loop if receive_event returns immediately (e.g. on Windows)
+                    time.sleep(0.5)
                     continue
 
                 if event.get('event') == 'property-change':
                     prop_name = event.get('name')
                     data = event.get('data')
 
-                    if prop_name == 'path':
-                        new_path = data
-                        logging.debug(f"Tracker: property-change 'path' detected. Old: {current_path}, New: {new_path}")
+                    if prop_name == 'user-data/id':
+                        new_id = data
+                        logging.debug(f"Tracker: property-change 'user-data/id' detected. Old: {current_id}, New: {new_id}")
 
-                        if current_path and current_path != new_path:
-                            # File has changed, so the previous one is considered played.
-                            for item in self.playlist:
-                                logging.debug(f"Tracker: Comparing current_path '{current_path}' with item URL '{item.get('url')}'")
-                                if item.get('url') == current_path and item.get('id') not in self.played_item_ids:
-                                    logging.info(f"Tracker: Marking item as played: {item['url']} (ID: {item['id']})")
-                                    self.played_item_ids.add(item['id'])
-                                    break
-                        current_path = new_path
+                        if new_id:
+                            self._update_last_played(new_id)
+
+                        if current_id and current_id != new_id:
+                            # Item has changed, mark the previous one as played
+                            logging.info(f"Tracker: Marking item as played: ID {current_id}")
+                            self.played_item_ids.add(current_id)
+                        
+                        current_id = new_id
 
                 elif event.get('event') == 'end-file' and event.get('reason') == 'eof':
-                    logging.debug(f"Tracker: end-file event (eof) detected for path: {current_path}")
-                    # This event is a strong confirmation that a file finished naturally.
-                    if current_path:
-                         for item in self.playlist:
-                            logging.debug(f"Tracker: Comparing current_path '{current_path}' with item URL '{item.get('url')}' for end-file.")
-                            if item.get('url') == current_path and item.get('id') not in self.played_item_ids:
-                                logging.info(f"Tracker: Marking item as played on end-file event: {item['url']} (ID: {item['id']})")
-                                self.played_item_ids.add(item['id'])
-                                break
+                    logging.debug(f"Tracker: end-file event (eof) detected for ID: {current_id}")
+                    if current_id:
+                        self.played_item_ids.add(current_id)
+
+            except Exception as e:
+                logging.error(f"Error in playlist tracker: {e}")
 
             except Exception as e: # Catch all for connection errors now handled by ipc_manager
                 # IPCSocketManager handles FileNotFoundError, ConnectionRefusedError internally now.
@@ -153,3 +155,25 @@ class PlaylistTracker:
         # Clean up the local manager when loop exits
         if self.ipc_manager:
             self.ipc_manager.close()
+
+    def _update_last_played(self, item_id):
+        """Saves the last played item ID to the folder's metadata and notifies the extension."""
+        if not self.folder_id or not item_id:
+            return
+        
+        try:
+            # 1. Update the local folders.json file (for CLI and persistence)
+            all_folders = self.file_io.get_all_folders_from_file()
+            if self.folder_id in all_folders:
+                all_folders[self.folder_id]["last_played_id"] = item_id
+                self.file_io.write_folders_file(all_folders)
+                logging.debug(f"Tracker: Updated last_played_id to '{item_id}' for folder '{self.folder_id}'.")
+            
+            # 2. Notify the extension so it can update its internal storage
+            self.send_message({
+                "action": "update_last_played",
+                "folderId": self.folder_id,
+                "itemId": item_id
+            })
+        except Exception as e:
+            logging.error(f"Tracker: Failed to update last_played_id: {e}")
