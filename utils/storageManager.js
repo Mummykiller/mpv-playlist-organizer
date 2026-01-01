@@ -55,6 +55,22 @@ export class StorageManager {
                         anilistAttachOnOpen: true,
                         minimizedStubPosition: { top: '15px', left: '15px', right: 'auto', bottom: 'auto' },                        
                         show_minimized_stub: true,
+                        enable_smart_resume: true,
+                        enable_active_item_highlight: true,
+                        // Networking & Buffering Defaults
+                        disable_network_overrides: false,
+                        enable_cache: true,
+                        http_persistence: 'auto',
+                        demuxer_max_bytes: '1G',
+                        demuxer_max_back_bytes: '500M',
+                        cache_secs: 500,
+                        demuxer_readahead_secs: 500,
+                        stream_buffer_size: '10M',
+                        // Keybindings
+                        kb_add_playlist: 'Shift+A',
+                        kb_play_playlist: 'Shift+P',
+                        kb_toggle_controller: 'Shift+S',
+                        kb_open_popup: 'Alt+P',
                         dependencyStatus: {
                             mpv: { found: null, path: null, error: null },
                             ytdlp: { found: null, path: null, version: null, error: null }
@@ -133,14 +149,28 @@ export class StorageManager {
                 needsUpdate = true;
             }
 
-            // Migration: Ensure all playlist items have a 'settings' object.
+            // Migration: Ensure all playlist items have a 'settings' object and a unique 'id'.
             for (const folderId in storedValue.folders) {
                 const folder = storedValue.folders[folderId];
                 if (folder.playlist && Array.isArray(folder.playlist)) {
                     folder.playlist = folder.playlist.map(item => {
-                        if (typeof item === 'object' && item !== null && !item.settings) {
+                        let modified = false;
+                        let newItem = { ...item };
+                        
+                        if (typeof item === 'object' && item !== null) {
+                            if (!item.settings) {
+                                newItem.settings = {};
+                                modified = true;
+                            }
+                            if (!item.id) {
+                                newItem.id = crypto.randomUUID();
+                                modified = true;
+                            }
+                        }
+                        
+                        if (modified) {
                             needsUpdate = true;
-                            return { ...item, settings: {} };
+                            return newItem;
                         }
                         return item;
                     });

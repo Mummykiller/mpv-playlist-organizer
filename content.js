@@ -50,7 +50,7 @@ class MpvController {
         this.enableDblclickCopy = false; // New: Preference for double-click copy
         this.showCopyTitleButton = false; // New: Preference for the copy title button
         this.lastRightClickedElement = null; // New: To track right-clicks for context menu actions
-        this.keybinds = { add: null, toggle: null, openPopup: null };
+        this.keybinds = { add: null, playPlaylist: null, toggle: null, openPopup: null };
 
         // Bind `this` for methods that are used as event listeners or callbacks
         this.handleMessage = this.handleMessage.bind(this);
@@ -86,7 +86,7 @@ class MpvController {
             // matches the currently selected folder.
             const currentFolderId = this.uiManager.shadowRoot?.getElementById('folder-select')?.value;
             if (currentFolderId === request.folderId) {
-                this.playlistUI?.render(request.playlist);
+                this.playlistUI?.render(request.playlist, request.last_played_id);
             } else if (request.fromContextMenu) {
                 // If the update came from a context menu action for a *different* folder,
                 // the user might switch to that folder later and expect to see the new item.
@@ -116,6 +116,13 @@ class MpvController {
             this.addLogEntry(request.log);
         } else if (request.action === 'preferences_changed') {
             const changedPrefs = request.preferences; // This will now contain the specific preferences that changed
+            
+            // Update the settings object if relevant keys changed
+            if (this.settings) {
+                if (changedPrefs.enable_active_item_highlight !== undefined) this.settings.enable_active_item_highlight = changedPrefs.enable_active_item_highlight;
+                if (changedPrefs.enable_smart_resume !== undefined) this.settings.enable_smart_resume = changedPrefs.enable_smart_resume;
+            }
+
             const changeDomain = request.domain; // The domain this change was for. Can be null for global changes.
             const myDomain = this.uiManager.getDomain(); // Get the current tab's domain.
 
@@ -961,6 +968,14 @@ class MpvController {
                 if (folderId) {
                     this.addDetectedUrlToFolder(folderId, { isUiVisible: this.uiManager.controllerHost.style.display !== 'none' });
                 }
+            } else if (this.keybinds.playPlaylist && combo === normalize(this.keybinds.playPlaylist)) {
+                e.preventDefault();
+                e.stopPropagation();
+                const folderSelect = this.uiManager.shadowRoot?.getElementById('folder-select');
+                const folderId = folderSelect?.value;
+                if (folderId) {
+                    this.sendCommandToBackground('play', folderId);
+                }
             } else if (this.keybinds.toggle && combo === normalize(this.keybinds.toggle)) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -1098,6 +1113,10 @@ class MpvController {
         const anilistSize = prefs?.anilistPanelSize;        
         this.anilistUI.isEnabled = prefs?.enable_anilist_integration ?? true;
         this.anilistUI.isLocked = prefs?.lockAnilistPanel ?? false;
+        this.settings = {
+            enable_active_item_highlight: prefs?.enable_active_item_highlight ?? true,
+            enable_smart_resume: prefs?.enable_smart_resume ?? true
+        };
         this.anilistUI.updateDynamicStyles(); // Apply lock style
         this.anilistUI.forceAttached = prefs?.forcePanelAttached ?? false;
         this.anilistUI.attachOnOpen = prefs?.anilistAttachOnOpen ?? true;
@@ -1108,6 +1127,7 @@ class MpvController {
         this.pageScraper.updateFilterWords(prefs?.scraper_filter_words || ['watch', 'online', 'free', 'episode', 'season', 'full', 'hd', 'eng sub', 'subbed', 'dubbed', 'animepahe']);
         this._updateStubButtonState();
         this.keybinds.add = prefs?.kb_add_playlist || null;
+        this.keybinds.playPlaylist = prefs?.kb_play_playlist || null;
         this.keybinds.toggle = prefs?.kb_toggle_controller || null;
         this.keybinds.openPopup = prefs?.kb_open_popup || null;
 
@@ -1430,7 +1450,7 @@ class MpvController {
             if (response) {
                 // The 'get_playlist' command is the only one that returns a list to render.
                 if (action === 'get_playlist' && response.success) {
-                    this.playlistUI?.render(response.list);
+                    this.playlistUI?.render(response.list, response.last_played_id);
                 }
                 // Log success/info messages from the background script.
                 if (response.message && action !== 'get_playlist') {

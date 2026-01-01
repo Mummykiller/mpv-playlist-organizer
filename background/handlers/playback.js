@@ -65,6 +65,7 @@ class PlaybackQueue {
                         const response = await _callNativeHost({
                             action: 'append',
                             url_item: urlItem,
+                            folderId: folderId,
                             bypassScripts: globalPrefs.bypassScripts || {}
                         });
 
@@ -346,9 +347,53 @@ export async function handlePlayM3U(request) {
         playbackQueueInstance.isPlaying = true;
         playbackQueueInstance.currentPlayingItem = { folderId: folderId, isLastInFolder: true }; // Mark as playing this folder
 
+        // --- Smart Resume Sync ---
+        // If the native host reordered the playlist (Smart Resume), we MUST update
+        // our internal storage to match, otherwise our UI and subsequent actions will be out of sync.
+        if (response.playlist_items && folderId) {
+            _broadcastLog({ text: `[Background]: Syncing Smart Resume reordering for folder '${folderId}'.`, type: 'info' });
+            const storageData = await _storage.get();
+            if (storageData.folders[folderId]) {
+                storageData.folders[folderId].playlist = response.playlist_items;
+                // We also update the last_played_id immediately if it was returned
+                if (response.playlist_items.length > 0) {
+                    storageData.folders[folderId].last_played_id = response.playlist_items[0].id;
+                }
+                await _storage.set(storageData);
+                // Note: We don't need to call debouncedSyncToNativeHostFile here 
+                // because the native host is the one that just sent us this data.
+                _broadcastToTabs({ action: 'render_playlist', folderId: folderId, playlist: response.playlist_items });
+            }
+        }
+
         return { success: true, message: `Playback initiated for playlist '${folderId}'.` };
     } else {
         return response;
+    }
+}
+
+/**
+ * Handles the 'update_last_played' message from the native host tracker.
+ * Updates the extension's internal storage to keep it in sync with the active session.
+ */
+export async function handleUpdateLastPlayed(data) {
+    const { folderId, itemId } = data;
+    if (!folderId || !itemId) return;
+
+    _broadcastLog({ text: `[Background]: Tracker reported last_played_id update for folder '${folderId}': ${itemId}`, type: 'info' });
+    
+    const storageData = await _storage.get();
+    if (storageData.folders[folderId]) {
+        storageData.folders[folderId].last_played_id = itemId;
+        await _storage.set(storageData);
+        
+        // Broadcast the update so the UI highlights the new item immediately
+        _broadcastToTabs({ 
+            action: 'render_playlist', 
+            folderId: folderId, 
+            playlist: storageData.folders[folderId].playlist,
+            last_played_id: itemId
+        });
     }
 }
 

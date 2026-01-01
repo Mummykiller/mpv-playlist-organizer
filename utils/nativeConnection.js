@@ -16,6 +16,7 @@ let connectionPromise = null;
 let dependencies = {
     broadcastLog: () => {},
     handleMpvExited: () => {},
+    handleUpdateLastPlayed: () => {},
 };
 
 /**
@@ -25,6 +26,7 @@ let dependencies = {
 export function injectDependencies(deps) {
     dependencies.broadcastLog = deps.broadcastLog;
     dependencies.handleMpvExited = deps.handleMpvExited;
+    dependencies.handleUpdateLastPlayed = deps.handleUpdateLastPlayed;
 }
 
 /**
@@ -67,6 +69,8 @@ function connectToNativeHost() {
                 delete requestPromises[request_id];
             } else if (responseData.action === 'mpv_exited') {
                 dependencies.handleMpvExited(responseData);
+            } else if (responseData.action === 'update_last_played') {
+                dependencies.handleUpdateLastPlayed(responseData);
             } else if (responseData.log) {
                 dependencies.broadcastLog(responseData.log);
             } else if (responseData.action === 'session_restored' && responseData.result) {

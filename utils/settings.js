@@ -41,8 +41,19 @@ class OptionsManager {
             { key: 'ytdlp_update_behavior', elementId: 'ytdlp-update-behavior-select', type: 'select' },
             { key: 'mode', elementId: 'default-ui-mode-select', type: 'select' },
             { key: 'kb_add_playlist', elementId: 'kb-add-playlist-input', type: 'input' },
+            { key: 'kb_play_playlist', elementId: 'kb-play-playlist-input', type: 'input' },
             { key: 'kb_toggle_controller', elementId: 'kb-toggle-ui-input', type: 'input' },
-            { key: 'kb_open_popup', elementId: 'kb-open-popup-input', type: 'input' }
+            { key: 'kb_open_popup', elementId: 'kb-open-popup-input', type: 'input' },
+            { key: 'enable_smart_resume', elementId: 'enable-smart-resume-checkbox', type: 'checkbox' },
+            { key: 'enable_active_item_highlight', elementId: 'enable-active-highlight-checkbox', type: 'checkbox' },
+            { key: 'disable_network_overrides', elementId: 'disable-network-overrides-checkbox', type: 'checkbox' },
+            { key: 'enable_cache', elementId: 'enable-cache-checkbox', type: 'checkbox' },
+            { key: 'http_persistence', elementId: 'http-persistence-select', type: 'select' },
+            { key: 'demuxer_max_bytes', elementId: 'demuxer_max_bytes-input', type: 'input' },
+            { key: 'demuxer_max_back_bytes', elementId: 'demuxer-max-back-bytes-input', type: 'input' },
+            { key: 'cache_secs', elementId: 'cache-secs-input', type: 'input', transform: Number },
+            { key: 'demuxer_readahead_secs', elementId: 'demuxer-readahead-secs-input', type: 'input', transform: Number },
+            { key: 'stream_buffer_size', elementId: 'stream-buffer-size-input', type: 'input' }
         ];
 
         this.debouncedSaveAllPreferences = this._debounce(this.saveAllPreferences.bind(this), 400);
@@ -81,10 +92,21 @@ class OptionsManager {
         document.getElementById('anilist-options-container').style.display = enableAnilist ? 'block' : 'none';
         document.getElementById('shared-anilist-section').style.display = enableAnilist ? 'block' : 'none';
 
+        // --- Networking Master Toggle Logic ---
+        const networkMasterToggle = document.getElementById('disable-network-overrides-checkbox');
+        if (networkMasterToggle) {
+            this._updateNetworkingSectionState(networkMasterToggle.checked);
+        }
+
         // Manual handling for MPV flags list
-        const flagsStr = prefs.custom_mpv_flags || '';
-        const flags = flagsStr.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
-        this._renderMpvFlagsList(flags);
+        // Custom flags are now stored as objects {flag: string, enabled: boolean} OR legacy string
+        const customFlagsRaw = prefs.custom_mpv_flags || [];
+        const customFlags = Array.isArray(customFlagsRaw) ? customFlagsRaw : 
+                           (typeof customFlagsRaw === 'string' ? customFlagsRaw.match(/(?:[^\s"]+|"[^"]*")+/g) || [] : []);
+        
+        // Normalize custom flags to objects
+        const normalizedCustomFlags = customFlags.map(f => typeof f === 'string' ? { flag: f, enabled: true } : f);
+        this._renderMpvFlagsList(normalizedCustomFlags);
 
         // Manual handling for Automatic MPV flags list
         const automaticFlags = prefs.automatic_mpv_flags || [];
@@ -94,6 +116,28 @@ class OptionsManager {
 
         this._renderScraperFilterList(prefs.scraper_filter_words || []);
         this._renderBuiltInFilterList();
+    }
+
+    _updateNetworkingSectionState(isDisabled) {
+        const networkingSection = document.getElementById('disable-network-overrides-checkbox')?.closest('.settings-section');
+        if (networkingSection) {
+            const content = networkingSection.querySelector('.settings-section-content');
+            // Gray out everything EXCEPT the master toggle itself
+            const otherControls = Array.from(content.children).filter(child => !child.contains(document.getElementById('disable-network-overrides-checkbox')));
+            
+            otherControls.forEach(control => {
+                if (isDisabled) {
+                    control.classList.add('disabled-overlay');
+                } else {
+                    control.classList.remove('disabled-overlay');
+                }
+                
+                // Also literally disable the inputs/selects
+                control.querySelectorAll('input, select').forEach(input => {
+                    input.disabled = isDisabled;
+                });
+            });
+        }
     }
 
     saveAllPreferences() {
@@ -115,10 +159,12 @@ class OptionsManager {
         // Gather MPV flags from the DOM list
         const flagPills = document.querySelectorAll('#mpv-flags-list-container .filter-pill');
         if (flagPills.length > 0) {
-            const flags = Array.from(flagPills).map(p => p.dataset.flag);
-            preferences.custom_mpv_flags = flags.join(' ');
+            preferences.custom_mpv_flags = Array.from(flagPills).map(p => ({
+                flag: p.dataset.flag,
+                enabled: !p.classList.contains('disabled')
+            }));
         } else {
-            preferences.custom_mpv_flags = '';
+            preferences.custom_mpv_flags = [];
         }
 
         // Gather Automatic MPV flags from the DOM list
@@ -159,12 +205,15 @@ class OptionsManager {
         const container = document.getElementById('mpv-flags-list-container');
         if (!container) return;
         container.innerHTML = '';
-        flags.forEach(flag => {
+        flags.forEach(flagData => {
             const pill = document.createElement('div');
             pill.className = 'filter-pill';
-            pill.textContent = flag;
-            pill.dataset.flag = flag;
-            pill.title = 'Click to remove';
+            if (flagData.enabled === false) {
+                pill.classList.add('disabled');
+            }
+            pill.textContent = flagData.flag;
+            pill.dataset.flag = flagData.flag;
+            pill.title = 'Click to toggle. Double-click to remove.';
             container.appendChild(pill);
         });
     }
@@ -192,16 +241,28 @@ class OptionsManager {
         const newFlag = input.value.trim();
         if (!newFlag) return;
 
+        // Check if already exists
+        const existing = Array.from(document.querySelectorAll('#mpv-flags-list-container .filter-pill')).find(p => p.dataset.flag === newFlag);
+        if (existing) {
+            input.value = '';
+            return;
+        }
+
         // Create pill and append to DOM immediately
         const container = document.getElementById('mpv-flags-list-container');
         const pill = document.createElement('div');
         pill.className = 'filter-pill';
         pill.textContent = newFlag;
         pill.dataset.flag = newFlag;
-        pill.title = 'Click to remove';
+        pill.title = 'Click to toggle. Double-click to remove.';
         container.appendChild(pill);
 
         input.value = '';
+        this.debouncedSaveAllPreferences();
+    }
+
+    _toggleMpvFlag(element) {
+        element.classList.toggle('disabled');
         this.debouncedSaveAllPreferences();
     }
 
@@ -275,6 +336,11 @@ class OptionsManager {
             if (control) {
                 const eventType = (mapping.type === 'textarea' || mapping.type === 'input' || mapping.type === 'slider') ? 'input' : 'change';
                 control.addEventListener(eventType, this.debouncedSaveAllPreferences);
+                
+                // Extra logic for networking master toggle
+                if (mapping.elementId === 'disable-network-overrides-checkbox') {
+                    control.addEventListener('change', () => this._updateNetworkingSectionState(control.checked));
+                }
             }
         });
 
@@ -353,9 +419,23 @@ class OptionsManager {
 
         const mpvFlagsList = document.getElementById('mpv-flags-list-container');
         if (mpvFlagsList) {
+            // Use a click delay to distinguish single vs double click
+            let clickTimer = null;
+            
             mpvFlagsList.addEventListener('click', (e) => {
                 if (e.target.classList.contains('filter-pill')) {
-                    this._removeMpvFlag(e.target);
+                    if (clickTimer) {
+                        clearTimeout(clickTimer);
+                        clickTimer = null;
+                        // Double click: Remove
+                        this._removeMpvFlag(e.target);
+                    } else {
+                        clickTimer = setTimeout(() => {
+                            clickTimer = null;
+                            // Single click: Toggle
+                            this._toggleMpvFlag(e.target);
+                        }, 250);
+                    }
                 }
             });
         }
@@ -378,11 +458,182 @@ class OptionsManager {
         if (resetAutomaticMpvFlagsBtn) {
             resetAutomaticMpvFlagsBtn.addEventListener('click', () => this._resetAutomaticMpvFlags());
         }
+
+        // --- Search Listener ---
+        const searchInput = document.getElementById('settings-search-input');
+        if (searchInput) {
+            searchInput.addEventListener('input', (e) => this._handleSettingsSearch(e.target.value));
+        }
+
+        // --- Keybind Record Listeners ---
+        const recordBtns = document.querySelectorAll('.btn-record-keybind');
+        recordBtns.forEach(btn => {
+            const input = btn.parentElement.querySelector('input');
+            if (input) {
+                btn.addEventListener('click', () => this._startRecording(btn, input));
+            }
+        });
+
+        // --- Section Reload Listeners ---
+        const reloadBtns = document.querySelectorAll('.section-reload-btn');
+        reloadBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this._handleSectionReload(btn);
+            });
+        });
+    }
+
+    async _handleSectionReload(btn) {
+        if (btn.classList.contains('reloading')) return;
+
+        // Visual feedback: Start continuous spin
+        btn.classList.add('reloading');
+        
+        this.showStatus('Syncing settings across all tabs...');
+        
+        try {
+            // Give it at least 600ms of spin for visual satisfaction
+            const syncPromise = this.sendMessageAsync({ action: 'force_reload_settings' });
+            const delayPromise = new Promise(resolve => setTimeout(resolve, 600));
+            
+            await Promise.all([syncPromise, delayPromise]);
+
+            // Optional: Re-fetch preferences to ensure UI is fresh
+            const response = await this.sendMessageAsync({ action: 'get_ui_preferences' });
+            if (response?.success) {
+                this.updateAllPreferencesUI(response.preferences);
+            }
+            
+            // Brief "success" state
+            setTimeout(() => {
+                btn.classList.remove('reloading');
+                this.showStatus('Settings synchronized!');
+            }, 200);
+
+        } catch (e) {
+            btn.classList.remove('reloading');
+            this.showStatus('Failed to sync settings.', true);
+        }
     }
 
     _toggleAutomaticMpvFlag(element) {
         element.classList.toggle('disabled');
         this.debouncedSaveAllPreferences();
+    }
+
+    // --- Search & Reorder Logic ---
+    _handleSettingsSearch(query) {
+        const wrapper = document.getElementById('settings-sections-wrapper');
+        const sections = Array.from(wrapper.querySelectorAll('.settings-section'));
+        const normalizedQuery = query.toLowerCase().trim();
+
+        if (!normalizedQuery) {
+            // Restore default order (as defined in HTML)
+            sections.sort((a, b) => 0); // Keep current order or implement a fixed sequence if needed
+            sections.forEach(s => {
+                s.style.display = 'block';
+                s.style.boxShadow = 'none';
+                s.style.borderColor = 'var(--border-primary)';
+            });
+            return;
+        }
+
+        const scoredSections = sections.map(section => {
+            const sectionName = section.dataset.sectionName || '';
+            const settings = Array.from(section.querySelectorAll('.control-group, .setting-item'));
+            
+            let bestScore = 0;
+            if (sectionName.includes(normalizedQuery)) bestScore = 10;
+
+            settings.forEach(setting => {
+                const settingName = setting.dataset.settingName || '';
+                if (settingName.includes(normalizedQuery)) {
+                    bestScore = Math.max(bestScore, 5);
+                    setting.style.backgroundColor = 'rgba(88, 101, 242, 0.1)'; // Subtle highlight
+                } else {
+                    setting.style.backgroundColor = 'transparent';
+                }
+            });
+
+            return { element: section, score: bestScore };
+        });
+
+        // Reorder: Highest score first
+        scoredSections.sort((a, b) => b.score - a.score);
+
+        scoredSections.forEach(item => {
+            wrapper.appendChild(item.element);
+            if (item.score > 0) {
+                item.element.open = true; // Auto-expand matching sections
+                item.element.style.borderColor = 'var(--accent-primary)';
+                item.element.style.boxShadow = '0 0 10px rgba(88, 101, 242, 0.2)';
+            } else {
+                item.element.style.borderColor = 'var(--border-primary)';
+                item.element.style.boxShadow = 'none';
+            }
+        });
+    }
+
+    // --- Keybind Recorder Logic ---
+    _startRecording(btn, input) {
+        // Clear previous state
+        this._stopRecording();
+
+        this.activeRecorder = { btn, input, originalValue: input.value };
+        btn.classList.add('recording');
+        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>'; // Spinner icon
+        input.value = 'Press combination...';
+        input.classList.add('recording-active');
+
+        this.keyHandler = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const forbiddenKeys = ['Control', 'Shift', 'Alt', 'Meta', 'CapsLock', 'Tab'];
+            if (forbiddenKeys.includes(e.key)) return;
+
+            const combo = [];
+            if (e.ctrlKey) combo.push('Ctrl');
+            if (e.shiftKey) combo.push('Shift');
+            if (e.altKey) combo.push('Alt');
+            if (e.metaKey) combo.push('Meta');
+            
+            // Normalize key name
+            let keyName = e.key;
+            if (keyName === ' ') keyName = 'Space';
+            if (keyName.length === 1) keyName = keyName.toUpperCase();
+            
+            combo.push(keyName);
+            
+            const comboStr = combo.join('+');
+            input.value = comboStr;
+            this._stopRecording();
+            this.debouncedSaveAllPreferences();
+        };
+
+        window.addEventListener('keydown', this.keyHandler, true);
+        
+        // Click outside or ESC to cancel
+        this.escHandler = (e) => {
+            if (e.key === 'Escape') {
+                input.value = this.activeRecorder.originalValue;
+                this._stopRecording();
+            }
+        };
+        window.addEventListener('keydown', this.escHandler);
+    }
+
+    _stopRecording() {
+        if (this.activeRecorder) {
+            this.activeRecorder.btn.classList.remove('recording');
+            this.activeRecorder.btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>';
+            this.activeRecorder.input.classList.remove('recording-active');
+            this.activeRecorder = null;
+        }
+        if (this.keyHandler) window.removeEventListener('keydown', this.keyHandler, true);
+        if (this.escHandler) window.removeEventListener('keydown', this.escHandler);
     }
 
     async _resetAutomaticMpvFlags() {
