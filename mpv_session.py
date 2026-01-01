@@ -173,6 +173,11 @@ class MpvSessionManager:
                 )
                 self.playlist_tracker.start_tracking()
 
+                # --- CRITICAL: Start a watcher thread for the restored orphaned process ---
+                # Since this native_host instance didn't start the MPV process, it can't .wait() on it.
+                # We must poll for its existence to trigger the 'mpv_exited' event and playlist clearing.
+                self._start_restored_process_watcher(pid, ipc_path, owner_folder_id)
+
                 logging.info(f"Successfully restored session and tracker for MPV process (PID: {pid}) owned by folder '{owner_folder_id}'.")
                 return {"was_stale": False, "folderId": owner_folder_id, "lastPlayedId": last_played_id}
             else:
@@ -187,6 +192,47 @@ class MpvSessionManager:
             try: os.remove(self.session_file)
             except OSError: pass
             return None
+
+    def _start_restored_process_watcher(self, pid, ipc_path, folder_id):
+        """Starts a background thread to poll for the exit of a restored (orphaned) process."""
+        def watcher():
+            logging.info(f"Restored Process Watcher: Monitoring PID {pid} for folder '{folder_id}'.")
+            while True:
+                time.sleep(1.0)
+                # Check if the process is still alive using the robust check from ipc_utils
+                if not ipc_utils.is_pid_running(pid):
+                    logging.info(f"Restored Process Watcher: Detected exit of orphaned MPV process (PID {pid}).")
+                    
+                    return_code = -1 # Default for orphaned processes where we can't get real code
+                    
+                    # Check for natural completion flag to support auto-clearing
+                    if ipc_path:
+                        ipc_dir = os.path.dirname(ipc_path)
+                        flag_file = os.path.join(ipc_dir, f'mpv_natural_completion_{pid}.flag')
+                        if os.path.exists(flag_file):
+                            if getattr(self, 'manual_quit', False):
+                                logging.info(f"Restored Watcher: Natural completion flag found, but manual_quit is TRUE. Ignoring flag.")
+                            else:
+                                logging.info(f"Restored Watcher: Natural completion flag FOUND. Overriding return code to 99.")
+                                return_code = 99
+                            
+                            try:
+                                os.remove(flag_file)
+                            except Exception as e:
+                                logging.warning(f"Restored Watcher: Failed to remove flag file: {e}")
+
+                    # Notify the extension so it can handle clearing/UI updates
+                    self.send_message({"action": "mpv_exited", "folderId": folder_id, "returnCode": return_code})
+                    self.clear(mpv_return_code=return_code)
+                    break
+                
+                # Also stop watching if this session object is cleared/replaced
+                if not self.is_alive or self.pid != pid:
+                    logging.info(f"Restored Process Watcher: Session state changed. Stopping watcher for PID {pid}.")
+                    break
+
+        watcher_thread = threading.Thread(target=watcher, daemon=True)
+        watcher_thread.start()
 
     def append_batch(self, items, mode="append"):
         """Appends multiple items using a temporary M3U to preserve titles and options natively."""
