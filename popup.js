@@ -457,31 +457,38 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const response = await sendMessageAsync({ action: 'get_playlist', folderId });
         if (response?.success) {
-            renderPlaylist(response.list, response.last_played_id);
+            renderPlaylist(response.list, response.last_played_id, response.isFolderActive);
         }
     }
 
     /**
-     * Renders the playlist items in the popup's playlist container.
-     * @param {Array<object>} playlist The array of playlist items.
+     * Renders the items of the currently selected folder into the playlist container.
+     * @param {Array} playlist - The array of URL items to render.
+     * @param {string} lastPlayedId - The ID of the item that was last played in this folder.
+     * @param {boolean} isFolderActive - Whether this folder is currently being played in MPV.
      */
-    async function renderPlaylist(playlist, lastPlayedId) {
+    async function renderPlaylist(playlist, lastPlayedId, isFolderActive = false) {
         const oldItemCount = playlistContainer.querySelectorAll('.list-item').length;
         const scrollPosition = playlistContainer.scrollTop;
-
-        playlistContainer.innerHTML = ''; // Clear existing content
-        miniItemCountSpan.textContent = playlist?.length || 0;
-
-        const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
-        const highlightEnabled = prefsResponse?.preferences?.enable_active_item_highlight ?? true;
+        playlistContainer.innerHTML = ''; // Clear current content
 
         if (playlist && playlist.length > 0) {
+            const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
+            const highlightEnabled = prefsResponse?.preferences?.enable_active_item_highlight ?? true;
+            const showCopyButton = prefsResponse?.preferences?.show_copy_title_button ?? false;
+
             playlist.forEach((item, index) => {
                 const itemDiv = document.createElement('div');
                 itemDiv.className = 'list-item';
+                
                 if (highlightEnabled && lastPlayedId && item.id === lastPlayedId) {
-                    itemDiv.classList.add('active-item');
+                    if (isFolderActive) {
+                        itemDiv.classList.add('active-item');
+                    } else {
+                        itemDiv.classList.add('last-played-item');
+                    }
                 }
+
                 itemDiv.draggable = true;
                 itemDiv.title = item.url;
                 itemDiv.dataset.url = item.url;
@@ -1169,7 +1176,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const isMiniView = miniControllerView.style.display === 'flex';
             const currentFolderId = miniFolderSelect.value;
             if (isMiniView && currentFolderId === request.folderId) {
-                renderPlaylist(request.playlist, request.last_played_id);
+                renderPlaylist(request.playlist, request.last_played_id, request.isFolderActive);
             }
         }
 

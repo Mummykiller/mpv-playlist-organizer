@@ -31,7 +31,8 @@ local function write_completion_flag()
     -- Ensure trailing slash
     if ipc_dir:sub(-1) ~= "/" then ipc_dir = ipc_dir .. "/" end
     
-    local flag_file_path = ipc_dir .. 'mpv_natural_completion.flag'
+    local pid = utils.getpid()
+    local flag_file_path = ipc_dir .. 'mpv_natural_completion_' .. pid .. '.flag'
     
     log("Attempting to write flag to: " .. flag_file_path)
     

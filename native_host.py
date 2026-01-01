@@ -81,6 +81,8 @@ try:
     import services
     from utils import ipc_utils
     from utils.native_host_handlers import HandlerManager
+    from utils.janitor import Janitor
+    from logging.handlers import RotatingFileHandler
 
     # --- Function to get the appropriate user data directory ---
     def get_user_data_dir():
@@ -90,60 +92,33 @@ try:
     # --- Configuration ---
     DATA_DIR = file_io.DATA_DIR
     LOG_FILE = os.path.join(DATA_DIR, "native_host.log")
-    MAX_LOG_LINES = 2000
+    MAX_LOG_BYTES = 1024 * 1024 * 5 # 5 MB
+    BACKUP_COUNT = 1
     SESSION_FILE = os.path.join(DATA_DIR, "session.json")
     ANILIST_CACHE_FILE = os.path.join(DATA_DIR, "anilist_cache.json")
     TEMP_PLAYLISTS_DIR = os.path.join(DATA_DIR, "temp_playlists")
 
-    class TrimmingFileHandler(logging.FileHandler):
-        """
-        A logging handler that keeps the log file trimmed to a maximum number of lines.
-        When a new line is added, if the line count exceeds the max, the oldest
-        line is removed from the top of the file.
-        """
-        def __init__(self, filename, max_lines=200, mode='a', encoding=None, delay=False):
-            self._max_lines = max_lines
-            super().__init__(filename, mode, encoding, delay)
-            # Trim on initialization in case the file is already too long from a previous run
-            self._trim()
-
-        def emit(self, record):
-            """Emit a record and then trim the log file if necessary."""
-            super().emit(record)
-            self._trim()
-
-        def _trim(self):
-            """Trims the log file to the specified maximum number of lines."""
-            if not os.path.exists(self.baseFilename):
-                return # Nothing to trim
-            try:
-                with open(self.baseFilename, 'r', encoding=self.encoding) as f:
-                    lines = f.readlines()
-                if len(lines) > self._max_lines:
-                    with open(self.baseFilename, 'w', encoding=self.encoding) as f:
-                        f.writelines(lines[-self._max_lines:])
-            except Exception:
-                # We can't log an error here as it would cause a recursion loop.
-                # We'll just let the default handler error mechanism work.
-                self.handleError(None)
-
-    # Setup logging
-    # Ensure the data directory exists before setting up the logger
+    # Ensure the data directory exists before running janitor or setup
     os.makedirs(DATA_DIR, exist_ok=True)
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+    # --- Run Janitor Startup Sweep (Threaded) ---
+    # This rotates logs, wipes temp files, and cleans up stale IPC/pycache.
+    # We run it in a thread to avoid blocking the initial native messaging handshake.
+    janitor = Janitor(DATA_DIR, TEMP_PLAYLISTS_DIR)
+    janitor_thread = threading.Thread(target=janitor.run_startup_sweep, kwargs={'extension_root': SCRIPT_DIR}, daemon=True)
+    janitor_thread.start()
+
     root_logger = logging.getLogger()
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
     root_logger.setLevel(logging.DEBUG) # Changed to DEBUG for better visibility
-    handler = TrimmingFileHandler(LOG_FILE, max_lines=MAX_LOG_LINES, encoding='utf-8')
+    
+    # Use standard RotatingFileHandler instead of custom TrimmingFileHandler
+    handler = RotatingFileHandler(LOG_FILE, maxBytes=MAX_LOG_BYTES, backupCount=BACKUP_COUNT, encoding='utf-8')
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-
-    # Clean up and recreate the temp playlists directory on startup
-    if os.path.exists(TEMP_PLAYLISTS_DIR):
-        shutil.rmtree(TEMP_PLAYLISTS_DIR, ignore_errors=True)
-    os.makedirs(TEMP_PLAYLISTS_DIR, exist_ok=True)
 
     def log_stream(stream, log_level, owner_folder_id):
         """Reads from a stream line by line and logs it."""

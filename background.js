@@ -121,6 +121,7 @@ playlistManager.injectDependencies({
     sendMessageAsync,
     findM3u8InUrl: m3u8_scanner_handlers.findM3u8InUrl,
     callNativeHost,
+    isFolderActive: playback_handlers.isFolderActive,
     MPV_PLAYLIST_COMPLETED_EXIT_CODE: playback_handlers.getMpvPlaylistCompletedExitCode()
 });
 

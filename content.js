@@ -85,8 +85,8 @@ class MpvController {
             // The background has sent an updated list. Render it only if it
             // matches the currently selected folder.
             const currentFolderId = this.uiManager.shadowRoot?.getElementById('folder-select')?.value;
-            if (currentFolderId === request.folderId) {
-                this.playlistUI?.render(request.playlist, request.last_played_id);
+            if (currentFolderId === request.action_folder_id || currentFolderId === request.folderId) {
+                this.playlistUI?.render(request.playlist, request.last_played_id, request.isFolderActive);
             } else if (request.fromContextMenu) {
                 // If the update came from a context menu action for a *different* folder,
                 // the user might switch to that folder later and expect to see the new item.

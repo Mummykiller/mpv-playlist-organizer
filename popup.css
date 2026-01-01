@@ -1207,6 +1207,12 @@ button:disabled {
     font-weight: 700;
 }
 
+/* New style for last-played item when player is NOT active */
+.playlist-container .list-item.last-played-item .url-index {
+    color: var(--accent-primary);
+    font-weight: 700;
+}
+
 .playlist-container .list-item.active-item:hover {
     background-color: rgba(87, 242, 135, 0.2);
 }

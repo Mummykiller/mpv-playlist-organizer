@@ -22,6 +22,15 @@ from services import apply_bypass_script
 from playlist_tracker import PlaylistTracker # Added this import
 from utils.m3u_parser import parse_m3u # Import the new M3U parser
 
+# Constants for file patterns
+DELTA_PREFIX = "delta_"
+DELTA_EXT = ".m3u"
+
+
+# Constants for file patterns
+DELTA_PREFIX = "delta_"
+DELTA_EXT = ".m3u"
+
 class MpvSessionManager:
     def __init__(self, session_file_path, dependencies):
         self.process = None
@@ -35,6 +44,7 @@ class MpvSessionManager:
         self.ipc_manager = None
         self.playlist_tracker = None # New attribute to hold the PlaylistTracker instance
         self.manual_quit = False # Track if the session was closed by the user
+        self.session_cookies = set() # Track cookie files created during this session
 
         # --- Injected Dependencies ---
         self.get_all_folders_from_file = dependencies['get_all_folders_from_file']
@@ -69,6 +79,19 @@ class MpvSessionManager:
         self.playlist = None
         self.owner_folder_id = None
         self.manual_quit = False # Reset manual quit flag for the next session
+
+        # Cleanup session cookies
+        if self.session_cookies:
+            logging.info(f"Cleaning up {len(self.session_cookies)} session cookies.")
+            for cookie_path in list(self.session_cookies):
+                try:
+                    if os.path.exists(cookie_path):
+                        os.remove(cookie_path)
+                        logging.debug(f"Removed session cookie: {cookie_path}")
+                except Exception as e:
+                    logging.warning(f"Failed to remove session cookie {cookie_path}: {e}")
+            self.session_cookies.clear()
+
         if os.path.exists(self.session_file):
             try:
                 os.remove(self.session_file)
@@ -103,10 +126,15 @@ class MpvSessionManager:
                 self.ipc_path = ipc_path
                 self.playlist = folder_data.get("playlist", [])
                 self.owner_folder_id = owner_folder_id
+                self.is_alive = True # Mark as alive so other methods can use it
+                
+                # Initialize the IPC manager for the restored session
+                self.ipc_manager = ipc_utils.IPCSocketManager()
+                if not self.ipc_manager.connect(self.ipc_path):
+                    logging.warning(f"Restored session found, but failed to connect to IPC at {self.ipc_path}.")
+                    # Don't fail the whole restore, but we won't have IPC until it reconnects
                 
                 # Restart the tracker for the restored session
-                all_settings = self.dependencies['get_all_folders_from_file']() # Wait, need settings
-                # Actually, we need to get settings from file_io
                 import file_io
                 settings = file_io.get_settings()
                 
@@ -121,7 +149,7 @@ class MpvSessionManager:
                 self.playlist_tracker.start_tracking()
 
                 logging.info(f"Successfully restored session and tracker for MPV process (PID: {pid}) owned by folder '{owner_folder_id}'.")
-                return {"was_stale": False}
+                return {"was_stale": False, "folderId": owner_folder_id}
             else:
                 logging.warning(f"Stale session for PID {pid} found. Cleaning up.")
                 try:
@@ -185,9 +213,14 @@ class MpvSessionManager:
             # Ensure the temp directory exists
             os.makedirs(self.TEMP_PLAYLISTS_DIR, exist_ok=True)
             
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.m3u', dir=self.TEMP_PLAYLISTS_DIR, delete=False, encoding='utf-8') as tf:
+            # Include PID in the filename for smart cleanup
+            pid = os.getpid()
+            unique_id = uuid.uuid4().hex[:8]
+            temp_filename = f"{DELTA_PREFIX}{pid}_{unique_id}{DELTA_EXT}"
+            temp_path = os.path.join(self.TEMP_PLAYLISTS_DIR, temp_filename)
+            
+            with open(temp_path, 'w', encoding='utf-8') as tf:
                 tf.write(m3u_content)
-                temp_path = tf.name
             
             logging.info(f"Linked Playlist: Created delta M3U at {temp_path}")
 
@@ -195,17 +228,13 @@ class MpvSessionManager:
             # We use loadlist because it parses #EXTINF titles natively.
             res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True)
             
-            # Cleanup the delta file after a short delay to ensure MPV has read it
-            def cleanup():
-                time.sleep(5)
-                try:
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
-                        logging.debug(f"Cleaned up delta M3U: {temp_path}")
-                except Exception as e:
-                    logging.warning(f"Failed to cleanup delta M3U: {e}")
-            
-            threading.Thread(target=cleanup, daemon=True).start()
+            # Cleanup the delta file immediately after MPV has processed the command
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                    logging.debug(f"Cleaned up delta M3U: {temp_path}")
+            except Exception as e:
+                logging.warning(f"Failed to cleanup delta M3U: {e}")
 
             if res and res.get("error") == "success":
                 # If MPV is currently idle (e.g. finished the playlist), 
@@ -308,7 +337,7 @@ class MpvSessionManager:
             
             return {"success": True, "message": "Live playlist reordered."}
 
-    def _launch(self, url_item, folder_id, settings, file_io, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False, full_playlist=None, force_terminal=False):
+    def _launch(self, url_item, folder_id, settings, file_io, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False, full_playlist=None, force_terminal=False, playlist_start_index=0):
         """Launches a new instance of MPV with a single URL and prepares for playlist construction via IPC."""
         logging.info(f"Starting a new MPV instance for URL: {url_item.get('url')}")
         mpv_exe = self.get_mpv_executable()
@@ -338,6 +367,10 @@ class MpvSessionManager:
                 force_terminal=force_terminal,
                 settings=settings
             )
+
+            # Manually add playlist-start if needed (CommandBuilder might not handle it via construct_mpv_command)
+            if playlist_start_index > 0:
+                full_command.insert(1, f"--playlist-start={playlist_start_index}")
 
             popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
 
@@ -435,20 +468,22 @@ class MpvSessionManager:
                 # This handles cases where MPV exits with code 0 but actually finished the playlist.
                 if self.ipc_path:
                     ipc_dir = os.path.dirname(self.ipc_path)
-                    flag_file = os.path.join(ipc_dir, 'mpv_natural_completion.flag')
-                    logging.info(f"Checking for natural completion flag at: {flag_file}")
-                    
-                    if os.path.exists(flag_file):
-                        if getattr(self, 'manual_quit', False):
-                            logging.info(f"Natural completion flag found, but manual_quit is TRUE. Ignoring flag for folder '{f_id}'.")
-                        else:
-                            logging.info(f"Natural completion flag FOUND for folder '{f_id}'. Overriding return code to 99.")
-                            return_code = 99
+                    actual_pid = getattr(self, 'pid', None)
+                    if actual_pid:
+                        flag_file = os.path.join(ipc_dir, f'mpv_natural_completion_{actual_pid}.flag')
+                        logging.info(f"Checking for natural completion flag at: {flag_file}")
                         
-                        try:
-                            os.remove(flag_file)
-                        except Exception as e: 
-                            logging.warning(f"Failed to remove flag file: {e}")
+                        if os.path.exists(flag_file):
+                            if getattr(self, 'manual_quit', False):
+                                logging.info(f"Natural completion flag found, but manual_quit is TRUE. Ignoring flag for folder '{f_id}'.")
+                            else:
+                                logging.info(f"Natural completion flag FOUND for folder '{f_id}'. Overriding return code to 99.")
+                                return_code = 99
+                            
+                            try:
+                                os.remove(flag_file)
+                            except Exception as e: 
+                                logging.warning(f"Failed to remove flag file: {e}")
                     else:
                         logging.info(f"Natural completion flag NOT found for folder '{f_id}'.")
 
@@ -541,6 +576,9 @@ class MpvSessionManager:
         item['is_youtube'] = is_youtube_flag_from_script
         item['disable_http_persistent'] = disable_http_persistent_flag
         item['cookies_file'] = cookies_file
+        if cookies_file:
+            with self.sync_lock:
+                self.session_cookies.add(cookies_file)
         item['enriched'] = True
         return [item]
 
@@ -628,18 +666,14 @@ class MpvSessionManager:
             folder_metadata = all_folders.get(folder_id, {})
             last_played_id = folder_metadata.get("last_played_id")
 
+            playlist_start_index = 0
             if enable_smart_resume and last_played_id:
                 # Find the index of the last played item
-                target_idx = -1
                 for idx, item in enumerate(_url_items_list):
                     if item.get('id') == last_played_id:
-                        target_idx = idx
+                        playlist_start_index = idx
+                        logging.info(f"Smart Resume: Found last played item at index {idx}. Will start playback there.")
                         break
-                
-                if target_idx > 0:
-                    logging.info(f"Smart Resume: Found last_played_id '{last_played_id}' at index {target_idx}. Reordering list.")
-                    # Move the last played item and all following items to the front
-                    _url_items_list = _url_items_list[target_idx:] + _url_items_list[:target_idx]
 
             if is_definitely_m3u_flow:
                 logging.info(f"M3U-Flow suspected. Enriching ALL {len(_url_items_list)} items in parallel...")
@@ -690,8 +724,12 @@ class MpvSessionManager:
             rest_items = []
             playlist_for_launch = _url_items_list
         else:
-            launch_item = _url_items_list[0]
-            rest_items = _url_items_list[1:]
+            # --- Delayed Prepend Logic ---
+            # We launch with exactly the item the user wants to see.
+            launch_item = _url_items_list[playlist_start_index]
+            
+            # We will append the FULL list afterwards to restore correct order.
+            rest_items = _url_items_list
             playlist_for_launch = [launch_item]
 
         if self.pid and not ipc_utils.is_process_alive(self.pid, self.ipc_path):
@@ -729,20 +767,48 @@ class MpvSessionManager:
             start_paused=start_paused, headers=h, disable_http_persistent=d,
             ytdl_raw_options=y, use_ytdl_mpv=u, is_youtube=i,
             full_playlist=playlist_for_launch,
-            force_terminal=force_terminal
+            force_terminal=force_terminal,
+            playlist_start_index=0 # Launch as index 0 initially
         )
 
         if launch_result and launch_result["success"] and rest_items:
             def append_remaining_items():
-                time.sleep(1.5) # Give MPV time to start and initialize IPC
+                time.sleep(2.0) # Reduced delay for faster restoration
                 if not self.is_alive: return
                 
-                logging.info(f"Standard Flow: Batch-appending {len(rest_items)} items for title visibility.")
-                # 1. Immediate Batch Append (Unresolved webpage URLs)
-                # This ensures titles are visible in the playlist ahead-of-time!
-                self.append_batch(rest_items, mode="append")
+                # 1. Identify History (1 to N-1) and Future (N+1 to End)
+                history_items = _url_items_list[:playlist_start_index]
+                future_items = _url_items_list[playlist_start_index + 1:]
                 
-                logging.info(f"Standard Flow: Starting sequential resolution for {len(rest_items)} items.")
+                logging.info(f"Standard Flow (Phase 1): Appending {len(future_items)} future items.")
+                # 2. Append Future Items (They go to the end, doesn't affect current playback)
+                if future_items:
+                    self.append_batch(future_items, mode="append")
+                
+                if history_items:
+                    logging.info(f"Standard Flow (Phase 2): Prepending {len(history_items)} history items.")
+                    # 3. Append History Items to the end temporarily
+                    self.append_batch(history_items, mode="append")
+                    
+                    # 4. Move History Items to the very front one by one
+                    # They are currently at the end of the playlist. 
+                    # Total length is len(_url_items_list).
+                    total_len = len(_url_items_list)
+                    history_count = len(history_items)
+                    
+                    for i in range(history_count):
+                        # The items to move are at the VERY end
+                        # Move from (TotalLen - HistoryCount + i) to index (i)
+                        source_idx = total_len - history_count
+                        target_idx = i
+                        logging.debug(f"Standard Flow: Moving history item from {source_idx} to {target_idx}")
+                        self.ipc_manager.send({"command": ["playlist-move", source_idx, target_idx]})
+                
+                logging.info("Standard Flow: Playlist order restored successfully.")
+                
+                # 5. Sequential Resolution and Update (The original logic for metadata)
+                # Since we already updated 'self.playlist' in append_batch, we just need to resolve them
+                logging.info(f"Standard Flow: Starting sequential resolution for metadata.")
                 # 2. Sequential Resolution and Update
                 for idx, item in enumerate(rest_items):
                     if not self.is_alive: break

@@ -5,6 +5,12 @@ import os
 import re # Add re import
 import platform # Add platform import
 import logging
+import file_io
+import uuid
+
+# Constants for file patterns
+COOKIE_PREFIX = "mpv_cookies_"
+COOKIE_EXT = ".txt"
 
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
@@ -36,8 +42,18 @@ def get_cookies_file(browser, url):
             return _COOKIES_CACHE["path"]
 
     try:
-        fd, temp_path = tempfile.mkstemp(suffix='.txt', prefix='mpv_cookies_')
-        os.close(fd)
+        # Use a dedicated directory for cookies within the app data dir
+        cookies_dir = os.path.join(file_io.DATA_DIR, "temp_playlists", "cookies")
+        os.makedirs(cookies_dir, exist_ok=True)
+        
+        # Include PID in the filename for smart cleanup: mpv_cookies_PID_uuid.txt
+        pid = os.getpid()
+        unique_id = uuid.uuid4().hex[:8]
+        temp_filename = f"{COOKIE_PREFIX}{pid}_{unique_id}{COOKIE_EXT}"
+        temp_path = os.path.join(cookies_dir, temp_filename)
+        
+        # Create empty file to ensure we have write access
+        with open(temp_path, 'w') as f: pass
         
         # Run a separate yt-dlp call just to dump cookies
         cookie_cmd = [
