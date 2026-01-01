@@ -18,6 +18,7 @@ let dependencies = {
     handleMpvExited: () => {},
     handleUpdateLastPlayed: () => {},
     handleUpdateItemResumeTime: () => {},
+    handleSessionRestored: () => {},
 };
 
 /**
@@ -29,6 +30,7 @@ export function injectDependencies(deps) {
     dependencies.handleMpvExited = deps.handleMpvExited;
     dependencies.handleUpdateLastPlayed = deps.handleUpdateLastPlayed;
     dependencies.handleUpdateItemResumeTime = deps.handleUpdateItemResumeTime;
+    dependencies.handleSessionRestored = deps.handleSessionRestored;
 }
 
 /**
@@ -69,7 +71,10 @@ function connectToNativeHost() {
             if (request_id && requestPromises[request_id]) {
                 requestPromises[request_id].resolve(responseData);
                 delete requestPromises[request_id];
-            } else if (responseData.action === 'mpv_exited') {
+            }
+            
+            // Handle actions (including restore_session result which is returned as an action)
+            if (responseData.action === 'mpv_exited') {
                 dependencies.handleMpvExited(responseData);
             } else if (responseData.action === 'update_last_played') {
                 dependencies.handleUpdateLastPlayed(responseData);
@@ -77,17 +82,19 @@ function connectToNativeHost() {
                 dependencies.handleUpdateItemResumeTime(responseData);
             } else if (responseData.log) {
                 dependencies.broadcastLog(responseData.log);
-            } else if (responseData.action === 'session_restored' && responseData.result) {
-                if (responseData.result.was_stale) {
-                    dependencies.handleMpvExited(responseData.result);
-                }
-            } else {
-                console.warn("Received message from native host without a matching request ID:", response);
+            } else if (responseData.action === 'session_restored') {
+                dependencies.handleSessionRestored(responseData);
+            } else if (request_id === undefined) {
+                console.warn("Received unexpected message from native host:", response);
             }
         });
 
         connectionStatus = ConnectionStatus.CONNECTED;
         dependencies.broadcastLog({ text: `[Background]: Successfully connected to native host.`, type: 'info' });
+        
+        // Trigger session restoration immediately upon connection
+        nativePort.postMessage({ action: 'restore_session' });
+        
         resolve();
     });
 

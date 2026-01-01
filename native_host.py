@@ -232,16 +232,15 @@ try:
             logging.error("Standard input/output is missing. If on Windows, ensure the registry key points to 'python.exe' and not 'pythonw.exe'.")
             sys.exit(1)
 
-        logging.info("Native host started in messaging mode.")
-
-        # On startup, try to restore a session. The result will be handled by the
-        # background script, which might trigger cleanup for a stale session.
-        restore_result = mpv_session.restore()
-
-        if restore_result:
-            send_message({"action": "session_restored", "result": restore_result})
+        def handle_restore_session(message):
+            """Manual trigger for session restoration from the extension."""
+            res = mpv_session.restore()
+            if res:
+                return {"success": True, "action": "session_restored", "result": res}
+            return {"success": True, "action": "session_restored", "result": None}
 
         COMMAND_HANDLERS = {
+            'restore_session': handle_restore_session,
             'play': handler_manager.handle_play,
             'play_batch': handler_manager.handle_play_batch,
             'play_m3u': handler_manager.handle_play_m3u,
