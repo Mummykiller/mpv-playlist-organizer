@@ -6,6 +6,10 @@
  * @returns {Promise<any>} A promise that resolves with the response.
  */
 const sendMessageAsyncInternal = (payload) => new Promise((resolve, reject) => {
+    // Safety check: if extension context is invalidated, fail gracefully
+    if (!chrome.runtime?.id) {
+        return reject(new Error("Extension context invalidated."));
+    }
     chrome.runtime.sendMessage(payload, (response) => {
         if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
         resolve(response);

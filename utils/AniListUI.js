@@ -184,14 +184,17 @@ class AniListUI {
      * @param {boolean} [forceRefresh=false] - Whether to force a refresh of the data.
      */
     async fetchReleases(forceRefresh = false) {
-        if (!this.shadowRoot) return;
+        if (!this.shadowRoot || !this.controller.checkContext()) return;
         const anilistContent = this.shadowRoot.getElementById('anilist-releases-list');
         if (!anilistContent) return;
 
         anilistContent.innerHTML = '<div class="loading-spinner"></div>';
         try {
             const releases = await AniListRenderer.fetchReleases(forceRefresh);
-            AniListRenderer.render(anilistContent, releases);
+            // Re-check context after async call before rendering
+            if (this.controller.checkContext()) {
+                AniListRenderer.render(anilistContent, releases);
+            }
         } catch (error) {
             const errorElement = document.createElement('li');
             errorElement.className = 'anilist-error';

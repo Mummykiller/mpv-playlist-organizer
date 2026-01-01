@@ -25,11 +25,8 @@ from utils.m3u_parser import parse_m3u # Import the new M3U parser
 # Constants for file patterns
 DELTA_PREFIX = "delta_"
 DELTA_EXT = ".m3u"
+NATURAL_COMPLETION_FLAG = "mpv_natural_completion_"
 
-
-# Constants for file patterns
-DELTA_PREFIX = "delta_"
-DELTA_EXT = ".m3u"
 
 class MpvSessionManager:
     def __init__(self, session_file_path, dependencies):
@@ -134,6 +131,34 @@ class MpvSessionManager:
                     logging.warning(f"Restored session found, but failed to connect to IPC at {self.ipc_path}.")
                     # Don't fail the whole restore, but we won't have IPC until it reconnects
                 
+                # Try to identify current playing item for UI sync
+                last_played_id = None
+                if self.ipc_manager.is_connected():
+                    try:
+                        # Get current path and title from MPV
+                        path_resp = self.ipc_manager.send({"command": ["get_property", "path"]}, expect_response=True)
+                        title_resp = self.ipc_manager.send({"command": ["get_property", "media-title"]}, expect_response=True)
+                        
+                        current_path = path_resp.get("data") if path_resp and path_resp.get("error") == "success" else None
+                        current_title = title_resp.get("data") if title_resp and title_resp.get("error") == "success" else None
+
+                        if current_path or current_title:
+                            for item in self.playlist:
+                                # 1. Check ID directly if we can (unlikely unless we store it in a custom property)
+                                # 2. Check URL match
+                                if current_path and (item.get('url') == current_path or item.get('original_url') == current_path):
+                                    last_played_id = item.get('id')
+                                    break
+                                # 3. Check Title match
+                                if current_title and item.get('title') == current_title:
+                                    last_played_id = item.get('id')
+                                    break
+                            
+                            if last_played_id:
+                                logging.info(f"Restore: Identified active item ID: {last_played_id}")
+                    except Exception as e:
+                        logging.warning(f"Failed to query active item during restore: {e}")
+                
                 # Restart the tracker for the restored session
                 import file_io
                 settings = file_io.get_settings()
@@ -149,7 +174,7 @@ class MpvSessionManager:
                 self.playlist_tracker.start_tracking()
 
                 logging.info(f"Successfully restored session and tracker for MPV process (PID: {pid}) owned by folder '{owner_folder_id}'.")
-                return {"was_stale": False, "folderId": owner_folder_id}
+                return {"was_stale": False, "folderId": owner_folder_id, "lastPlayedId": last_played_id}
             else:
                 logging.warning(f"Stale session for PID {pid} found. Cleaning up.")
                 try:

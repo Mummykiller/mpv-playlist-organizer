@@ -5,7 +5,7 @@ import sys
 import time
 import re
 import shutil
-from utils.ipc_utils import IPC_DIR_LINUX, is_pid_running
+from utils.ipc_utils import IPC_DIR_LINUX, is_pid_running, IPCSocketManager
 import mpv_session
 from utils import url_analyzer, native_host_handlers
 
@@ -22,9 +22,9 @@ class Janitor:
     def clean_temp_dir(self):
         """
         Smart cleanup for temp playlists and cookies.
-        - Removes files for dead PIDs immediately.
+        - Removes files for dead PIDs after a 24-hour grace period (to support MPV persistence).
         - Removes files older than 7 days even if PID is alive (prevents zombie accumulation).
-        - Removes unmatched temp files older than 24 hours.
+        - Removes unmatched temp files older than 48 hours.
         """
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir, exist_ok=True)
@@ -32,7 +32,8 @@ class Janitor:
 
         logging.info(f"Janitor: Running smart cleanup for {self.temp_dir}")
         now = time.time()
-        one_day_ago = now - (24 * 3600)
+        one_day_ago = now - 86400
+        two_days_ago = now - (2 * 86400)
         seven_days_ago = now - (7 * 24 * 3600)
 
         # Import patterns from source modules to avoid duplication
@@ -70,23 +71,27 @@ class Janitor:
                             is_running = is_pid_running(pid)
                             file_mtime = os.path.getmtime(file_path)
 
+                            # If PID is dead, only delete if older than 24 hour grace period
                             if not is_running:
-                                logging.info(f"Janitor: Removing stale {ext} file for dead PID {pid}: {filename}")
-                                os.remove(file_path)
+                                if file_mtime < one_day_ago:
+                                    logging.info(f"Janitor: Removing stale {ext} file for dead PID {pid}: {filename}")
+                                    os.remove(file_path)
                             elif file_mtime < seven_days_ago:
                                 logging.info(f"Janitor: Removing ancient {ext} file (PID {pid} alive but file > 7 days old): {filename}")
                                 os.remove(file_path)
 
+                        except FileNotFoundError: pass # Already deleted
                         except (ValueError, OSError) as e:
                             logging.warning(f"Janitor: Error removing stale file {filename}: {e}")
                         break # Found match, move to next file
                 
-                # Fallback: only delete known extensions if older than 24 hours
+                # Fallback: only delete known extensions if older than 48 hours
                 if not matched and any(filename.lower().endswith(e) for e in ['.m3u', '.json', '.txt', '.flag']):
                     try:
-                        if os.path.getmtime(file_path) < one_day_ago:
+                        if os.path.getmtime(file_path) < two_days_ago:
                             logging.info(f"Janitor: Removing old temporary file (no PID match): {filename}")
                             os.remove(file_path)
+                    except FileNotFoundError: pass
                     except OSError as e:
                         logging.warning(f"Janitor: Error removing old file {filename}: {e}")
 
@@ -111,11 +116,16 @@ class Janitor:
         if not os.path.exists(IPC_DIR_LINUX):
             return
 
+        # Check for directory permissions before proceeding
+        if not os.access(IPC_DIR_LINUX, os.R_OK | os.W_OK):
+            logging.debug(f"Janitor: Skipping IPC cleanup due to lack of permissions on {IPC_DIR_LINUX}")
+            return
+
         logging.info(f"Janitor: Checking for stale IPC resources in {IPC_DIR_LINUX}")
         
         # Exact pattern for sockets and flags
         socket_re = re.compile(r'^mpv-socket-(?P<pid>\d+)$')
-        flag_re = re.compile(r'^mpv_natural_completion_(?P<pid>\d+)\.flag$')
+        flag_re = re.compile(re.escape(mpv_session.NATURAL_COMPLETION_FLAG) + r'(?P<pid>\d+)\.flag$')
         
         try:
             for item in os.listdir(IPC_DIR_LINUX):
@@ -127,8 +137,31 @@ class Janitor:
                     try:
                         pid = int(s_match.group('pid'))
                         if not is_pid_running(pid):
-                            logging.info(f"Janitor: Removing stale socket for dead PID {pid}: {item}")
-                            os.remove(item_path)
+                            # CRITICAL FIX: The PID in the filename is the *native_host* PID.
+                            # Even if the native host is dead, the MPV process using this socket might still be alive
+                            # (e.g. restoration scenario). We must check if the socket itself is responsive.
+                            
+                            is_socket_responsive = False
+                            try:
+                                # Try to connect and ping MPV
+                                manager = IPCSocketManager()
+                                if manager.connect(item_path, timeout=0.5):
+                                    # Verify the connected process is alive
+                                    resp = manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=0.5)
+                                    manager.close()
+                                    
+                                    if resp and resp.get("error") == "success":
+                                        mpv_pid = resp.get("data")
+                                        if mpv_pid and is_pid_running(mpv_pid):
+                                            is_socket_responsive = True
+                                            logging.info(f"Janitor: Preserving orphan socket {item} because MPV (PID {mpv_pid}) is responding.")
+                            except Exception as e:
+                                logging.debug(f"Janitor: Socket check failed for {item}: {e}")
+
+                            if not is_socket_responsive:
+                                logging.info(f"Janitor: Removing stale socket for dead Host PID {pid}: {item}")
+                                os.remove(item_path)
+                    except FileNotFoundError: pass
                     except (ValueError, OSError) as e:
                         logging.warning(f"Janitor: Error removing stale socket {item}: {e}")
                     continue
@@ -141,6 +174,7 @@ class Janitor:
                         if not is_pid_running(pid):
                             logging.info(f"Janitor: Removing stale flag for dead PID {pid}: {item}")
                             os.remove(item_path)
+                    except FileNotFoundError: pass
                     except (ValueError, OSError) as e:
                         logging.warning(f"Janitor: Error removing stale flag {item}: {e}")
                     continue
@@ -155,21 +189,45 @@ class Janitor:
         if not root_path or not os.path.exists(root_path):
             return
 
+        # Check for directory permissions before proceeding
+        if not os.access(root_path, os.R_OK):
+            logging.debug(f"Janitor: Skipping pycache cleanup due to lack of permissions on {root_path}")
+            return
+
         logging.info(f"Janitor: Cleaning up __pycache__ in {root_path}")
         for root, dirs, files in os.walk(root_path):
             if "__pycache__" in dirs:
                 pycache_path = os.path.join(root, "__pycache__")
                 try:
-                    shutil.rmtree(pycache_path)
-                    logging.info(f"Janitor: Removed {pycache_path}")
+                    # Double check we have permission to write/delete in this specific pycache dir
+                    if os.access(pycache_path, os.W_OK):
+                        shutil.rmtree(pycache_path)
+                        logging.info(f"Janitor: Removed {pycache_path}")
                     # Remove from dirs so os.walk doesn't try to go into it
                     dirs.remove("__pycache__")
                 except Exception as e:
                     logging.warning(f"Janitor: Failed to remove {pycache_path}: {e}")
 
     def run_startup_sweep(self, extension_root=None):
-        """Executes a full cleanup suite on startup."""
-        self.clean_temp_dir()
-        self.cleanup_stale_ipc()
-        if extension_root:
-            self.cleanup_pycache(extension_root)
+        """Executes a full cleanup suite on startup with concurrency protection."""
+        lock_file = os.path.join(self.data_dir, ".janitor.lock")
+        try:
+            # Simple lock: If lock file is older than 5 minutes, assume it's stale
+            if os.path.exists(lock_file) and (time.time() - os.path.getmtime(lock_file)) < 300:
+                logging.debug("Janitor: Another sweep is recently active. Skipping.")
+                return
+
+            with open(lock_file, 'w') as f:
+                f.write(str(os.getpid()))
+
+            self.clean_temp_dir()
+            self.cleanup_stale_ipc()
+            # We skip pycache cleanup on standard startup to avoid race conditions and unnecessary disk I/O.
+        except Exception as e:
+            logging.warning(f"Janitor: Startup sweep encountered an error: {e}")
+        finally:
+            if os.path.exists(lock_file):
+                try:
+                    os.remove(lock_file)
+                except Exception:
+                    pass

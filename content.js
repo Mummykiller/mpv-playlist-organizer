@@ -20,6 +20,10 @@ function debounce(func, wait) {
 }
 
 const sendMessageAsync = (payload) => new Promise((resolve, reject) => {
+    // Safety check: if extension context is invalidated, fail gracefully instead of throwing TypeError
+    if (!chrome.runtime?.id) {
+        return reject(new Error("Extension context invalidated."));
+    }
     chrome.runtime.sendMessage(payload, (response) => {
         if (chrome.runtime.lastError) {
             // The error message is more useful than a generic rejection.
@@ -51,11 +55,38 @@ class MpvController {
         this.showCopyTitleButton = false; // New: Preference for the copy title button
         this.lastRightClickedElement = null; // New: To track right-clicks for context menu actions
         this.keybinds = { add: null, playPlaylist: null, toggle: null, openPopup: null };
+        this.observer = null; // Store observer for cleanup
 
         // Bind `this` for methods that are used as event listeners or callbacks
         this.handleMessage = this.handleMessage.bind(this);
         this.handleFullscreenChange = this.handleFullscreenChange.bind(this); // This is correct
+        this.handleMouseDown = this.handleMouseDown.bind(this);
         this.handlePageUpdate = debounce(this.handlePageUpdate.bind(this), 250); // Debounce the handler
+    }
+
+    /**
+     * Handles mousedown to capture right-click targets safely.
+     */
+    handleMouseDown(event) {
+        if (event.button === 2) { // Right-click
+             this.lastRightClickedElement = event.target;
+        }
+    }
+
+    /**
+     * Checks if the extension context is still valid.
+     * If not, it triggers a silent teardown.
+     * @returns {boolean} True if context is valid, false otherwise.
+     */
+    checkContext() {
+        if (!chrome.runtime?.id) {
+            if (!this.isTearingDown) {
+                console.warn("MPV Controller: Extension context invalidated detected. Tearing down.");
+                this.teardown();
+            }
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -65,6 +96,9 @@ class MpvController {
      * @param {Function} sendResponse - Function to call to send a response.
      */
     handleMessage(request, sender, sendResponse) {
+        // Critical safety check: If we are in the middle of tearing down, ignore incoming messages.
+        if (this.isTearingDown) return;
+
         if (request.action === 'init_ui_state' && this.uiManager.controllerHost) {
             // The background script has sent the initial state. Apply it now.
             // This is the single point of truth for whether the UI should be visible on load.
@@ -77,14 +111,17 @@ class MpvController {
         } else if (request.m3u8) {
             this.detectedUrl = request.m3u8;
             // Report the detected stream URL to the background script
-            chrome.runtime.sendMessage({ action: 'report_detected_url', url: this.detectedUrl });
+            if (this.checkContext()) {
+                chrome.runtime.sendMessage({ action: 'report_detected_url', url: this.detectedUrl });
+            }
             // Call the global UI update function
             // Update the button state, which will also update the status banner.
             this.updateAddButtonState();
         } else if (request.action === 'render_playlist') {
             // The background has sent an updated list. Render it only if it
             // matches the currently selected folder.
-            const currentFolderId = this.uiManager.shadowRoot?.getElementById('folder-select')?.value;
+            if (!this.uiManager.shadowRoot) return;
+            const currentFolderId = this.uiManager.shadowRoot.getElementById('folder-select')?.value;
             if (currentFolderId === request.action_folder_id || currentFolderId === request.folderId) {
                 this.playlistUI?.render(request.playlist, request.last_played_id, request.isFolderActive);
             } else if (request.fromContextMenu) {
@@ -100,8 +137,9 @@ class MpvController {
         } else if (request.action === 'last_folder_changed') {
             // The selected folder was changed in another context (e.g., the popup).
             // We need to sync our dropdowns to reflect this change.
-            const fullSelect = this.uiManager.shadowRoot?.getElementById('folder-select');
-            const compactSelect = this.uiManager.shadowRoot?.getElementById('compact-folder-select');
+            if (!this.uiManager.shadowRoot) return;
+            const fullSelect = this.uiManager.shadowRoot.getElementById('folder-select');
+            const compactSelect = this.uiManager.shadowRoot.getElementById('compact-folder-select');
             if (fullSelect && compactSelect && request.folderId) {
                 // Check if the value is different to avoid redundant playlist refreshes.
                 if (fullSelect.value !== request.folderId) {
@@ -264,9 +302,10 @@ class MpvController {
     }
 
     switchUi(uiMode, saveState = true) {
-        const fullUiContainer = this.uiManager.shadowRoot?.getElementById('full-ui-container');
-        const compactUiContainer = this.uiManager.shadowRoot?.getElementById('compact-ui-container');
-        const toggleBtn = this.uiManager.shadowRoot?.getElementById('btn-toggle-ui-mode');
+        if (!this.uiManager.shadowRoot) return;
+        const fullUiContainer = this.uiManager.shadowRoot.getElementById('full-ui-container');
+        const compactUiContainer = this.uiManager.shadowRoot.getElementById('compact-ui-container');
+        const toggleBtn = this.uiManager.shadowRoot.getElementById('btn-toggle-ui-mode');
         const fullIcon = toggleBtn?.querySelector('.icon-full-ui');
         const compactIcon = toggleBtn?.querySelector('.icon-compact-ui');
 
@@ -416,6 +455,7 @@ class MpvController {
      * @param {object} preference - The preference object to save (e.g., {pinned: true}).
      */
     savePreference(preference) {
+        if (!this.checkContext()) return;
         chrome.runtime.sendMessage({
             action: 'set_ui_preferences',
             preferences: preference
@@ -719,17 +759,18 @@ class MpvController {
 
     /** Binds listeners for the main header (minimize, pin, UI mode, AniList). */
     _bindHeaderControls() {
-        this.uiManager.shadowRoot.getElementById('btn-toggle-minimize').addEventListener('click', () => this.setMinimizedState(true));
+        if (!this.uiManager.shadowRoot) return;
+        this.uiManager.shadowRoot.getElementById('btn-toggle-minimize')?.addEventListener('click', () => this.setMinimizedState(true));
 
-        this.uiManager.shadowRoot.getElementById('btn-toggle-pin').addEventListener('click', () => this.setPinState(!this.isPinned));
+        this.uiManager.shadowRoot.getElementById('btn-toggle-pin')?.addEventListener('click', () => this.setPinState(!this.isPinned));
 
-        this.uiManager.shadowRoot.getElementById('btn-toggle-stub').addEventListener('click', () => {
+        this.uiManager.shadowRoot.getElementById('btn-toggle-stub')?.addEventListener('click', () => {
             this.showMinimizedStub = !this.showMinimizedStub;
             this.savePreference({ show_minimized_stub: this.showMinimizedStub });
             this._updateStubButtonState();
         });
 
-        this.uiManager.shadowRoot.getElementById('btn-toggle-ui-mode').addEventListener('click', () => {
+        this.uiManager.shadowRoot.getElementById('btn-toggle-ui-mode')?.addEventListener('click', () => {
             const newMode = this.currentUiMode === 'full' ? 'compact' : 'full';
             this.switchUi(newMode);
         });
@@ -748,14 +789,19 @@ class MpvController {
 
     /** Binds listeners for the primary action buttons (Play, Add, Clear, etc.). */
     _bindActionControls() {
+        if (!this.uiManager.shadowRoot) return;
+
         const getCurrentFolderId = () => {
+            if (!this.uiManager.shadowRoot) return null;
             const folderSelect = this.uiManager.shadowRoot.getElementById('folder-select');
             const compactFolderSelect = this.uiManager.shadowRoot.getElementById('compact-folder-select');
-            return this.currentUiMode === 'full' ? folderSelect.value : compactFolderSelect.value;
+            return this.currentUiMode === 'full' ? folderSelect?.value : compactFolderSelect?.value;
         };
 
         const handleAddClick = async () => {
-            await this.addDetectedUrlToFolder(getCurrentFolderId(), { isUiVisible: true });
+            const folderId = getCurrentFolderId();
+            if (!folderId) return;
+            await this.addDetectedUrlToFolder(folderId, { isUiVisible: true });
         };
 
         const handlePlayClick = () => {
@@ -766,6 +812,7 @@ class MpvController {
 
         const handleClearClick = async () => {
             const folderId = getCurrentFolderId();
+            if (!folderId) return;
             const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
             if (prefsResponse?.preferences?.confirm_clear_playlist ?? true) {
                 const confirmed = await this.showPageLevelConfirmation(`Are you sure you want to clear the playlist in "${folderId}"?`);
@@ -789,6 +836,7 @@ class MpvController {
 
         const handlePlayNewClick = async () => {
             const folderId = getCurrentFolderId();
+            if (!folderId) return;
             const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
             if (prefsResponse?.preferences?.confirm_play_new ?? true) {
                 const confirmed = await this.showPageLevelConfirmation("Launching a new MPV instance while another is running may cause issues. Continue?");
@@ -802,10 +850,10 @@ class MpvController {
 
         const actionMap = { add: handleAddClick, play: handlePlayClick, clear: handleClearClick, 'close-mpv': handleCloseMpvClick };
         for (const [action, handler] of Object.entries(actionMap)) {
-            this.uiManager.shadowRoot.getElementById(`btn-${action}`).addEventListener('click', handler);
-            this.uiManager.shadowRoot.getElementById(`btn-compact-${action}`).addEventListener('click', handler);
+            this.uiManager.shadowRoot.getElementById(`btn-${action}`)?.addEventListener('click', handler);
+            this.uiManager.shadowRoot.getElementById(`btn-compact-${action}`)?.addEventListener('click', handler);
         }
-        this.uiManager.shadowRoot.getElementById('btn-play-new').addEventListener('click', handlePlayNewClick);
+        this.uiManager.shadowRoot.getElementById('btn-play-new')?.addEventListener('click', handlePlayNewClick);
     }
 
     /**
@@ -839,21 +887,23 @@ class MpvController {
      * @private
      */
     _bindLogControls() {
-        this.uiManager.shadowRoot.getElementById('btn-toggle-log').addEventListener('click', () => {
+        if (!this.uiManager.shadowRoot) return;
+        this.uiManager.shadowRoot.getElementById('btn-toggle-log')?.addEventListener('click', () => {
             const logContainer = this.uiManager.shadowRoot.getElementById('log-container');
+            if (!logContainer) return;
             const isCurrentlyVisible = !logContainer.classList.contains('log-hidden');
             this.setLogVisibility(!isCurrentlyVisible);
         });
 
-        this.uiManager.shadowRoot.getElementById('btn-clear-log').addEventListener('click', () => {
+        this.uiManager.shadowRoot.getElementById('btn-clear-log')?.addEventListener('click', () => {
             this.addLogEntry({ text: '[Content]: Log cleared.', type: 'info' }, true);
         });
 
-        this.uiManager.shadowRoot.getElementById('btn-filter-info').addEventListener('click', () => {
+        this.uiManager.shadowRoot.getElementById('btn-filter-info')?.addEventListener('click', () => {
             this.setLogFilters({ info: !this.activeLogFilters.info });
         });
 
-        this.uiManager.shadowRoot.getElementById('btn-filter-error').addEventListener('click', () => {
+        this.uiManager.shadowRoot.getElementById('btn-filter-error')?.addEventListener('click', () => {
             this.setLogFilters({ error: !this.activeLogFilters.error });
         });
     }
@@ -870,6 +920,7 @@ class MpvController {
 
             if (restoreBtn && playBtn) {
                 restoreBtn.addEventListener('click', async (e) => {
+                    if (!this.checkContext()) return;
                     // Prevent default behavior, especially if it's a right-click for dragging
                     e.preventDefault();
 
@@ -984,11 +1035,13 @@ class MpvController {
             } else if (this.keybinds.openPopup && combo === normalize(this.keybinds.openPopup)) {
                 e.preventDefault();
                 e.stopPropagation();
-                sendMessageAsync({ action: 'open_popup' }).then(response => {
-                    if (!response || !response.success) {
-                        this.addLogEntry({ text: `[Content]: Failed to open popup: ${response?.error || 'Unknown error'}`, type: 'error' });
-                    }
-                });
+                if (this.checkContext()) {
+                    sendMessageAsync({ action: 'open_popup' }).then(response => {
+                        if (!response || !response.success) {
+                            this.addLogEntry({ text: `[Content]: Failed to open popup: ${response?.error || 'Unknown error'}`, type: 'error' });
+                        }
+                    });
+                }
             }
         }, true);
     }
@@ -1047,8 +1100,11 @@ class MpvController {
      */
     _bindWindowEvents() {
         if (!this.uiManager.controllerHost) return;
-        const debouncedReposition = debounce(() => {
+        this._handleResize = debounce(() => {
             // --- New Resize Logic ---
+            // Add a null check to prevent crashes if teardown happened while debounced
+            if (!this.uiManager.controllerHost) return;
+
             if (this.uiManager.controllerHost.style.display === 'none') {
                 // If the main controller is hidden, just validate the minimized stub.
                 this.validateAndRepositionMinimizedStub();
@@ -1086,7 +1142,7 @@ class MpvController {
                 if (originalLeft <= maxX && originalTop <= maxY) this.preResizePosition = null;
             }
         }, 250);
-        window.addEventListener('resize', debouncedReposition);
+        window.addEventListener('resize', this._handleResize);
     }
 
     /**
@@ -1223,7 +1279,9 @@ class MpvController {
         this.anilistUI.bindEvents();
         this.bindEventListeners();
         await this.updateFolderDropdowns();
-        chrome.runtime.sendMessage({ action: 'content_script_init' });
+        if (this.checkContext()) {
+            chrome.runtime.sendMessage({ action: 'content_script_init' });
+        }
         console.log("MPV Controller content script initialized and ready.");
 
         // After initializing, check if we are in fullscreen mode and hide the UI if so.
@@ -1298,7 +1356,8 @@ class MpvController {
     }
 
     addLogEntry(logObject, clear = false) {
-        const logContainer = this.uiManager.shadowRoot?.getElementById('log-container');
+        if (!this.uiManager.shadowRoot) return; // UI not present, do nothing.
+        const logContainer = this.uiManager.shadowRoot.getElementById('log-container');
         if (!logContainer) return; // UI not present, do nothing.
         const placeholder = this.uiManager.shadowRoot.getElementById('log-placeholder');
 
@@ -1380,9 +1439,10 @@ class MpvController {
     }
 
     refreshPlaylist() {
+        if (!this.uiManager.shadowRoot) return;
         // The folder dropdowns are always kept in sync, so we can reliably get the
         // current folder ID from the main dropdown without checking the UI mode.
-        const folderSelect = this.uiManager.shadowRoot?.getElementById('folder-select');
+        const folderSelect = this.uiManager.shadowRoot.getElementById('folder-select');
         if (!folderSelect || !folderSelect.value) {
             return; // UI not ready or no folder selected.
         }
@@ -1399,13 +1459,17 @@ class MpvController {
         return new Promise((resolve) => {
             chrome.runtime.sendMessage({ action: 'is_mpv_running' }, (response) => {
                 if (chrome.runtime.lastError) {
-                    this.addLogEntry({ text: `[Content]: Error checking MPV status: ${chrome.runtime.lastError.message}`, type: 'error' });
+                    if (!this.isTearingDown) {
+                        this.addLogEntry({ text: `[Content]: Error checking MPV status: ${chrome.runtime.lastError.message}`, type: 'error' });
+                    }
                     return resolve(false);
                 }
                 if (response?.success) {
                     resolve(response.is_running);
                 } else {
-                    this.addLogEntry({ text: `[Content]: Failed to get MPV status: ${response?.error || 'Unknown error'}`, type: 'error' });
+                    if (!this.isTearingDown) {
+                        this.addLogEntry({ text: `[Content]: Failed to get MPV status: ${response?.error || 'Unknown error'}`, type: 'error' });
+                    }
                     resolve(false);
                 }
             });
@@ -1439,11 +1503,14 @@ class MpvController {
      * @param {object} data - Additional data for the action (e.g., {url: '...'} or {data: {index: 1}}).
      */
     sendCommandToBackground(action, folderId, data = {}) {
+        if (this.isTearingDown) return;
         const payload = { action, folderId, ...data, tabId: this.tabId };
 
         chrome.runtime.sendMessage(payload, (response) => {
             if (chrome.runtime.lastError) {
-                this.addLogEntry({ text: `[Content]: Error sending '${action}': ${chrome.runtime.lastError.message}`, type: 'error' });
+                if (!this.isTearingDown) {
+                    this.addLogEntry({ text: `[Content]: Error sending '${action}': ${chrome.runtime.lastError.message}`, type: 'error' });
+                }
                 return;
             }
 
@@ -1453,11 +1520,11 @@ class MpvController {
                     this.playlistUI?.render(response.list, response.last_played_id);
                 }
                 // Log success/info messages from the background script.
-                if (response.message && action !== 'get_playlist') {
+                if (response.message && action !== 'get_playlist' && !this.isTearingDown) {
                     this.addLogEntry({ text: `[Background]: ${response.message}`, type: 'info' });
                 }
                 // Also log any error messages from the background script.
-                if (response.error) {
+                if (response.error && !this.isTearingDown) {
                     this.addLogEntry({ text: `[Background]: ${response.error}`, type: 'error' });
                 }
             }
@@ -1465,6 +1532,9 @@ class MpvController {
     }
 
     handleFullscreenChange() {
+        // Critical safety check: If we are in the middle of tearing down, ignore.
+        if (this.isTearingDown) return;
+
         // Re-query the host from the DOM to ensure we have a live reference.
         const controllerHost = this.uiManager.controllerHost;
         const minimizedHost = this.uiManager.minimizedHost;
@@ -1498,6 +1568,7 @@ class MpvController {
      * Checks if the current page is a YouTube video or playlist page and updates the detected URL.
      */
     checkForYouTubeURL() {
+        if (this.isTearingDown || !this.checkContext()) return;
         const YOUTUBE_VIDEO_REGEX = /^https?:\/\/((www|music)\.)?youtube\.com\/watch\?v=([a-zA-Z0-9_-]+)/;
         const YOUTUBE_PLAYLIST_REGEX = /^https?:\/\/((www|music)\.)?youtube\.com\/playlist\?list=([a-zA-Z0-9_-]+)/;
         const currentUrl = window.location.href;
@@ -1522,11 +1593,18 @@ class MpvController {
     // --- Robustness for Single-Page Applications ---
     // This function handles all updates needed after a potential page navigation on an SPA.
     handlePageUpdate() {
+        if (this.isTearingDown || !this.checkContext()) return;
         // If the host element is gone, the SPA has likely removed it. Re-inject.
         // This is the most critical check for SPA navigation.
         if (!document.getElementById('m3u8-controller-host')) {
             console.log("MPV Controller host has been removed from the DOM. Re-injecting UI.");
-            this.teardownAndReinitialize();
+            this.teardown();
+            setTimeout(() => {
+                // We use the global startInitialization provided by the IIFE
+                if (typeof window.mpvStartInitialization === 'function') {
+                    window.mpvStartInitialization();
+                }
+            }, 100);
             return;
         }
 
@@ -1551,31 +1629,40 @@ class MpvController {
         if (urlChanged) {
             this.lastUrl = window.location.href;
             // Report the new state to the background script and refresh the UI.
-            sendMessageAsync({ action: 'report_detected_url', url: this.detectedUrl });
-            this.updateFolderDropdowns();
+            if (this.checkContext()) {
+                sendMessageAsync({ action: 'report_detected_url', url: this.detectedUrl }).then(() => {
+                    // Extra safety: re-check context before updating UI after async call
+                    if (this.checkContext()) {
+                        this.updateFolderDropdowns();
+                    }
+                }).catch(() => {});
+            }
         }
     }
 
     /**
-     * Safely tears down and re-initializes the controller.
-     * This is used when the UI is removed from the DOM by an SPA.
+     * Safely tears down the controller.
      */
-    teardownAndReinitialize() {
-        // Prevent multiple teardowns from running at once.
-        if (this.isTearingDown) return;
+    teardown() {
         this.isTearingDown = true;
+        if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+        if (this.pageUpdateInterval) clearInterval(this.pageUpdateInterval);
+        if (this._handleResize) window.removeEventListener('resize', this._handleResize);
+        
+        document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+        if (this.handleMouseDown) document.removeEventListener('mousedown', this.handleMouseDown, true);
+        
+        if (this.observer) {
+            this.observer.disconnect();
+            this.observer = null;
+        }
 
         this.uiManager.teardown();
-
-        // Re-run the global initialization function after a short delay to ensure the DOM is clean.
-        setTimeout(() => {
-            startInitialization();
-        }, 100);
+        window.mpvControllerInitialized = false;
     }
 
     /**
      * Starts a periodic check to ensure the background script is still alive.
-     * If the connection is lost (e.g., extension reloaded), it triggers a self-reload.
      */
     startHeartbeat() {
         if (this.heartbeatInterval) {
@@ -1584,21 +1671,19 @@ class MpvController {
 
         this.heartbeatInterval = setInterval(async () => {
             try {
-                // Sending a message to the background script. If it throws an error,
-                // it means the background script is gone (e.g., extension was reloaded).
                 const response = await sendMessageAsync({ action: 'heartbeat' });
                 if (!response?.success) throw new Error("Invalid heartbeat response.");
             } catch (e) {
-                // The background script is unresponsive.
-                console.warn("MPV Controller: Heartbeat failed. Background script may have been reloaded. Refreshing content script.");
-
-                // Stop the heartbeat to prevent an infinite loop of reloads.
-                if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
-
-                // Instead of reloading the page, tear down and re-initialize the controller.
-                this.teardownAndReinitialize();
+                // The background script is unresponsive (likely extension reloaded).
+                console.warn("MPV Controller: Background script disconnected. Stopping UI updates.");
+                
+                // Stop everything
+                this.teardown();
+                
+                // Provide visual feedback if the UI was visible
+                this.addLogEntry({ text: "[Content]: Connection to extension lost. Please refresh the page.", type: "error" });
             }
-        }, 15000); // Check every 15 seconds.
+        }, 30000); // Check every 30 seconds to be less intrusive
     }
 
     /**
@@ -1615,11 +1700,7 @@ class MpvController {
         // New: Listen for right-clicks to capture the target element.
         // We use the 'capture' phase to ensure our listener runs before any other
         // that might stop the event's propagation.
-        document.addEventListener('mousedown', (event) => {
-            if (event.button === 2) { // Right-click
-                 this.lastRightClickedElement = event.target;
-            }
-        }, true);
+        document.addEventListener('mousedown', this.handleMouseDown, true);
 
        
         // This block contains scraping logic specifically for a YouTube video watch page (`/watch`).
@@ -1632,8 +1713,12 @@ class MpvController {
         // --- END AI GUARD ---
 
         // --- SPA Handling using MutationObserver ---
-        const observer = new MutationObserver(() => this.handlePageUpdate());
-        observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+        this.observer = new MutationObserver(() => {
+            if (this.checkContext()) {
+                this.handlePageUpdate();
+            }
+        });
+        this.observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
         // Also, poll the URL periodically. This is more reliable for SPA navigations. This interval is cleared in teardown().
         this.pageUpdateInterval = setInterval(this.handlePageUpdate, 500);
@@ -1660,21 +1745,24 @@ class MpvController {
     }
   } catch (e) { /* Ignore invalid URLs */ }
 
-  const startInitialization = () => {
+  window.mpvStartInitialization = () => {
     // Create a single, authoritative instance of the controller.
     const controller = new MpvController();
-    // Expose the controller instance to the window for debugging from the console.
 
     // Initialize the controller.
     controller.init();
 
     // Attach the message listener to the single controller instance.
-    chrome.runtime.onMessage.addListener(controller.handleMessage);
+    // Use a flag to ensure we only attach it once per script execution context
+    if (!window.mpvMessageListenerAttached) {
+        chrome.runtime.onMessage.addListener(controller.handleMessage);
+        window.mpvMessageListenerAttached = true;
+    }
   };
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startInitialization);
+    document.addEventListener('DOMContentLoaded', window.mpvStartInitialization);
   } else {
-    startInitialization();
+    window.mpvStartInitialization();
   }
 })();

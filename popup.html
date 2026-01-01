@@ -335,7 +335,37 @@
                                     <button id="btn-manual-ytdlp-update" class="secondary-action" style="flex-grow: 1;" title="Manually run the yt-dlp update process.">Update yt-dlp Now</button>
                                 </div>
                             </div>
-                        </details>            <details class="settings-section" data-section-name="keybindings">
+                        </details>
+                        <details class="settings-section" data-section-name="youtube site support">
+                            <summary class="settings-section-header">
+                                <span>YouTube & Site Support</span>
+                                <div class="header-actions">
+                                    <button class="section-reload-btn" title="Sync & Refresh Settings">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+                                    </button>
+                                </div>
+                            </summary>
+                            <div class="settings-section-content">
+                                <div class="control-group" data-setting-name="use youtube cookies">
+                                    <label for="yt-use-cookies-checkbox" class="settings-label">Use Cookies for YouTube:</label>
+                                    <input type="checkbox" id="yt-use-cookies-checkbox" class="settings-checkbox" title="If checked, YouTube playback will use your browser cookies for subscriptions and private videos.">
+                                </div>
+                                <div class="control-group indent-setting" data-setting-name="mark youtube watched">
+                                    <label for="yt-mark-watched-checkbox" class="settings-label">Mark as Watched:</label>
+                                    <input type="checkbox" id="yt-mark-watched-checkbox" class="settings-checkbox" title="Automatically mark videos as 'Watched' in your YouTube account history. Requires YouTube cookies to be enabled above.">
+                                </div>
+                                <div class="control-group indent-setting" data-setting-name="ignore ytdlp config">
+                                    <label for="yt-ignore-config-checkbox" class="settings-label">Ignore local yt-dlp config:</label>
+                                    <input type="checkbox" id="yt-ignore-config-checkbox" class="settings-checkbox" title="If checked, ignores any personal yt-dlp configuration files on your system. Highly recommended for stability.">
+                                </div>
+                                <div class="control-group" data-setting-name="use cookies other sites">
+                                    <label for="other-sites-use-cookies-checkbox" class="settings-label">Use Cookies for External Sites:</label>
+                                    <input type="checkbox" id="other-sites-use-cookies-checkbox" class="settings-checkbox" title="If checked, external resolution (for sites like AnimePahe) will use your browser cookies.">
+                                </div>
+                                <small style="color: var(--text-secondary); display: block; margin-top: 4px;">Note: These features require 'YouTube Analysis' and 'URL Analysis' to be enabled in the installer.</small>
+                            </div>
+                        </details>
+                        <details class="settings-section" data-section-name="keybindings">
                 <summary class="settings-section-header">
                     <span>Keybindings</span>
                     <div class="header-actions">

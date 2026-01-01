@@ -571,13 +571,29 @@ def apply_bypass_script(url_item, send_message_func):
 
     # is_youtube for bypass script is driven by enable_youtube_analysis setting
     youtube_enabled_for_script = "true" if enable_youtube_analysis else "false"
+    
+    # Extract granular preferences from the message
+    item_settings = url_item.get('settings', {})
+    yt_use_cookies = item_settings.get('yt_use_cookies', True)
+    yt_mark_watched = item_settings.get('yt_mark_watched', True)
+    yt_ignore_config = item_settings.get('yt_ignore_config', True)
+    other_sites_use_cookies = item_settings.get('other_sites_use_cookies', True)
 
     try:
         logging.info(f"Executing URL analysis for URL: {original_url}")
         send_message_func({"action": "log_from_native_host", "log": {"text": f"Running URL analysis for: {original_url}", "type": "info"}})
         
         # Directly call the run_bypass_logic function from url_analyzer
-        result = url_analyzer.run_bypass_logic(original_url, browser_for_analysis, youtube_enabled_for_script, user_agent_string)
+        result = url_analyzer.run_bypass_logic(
+            original_url, 
+            browser_for_analysis, 
+            youtube_enabled_for_script, 
+            user_agent_string,
+            yt_use_cookies=yt_use_cookies,
+            yt_mark_watched=yt_mark_watched,
+            yt_ignore_config=yt_ignore_config,
+            other_sites_use_cookies=other_sites_use_cookies
+        )
 
         if not result.get("success", False):
             error_message = result.get("error", "Unknown error from URL analyzer.")

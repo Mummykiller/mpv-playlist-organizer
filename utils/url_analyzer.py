@@ -2,8 +2,8 @@ import sys
 import json
 import subprocess
 import os
-import re # Add re import
-import platform # Add platform import
+import re
+import platform
 import logging
 import file_io
 import uuid
@@ -29,11 +29,11 @@ _COOKIES_CACHE = {
     "timestamp": 0
 }
 
-def get_cookies_file(browser, url):
+def get_cookies_file(browser, url, ignore_config=True):
     """Extracts cookies once and caches the path."""
     global _COOKIES_CACHE
     import time
-    import tempfile
+    import shutil
     
     now = time.time()
     # Cache for 10 minutes
@@ -52,41 +52,56 @@ def get_cookies_file(browser, url):
         temp_filename = f"{COOKIE_PREFIX}{pid}_{unique_id}{COOKIE_EXT}"
         temp_path = os.path.join(cookies_dir, temp_filename)
         
-        # Create empty file to ensure we have write access
-        with open(temp_path, 'w') as f: pass
+        ytdlp_path = shutil.which("yt-dlp") or "yt-dlp"
         
         # Run a separate yt-dlp call just to dump cookies
         cookie_cmd = [
-            'yt-dlp',
-            '--force-ipv4',
+            ytdlp_path,
             '--cookies-from-browser', browser,
             '--cookies', temp_path,
             '--simulate',
+            '--quiet',
             url
         ]
-        # Use a reasonable timeout for cookie extraction
-        logging.info(f"Extracting cookies from {browser} to {temp_path}...")
-        subprocess.run(cookie_cmd, capture_output=True, check=False, timeout=20)
         
+        if ignore_config:
+            cookie_cmd.insert(1, '--ignore-config')
+        
+        logging.info(f"Extracting cookies from {browser} using command: {' '.join(cookie_cmd)}")
+        result = subprocess.run(cookie_cmd, capture_output=True, text=True, check=False, timeout=30)
+        
+        if result.returncode != 0:
+            logging.error(f"yt-dlp cookie extraction failed (Code {result.returncode})")
+            if result.stdout: logging.error(f"STDOUT: {result.stdout.strip()}")
+            if result.stderr: logging.error(f"STDERR: {result.stderr.strip()}")
+
         if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
             _COOKIES_CACHE["path"] = temp_path
             _COOKIES_CACHE["browser"] = browser
             _COOKIES_CACHE["timestamp"] = now
-            logging.info(f"Successfully extracted cookies to {temp_path}")
+            logging.info(f"Successfully extracted {os.path.getsize(temp_path)} bytes of cookies to {temp_path}")
             return temp_path
         else:
             logging.warning(f"Extracted cookie file is empty or missing: {temp_path}")
+            if not result.stderr and not result.stdout:
+                logging.warning("yt-dlp exited silently with no cookies found. Check if the browser profile is correct.")
             return None
     except Exception as e:
         logging.warning(f"Failed to extract cookies for MPV: {e}")
         return None
 
-def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
+def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cookies=True, yt_mark_watched=True, yt_ignore_config=True, other_sites_use_cookies=True):
     """
     Runs bypass logic to extract direct URLs or provide options for MPV's internal handlers.
     """
     # Use provided UA or a reasonable Chrome-like default
     effective_user_agent = user_agent_str if user_agent_str else "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    
+    is_yt_enabled = str(youtube_enabled).lower() == "true"
+    is_yt_cookies_enabled = str(yt_use_cookies).lower() == "true"
+    is_mark_watched_enabled = str(yt_mark_watched).lower() == "true"
+    is_yt_ignore_config_enabled = str(yt_ignore_config).lower() == "true"
+    is_other_cookies_enabled = str(other_sites_use_cookies).lower() == "true"
 
     # --- Case 1: Animepahe-like URLs (VAULT_RE) ---
     if VAULT_RE.search(url):
@@ -97,17 +112,16 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
             "headers": {
                 "User-Agent": effective_user_agent,
                 "Referer": "https://kwik.cx/",
-                "Origin": "https://kwik.cx/", # Added from stuff.py
-                "X-Requested-With": "XMLHttpRequest" # Added from stuff.py
+                "Origin": "https://kwik.cx/",
+                "X-Requested-With": "XMLHttpRequest"
             },
-            "ytdl_raw_options": None, # No yt-dlp options needed
-            "use_ytdl_mpv": False, # Explicitly set to False as per stuff.py
+            "ytdl_raw_options": None,
+            "use_ytdl_mpv": False,
             "is_youtube": False,
-            "disable_http_persistent": True # Added to fix 'End of file' errors
+            "disable_http_persistent": True
         }
 
     # --- Case 1b: Generic Direct Stream Detection ---
-    # Catch already-resolved URLs to avoid the slow yt-dlp fallback in Case 3.
     if DIRECT_STREAM_RE.search(url) and not YOUTUBE_RE.search(url):
         logging.info(f"Direct stream URL detected: {url}. Skipping yt-dlp resolution.")
         return {
@@ -119,12 +133,11 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
             "is_youtube": False
         }
 
-    # --- Case 2: YouTube URLs (YOUTUBE_RE) ---
+    # --- Case 2: YouTube URLs ---
     is_yt = YOUTUBE_RE.search(url)
-    is_yt_enabled = str(youtube_enabled).lower() == "true"
 
     if is_yt:
-        # 2a. Handle Playlist Expansion (Always allowed if it's a playlist URL)
+        # 2a. Handle Playlist Expansion
         if "list=" in url:
             try:
                 logging.info(f"Expanding YouTube playlist: {url}")
@@ -133,8 +146,17 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
                     '--flat-playlist',
                     '--print', '%(title)s|%(webpage_url)s'
                 ]
+                
+                if is_yt_ignore_config_enabled:
+                    cmd.insert(1, '--ignore-config')
+
+                cookies_file = None
+                # Expansion always tries to use browser cookies if possible for private playlists
                 if browser and browser != "None":
                     cmd.extend(['--cookies-from-browser', browser])
+                    if is_yt_enabled and is_yt_cookies_enabled:
+                        cookies_file = get_cookies_file(browser, url, ignore_config=is_yt_ignore_config_enabled)
+
                 cmd.append(url)
 
                 result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
@@ -144,13 +166,23 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
                 for line in lines:
                     if '|' in line:
                         title, webpage_url = line.split('|', 1)
+                        
+                        ytdl_opts = []
+                        if is_yt_enabled:
+                            if is_mark_watched_enabled and is_yt_cookies_enabled:
+                                ytdl_opts.append("mark-watched=")
+                            if cookies_file:
+                                ytdl_opts.append(f"cookies={cookies_file}")
+
                         entries.append({
                             "title": title,
                             "url": webpage_url,
                             "is_youtube": True,
                             "use_ytdl_mpv": True, # Allow MPV to handle if played before background resolution
                             "disable_http_persistent": True,
-                            "headers": {"User-Agent": effective_user_agent}
+                            "headers": {"User-Agent": effective_user_agent},
+                            "ytdl_raw_options": ",".join(ytdl_opts) if ytdl_opts else None,
+                            "cookies_file": cookies_file
                         })
                 
                 if entries:
@@ -180,20 +212,23 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
 
         try:
             cookies_file = None
-            if browser and browser != "None":
-                cookies_file = get_cookies_file(browser, url)
+            if is_yt_cookies_enabled and browser and browser != "None":
+                cookies_file = get_cookies_file(browser, url, ignore_config=is_yt_ignore_config_enabled)
 
-            # Instead of resolving to a direct URL in Python (which limits quality to single-file formats),
-            # we return the original URL but tell MPV to use its internal ytdl hook with the cookies file.
-            # This allows MPV to handle high-quality DASH/HLS streams natively.
             logging.info(f"YouTube resolution enabled. Using original URL with cookies for MPV: {url}")
+
+            ytdl_opts = []
+            if is_mark_watched_enabled and is_yt_cookies_enabled:
+                ytdl_opts.append("mark-watched=")
+            if cookies_file:
+                ytdl_opts.append(f"cookies={cookies_file}")
 
             return {
                 "success": True,
                 "url": url,
                 "headers": {"User-Agent": effective_user_agent},
-                "ytdl_raw_options": f"cookies={cookies_file}" if cookies_file else None,
-                "use_ytdl_mpv": True, # MPV WILL use ytdl hook
+                "ytdl_raw_options": ",".join(ytdl_opts) if ytdl_opts else None,
+                "use_ytdl_mpv": True,
                 "is_youtube": True,
                 "disable_http_persistent": True,
                 "cookies_file": cookies_file,
@@ -201,21 +236,17 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
             }
         except Exception as e:
             logging.warning(f"YouTube cookie extraction failed: {e}. Falling back to original URL.")
-            # Fallback to original URL if resolution fails for some reason
             return {
                 "success": True,
                 "url": url,
                 "headers": {"User-Agent": effective_user_agent},
-                "use_ytdl_mpv": True, # Last resort: let MPV try
+                "use_ytdl_mpv": True,
                 "is_youtube": True
             }
 
     # --- Case 3: Other URLs (External resolution as fallback) ---
     try:
-        # For non-YouTube sites, we still resolve to a direct URL to speed up loading,
-        # but we use 'best' instead of forcing MP4, allowing for better quality if available.
         ytdl_format = 'best'
-
         cmd = [
             'yt-dlp',
             '--force-ipv4',
@@ -226,8 +257,11 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
             '--user-agent', effective_user_agent,
             url
         ]
+        
+        if is_yt_ignore_config_enabled: 
+            cmd.insert(1, '--ignore-config')
 
-        if browser and browser != "None":
+        if is_other_cookies_enabled and browser and browser != "None":
             cmd.extend(['--cookies-from-browser', browser])
         
         logging.info(f"Resolving non-YouTube URL externally: {url} with format {ytdl_format}")
@@ -254,17 +288,17 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str):
         return {"success": False, "error": f"Bypass script error: {str(e)}"}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 5: # Expect 5 arguments now (script, url, browser, youtube_enabled, user_agent)
-        print(json.dumps({"success": False, "error": "Missing arguments. Usage: _bypass_logic.py <url> <browser> <youtube_enabled> <user_agent>"}), file=sys.stderr)
+    if len(sys.argv) < 5:
+        print(json.dumps({"success": False, "error": "Missing arguments."}), file=sys.stderr)
         sys.exit(1)
 
     url = sys.argv[1]
-    browser = sys.argv[2] # e.g., 'chrome', 'brave', 'firefox'
-    youtube_enabled = sys.argv[3] # 'true' or 'false'
-    user_agent = sys.argv[4] # User-Agent string
+    browser = sys.argv[2]
+    youtube_enabled = sys.argv[3]
+    user_agent = sys.argv[4]
 
     result = run_bypass_logic(url, browser, youtube_enabled, user_agent)
     print(json.dumps(result))
     
     if not result.get("success"):
-        sys.exit(1) # Indicate failure to the shell script
+        sys.exit(1)

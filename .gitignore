@@ -1,0 +1,10 @@
+data/
+mpv-cli
+play_with_bypass.sh
+run_native_host.sh
+*.log
+GEMINI.md
+plan.md
+CLEANUP.md
+Verification Report.md
+testing_tools/
