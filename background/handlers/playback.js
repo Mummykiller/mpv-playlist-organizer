@@ -489,33 +489,43 @@ export function getMpvPlaylistCompletedExitCode() {
 
 export function handleSessionRestored(request) {
     const result = request.result;
-    if (!result) return;
+    if (!result) {
+        _broadcastLog({ text: `[Background]: No active session found to restore.`, type: 'info' });
+        return;
+    }
 
     if (result.was_stale) {
         _broadcastLog({ text: `[Background]: Detected stale MPV session for folder '${result.folderId}'.`, type: 'info' });
         // Trigger the same cleanup logic as when MPV exits.
         handleMpvExited(result);
     } else {
-        _broadcastLog({ text: `[Background]: Successfully reconnected to active MPV session for folder '${result.folderId}'.`, type: 'info' });
-        // Update background state
+        _broadcastLog({ text: `[Background]: Re-establishing connection to active MPV session for folder '${result.folderId}'...`, type: 'info' });
+        
+        // Update background state to match a fresh launch
+        playbackQueueInstance.queue = [];
         playbackQueueInstance.isPlaying = true;
+        playbackQueueInstance.isProcessingQueue = false;
         playbackQueueInstance.currentPlayingItem = { folderId: result.folderId, isLastInFolder: true };
         
-        // Notify UI to show active highlight
+        // Notify UI to show active highlight and provide feedback
         _storage.get().then(storageData => {
-            if (storageData.folders[result.folderId]) {
-                const lastPlayedId = result.lastPlayedId || storageData.folders[result.folderId].last_played_id;
+            const folder = storageData.folders[result.folderId];
+            if (folder) {
+                const folderName = folder.name || result.folderId;
+                _broadcastLog({ text: `Reconnected to mpv playlist (${folderName})`, type: 'info' });
+
+                const lastPlayedId = result.lastPlayedId || folder.last_played_id;
                 
                 // If the native host identified a different item, sync our storage
-                if (result.lastPlayedId && result.lastPlayedId !== storageData.folders[result.folderId].last_played_id) {
-                    storageData.folders[result.folderId].last_played_id = result.lastPlayedId;
-                    _storage.set(storageData); // Save async, don't await
+                if (result.lastPlayedId && result.lastPlayedId !== folder.last_played_id) {
+                    folder.last_played_id = result.lastPlayedId;
+                    _storage.set(storageData); // Save async
                 }
 
                 _broadcastToTabs({ 
                     action: 'render_playlist', 
                     folderId: result.folderId, 
-                    playlist: storageData.folders[result.folderId].playlist,
+                    playlist: folder.playlist,
                     last_played_id: lastPlayedId,
                     isFolderActive: true
                 });
