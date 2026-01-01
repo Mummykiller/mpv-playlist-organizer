@@ -121,6 +121,15 @@ class PlaybackQueue {
 
 const playbackQueueInstance = new PlaybackQueue(); // Create a single instance
 
+/**
+ * Checks if a specific folder is currently active in MPV.
+ * @param {string} folderId The ID of the folder to check.
+ * @returns {boolean} True if the folder is active and playing.
+ */
+export function isFolderActive(folderId) {
+    return playbackQueueInstance.isPlaying && playbackQueueInstance.currentPlayingItem?.folderId === folderId;
+}
+
 export function init(dependencies) {
     _storage = dependencies.storage;
     _broadcastLog = dependencies.broadcastLog;
@@ -156,7 +165,12 @@ export async function handleMpvExited(data) {
                     storageData.folders[folderId].playlist = [];
                     await _storage.set(storageData);
                     _debouncedSyncToNativeHostFile(); // Sync the empty playlist back to the disk
-                    _broadcastToTabs({ action: 'render_playlist', folderId: folderId, playlist: [] });
+                    _broadcastToTabs({ 
+                        action: 'render_playlist', 
+                        folderId: folderId, 
+                        playlist: [],
+                        isFolderActive: false
+                    });
                 }
             } else {
                 // If the user quits manually (e.g., 'q') or MPV exits with any other code,
@@ -392,7 +406,8 @@ export async function handleUpdateLastPlayed(data) {
             action: 'render_playlist', 
             folderId: folderId, 
             playlist: storageData.folders[folderId].playlist,
-            last_played_id: itemId
+            last_played_id: itemId,
+            isFolderActive: true
         });
     }
 }
@@ -442,9 +457,30 @@ export function getMpvPlaylistCompletedExitCode() {
 }
 
 export function handleSessionRestored(request) {
-    if (request.result?.was_stale) {
-        _broadcastLog({ text: `[Background]: Detected stale MPV session for folder '${request.result.folderId}'.`, type: 'info' });
+    const result = request.result;
+    if (!result) return;
+
+    if (result.was_stale) {
+        _broadcastLog({ text: `[Background]: Detected stale MPV session for folder '${result.folderId}'.`, type: 'info' });
         // Trigger the same cleanup logic as when MPV exits.
-        handleMpvExited(request.result);
+        handleMpvExited(result);
+    } else {
+        _broadcastLog({ text: `[Background]: Successfully reconnected to active MPV session for folder '${result.folderId}'.`, type: 'info' });
+        // Update background state
+        playbackQueueInstance.isPlaying = true;
+        playbackQueueInstance.currentPlayingItem = { folderId: result.folderId, isLastInFolder: true };
+        
+        // Notify UI to show active highlight
+        _storage.get().then(storageData => {
+            if (storageData.folders[result.folderId]) {
+                _broadcastToTabs({ 
+                    action: 'render_playlist', 
+                    folderId: result.folderId, 
+                    playlist: storageData.folders[result.folderId].playlist,
+                    last_played_id: storageData.folders[result.folderId].last_played_id,
+                    isFolderActive: true
+                });
+            }
+        });
     }
 }

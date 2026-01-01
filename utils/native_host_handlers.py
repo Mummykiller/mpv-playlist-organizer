@@ -11,6 +11,10 @@ from urllib.request import urlopen # Added for server readiness check
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
 
+# Constants for file patterns
+SERVER_PREFIX = "server_"
+SERVER_EXT = ".m3u"
+
 class HandlerManager:
     def __init__(self, mpv_session, file_io_module, services_module, ipc_utils_module,
                  send_message_func, script_dir, anilist_cache_file, temp_playlists_dir, log_stream_func):
@@ -23,14 +27,6 @@ class HandlerManager:
         self.anilist_cache_file = anilist_cache_file
         self.temp_playlists_dir = temp_playlists_dir
         self.log_stream = log_stream_func # Passed from native_host for unmanaged MPV logging
-
-        self.playlist_server_process = None
-        self.playlist_server_port = None
-        self.temp_m3u_file_for_server = None
-
-        self.playlist_server_process = None
-        self.playlist_server_port = None
-        self.temp_m3u_file_for_server = None
 
         self.playlist_server_process = None
         self.playlist_server_port = None
@@ -418,10 +414,10 @@ class HandlerManager:
         Starts or reuses playlist_server.py to serve dynamic M3U content.
         Returns the URL of the served M3U.
         """
-        # Ensure we have a stable path for the server to serve within this instance
+        # Use a deterministic path for the server to serve within this instance
         if not self.temp_m3u_file_for_server:
-            temp_m3u_filename = f"active_server_playlist_{uuid.uuid4().hex[:8]}.m3u"
-            self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, temp_m3u_filename)
+            pid = os.getpid()
+            self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, f"{SERVER_PREFIX}{pid}{SERVER_EXT}")
 
         # Update the file content on disk. The running server reads this on every request.
         logging.info(f"Updating M3U content for server at {self.temp_m3u_file_for_server}")
@@ -506,11 +502,11 @@ class HandlerManager:
         
         if self.temp_m3u_file_for_server and os.path.exists(self.temp_m3u_file_for_server):
             try:
-                # os.remove(self.temp_m3u_file_for_server)
-                logging.info(f"DEBUG: Preserving temporary M3U file: {self.temp_m3u_file_for_server}")
+                os.remove(self.temp_m3u_file_for_server)
+                logging.info(f"Cleaned up temporary M3U file: {self.temp_m3u_file_for_server}")
             except OSError as e:
                 logging.warning(f"Failed to remove temporary M3U file {self.temp_m3u_file_for_server}: {e}")
-            # self.temp_m3u_file_for_server = None
+            self.temp_m3u_file_for_server = None
 
     def handle_play_m3u(self, message):
         """
@@ -630,8 +626,18 @@ class HandlerManager:
             if not local_server_url:
                 raise RuntimeError("Failed to start local M3U server for enriched content.")
             
+            # Calculate start index for the final launch
+            playlist_start_index = 0
+            all_folders = self.file_io.get_all_folders_from_file()
+            last_played_id = all_folders.get(folder_id, {}).get("last_played_id")
+            if settings.get("enable_smart_resume", True) and last_played_id:
+                for idx, item in enumerate(enriched_url_items):
+                    if item.get('id') == last_played_id:
+                        playlist_start_index = idx
+                        break
+
             # --- STEP 3: Launch MPV with the Local Server URL ---
-            logging.info(f"Step 3: Launching MPV with local server URL: {local_server_url}")
+            logging.info(f"Step 3: Launching MPV with local server URL: {local_server_url} and playlist-start={playlist_start_index}.")
             
             # Call mpv_session.start() again, this time with the local server URL.
             # Crucially, pass the `enriched_url_items` so the playlist tracker can use them.
@@ -652,7 +658,8 @@ class HandlerManager:
                 use_ytdl_mpv=global_use_ytdl_mpv,
                 is_youtube=global_is_youtube,
                 disable_http_persistent=global_disable_http_persistent,
-                force_terminal=message.get('force_terminal', False)
+                force_terminal=message.get('force_terminal', False),
+                playlist_start_index=playlist_start_index
             )
             
             if final_launch_result and final_launch_result.get("success"):

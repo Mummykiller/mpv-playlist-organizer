@@ -35,8 +35,9 @@ class PlaylistUI {
      * Renders the playlist items in the UI and updates counts.
      * @param {Array<object>} playlist - The array of playlist items.
      * @param {string} [lastPlayedId] - The ID of the last played item to highlight.
+     * @param {boolean} [isFolderActive] - Whether this folder is currently being played.
      */
-    render(playlist, lastPlayedId) {
+    render(playlist, lastPlayedId, isFolderActive = false) {
         // Update compact UI count
         if (this.itemCountSpan) this.itemCountSpan.textContent = playlist?.length || 0;
 
@@ -59,9 +60,15 @@ class PlaylistUI {
             playlist.forEach((item, index) => {
                 const itemDiv = document.createElement('div');
                 itemDiv.className = 'list-item';
+                
                 if (highlightEnabled && lastPlayedId && item.id === lastPlayedId) {
-                    itemDiv.classList.add('active-item');
+                    if (isFolderActive) {
+                        itemDiv.classList.add('active-item');
+                    } else {
+                        itemDiv.classList.add('last-played-item');
+                    }
                 }
+
                 itemDiv.draggable = true;
                 itemDiv.title = item.url;
                 itemDiv.dataset.url = item.url;

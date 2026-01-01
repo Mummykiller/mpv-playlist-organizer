@@ -389,6 +389,12 @@ select:focus-visible {
     font-weight: 700;
 }
 
+/* New style for last-played item when player is NOT active */
+.list-item.last-played-item .url-index {
+    color: var(--accent-primary); /* Use accent color for number only */
+    font-weight: 700;
+}
+
 .list-item.active-item:hover {
     background-color: rgba(87, 242, 135, 0.2);
 }

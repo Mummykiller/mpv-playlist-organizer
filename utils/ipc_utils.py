@@ -14,6 +14,36 @@ import collections
 import threading # Added this import
 import select
 
+def is_pid_running(pid):
+    """Checks if a process ID is currently running on the system using native APIs."""
+    if pid <= 0: return False
+    system = platform.system()
+    
+    if system == "Windows":
+        import ctypes
+        # PROCESS_QUERY_LIMITED_INFORMATION is sufficient for existence check and works across users
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.windll.kernel32
+        h_process = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+        if h_process:
+            kernel32.CloseHandle(h_process)
+            return True
+        else:
+            # ERROR_ACCESS_DENIED (5) means the process exists but we can't open it
+            if kernel32.GetLastError() == 5:
+                return True
+            return False
+    else:
+        try:
+            # os.kill(pid, 0) is the standard Unix way to check if a PID exists
+            os.kill(pid, 0)
+            return True
+        except PermissionError:
+            # If we get a PermissionError, the process exists but we can't signal it.
+            return True
+        except (OSError, ImportError):
+            return False
+
 class IPCSocketManager:
     """
     Manages a persistent IPC socket connection to an MPV instance.
@@ -310,20 +340,20 @@ def is_process_alive(pid, ipc_path):
     return False
 
 
+IPC_DIR_LINUX = os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")
+PIPE_NAME_WINDOWS = "mpv-playlist-organizer-ipc"
+
 def get_ipc_path():
     """Generates a unique, platform-specific path for the mpv IPC socket/pipe."""
     # Use the process ID of the *current* python process
     # This ensures a unique path for each native_host instance.
     pid = os.getpid() 
     
-    # Use a more specific temporary directory to avoid conflicts
-    temp_base_dir = os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")
-    os.makedirs(temp_base_dir, exist_ok=True)
-
     if platform.system() == "Windows":
         # Named pipes on Windows are global names.
         # Format: \\.\pipe\<PipeName>
-        return f"\\\\.\\pipe\\mpv-playlist-organizer-ipc-{pid}"
+        return f"\\\\.\\pipe\\{PIPE_NAME_WINDOWS}-{pid}"
     else: # Linux/macOS
         # Unix domain sockets are file-system based.
-        return os.path.join(temp_base_dir, f"mpv-socket-{pid}")
+        os.makedirs(IPC_DIR_LINUX, exist_ok=True)
+        return os.path.join(IPC_DIR_LINUX, f"mpv-socket-{pid}")

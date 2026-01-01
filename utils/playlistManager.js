@@ -9,6 +9,7 @@ let debouncedSyncToNativeHostFile;
 let sendMessageAsync; // For asking confirmation from other contexts
 let findM3u8InUrl; // For the stream scanner
 let callNativeHost; // For oEmbed via native host
+let isFolderActive; // For checking live playback status
 let MPV_PLAYLIST_COMPLETED_EXIT_CODE; // For context-menu driven playlist updates
 
 // A lock to prevent multiple scraping processes for the same URL at the same time.
@@ -26,6 +27,7 @@ export function injectDependencies(deps) {
     sendMessageAsync = deps.sendMessageAsync;
     findM3u8InUrl = deps.findM3u8InUrl;
     callNativeHost = deps.callNativeHost;
+    isFolderActive = deps.isFolderActive;
     MPV_PLAYLIST_COMPLETED_EXIT_CODE = deps.MPV_PLAYLIST_COMPLETED_EXIT_CODE;
 }
 
@@ -123,6 +125,7 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
             folderId: folderId, 
             playlist: data.folders[folderId].playlist, 
             last_played_id: data.folders[folderId].last_played_id,
+            isFolderActive: isFolderActive(folderId),
             fromContextMenu: true 
         });
 
@@ -255,7 +258,12 @@ export async function handleClear(request) {
     data.folders[request.folderId].playlist = [];
     await storage.set(data);
     try {
-        await broadcastToTabs({ action: 'render_playlist', folderId: request.folderId, playlist: [] });
+        await broadcastToTabs({ 
+            action: 'render_playlist', 
+            folderId: request.folderId, 
+            playlist: [],
+            isFolderActive: isFolderActive(request.folderId)
+        });
     } catch (e) { /* Suppress errors if no content scripts exist */ }
     debouncedSyncToNativeHostFile();
     return { success: true, message: `Playlist in folder ${request.folderId} cleared` };
@@ -274,7 +282,8 @@ export async function handleRemoveItem(request) {
             action: 'render_playlist', 
             folderId: request.folderId, 
             playlist: playlist,
-            last_played_id: last_played_id
+            last_played_id: last_played_id,
+            isFolderActive: isFolderActive(request.folderId)
         });
         debouncedSyncToNativeHostFile();
 
@@ -332,5 +341,10 @@ export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
 export async function handleGetPlaylist(request) {
     const data = await storage.get();
     const folder = data.folders[request.folderId] || { playlist: [], last_played_id: null };
-    return { success: true, list: folder.playlist, last_played_id: folder.last_played_id };
+    return { 
+        success: true, 
+        list: folder.playlist, 
+        last_played_id: folder.last_played_id,
+        isFolderActive: isFolderActive(request.folderId)
+    };
 }
