@@ -71,6 +71,8 @@ function connectToNativeHost() {
                 dependencies.handleMpvExited(responseData);
             } else if (responseData.action === 'update_last_played') {
                 dependencies.handleUpdateLastPlayed(responseData);
+            } else if (responseData.action === 'update_item_resume_time') {
+                dependencies.handleUpdateItemResumeTime(responseData);
             } else if (responseData.log) {
                 dependencies.broadcastLog(responseData.log);
             } else if (responseData.action === 'session_restored' && responseData.result) {

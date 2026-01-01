@@ -397,6 +397,27 @@ export async function handleUpdateLastPlayed(data) {
     }
 }
 
+/**
+ * Handles the 'update_item_resume_time' message from the native host tracker.
+ * Updates the extension's internal storage with the latest playback timestamp.
+ */
+export async function handleUpdateItemResumeTime(data) {
+    const { folderId, itemId, resumeTime } = data;
+    if (!folderId || !itemId) return;
+
+    const storageData = await _storage.get();
+    if (storageData.folders[folderId]) {
+        const folder = storageData.folders[folderId];
+        for (let item of folder.playlist) {
+            if (item.id === itemId) {
+                item.resume_time = resumeTime;
+                await _storage.set(storageData);
+                break;
+            }
+        }
+    }
+}
+
 export async function handleAppend(request) { // New 'append' action handler
     const { url_item, folderId } = request;
     if (!url_item) {

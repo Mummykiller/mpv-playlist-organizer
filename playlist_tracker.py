@@ -89,8 +89,10 @@ class PlaylistTracker:
         # Observe 'user-data/id' to detect when the active file changes.
         # This is set by adaptive_headers.lua and is more reliable than 'path'.
         self.ipc_manager.send({"command": ["observe_property", 1, "user-data/id"]})
+        self.ipc_manager.send({"command": ["observe_property", 2, "time-pos"]})
 
         current_id = None
+        current_time = 0
         response = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True)
         if response and 'data' in response:
             current_id = response['data']
@@ -106,6 +108,7 @@ class PlaylistTracker:
                 if self.ipc_manager.connect(self.ipc_path):
                     logging.info("Tracker reconnected. Re-observing properties.")
                     self.ipc_manager.send({"command": ["observe_property", 1, "user-data/id"]})
+                    self.ipc_manager.send({"command": ["observe_property", 2, "time-pos"]})
                 else:
                     time.sleep(2)
                     continue
@@ -124,20 +127,40 @@ class PlaylistTracker:
                         new_id = data
                         logging.debug(f"Tracker: property-change 'user-data/id' detected. Old: {current_id}, New: {new_id}")
 
-                        if new_id:
-                            self._update_last_played(new_id)
+                        if new_id and new_id != current_id:
+                            # 1. If we were playing something else, do a FINAL save for it
+                            if current_id and current_time > 2:
+                                logging.info(f"Tracker: Saving final position for old item {current_id}: {int(current_time)}s")
+                                self._update_resume_time(current_id, current_time)
+                                self.played_item_ids.add(current_id)
 
-                        if current_id and current_id != new_id:
-                            # Item has changed, mark the previous one as played
-                            logging.info(f"Tracker: Marking item as played: ID {current_id}")
-                            self.played_item_ids.add(current_id)
-                        
-                        current_id = new_id
+                            # 2. Update the active item ID
+                            current_id = new_id
+                            
+                            # 3. Immediately notify the extension to update the UI highlight
+                            logging.info(f"Tracker: Active episode changed to ID {current_id}. Notifying UI.")
+                            self._update_last_played(current_id)
+                    
+                    elif prop_name == 'time-pos':
+                        if current_id and data is not None:
+                            current_time = data
+                            # Periodic save every 5 seconds, but don't let it block the loop
+                            if int(current_time) > 0 and int(current_time) % 5 == 0:
+                                self._update_resume_time(current_id, current_time)
 
-                elif event.get('event') == 'end-file' and event.get('reason') == 'eof':
-                    logging.debug(f"Tracker: end-file event (eof) detected for ID: {current_id}")
+                elif event.get('event') == 'end-file':
+                    reason = event.get('reason')
+                    logging.debug(f"Tracker: end-file event detected. Reason: {reason}, ID: {current_id}")
+                    
                     if current_id:
-                        self.played_item_ids.add(current_id)
+                        if reason == 'eof':
+                            # Natural finish: Reset resume time to 0
+                            self.played_item_ids.add(current_id)
+                            self._update_resume_time(current_id, 0)
+                        elif reason == 'stop' or reason == 'quit':
+                            # Manual stop/skip/quit: Save final position
+                            if current_time > 2:
+                                self._update_resume_time(current_id, current_time)
 
             except Exception as e:
                 logging.error(f"Error in playlist tracker: {e}")
@@ -177,3 +200,33 @@ class PlaylistTracker:
             })
         except Exception as e:
             logging.error(f"Tracker: Failed to update last_played_id: {e}")
+
+    def _update_resume_time(self, item_id, resume_time):
+        """Saves the current playback time for a specific item to the folder's playlist metadata."""
+        if not self.folder_id or not item_id:
+            return
+        
+        try:
+            # 1. Update the local folders.json file
+            all_folders = self.file_io.get_all_folders_from_file()
+            if self.folder_id in all_folders:
+                folder = all_folders[self.folder_id]
+                for item in folder.get("playlist", []):
+                    if item.get("id") == item_id:
+                        # Only update if the difference is significant or it's a reset
+                        old_time = item.get("resume_time", 0)
+                        if abs(resume_time - old_time) > 2 or resume_time == 0:
+                            item["resume_time"] = int(resume_time)
+                            self.file_io.write_folders_file(all_folders)
+                            logging.debug(f"Tracker: Updated resume_time for item '{item_id}' to {int(resume_time)}s.")
+                            
+                            # 2. Notify the extension
+                            self.send_message({
+                                "action": "update_item_resume_time",
+                                "folderId": self.folder_id,
+                                "itemId": item_id,
+                                "resumeTime": int(resume_time)
+                            })
+                        break
+        except Exception as e:
+            logging.error(f"Tracker: Failed to update resume_time: {e}")

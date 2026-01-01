@@ -42,6 +42,8 @@ export class StorageManager {
                             { flag: '--save-position-on-quit', description: 'Always save the current playback position on quit.', enabled: true }
                         ],
                         show_play_new_button: false, duplicate_url_behavior: 'ask', one_click_add: false,
+                        auto_append_on_add: true,
+                        live_removal: true,
                         stream_scanner_timeout: 60, confirm_remove_folder: true, confirm_clear_playlist: true,
                         confirm_close_mpv: true, confirm_play_new: true, confirm_folder_switch: true, clear_on_completion: false,
                         autofocus_new_folder: false,
@@ -56,6 +58,7 @@ export class StorageManager {
                         minimizedStubPosition: { top: '15px', left: '15px', right: 'auto', bottom: 'auto' },                        
                         show_minimized_stub: true,
                         enable_smart_resume: true,
+                        enable_precise_resume: false,
                         enable_active_item_highlight: true,
                         // Networking & Buffering Defaults
                         disable_network_overrides: false,

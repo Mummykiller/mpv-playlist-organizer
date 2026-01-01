@@ -126,12 +126,18 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
             fromContextMenu: true 
         });
 
-        // Attempt to append to live MPV session if running
-        callNativeHost({ 
-            action: 'append', 
-            url_item: newItem, 
-            folderId: folderId 
-        }).catch(() => {});
+        // NOTE FOR FUTURE EDITORS: We trigger a live 'append' here to keep the player in sync.
+        // The backend reroutes this through 'append_batch' using a temporary M3U file.
+        // This is the ONLY way to reliably pass custom titles to MPV natively via IPC; 
+        // using a standard 'loadfile' command would only show the raw URL in the player.
+        const globalPrefs = data.settings.ui_preferences.global;
+        if (globalPrefs.auto_append_on_add !== false) {
+            callNativeHost({ 
+                action: 'append', 
+                url_item: newItem, 
+                folderId: folderId 
+            }).catch(() => {});
+        }
 
         const logMessage = `[Background]: Added "${title}" to folder '${folderId}'.`;
 
@@ -272,12 +278,15 @@ export async function handleRemoveItem(request) {
         });
         debouncedSyncToNativeHostFile();
 
-        // Attempt to remove from live MPV session if running
-        callNativeHost({ 
-            action: 'remove_item_live', 
-            folderId: request.folderId, 
-            item_id: itemToRemove.id 
-        }).catch(() => {});
+        // Attempt to remove from live MPV session if running AND live removal is enabled
+        const globalPrefs = data.settings.ui_preferences.global;
+        if (globalPrefs.live_removal !== false) {
+            callNativeHost({ 
+                action: 'remove_item_live', 
+                folderId: request.folderId, 
+                item_id: itemToRemove.id 
+            }).catch(() => {});
+        }
 
         return { success: true, message: 'Item removed.' };
     }
