@@ -17,6 +17,7 @@ let dependencies = {
     broadcastLog: () => {},
     handleMpvExited: () => {},
     handleUpdateLastPlayed: () => {},
+    handleUpdateItemResumeTime: () => {},
 };
 
 /**
@@ -27,6 +28,7 @@ export function injectDependencies(deps) {
     dependencies.broadcastLog = deps.broadcastLog;
     dependencies.handleMpvExited = deps.handleMpvExited;
     dependencies.handleUpdateLastPlayed = deps.handleUpdateLastPlayed;
+    dependencies.handleUpdateItemResumeTime = deps.handleUpdateItemResumeTime;
 }
 
 /**

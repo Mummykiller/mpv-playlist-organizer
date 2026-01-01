@@ -16,7 +16,9 @@
 
 ## 📋 Overview
 
-MPV Playlist Organizer is a browser extension that captures video stream URLs (M3U8, MPD) and YouTube links, organizes them into persistent playlists, and plays them directly in the [MPV media player](https://mpv.io/). Experience seamless video management with a draggable on-page UI, command-line interface synchronization, and robust playback controls—all without leaving your browser.
+MPV Playlist Organizer is a browser extension that captures video stream URLs (M3U8, MPD) and YouTube links, organizes them into persistent playlists, and plays them directly in the [MPV media player](https://mpv.io/). 
+
+Experience seamless video management with a draggable on-page UI, **real-time session synchronization**, and **precise resume tracking**—all without leaving your browser.
 
 > **Development Note:** This extension was developed through human-AI collaboration, combining AI assistance with human direction and oversight.
 
@@ -40,11 +42,11 @@ MPV Playlist Organizer is a browser extension that captures video stream URLs (M
 
 Get up and running in 5 simple steps:
 
-1. **📥 Download** — Get the latest release and unzip to a **permanent location**
-2. **🔧 Install** — Run `installer.py` and follow the GUI prompts
-3. **🧩 Load Extension** — Add the unpacked extension in your browser (`chrome://extensions`)
-4. **🔗 Connect** — Copy the extension ID, paste it into the installer, and click "Install"
-5. **♻️ Restart** — Completely restart your browser
+1. **📥 Download** — Get the latest release and unzip to a **permanent location**.
+2. **🔧 Install** — Run `installer.py` and follow the GUI prompts.
+3. **🧩 Load Extension** — Add the unpacked extension in your browser (`chrome://extensions`).
+4. **🔗 Connect** — Click **"Detect"** in the installer to automatically find your ID (or paste it manually) and click **"Install"**.
+5. **♻️ Restart** — **Completely restart your browser** to register the native host.
 
 📚 [Detailed installation instructions](#-installation)
 
@@ -52,35 +54,47 @@ Get up and running in 5 simple steps:
 
 ## ✨ Core Features
 
-### 🎯 Playback & Queue Management
-- **Sequential Playback Queue** — Stack multiple videos to play consecutively in the same MPV instance
-- **Session Restoration** — Reconnect to your MPV instance even after closing your browser
-- **Per-Item Settings** — Apply individual settings to each video in your queue
-- **Native M3U Support** — Generates M3U playlists including video names for robust metadata handling and playback stability
+### 🎯 Advanced Playback & Queue
+- **Precise Resume Tracking** — Tracks your position down to the second. Uses the `--start` flag to bypass inconsistent network stream resumes.
+- **Smart Order Restoration** — Launch any episode in a playlist; the extension automatically "reconstructs" the surrounding context in the player queue.
+- **Sequential Playback Queue** — Stack multiple videos to play consecutively in the same MPV instance.
+- **Session Restoration** — Reconnect to your active MPV instance even after closing your browser.
+- **Native M3U Enrichment** — Generates metadata-rich M3U playlists to guarantee title preservation and playback stability.
 
-### 🎨 User Interface
-- **Draggable On-Page Controller** — Floating UI that can be minimized to a small button
-- **Popup Playlist Manager** — Quick access to playlists from the toolbar icon
-- **Context Menu Integration** — Right-click any link or video to add it instantly
-- **SPA Compatibility** — Works seamlessly on modern Single-Page Applications like YouTube
+### 🎨 Intelligent User Interface
+- **Draggable Controller** — A floating on-page UI that snaps to corners and can be minimized to a discreet button.
+- **AniList Dashboard** — A dedicated, draggable panel showing today's airing anime with integrated search and playback.
+- **Popup Playlist Manager** — Quick access to your folders, settings, and full queue from the browser toolbar.
+- **SPA Compatibility** — Native support for modern Single-Page Applications (YouTube, etc.) via MutationObservers.
 
-### 📂 Organization & Management
-- **Multiple Playlists** — Create and manage unlimited playlist folders
-- **Smart Title Scraping** — Automatically generates clean titles (e.g., `s01e05 - Show Name`)
-- **Import/Export** — Backup playlists as JSON files
-- **Drag & Drop Reordering** — Organize your queue with ease
+### ⚡ Live Interaction
+- **Real-Time Sync** — Adding, removing, or reordering items in the browser UI can instantly update the running MPV instance via JSON-IPC.
+- **Context Menu Integration** — Right-click any link, video, or thumbnail to add it instantly to your preferred folder.
+- **Double-Click Title Copy** — Quickly copy video titles directly from the playlist UI for easy sharing or searching.
 
-### 🔧 Advanced Features
-- **AniList Integration** — View today's airing anime in a draggable side-panel
-- **Advanced Site Support** — Dynamic bypass scripts for sites requiring special headers
-- **Customizable Keybindings** — Set global shortcuts for common actions
-- **Terminal Mode** — Launch MPV with a visible console for debugging
-- **Manageable Flags** — Enable/disable default MPV flags through settings
+### 🔧 Power User Features
+- **One-Click ID Detection** — The installer can automatically detect your Extension ID by scanning your browser profiles.
+- **Browser Cookie Sync** — Uses your browser's cookies (Chrome/Brave/Edge/Vivaldi) for YouTube playback to support watch history, subscriptions, and private videos.
+- **yt-dlp Auto-Update** — Detects when `yt-dlp` is outdated (fixing 410 Gone errors) and offers a one-click automatic update.
+- **The Janitor** — Built-in automated cleanup that wipes temporary M3U files and stale IPC sockets on startup.
+- **Customizable Keybindings** — Set global browser shortcuts for Adding, Playing, or Toggling the UI.
 
-### 💻 Command-Line Interface
-- **Terminal Support** — Full CLI for managing and playing playlists
-- **Cross-Platform** — Works on Windows, Linux, and macOS
-- **Session Management** — CLI sessions sync with browser extension
+---
+
+## 💻 Command-Line Interface
+
+The extension includes a powerful CLI wrapper for managing your media without opening a browser.
+
+### Usage Examples
+
+| Command | Description |
+|---------|-------------|
+| `mpv-cli list` | Lists all available folders and their item counts |
+| `mpv-cli play "Watchlist"` | Launches MPV with the specified playlist |
+
+### Setup
+1. Open `installer.py` and click **"Install CLI Wrapper"**.
+2. Click **"Add Folder to User PATH"** (Windows) or follow the manual instructions for `~/.bashrc` / `~/.zshrc` (Linux/macOS).
 
 ---
 
@@ -88,198 +102,66 @@ Get up and running in 5 simple steps:
 
 ### Prerequisites
 
-Before installing, ensure you have:
-
 | Requirement | Description |
 |-------------|-------------|
-| **Browser** | Chromium-based (Chrome, Edge, Brave) — *Firefox not supported* |
-| **MPV Player** | [Download here](https://mpv.io/installation/) |
-| **yt-dlp** | [Install guide](https://github.com/yt-dlp/yt-dlp) — Required for YouTube |
-| **Python** | Python 3.7+ for installer and native host |
-
-### Step-by-Step Guide
-
-#### 1️⃣ Download the Project
-
-Download the latest release from the **[Releases](https://github.com/Mummykiller/mpv-playlist-organizer/releases)** page and unzip it to a **permanent location** (e.g., `Documents` or home folder).
-
-> ⚠️ **Important:** Do not install from your `Downloads` folder. The installer creates absolute paths—moving the folder later will break the extension.
-
-#### 2️⃣ Run the Installer
-
-Launch the installer GUI:
-
-```bash
-# macOS/Linux
-python3 installer.py
-
-# Windows
-python installer.py
-```
-
-Or simply double-click `installer.py`.
-
-The installer window allows you to:
-- Enter your Extension ID
-- Select your browser for bypass scripts
-- Run diagnostics to verify setup
-
-#### 3️⃣ Load the Extension
-
-1. Navigate to `chrome://extensions` (or your browser's equivalent)
-2. Enable **Developer Mode**
-3. Click **"Load unpacked"**
-4. Select the unzipped project folder
-5. **Copy the Extension ID** that appears
-6. Paste the ID into the installer and click **Install**
-
-#### 4️⃣ Restart Your Browser
-
-**Completely close and restart your browser** to register the native messaging host.
-
----
-
-## 📖 Usage Guide
-
-### Three Ways to Interact
-
-| Interface | Description |
-|-----------|-------------|
-| **🖥️ On-Page Controller** | Main UI on web pages for adding URLs, playing, and clearing playlists. Minimizable to a small button. |
-| **📱 Popup Menu** | Click the toolbar icon to view/manage playlists, create folders, adjust settings, and see anime releases. |
-| **🖱️ Context Menu** | Right-click links, videos, or pages to quickly add them to your playlist. |
-
-### Basic Workflow
-
-1. **Browse** to a video streaming site
-2. **Detect** — The extension automatically captures M3U8/MPD URLs
-3. **Add** — Click the floating button or use the context menu
-4. **Play** — Hit the play button to launch MPV
-5. **Manage** — Organize into folders, reorder, or export playlists
-
----
-
-## 💻 Command-Line Interface
-
-### Setup
-
-1. Open `installer.py`
-2. Click **"Install CLI Wrapper"**
-3. Click **"Add Folder to User PATH"** (Windows) or follow the manual instructions (Linux/macOS)
-
-### Usage
-
-Play a playlist named "My Watchlist":
-
-```bash
-mpv-cli "My Watchlist"
-```
-
-The CLI will:
-- ✅ Locate the specified playlist
-- ✅ Launch MPV with proper configuration
-- ✅ Create a session controllable by the browser extension
-
-### CLI Features
-
-- 🔄 Sync with browser extension sessions
-- 📝 Support for all playlist management operations
-- 🎯 Direct playback without opening the browser
+| **Browser** | Chromium-based (Chrome, Edge, Brave, Vivaldi) — *Firefox not supported* |
+| **MPV Player** | [Download here](https://mpv.io/installation/) — Must be in PATH or selected in installer |
+| **yt-dlp** | [Install guide](https://github.com/yt-dlp/yt-dlp) — Required for YouTube & Bypass |
+| **Python** | Python 3.7+ (ensure `tkinter` is installed on Linux) |
 
 ---
 
 ## ⚙️ How It Works
 
-The extension uses a **two-component architecture**:
+The extension uses a **secure three-tier architecture**:
+
+1. **Browser Extension (UI)**: Captures URLs and manages the user state.
+2. **Native Messaging Host (Python)**: A bridge that handles file I/O, `yt-dlp` resolution, and MPV process management.
+3. **MPV Media Player**: The playback engine, controlled via a **JSON-IPC socket**.
 
 ```mermaid
-Browser Extension (UI) ↔️ Native Host (Python) ↔️ MPV Player
+graph LR
+    A[Browser] <-->|Native Messaging| B(Python Host)
+    B <-->|JSON-IPC| C[MPV Player]
+    B -->|M3U8/yt-dlp| D[Streaming Services]
 ```
-
-1. **Browser Extension** — Captures URLs and provides the user interface
-2. **Native Host** — Python script that bridges browser and MPV
-3. **MPV Player** — Handles actual video playback
-
-This architecture enables powerful features like live playlist syncing, session persistence, and cross-platform support.
-
----
-
-## ⚠️ Known Limitations
-
-| Limitation | Details |
-|------------|---------|
-| **Absolute Paths** | Cannot move project folder after installation without reinstalling |
-| **Browser Support** | Chromium-based browsers only (Firefox not supported) |
-| **Single Instance** | Only one MPV instance can be managed at a time |
-| **URL Detection** | Primarily captures M3U8/MPD streams and YouTube URLs |
 
 ---
 
 ## 🔧 Troubleshooting
 
 <details>
-<summary><strong>🔍 Dependency Verification</strong></summary>
+<summary><strong>🔍 Run Diagnostics</strong></summary>
 
-**Issue:** Unsure if dependencies are configured correctly
-
-**Solution:** Open `installer.py` and click **Run Diagnostics**. This checks for:
-- ✅ MPV installation
-- ✅ yt-dlp availability
+If you encounter issues, open `installer.py` and click **Run Diagnostics**. This verifies:
+- ✅ MPV & yt-dlp installation/version
 - ✅ ffmpeg presence
-- ✅ Browser cookie access
+- ✅ Browser cookie access permissions
 
 </details>
 
 <details>
-<summary><strong>🔌 Native Host Connection</strong></summary>
+<summary><strong>🔌 Native Host Disconnected</strong></summary>
 
-**Issue:** Log shows "Native host disconnected"
-
-**Solution:**
-1. **Completely restart your browser** after running the installer
-2. Verify you haven't moved the project folder after installation
-3. Check that the extension ID in `config.json` matches your browser
+- **Completely restart your browser** after installation.
+- Verify you haven't moved the project folder after running the installer.
+- Ensure the extension ID in the installer matches the one in `chrome://extensions`.
 
 </details>
 
 <details>
-<summary><strong>🎬 MPV Launch Issues</strong></summary>
+<summary><strong>🐧 Linux Specifics</strong></summary>
 
-**Issue:** MPV doesn't launch when clicking Play
-
-**Solution:**
-- The installer should prompt for `mpv.exe` location if not found
-- Manually set the path in `data/config.json`
-- On Linux/macOS, ensure `mpv` is in your system `PATH`
-- Run diagnostics to verify MPV detection
-
-</details>
-
-<details>
-<summary><strong>📺 AniList Integration Problems</strong></summary>
-
-**Issue:** AniList feature shows SSL errors
-
-**Solution:**
-- Common on corporate networks
-- Place a certificate authority file named `ca.pem` in the `data` directory
-- Contact your network administrator for the appropriate certificate
+If the installer GUI doesn't open, ensure you have the `python3-tk` package installed:
+`sudo apt install python3-tk` (Ubuntu/Debian) or `sudo pacman -S tk` (Arch).
 
 </details>
 
 ---
 
-## 🤝 Contributing
+## 🤝 Contributing & License
 
-Contributions are welcome! Please feel free to submit a Pull Request.
-
----
-
-## 📄 License
-
-This project is licensed under the **MIT License** — see the [LICENSE](https://opensource.org/licenses/MIT) file for details.
-
----
+Contributions are welcome! This project is licensed under the **MIT License**.
 
 <div align="center">
 

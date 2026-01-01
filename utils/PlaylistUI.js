@@ -129,6 +129,7 @@ class PlaylistUI {
         if (!this.fullContainer || !this.folderSelect || !this.compactFolderSelect) return;
 
         const handleFolderChange = (newFolderId) => {
+            if (!this.controller.checkContext()) return;
             this.folderSelect.value = newFolderId;
             this.compactFolderSelect.value = newFolderId;
             chrome.runtime.sendMessage({ action: 'set_last_folder_id', folderId: newFolderId });
@@ -204,7 +205,7 @@ class PlaylistUI {
 
         this.fullContainer.addEventListener('drop', (e) => {
             e.preventDefault();
-            if (!this.draggedItem) return;
+            if (!this.draggedItem || !this.controller.checkContext()) return;
 
             const dropTarget = this.fullContainer.querySelector('.drag-over');
             if (dropTarget) dropTarget.classList.remove('drag-over');

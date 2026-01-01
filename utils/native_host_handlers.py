@@ -583,13 +583,18 @@ class HandlerManager:
                     with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
                         f.write(enriched_m3u_content)
                 
+                # Force unpause since this is a 'play' action
+                if self.mpv_session.ipc_manager:
+                    logging.info("Linked Playlist: Forcing unpause.")
+                    self.mpv_session.ipc_manager.send({"command": ["set_property", "pause", False]})
+
                 if new_items:
                     logging.info(f"Linked Playlist: Appending {len(new_items)} new items to active session.")
                     # Use the new batch append logic which creates a delta M3U
                     # to preserve titles and settings natively.
                     return self.mpv_session.append_batch(new_items)
                 else:
-                    return {"success": True, "message": "Playlist is already up-to-date."}
+                    return {"success": True, "message": "Playlist is already up-to-date. Playback resumed."}
 
             # --- ALWAYS write the M3U file for debugging/logging as requested ---
             if not self.temp_m3u_file_for_server:

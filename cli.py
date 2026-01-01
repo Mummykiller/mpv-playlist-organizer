@@ -77,12 +77,21 @@ def _cli_play_folder(args):
 
 def handle_cli():
     """Handles command-line invocation using argparse for a more robust CLI."""
-    if len(sys.argv) < 2 or sys.argv[1] not in ['play', 'list', '-h', '--help']:
+    # Only treat as a CLI call if:
+    # 1. Known CLI commands/flags are used
+    # 2. OR we are in a terminal (TTY) with no arguments (where we want to show help)
+    is_known_command = len(sys.argv) >= 2 and sys.argv[1] in ['play', 'list', '-h', '--help']
+    is_tty_no_args = len(sys.argv) == 1 and sys.stdin.isatty()
+
+    if not (is_known_command or is_tty_no_args):
         return False
 
     logging.info(f"Native host started in CLI mode with args: {sys.argv}")
     parser = argparse.ArgumentParser(description="Command-line interface for MPV Playlist Organizer.")
-    subparsers = parser.add_subparsers(dest='command', required=True, help='Available commands')
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+    # Note: We don't set required=True for subparsers so we can manually handle 
+    # the empty-argument case and print help gracefully.
 
     play_parser = subparsers.add_parser('play', help='Play a playlist from a specified folder.')
     play_parser.add_argument('folder_id', help='The name of the folder to play.')
@@ -91,7 +100,15 @@ def handle_cli():
     list_parser = subparsers.add_parser('list', help='List all available folders and their item counts.')
     list_parser.set_defaults(func=_cli_list_folders)
 
+    # If no arguments provided, print help and exit.
+    if len(sys.argv) == 1:
+        parser.print_help()
+        return True
+
     args = parser.parse_args()
-    args.func(args)
+    if args.command:
+        args.func(args)
+    else:
+        parser.print_help()
     
     return True

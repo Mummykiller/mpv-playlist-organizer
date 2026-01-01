@@ -25,6 +25,13 @@ class PlaybackQueue {
      * @returns {Promise<object>} The response from the native host.
      */
     async _playSingleUrlItem(url_item, folder_id, globalPrefs) {
+        // Ensure the item has the latest granular preferences
+        if (!url_item.settings) url_item.settings = {};
+        url_item.settings.yt_use_cookies = globalPrefs.yt_use_cookies ?? true;
+        url_item.settings.yt_mark_watched = globalPrefs.yt_mark_watched ?? true;
+        url_item.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
+        url_item.settings.other_sites_use_cookies = globalPrefs.other_sites_use_cookies ?? true;
+
         return _callNativeHost({
             action: 'play',
             url_item: url_item,
@@ -62,6 +69,13 @@ class PlaybackQueue {
                     // Try to append to the running session
                     _broadcastLog({ text: `[Background]: Appending to active session: ${urlItem.title || urlItem.url}`, type: 'info' });
                     try {
+                        // Ensure the item has the latest granular preferences
+                        if (!urlItem.settings) urlItem.settings = {};
+                        urlItem.settings.yt_use_cookies = globalPrefs.yt_use_cookies ?? true;
+                        urlItem.settings.yt_mark_watched = globalPrefs.yt_mark_watched ?? true;
+                        urlItem.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
+                        urlItem.settings.other_sites_use_cookies = globalPrefs.other_sites_use_cookies ?? true;
+
                         const response = await _callNativeHost({
                             action: 'append',
                             url_item: urlItem,
@@ -272,6 +286,12 @@ export async function handlePlay(request) {
         const data = await _storage.get();
         const globalPrefs = data.settings.ui_preferences.global;
 
+        if (!url_item.settings) url_item.settings = {};
+        url_item.settings.yt_use_cookies = globalPrefs.yt_use_cookies ?? true;
+        url_item.settings.yt_mark_watched = globalPrefs.yt_mark_watched ?? true;
+        url_item.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
+        url_item.settings.other_sites_use_cookies = globalPrefs.other_sites_use_cookies ?? true;
+
         const response = await _callNativeHost({
             action: 'play',
             url_item: url_item,
@@ -301,10 +321,21 @@ export async function handlePlay(request) {
 
         _broadcastLog({ text: `[Background]: Preparing playback for playlist '${folderId}' (${folder.playlist.length} items).`, type: 'info' });
         
+        // Ensure all items in the batch have the latest granular preferences
+        const globalPrefs = data.settings.ui_preferences.global;
+        const updatedPlaylist = folder.playlist.map(item => {
+            if (!item.settings) item.settings = {};
+            item.settings.yt_use_cookies = globalPrefs.yt_use_cookies ?? true;
+            item.settings.yt_mark_watched = globalPrefs.yt_mark_watched ?? true;
+            item.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
+            item.settings.other_sites_use_cookies = globalPrefs.other_sites_use_cookies ?? true;
+            return item;
+        });
+
         // Send the actual playlist items directly to preserve IDs and avoid anonymous M3U re-generation
         const m3u_data = { 
             type: "items", 
-            value: folder.playlist 
+            value: updatedPlaylist 
         };
         const effective_folder_id = folderId;
 
@@ -473,11 +504,19 @@ export function handleSessionRestored(request) {
         // Notify UI to show active highlight
         _storage.get().then(storageData => {
             if (storageData.folders[result.folderId]) {
+                const lastPlayedId = result.lastPlayedId || storageData.folders[result.folderId].last_played_id;
+                
+                // If the native host identified a different item, sync our storage
+                if (result.lastPlayedId && result.lastPlayedId !== storageData.folders[result.folderId].last_played_id) {
+                    storageData.folders[result.folderId].last_played_id = result.lastPlayedId;
+                    _storage.set(storageData); // Save async, don't await
+                }
+
                 _broadcastToTabs({ 
                     action: 'render_playlist', 
                     folderId: result.folderId, 
                     playlist: storageData.folders[result.folderId].playlist,
-                    last_played_id: storageData.folders[result.folderId].last_played_id,
+                    last_played_id: lastPlayedId,
                     isFolderActive: true
                 });
             }

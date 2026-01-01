@@ -1156,6 +1156,12 @@ button:disabled {
     color: var(--text-secondary);
 }
 
+.indent-setting {
+    margin-left: 20px;
+    border-left: 2px solid var(--border-primary);
+    padding-left: 12px;
+}
+
 /* --- New Playlist Styles for Popup --- */
 .playlist-container {
     border: 1px solid var(--border-primary);

@@ -17,6 +17,7 @@ class UIManager {
      * @returns {string|null} The domain, or null if it can't be determined.
      */
     getDomain() {
+        if (!chrome.runtime?.id) return null;
         try {
             return new URL(window.location.href).hostname;
         } catch (e) {
@@ -28,6 +29,12 @@ class UIManager {
      * Creates the controller container and injects the UI's HTML into the DOM.
      */
     createAndInjectUi() {
+        // Safety check: if the extension context is invalidated, abort.
+        if (!chrome.runtime?.id) {
+            console.warn("MPV UIManager: Extension context invalidated. Aborting UI creation.");
+            return;
+        }
+
         // Create the host element that will live in the main DOM.
         this.controllerHost = document.createElement('div');
         this.controllerHost.id = 'm3u8-controller-host';
@@ -89,8 +96,8 @@ class UIManager {
         document.body.appendChild(this.anilistPanelHost);
 
         // Inject styles for the host elements into the main document's head.
-        const hostStyle = document.createElement('style');
-        hostStyle.textContent = `
+        this.hostStyle = document.createElement('style');
+        this.hostStyle.textContent = `
             #m3u8-controller-host, #m3u8-minimized-host { position: fixed; z-index: 2147483647; } /* Default position is top-left (0,0) until JS moves it */
             #m3u8-minimized-host.top-left { top: 15px; left: 15px; right: auto; bottom: auto; }
             #m3u8-minimized-host.top-right { top: 15px; right: 15px; left: auto; bottom: auto; }
@@ -99,7 +106,7 @@ class UIManager {
             body.mpv-anilist-dragging, body.mpv-anilist-dragging * { user-select: none; -webkit-user-select: none; cursor: grabbing !important; }
             body.mpv-anilist-resizing, body.mpv-anilist-resizing * { user-select: none; -webkit-user-select: none; cursor: se-resize !important; }
         `;
-        document.head.appendChild(hostStyle);
+        document.head.appendChild(this.hostStyle);
     }
 
     /**
@@ -109,6 +116,7 @@ class UIManager {
         this.controllerHost?.remove();
         this.minimizedHost?.remove();
         this.anilistPanelHost?.remove();
+        this.hostStyle?.remove();
 
         // Reset properties
         this.controllerHost = null;
@@ -116,5 +124,6 @@ class UIManager {
         this.minimizedHost = null;
         this.anilistPanelHost = null;
         this.anilistShadowRoot = null;
+        this.hostStyle = null;
     }
 }

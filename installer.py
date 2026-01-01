@@ -115,6 +115,57 @@ class InstallerLogic:
             
         return warnings
 
+    def get_browser_user_data_dir(self, browser_name):
+        """Returns the path to the browser's User Data directory."""
+        raise NotImplementedError
+
+    def find_extension_id(self, browser_name):
+        """Attempts to find the extension ID by scanning browser preferences."""
+        user_data_root = self.get_browser_user_data_dir(browser_name)
+        if not user_data_root or not os.path.exists(user_data_root):
+            self.log(f"User Data directory not found for {browser_name}: {user_data_root}")
+            return None
+
+        self.log(f"Scanning profiles in {user_data_root} for Extension ID...")
+
+        # Profiles to check: Default and Profile 1-20
+        profiles = ['Default']
+        for i in range(1, 21):
+            profiles.append(f'Profile {i}')
+
+        # Also check common side-profile names for Brave/Opera if they exist
+        if browser_name == "opera":
+            # Opera uses a slightly different structure sometimes
+            pass
+
+        for profile in profiles:
+            pref_path = os.path.join(user_data_root, profile, 'Preferences')
+            if os.path.exists(pref_path):
+                try:
+                    with open(pref_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        data = json.load(f)
+                    
+                    settings = data.get('extensions', {}).get('settings', {})
+                    for ext_id, details in settings.items():
+                        path = details.get('path')
+                        if path:
+                            # Normalize paths for comparison
+                            norm_path = os.path.normpath(path)
+                            norm_install = os.path.normpath(INSTALL_DIR)
+                            # On Windows, drive letters might differ in case
+                            if platform.system() == "Windows":
+                                norm_path = norm_path.lower()
+                                norm_install = norm_install.lower()
+
+                            if norm_path == norm_install:
+                                self.log(f"✅ Found ID '{ext_id}' in browser profile: '{profile}'")
+                                return ext_id
+                except Exception as e:
+                    continue
+        
+        self.log(f"❌ Could not find an unpacked extension pointing to {INSTALL_DIR}")
+        return None
+
     def run_diagnostics(self, browser):
         """Runs diagnostics and returns (result_text, has_critical_error)."""
         results = []
@@ -196,6 +247,18 @@ class WindowsLogic(InstallerLogic):
             "Vivaldi": ("SOFTWARE\\Vivaldi\\NativeMessagingHosts", manifest_path),
             "Opera": ("SOFTWARE\\Opera Software\\Opera Stable\\NativeMessagingHosts", manifest_path),
         }
+
+    def get_browser_user_data_dir(self, browser_name):
+        appdata = os.environ.get('LOCALAPPDATA', '')
+        mapping = {
+            "chrome": os.path.join(appdata, "Google/Chrome/User Data"),
+            "brave": os.path.join(appdata, "BraveSoftware/Brave-Browser/User Data"),
+            "edge": os.path.join(appdata, "Microsoft/Edge/User Data"),
+            "chromium": os.path.join(appdata, "Chromium/User Data"),
+            "vivaldi": os.path.join(appdata, "Vivaldi/User Data"),
+            "opera": os.path.join(appdata, "Opera Software/Opera Stable"),
+        }
+        return mapping.get(browser_name.lower())
 
     def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
         self.log("Detected Windows OS.")
@@ -419,7 +482,7 @@ class UnixLogic(InstallerLogic):
         with open(wrapper_path, 'w') as f:
             f.write("#!/bin/sh\n")
             f.write("export PYTHONDONTWRITEBYTECODE=1\n")
-            f.write(f'"{sys.executable}" "$@" "{script_path}"\n') # Corrected argument order
+            f.write(f'"{sys.executable}" "{script_path}" "$@"\n')
         os.chmod(wrapper_path, 0o755)
         self.log(f"Created executable Unix CLI wrapper: mpv-cli")
 
@@ -439,6 +502,18 @@ class MacOSLogic(UnixLogic):
             "Vivaldi": os.path.join(base_path, "Vivaldi/NativeMessagingHosts"),
         }
 
+    def get_browser_user_data_dir(self, browser_name):
+        base_path = os.path.expanduser("~/Library/Application Support/")
+        mapping = {
+            "chrome": os.path.join(base_path, "Google/Chrome"),
+            "brave": os.path.join(base_path, "BraveSoftware/Brave-Browser"),
+            "edge": os.path.join(base_path, "Microsoft Edge"),
+            "chromium": os.path.join(base_path, "Chromium"),
+            "vivaldi": os.path.join(base_path, "Vivaldi"),
+            "opera": os.path.join(base_path, "com.operasoftware.Opera"),
+        }
+        return mapping.get(browser_name.lower())
+
 class LinuxLogic(UnixLogic):
     def get_browser_configs(self):
         base_path = os.path.expanduser("~/.config/")
@@ -450,6 +525,18 @@ class LinuxLogic(UnixLogic):
             "Vivaldi": os.path.join(base_path, "vivaldi/NativeMessagingHosts"),
             "Opera": os.path.join(base_path, "opera/NativeMessagingHosts"),
         }
+
+    def get_browser_user_data_dir(self, browser_name):
+        base_path = os.path.expanduser("~/.config/")
+        mapping = {
+            "chrome": os.path.join(base_path, "google-chrome"),
+            "brave": os.path.join(base_path, "BraveSoftware/Brave-Browser"),
+            "edge": os.path.join(base_path, "microsoft-edge"),
+            "chromium": os.path.join(base_path, "chromium"),
+            "vivaldi": os.path.join(base_path, "vivaldi"),
+            "opera": os.path.join(base_path, "opera"),
+        }
+        return mapping.get(browser_name.lower())
 
 # --- Tooltip Class for detailed explanations ---
 class Tooltip:
@@ -573,12 +660,21 @@ class HostManagerApp:
 
         # --- Row 0: Extension ID ---
         ttk.Label(settings_frame, text="Extension ID:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=4)
+        
+        id_input_frame = ttk.Frame(settings_frame)
+        id_input_frame.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        id_input_frame.columnconfigure(0, weight=1)
+
         self.extension_id_var = tk.StringVar()
-        self.extension_id_entry = ttk.Entry(settings_frame, textvariable=self.extension_id_var, font=("Segoe UI", 10))
-        self.extension_id_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        self.extension_id_entry = ttk.Entry(id_input_frame, textvariable=self.extension_id_var, font=("Segoe UI", 10))
+        self.extension_id_entry.grid(row=0, column=0, sticky="ew")
+
+        self.detect_id_btn = ttk.Button(id_input_frame, text="Detect", command=self.run_detect_id, width=7)
+        self.detect_id_btn.grid(row=0, column=1, sticky=tk.E, padx=(5, 0))
+        Tooltip(self.detect_id_btn, "Automatically find the Extension ID for the selected browser")
 
         # --- Row 1: Enable URL Analysis Option ---
-        bypass_label = ttk.Label(settings_frame, text="Enable URL Analysis:", font=("Segoe UI", 10, "bold"))
+        bypass_label = ttk.Label(settings_frame, text="Advanced URL Analysis:", font=("Segoe UI", 10, "bold"))
         bypass_label.grid(row=1, column=0, sticky=tk.W, pady=4)
         
         self.create_bypass_var = tk.BooleanVar(value=False) # Default to False, will be loaded from config
@@ -589,15 +685,19 @@ class HostManagerApp:
         self.bypass_checkbutton.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
         
         tooltip_text = (
-            "If checked, enables URL analysis using yt-dlp to resolve certain stream URLs (e.g., AnimePahe)\n"
-            "and automatically apply appropriate headers and yt-dlp options for playback in MPV.\n"
-            "Requires a selected browser below for cookie access."
+            "🔓 ENABLE ADVANCED URL ANALYSIS\n\n"
+            "What this does:\n"
+            "- Uses yt-dlp to resolve difficult stream URLs (e.g. AnimePahe).\n"
+            "- Automatically applies site-specific security headers.\n"
+            "- READS browser profiles to find cookies for the selected browser.\n\n"
+            "Privacy Note: This strictly accesses local browser data to authorize \n"
+            "video playback. No data is sent to external servers except the streaming site."
         )
         Tooltip(bypass_label, tooltip_text)
         Tooltip(self.bypass_checkbutton, tooltip_text)
 
         # --- Row 2: Enable YouTube Analysis Option ---
-        yt_bypass_label = ttk.Label(settings_frame, text="Enable YouTube Analysis:", font=("Segoe UI", 10, "bold"))
+        yt_bypass_label = ttk.Label(settings_frame, text="YouTube Account Integration:", font=("Segoe UI", 10, "bold"))
         yt_bypass_label.grid(row=2, column=0, sticky=tk.W, pady=4)
         
         self.enable_youtube_bypass_var = tk.BooleanVar(value=False) # Default to False, will be loaded from config
@@ -608,10 +708,13 @@ class HostManagerApp:
         self.yt_bypass_checkbutton.grid(row=2, column=1, sticky=tk.W, padx=(10, 0))
 
         yt_tooltip_text = (
-            "If checked, URL analysis will also support YouTube URLs.\n\n"
-            "This uses your browser cookies to access logged-in features like\n"
-            "subscriptions, private videos, and ensures videos are marked as watched\n"
-            "in your YouTube history after playback."
+            "📺 ENABLE YOUTUBE INTEGRATION\n\n"
+            "What this does:\n"
+            "- Synchronizes with your YouTube account via browser cookies.\n"
+            "- Supports Private Videos, Subscriptions, and Watch Later.\n"
+            "- Enables 'Mark as Watched' synchronization with your history.\n"
+            "- Allows the extension to expand YouTube Playlists automatically.\n\n"
+            "Requires 'Advanced URL Analysis' to be enabled above."
         )
         Tooltip(yt_bypass_label, yt_tooltip_text)
         Tooltip(self.yt_bypass_checkbutton, yt_tooltip_text)
@@ -792,6 +895,27 @@ class HostManagerApp:
             self.root.after(0, lambda: self.install_button.config(state=tk.NORMAL))
         
         threading.Thread(target=_test, daemon=True).start()
+
+    def run_detect_id(self):
+        """Attempts to automatically detect the Extension ID for the selected browser."""
+        browser = self.browser_var.get()
+        self.log(f"Attempting to detect Extension ID for {browser}...")
+        
+        self.detect_id_btn.config(state=tk.DISABLED)
+        
+        def _detect():
+            ext_id = self.logic.find_extension_id(browser)
+            if ext_id:
+                self.root.after(0, lambda: self.extension_id_var.set(ext_id))
+                self.log(f"Auto-detection successful: {ext_id}")
+            else:
+                self.root.after(0, lambda: messagebox.showwarning("Not Found", 
+                    f"Could not find the extension ID in {browser}'s profiles.\n\n"
+                    "Make sure you have loaded the unpacked extension in the browser first!"))
+            
+            self.root.after(0, lambda: self.detect_id_btn.config(state=tk.NORMAL))
+
+        threading.Thread(target=_detect, daemon=True).start()
 
     def _load_installer_prefs(self):
         """Loads installer preferences like the last selected browser."""

@@ -30,6 +30,10 @@ class OptionsManager {
             { key: 'confirm_play_new', elementId: 'confirm-play-new-checkbox', type: 'checkbox' },
             { key: 'confirm_folder_switch', elementId: 'confirm-folder-switch-checkbox', type: 'checkbox' },
             { key: 'clear_on_completion', elementId: 'clear-on-completion-checkbox', type: 'checkbox' },
+            { key: 'yt_use_cookies', elementId: 'yt-use-cookies-checkbox', type: 'checkbox' },
+            { key: 'yt_mark_watched', elementId: 'yt-mark-watched-checkbox', type: 'checkbox' },
+            { key: 'yt_ignore_config', elementId: 'yt-ignore-config-checkbox', type: 'checkbox' },
+            { key: 'other_sites_use_cookies', elementId: 'other-sites-use-cookies-checkbox', type: 'checkbox' },
             { key: 'autofocus_new_folder', elementId: 'autofocus-new-folder-checkbox', type: 'checkbox' },
             { key: 'enable_dblclick_copy', elementId: 'enable-dblclick-copy-checkbox', type: 'checkbox' },
             { key: 'show_copy_title_button', elementId: 'show-copy-title-button-checkbox', type: 'checkbox' },
@@ -99,6 +103,21 @@ class OptionsManager {
         const networkMasterToggle = document.getElementById('disable-network-overrides-checkbox');
         if (networkMasterToggle) {
             this._updateNetworkingSectionState(networkMasterToggle.checked);
+        }
+
+        // --- YouTube Cookies Interdependency ---
+        const ytCookiesToggle = document.getElementById('yt-use-cookies-checkbox');
+        const ytMarkWatchedToggle = document.getElementById('yt-mark-watched-checkbox');
+        const ytIgnoreConfigToggle = document.getElementById('yt-ignore-config-checkbox');
+        if (ytCookiesToggle) {
+            if (ytMarkWatchedToggle) {
+                ytMarkWatchedToggle.disabled = !ytCookiesToggle.checked;
+                ytMarkWatchedToggle.parentElement.style.opacity = ytCookiesToggle.checked ? '1' : '0.5';
+            }
+            if (ytIgnoreConfigToggle) {
+                ytIgnoreConfigToggle.disabled = !ytCookiesToggle.checked;
+                ytIgnoreConfigToggle.parentElement.style.opacity = ytCookiesToggle.checked ? '1' : '0.5';
+            }
         }
 
         // Manual handling for MPV flags list
@@ -343,6 +362,22 @@ class OptionsManager {
                 // Extra logic for networking master toggle
                 if (mapping.elementId === 'disable-network-overrides-checkbox') {
                     control.addEventListener('change', () => this._updateNetworkingSectionState(control.checked));
+                }
+
+                // Extra logic for YouTube cookies interdependency
+                if (mapping.elementId === 'yt-use-cookies-checkbox') {
+                    control.addEventListener('change', () => {
+                        const ytMarkWatchedToggle = document.getElementById('yt-mark-watched-checkbox');
+                        const ytIgnoreConfigToggle = document.getElementById('yt-ignore-config-checkbox');
+                        if (ytMarkWatchedToggle) {
+                            ytMarkWatchedToggle.disabled = !control.checked;
+                            ytMarkWatchedToggle.parentElement.style.opacity = control.checked ? '1' : '0.5';
+                        }
+                        if (ytIgnoreConfigToggle) {
+                            ytIgnoreConfigToggle.disabled = !control.checked;
+                            ytIgnoreConfigToggle.parentElement.style.opacity = control.checked ? '1' : '0.5';
+                        }
+                    });
                 }
             }
         });
