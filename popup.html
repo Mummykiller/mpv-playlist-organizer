@@ -174,382 +174,460 @@
     
     <!-- Shared Settings Container (moved via JS) -->
     <div id="shared-settings-container" style="display: none;">
-        <div class="settings-search-container" style="padding: 0 8px 8px 8px;">
-            <input type="text" id="settings-search-input" placeholder="Search settings (e.g. buffer, keybind)..." class="settings-input" style="text-align: left; padding-left: 35px; background-image: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%239e9e9e%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Ccircle cx=%2211%22 cy=%2211%22 r=%228%22/%3E%3Cline x1=%2221%22 y1=%2221%22 x2=%2216.65%22 y2=%2216.65%22/%3E%3C/svg%3E'); background-repeat: no-repeat; background-position: 10px center;">
+        <div class="settings-search-container">
+            <input type="text" id="settings-search-input" placeholder="Search settings (e.g. buffer, keybind)..." class="settings-input">
         </div>
         <div id="settings-sections-wrapper">
-            <details class="settings-section" open data-section-name="mpv launch settings">
-            <summary class="settings-section-header">
-                <span>MPV Launch Settings</span>
-                <div class="header-actions">
-                    <button class="section-reload-btn" title="Sync & Refresh Settings">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
-                    </button>
-                </div>
-            </summary>
-                            <div class="settings-section-content">
-                                <div class="control-group" data-setting-name="window size geometry">
-                                    <label for="geometry-select" class="settings-label">Window Size:</label>
-                                    <select id="geometry-select" title="Set the window size for MPV when it launches.">
-                                        <option value="">Default</option>
-                                        <option value="640x360">Small (360p)</option>
-                                        <option value="1280x720">Medium (720p)</option>
-                                        <option value="1920x1080">HD (1080p)</option>
-                                        <option value="custom">Custom</option>
-                                    </select>
-                                </div>
-                                <div class="control-group" data-setting-name="always show terminal">
-                                    <label for="force-terminal-checkbox" class="settings-label">Always show terminal:</label>
-                                    <input type="checkbox" id="force-terminal-checkbox" class="settings-checkbox" title="If checked, MPV will always launch in a separate terminal window.">
-                                </div>
-                                <div id="custom-geometry-container" class="control-group custom-geometry-container" style="display: none;" data-setting-name="custom geometry width height">
-                                    <input type="text" id="custom-width" class="custom-geometry-input" placeholder="Width" pattern="[0-9]{1,4}" maxlength="4" title="Custom window width in pixels.">
-                                    <span class="custom-geometry-separator">&times;</span>
-                                    <input type="text" id="custom-height" class="custom-geometry-input" placeholder="Height" pattern="[0-9]{1,4}" maxlength="4" title="Custom window height in pixels.">
-                                </div>
-                                <div class="control-group stacked-control setting-item" data-setting-name="custom mpv flags">
-                                    <label for="mpv-flag-input" class="settings-label">Custom MPV Flags:</label>
-                                    <div class="input-group">
-                                        <input type="text" id="mpv-flag-input" class="settings-input" placeholder="e.g. --vo=gpu" title="Type a flag and press Enter" list="allowed-mpv-flags">
-                                        <button id="btn-reset-mpv-flags" class="icon-button" title="Reset to Defaults" style="padding: 8px;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"/><path d="M3 3v9h9"/></svg></button>
-                                    </div>
-                                    <datalist id="allowed-mpv-flags">
-                                        <option value="--vo=gpu">
-                                        <option value="--hwdec=auto">
-                                        <option value="--fullscreen">
-                                        <option value="--ontop">
-                                        <option value="--no-border">
-                                        <option value="--force-window=immediate">
-                                        <option value="--volume=100">
-                                        <option value="--mute=yes">
-                                        <option value="--keep-open=yes">
-                                        <option value="--loop-playlist=inf">
-                                        <option value="--shuffle">
-                                        <option value="--geometry=50%:50%">
-                                        <option value="--autofit=70%">
-                                        <option value="--sub-font-size=40">
-                                        <option value="--sub-pos=95">
-                                        <option value="--speed=1.0">
-                                    </datalist>
-                                    <div id="mpv-flags-list-container" class="filter-list-container"></div>
-                                    <small>Click to toggle. Double-click to remove.</small>
-                                </div>
-                                <div class="control-group stacked-control setting-item" data-setting-name="automatic mpv flags">
-                                    <label for="automatic-mpv-flag-input" class="settings-label">Automatic MPV Flags:</label>
-                                    <div class="input-group">
-                                        <button id="btn-reset-automatic-mpv-flags" class="icon-button" title="Reset to Defaults" style="padding: 8px;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"/><path d="M3 3v9h9"/></svg></button>
-                                    </div>
-                                    <div id="automatic-mpv-flags-list-container" class="filter-list-container"></div>
-                                    <small>Click a flag to disable/enable it.</small>
-                                </div>
-                                <div class="control-group" style="margin-top: 10px;" data-setting-name="enable smart resume">
-                                    <label for="enable-smart-resume-checkbox" class="settings-label">Enable Smart Resume:</label>
-                                    <input type="checkbox" id="enable-smart-resume-checkbox" class="settings-checkbox" title="If checked, the extension will reorder the playlist to start with the last-played item. Enhances '--save-position-on-quit'.">
-                                </div>
-                                <div class="control-group" data-setting-name="enable precise resume">
-                                    <label for="enable-precise-resume-checkbox" class="settings-label">Enable Precise Resume:</label>
-                                    <input type="checkbox" id="enable-precise-resume-checkbox" class="settings-checkbox" title="If checked, the extension will track the exact timestamp (time) of your playback and forcefully resume from that second on next launch.">
-                                </div>
-                                <div class="control-group" data-setting-name="highlight active item">
-                                    <label for="enable-active-highlight-checkbox" class="settings-label">Highlight active item:</label>
-                                    <input type="checkbox" id="enable-active-highlight-checkbox" class="settings-checkbox" title="If checked, the currently playing item will be highlighted in green in the playlist.">
-                                </div>
-                                <div class="control-group" data-setting-name="show play new button">
-                                    <label for="show-play-new-button-checkbox" class="settings-label">Show "Play New" Button:</label>
-                                    <input type="checkbox" id="show-play-new-button-checkbox" class="settings-checkbox" title="If checked, shows a button to launch a second, unmanaged MPV instance.">
-                                </div>
-                            </div>
-                        </details>
-                        <details class="settings-section" data-section-name="behavior settings">
-                            <summary class="settings-section-header">
-                                <span>Behavior Settings</span>
-                                <div class="header-actions">
-                                    <button class="section-reload-btn" title="Sync & Refresh Settings">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
-                                    </button>
-                                </div>
-                            </summary>
-                            <div class="settings-section-content">
-                                <div class="control-group" data-setting-name="duplicates behavior">
-                                    <label for="duplicate-behavior-select" class="settings-label">Duplicates:</label>
-                                    <select id="duplicate-behavior-select" title="Choose what happens when adding a URL that is already in the playlist.">
-                                        <option value="ask">Always Ask</option>
-                                        <option value="always">Always Add</option>
-                                        <option value="never">Never Add</option>
-                                    </select>
-                                </div>
-                                <div class="control-group" data-setting-name="default ui mode">
-                                    <label for="default-ui-mode-select" class="settings-label">Default UI:</label>
-                                    <select id="default-ui-mode-select" title="Set the default appearance of the on-page controller when a page loads.">
-                                        <option value="full">Full</option>
-                                        <option value="compact">Compact</option>
-                                        <option value="minimized">Minimized</option>
-                                    </select>
-                                </div>
-                                <div class="control-group" data-setting-name="one-click add">
-                                    <label for="one-click-add-checkbox" class="settings-label">One-click Add:</label>
-                                    <input type="checkbox" id="one-click-add-checkbox" class="settings-checkbox" title="If checked, the context menu will have a direct option to add to the last used folder.">
-                                </div>
-                                <div class="control-group" data-setting-name="auto-append on add">
-                                    <label for="auto-append-on-add-checkbox" class="settings-label">Add to Active Player Automatically:</label>
-                                    <input type="checkbox" id="auto-append-on-add-checkbox" class="settings-checkbox" title="If checked, when you click 'Add' while MPV is already playing that folder, the new item will be sent to the player immediately.">
-                                </div>
-                                <div class="control-group" data-setting-name="live removal">
-                                    <label for="live-removal-checkbox" class="settings-label">Remove from Active Player Automatically:</label>
-                                    <input type="checkbox" id="live-removal-checkbox" class="settings-checkbox" title="If checked, removing an item from the extension's playlist while it is playing in MPV will also remove it from the player's internal playlist.">
-                                </div>
-                                <div class="control-group" data-setting-name="scanner timeout">
-                                    <label for="scanner-timeout-input" class="settings-label">Scanner Timeout (s):</label>
-                                    <input type="number" id="scanner-timeout-input" class="settings-input" min="10" max="300" step="1" title="Set the time (in seconds) to wait for a stream to be detected in the manual scanner window before timing out.">
-                                </div>
-                                <div class="control-group" data-setting-name="clear on completion">
-                                    <label for="clear-on-completion-checkbox" class="settings-label">Clear on Completion:</label>
-                                    <input type="checkbox" id="clear-on-completion-checkbox" class="settings-checkbox" title="If checked, automatically clears a playlist after it finishes playing in MPV.">
-                                </div>
-                                <div class="control-group" data-setting-name="auto-focus input">
-                                    <label for="autofocus-new-folder-checkbox" class="settings-label">Auto-focus Input:</label>
-                                    <input type="checkbox" id="autofocus-new-folder-checkbox" class="settings-checkbox" title="If checked, automatically focuses the 'Create new folder' input when the popup opens.">
-                                </div>
-                                <div class="control-group" data-setting-name="double-click to copy">
-                                    <label for="enable-dblclick-copy-checkbox" class="settings-label">Double-click to Copy:</label>
-                                    <input type="checkbox" id="enable-dblclick-copy-checkbox" class="settings-checkbox" title="If checked, double-clicking an item in the on-page playlist will copy its title.">
-                                </div>
-                                <div class="control-group" data-setting-name="show copy url button">
-                                    <label for="show-copy-title-button-checkbox" class="settings-label">Show Copy URL Button:</label>
-                                    <input type="checkbox" id="show-copy-title-button-checkbox" class="settings-checkbox" title="If checked, shows a button next to each playlist item to copy its URL.">
-                                </div>
-                                <div class="control-group" data-setting-name="show minimized stub">
-                                    <label for="show-minimized-stub-checkbox" class="settings-label">Show Minimized Button:</label>
-                                    <input type="checkbox" id="show-minimized-stub-checkbox" class="settings-checkbox" title="If checked, shows the circular button in the corner when the controller is minimized.">
-                                </div>
-                                <div class="control-group" data-setting-name="on yt playback failure ytdlp update">
-                                    <label for="ytdlp-update-behavior-select" class="settings-label">On YT Playback Failure:</label>
-                                    <select id="ytdlp-update-behavior-select" title="Choose how to handle yt-dlp updates when YouTube playback fails.">
-                                        <option value="manual">Do Nothing</option>
-                                        <option value="ask">Ask to Update yt-dlp</option>
-                                        <option value="auto">Auto-Update yt-dlp</option>
-                                    </select>
-                                </div>
-                                <div class="control-group" style="margin-top: 8px;" data-setting-name="manual update ytdlp">
-                                    <label for="btn-manual-ytdlp-update" class="settings-label">Manual Update:</label>
-                                    <button id="btn-manual-ytdlp-update" class="secondary-action" style="flex-grow: 1;" title="Manually run the yt-dlp update process.">Update yt-dlp Now</button>
-                                </div>
-                            </div>
-                        </details>
-                        <details class="settings-section" data-section-name="youtube site support">
-                            <summary class="settings-section-header">
-                                <span>YouTube & Site Support</span>
-                                <div class="header-actions">
-                                    <button class="section-reload-btn" title="Sync & Refresh Settings">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
-                                    </button>
-                                </div>
-                            </summary>
-                            <div class="settings-section-content">
-                                <div class="control-group" data-setting-name="use youtube cookies">
-                                    <label for="yt-use-cookies-checkbox" class="settings-label">Use Cookies for YouTube:</label>
-                                    <input type="checkbox" id="yt-use-cookies-checkbox" class="settings-checkbox" title="If checked, YouTube playback will use your browser cookies for subscriptions and private videos.">
-                                </div>
-                                <div class="control-group indent-setting" data-setting-name="mark youtube watched">
-                                    <label for="yt-mark-watched-checkbox" class="settings-label">Mark as Watched:</label>
-                                    <input type="checkbox" id="yt-mark-watched-checkbox" class="settings-checkbox" title="Automatically mark videos as 'Watched' in your YouTube account history. Requires YouTube cookies to be enabled above.">
-                                </div>
-                                <div class="control-group indent-setting" data-setting-name="ignore ytdlp config">
-                                    <label for="yt-ignore-config-checkbox" class="settings-label">Ignore local yt-dlp config:</label>
-                                    <input type="checkbox" id="yt-ignore-config-checkbox" class="settings-checkbox" title="If checked, ignores any personal yt-dlp configuration files on your system. Highly recommended for stability.">
-                                </div>
-                                <div class="control-group" data-setting-name="use cookies other sites">
-                                    <label for="other-sites-use-cookies-checkbox" class="settings-label">Use Cookies for External Sites:</label>
-                                    <input type="checkbox" id="other-sites-use-cookies-checkbox" class="settings-checkbox" title="If checked, external resolution (for sites like AnimePahe) will use your browser cookies.">
-                                </div>
-                                <small style="color: var(--text-secondary); display: block; margin-top: 4px;">Note: These features require 'YouTube Analysis' and 'URL Analysis' to be enabled in the installer.</small>
-                            </div>
-                        </details>
-                        <details class="settings-section" data-section-name="keybindings">
+            
+            <!-- 1. General Interface -->
+            <details class="settings-section" open data-section-name="general interface ui behavior look feel">
                 <summary class="settings-section-header">
-                    <span>Keybindings</span>
+                    <span>General Interface</span>
                     <div class="header-actions">
-                        <button class="section-reload-btn" title="Sync & Refresh Settings">
+                        <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
                         </button>
                     </div>
                 </summary>
                 <div class="settings-section-content">
-                    <div class="control-group stacked-control" data-setting-name="add to playlist keybind">
-                        <label for="kb-add-playlist-input" class="settings-label">Add to Playlist:</label>
-                        <div class="input-group">
-                            <input type="text" id="kb-add-playlist-input" class="settings-input" placeholder="e.g. Shift+A" readonly>
-                            <button class="icon-button btn-record-keybind" title="Record Keybind"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
-                        </div>
+                    <div class="control-group" data-setting-name="default ui mode on page controller">
+                        <label for="default-ui-mode-select" class="settings-label">Default UI Mode <span class="help-icon" title="Choose how the on-page controller first appears when you open a website.">?</span>:</label>
+                        <select id="default-ui-mode-select">
+                            <option value="full">Full (Normal)</option>
+                            <option value="compact">Compact (Slim)</option>
+                            <option value="minimized">Minimized (Button Only)</option>
+                        </select>
                     </div>
-                    <div class="control-group stacked-control" data-setting-name="play selected playlist keybind">
-                        <label for="kb-play-playlist-input" class="settings-label">Play Playlist:</label>
-                        <div class="input-group">
-                            <input type="text" id="kb-play-playlist-input" class="settings-input" placeholder="e.g. Shift+P" readonly>
-                            <button class="icon-button btn-record-keybind" title="Record Keybind"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
-                        </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="auto-focus input new folder">
+                        <label for="autofocus-new-folder-checkbox" class="settings-label">Auto-focus Input <span class="help-icon" title="Automatically focus the 'Create new folder' text box when you open this popup.">?</span>:</label>
+                        <input type="checkbox" id="autofocus-new-folder-checkbox" class="settings-checkbox">
                     </div>
-                    <div class="control-group stacked-control" data-setting-name="toggle controller keybind">
-                        <label for="kb-toggle-ui-input" class="settings-label">Toggle Controller:</label>
-                        <div class="input-group">
-                            <input type="text" id="kb-toggle-ui-input" class="settings-input" placeholder="e.g. Shift+S" readonly>
-                            <button class="icon-button btn-record-keybind" title="Record Keybind"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
-                        </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="show minimized stub button">
+                        <label for="show-minimized-stub-checkbox" class="settings-label">Show Minimized Button <span class="help-icon" title="Toggle the circular floating button that appears when the controller is minimized.">?</span>:</label>
+                        <input type="checkbox" id="show-minimized-stub-checkbox" class="settings-checkbox">
                     </div>
-                    <div class="control-group stacked-control" data-setting-name="open popup keybind">
-                        <label for="kb-open-popup-input" class="settings-label">Open Popup:</label>
-                        <div class="input-group">
-                            <input type="text" id="kb-open-popup-input" class="settings-input" placeholder="e.g. Alt+P" readonly>
-                            <button class="icon-button btn-record-keybind" title="Record Keybind"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="one-click add context menu">
+                        <label for="one-click-add-checkbox" class="settings-label">One-click Add <span class="help-icon" title="Adds a top-level 'Add to Last Used' option to the right-click context menu for faster access.">?</span>:</label>
+                        <input type="checkbox" id="one-click-add-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="double-click to copy title">
+                        <label for="enable-dblclick-copy-checkbox" class="settings-label">Double-click to Copy <span class="help-icon" title="Copy the title of a playlist item to your clipboard by double-clicking it.">?</span>:</label>
+                        <input type="checkbox" id="enable-dblclick-copy-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="show copy url button playlist">
+                        <label for="show-copy-title-button-checkbox" class="settings-label">Show Copy URL Button <span class="help-icon" title="Show a small icon next to each item in the playlist to quickly copy its URL.">?</span>:</label>
+                        <input type="checkbox" id="show-copy-title-button-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group stacked-control" data-setting-name="popup width browser size">
+                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                            <label for="popup-width-slider" class="settings-label">Popup Width <span class="help-icon" title="Adjust the width of this extension window (400px to 780px).">?</span>:</label>
+                            <button id="btn-lock-popup-width" class="icon-button" title="Lock/Unlock Width Slider" style="padding: 4px; margin-right: 8px;">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lock-icon"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="unlock-icon" style="display: none;"><path d="M7 11V7a5 5 0 0 1 9.9-1"></path><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect></svg>
+                            </button>
+                        </div>
+                        <div id="popup-width-controls-container" class="input-group">
+                            <input type="range" id="popup-width-slider" min="400" max="780" step="10" style="margin: 0 -9px; flex-grow: 1;">
+                            <span id="popup-width-current" class="current-value-display"></span>
                         </div>
                     </div>
                 </div>
             </details>
-            <details class="settings-section" data-section-name="scraper settings">
+
+            <!-- 2. MPV Player -->
+            <details class="settings-section" data-section-name="mpv player launch playback behavior flags window">
                 <summary class="settings-section-header">
-                    <span>Scraper Settings</span>
+                    <span>MPV Player</span>
                     <div class="header-actions">
-                        <button class="section-reload-btn" title="Sync & Refresh Settings">
+                        <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
                         </button>
                     </div>
                 </summary>
                 <div class="settings-section-content">
-                    <div class="setting-item stacked-control" data-setting-name="add filter word scraper">
-                        <label for="scraper-filter-input">Add Filter Word</label>
-                        <input type="text" id="scraper-filter-input" placeholder="Type a word and press Enter...">
-                        <div id="scraper-filter-list-container" class="filter-list-container"></div>
-                        <small>Words to remove from scraped titles. Click a word to remove it.</small>
+                    <div class="settings-group-header">Launch & Window</div>
+                    
+                    <div class="control-group stacked-control" data-setting-name="window size geometry mpv">
+                        <label for="geometry-select" class="settings-label">Window Size <span class="help-icon" title="Set the initial window dimensions when MPV launches.">?</span>:</label>
+                        <select id="geometry-select">
+                            <option value="">Default (System/MPV Config)</option>
+                            <option value="640x360">Small (360p)</option>
+                            <option value="1280x720">Medium (720p)</option>
+                            <option value="1920x1080">HD (1080p)</option>
+                            <option value="custom">Custom Dimensions...</option>
+                        </select>
                     </div>
-                    <div class="setting-item stacked-control" style="margin-top: 12px;" data-setting-name="built-in filters scraper">
-                        <label>Built-in Filters (always active)</label>
-                        <div id="scraper-builtin-filter-list-container" class="filter-list-container readonly"></div>
-                        <small>These words are part of the core scraper logic and cannot be removed.</small>
+
+                    <div id="custom-geometry-container" class="control-group custom-geometry-container" style="display: none;" data-setting-name="custom geometry width height pixels">
+                        <input type="text" id="custom-width" class="custom-geometry-input" placeholder="Width" pattern="[0-9]{1,4}" maxlength="4" title="Width in pixels (e.g. 1280)">
+                        <span class="custom-geometry-separator">&times;</span>
+                        <input type="text" id="custom-height" class="custom-geometry-input" placeholder="Height" pattern="[0-9]{1,4}" maxlength="4" title="Height in pixels (e.g. 720)">
+                    </div>
+
+                    <hr class="settings-compact-separator">
+
+                    <div class="control-group" data-setting-name="always show terminal window mpv">
+                        <label for="force-terminal-checkbox" class="settings-label">Always show terminal <span class="help-icon" title="Forces MPV to run in a visible terminal window. Useful for seeing logs and errors.">?</span>:</label>
+                        <input type="checkbox" id="force-terminal-checkbox" class="settings-checkbox">
+                    </div>
+
+                    <hr class="settings-compact-separator">
+
+                    <div class="control-group" data-setting-name="show play new button instance">
+                        <label for="show-play-new-button-checkbox" class="settings-label">Show "Play New" Button <span class="help-icon" title="Show a button to launch a completely new, unmanaged MPV window instead of appending to the current one.">?</span>:</label>
+                        <input type="checkbox" id="show-play-new-button-checkbox" class="settings-checkbox">
+                    </div>
+
+                    <div class="settings-group-header" style="margin-top: 14px;">Playback & Logic</div>
+
+                    <div class="control-group" data-setting-name="enable smart resume reorder">
+                        <label for="enable-smart-resume-checkbox" class="settings-label">Enable Smart Resume <span class="help-icon" title="Automatically reorders the queue so your last-played item starts first. Great for binge watching.">?</span>:</label>
+                        <input type="checkbox" id="enable-smart-resume-checkbox" class="settings-checkbox">
+                    </div>
+
+                    <hr class="settings-compact-separator">
+
+                    <div class="control-group" data-setting-name="enable precise resume timestamp">
+                        <label for="enable-precise-resume-checkbox" class="settings-label">Enable Precise Resume <span class="help-icon" title="Tracks your exact timestamp (down to the second) and forces MPV to start there. Fixes resume issues on many streaming sites.">?</span>:</label>
+                        <input type="checkbox" id="enable-precise-resume-checkbox" class="settings-checkbox">
+                    </div>
+
+                    <hr class="settings-compact-separator">
+
+                    <div class="control-group" data-setting-name="highlight active item green">
+                        <label for="enable-active-highlight-checkbox" class="settings-label">Highlight active item <span class="help-icon" title="Highlights the video currently playing in MPV with a green border in the browser playlist.">?</span>:</label>
+                        <input type="checkbox" id="enable-active-highlight-checkbox" class="settings-checkbox">
+                    </div>
+
+                    <hr class="settings-compact-separator">
+
+                    <div class="control-group" data-setting-name="auto-append on add live">
+                        <label for="auto-append-on-add-checkbox" class="settings-label">Add to Active Player <span class="help-icon" title="If MPV is already playing from this folder, new items will be sent to the player immediately when added.">?</span>:</label>
+                        <input type="checkbox" id="auto-append-on-add-checkbox" class="settings-checkbox">
+                    </div>
+
+                    <hr class="settings-compact-separator">
+
+                    <div class="control-group" data-setting-name="live removal sync">
+                        <label for="live-removal-checkbox" class="settings-label">Remove from Active Player <span class="help-icon" title="Removing an item from your browser playlist will also remove it from the running MPV instance's internal queue.">?</span>:</label>
+                        <input type="checkbox" id="live-removal-checkbox" class="settings-checkbox">
+                    </div>
+
+                    <hr class="settings-compact-separator">
+
+                    <div class="control-group" data-setting-name="clear on completion auto">
+                        <label for="clear-on-completion-checkbox" class="settings-label">Clear on Completion <span class="help-icon" title="Automatically wipes the folder's playlist once the last item finishes playing in MPV.">?</span>:</label>
+                        <input type="checkbox" id="clear-on-completion-checkbox" class="settings-checkbox">
+                    </div>
+
+                    <hr class="settings-compact-separator">
+
+                    <div class="control-group stacked-control" data-setting-name="duplicates behavior ask always never">
+                        <label for="duplicate-behavior-select" class="settings-label">Duplicate URLs <span class="help-icon" title="Define what happens when you add a link that is already in the playlist.">?</span>:</label>
+                        <select id="duplicate-behavior-select">
+                            <option value="ask">Ask every time</option>
+                            <option value="always">Always add duplicates</option>
+                            <option value="never">Never add duplicates</option>
+                        </select>
+                    </div>
+
+                    <hr class="settings-compact-separator">
+                    <div class="settings-group-header">Advanced Flags</div>
+
+                    <div class="control-group stacked-control setting-item" data-setting-name="custom mpv flags command line">
+                        <label for="mpv-flag-input" class="settings-label">Custom MPV Flags <span class="help-icon" title="Enter a command-line flag for MPV and press Enter. These are appended to every MPV launch command.">?</span>:</label>
+                        <div class="input-group">
+                            <input type="text" id="mpv-flag-input" class="settings-input" placeholder="e.g. --vo=gpu" list="allowed-mpv-flags">
+                            <button id="btn-reset-mpv-flags" class="icon-button" title="Clear all custom flags and reset to empty."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"/><path d="M3 3v9h9"/></svg></button>
+                        </div>
+                        <datalist id="allowed-mpv-flags">
+                            <option value="--vo=gpu">
+                            <option value="--hwdec=auto">
+                            <option value="--fullscreen">
+                            <option value="--ontop">
+                            <option value="--no-border">
+                            <option value="--force-window=immediate">
+                            <option value="--volume=100">
+                            <option value="--mute=yes">
+                            <option value="--keep-open=yes">
+                            <option value="--loop-playlist=inf">
+                            <option value="--shuffle">
+                            <option value="--geometry=50%:50%">
+                            <option value="--autofit=70%">
+                            <option value="--sub-font-size=40">
+                            <option value="--sub-pos=95">
+                            <option value="--speed=1.0">
+                        </datalist>
+                        <div id="mpv-flags-list-container" class="filter-list-container" title="Active custom flags. Click to toggle, double-click to remove."></div>
+                        <small>Custom flags are appended to every MPV launch command.</small>
+                    </div>
+                    <div class="control-group stacked-control setting-item" data-setting-name="automatic mpv flags internal">
+                        <label for="automatic-mpv-flag-input" class="settings-label">Automatic Internal Flags <span class="help-icon" title="These are managed by the extension for stability. Toggle only if you know what you're doing.">?</span>:</label>
+                        <div class="input-group">
+                            <button id="btn-reset-automatic-mpv-flags" class="icon-button" title="Restore default internal flags."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"/><path d="M3 3v9h9"/></svg></button>
+                        </div>
+                        <div id="automatic-mpv-flags-list-container" class="filter-list-container"></div>
+                        <small>Internal stability flags. Toggle only if you know what you're doing.</small>
                     </div>
                 </div>
             </details>
-            <details class="settings-section" data-section-name="anilist settings">
+
+            <!-- 3. Integrations -->
+            <details class="settings-section" data-section-name="integrations youtube anilist scraper scanner">
                 <summary class="settings-section-header">
-                    <span>AniList Settings</span>
+                    <span>Integrations</span>
                     <div class="header-actions">
-                        <button class="section-reload-btn" title="Sync & Refresh Settings">
+                        <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
                         </button>
                     </div>
                 </summary>
-                <div class="settings-section-content" style="padding-top: 0;">
-                    <div class="control-group" style="padding: 12px 12px 8px; border-bottom: 1px solid var(--border-color);" data-setting-name="enable anilist integration">
-                        <label for="enable-anilist-integration-checkbox" class="settings-label">Enable AniList Integration:</label>
-                        <input type="checkbox" id="enable-anilist-integration-checkbox" class="settings-checkbox" title="Master toggle for all AniList-related features.">
+                <div class="settings-section-content">
+                    
+                    <div class="settings-group-header">YouTube & yt-dlp</div>
+                    <div class="control-group" data-setting-name="use youtube cookies history subscriptions">
+                        <label for="yt-use-cookies-checkbox" class="settings-label">Use Cookies for YouTube <span class="help-icon" title="Shares your browser's YouTube session with MPV. Enables watch history, subscriptions, and private videos.">?</span>:</label>
+                        <input type="checkbox" id="yt-use-cookies-checkbox" class="settings-checkbox">
                     </div>
-                    <div id="anilist-options-container" class="settings-section-content" style="border-top: none;">
-                        <div class="control-group" data-setting-name="lock panel anilist">
-                            <label for="lock-anilist-panel-checkbox" class="settings-label">Lock Panel:</label>
-                            <input type="checkbox" id="lock-anilist-panel-checkbox" class="settings-checkbox" title="If checked, the AniList panel cannot be dragged separately.">
+                    <hr class="settings-compact-separator">
+                    <div class="control-group indent-setting" data-setting-name="mark youtube watched history">
+                        <label for="yt-mark-watched-checkbox" class="settings-label">Mark as Watched <span class="help-icon" title="Automatically adds videos to your YouTube 'Watched' history once played. Requires cookies above.">?</span>:</label>
+                        <input type="checkbox" id="yt-mark-watched-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group indent-setting" data-setting-name="ignore ytdlp config local">
+                        <label for="yt-ignore-config-checkbox" class="settings-label">Ignore local yt-dlp config <span class="help-icon" title="Prevents your system-wide yt-dlp configuration from interfering with the extension. Recommended for stability.">?</span>:</label>
+                        <input type="checkbox" id="yt-ignore-config-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="use cookies other sites animepahe">
+                        <label for="other-sites-use-cookies-checkbox" class="settings-label">Cookies for Other Sites <span class="help-icon" title="Allows using your browser cookies for non-YouTube sites during stream detection (useful for sites with session-based protection).">?</span>:</label>
+                        <input type="checkbox" id="other-sites-use-cookies-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="on youtube playback failure auto update ytdlp">
+                        <label for="ytdlp-update-behavior-select" class="settings-label">On Playback Failure <span class="help-icon" title="What to do when YouTube playback fails due to an outdated yt-dlp version.">?</span>:</label>
+                        <select id="ytdlp-update-behavior-select">
+                            <option value="manual">Do Nothing (Manual Only)</option>
+                            <option value="ask">Ask to Update yt-dlp</option>
+                            <option value="auto">Auto-Update yt-dlp</option>
+                        </select>
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" style="margin-top: 8px;" data-setting-name="manual update ytdlp command">
+                        <label for="btn-manual-ytdlp-update" class="settings-label">Manual Update <span class="help-icon" title="Manually check for and install the latest version of yt-dlp.">?</span>:</label>
+                        <button id="btn-manual-ytdlp-update" class="secondary-action" style="flex-grow: 1;">Update yt-dlp Now</button>
+                    </div>
+
+                    <hr class="settings-compact-separator">
+                    
+                    <!-- AniList -->
+                    <div class="settings-group-header">AniList Integration</div>
+                    <div class="control-group" data-setting-name="enable anilist integration panel">
+                        <label for="enable-anilist-integration-checkbox" class="settings-label">Enable Integration <span class="help-icon" title="Master switch for the AniList airing dashboard and releases section.">?</span>:</label>
+                        <input type="checkbox" id="enable-anilist-integration-checkbox" class="settings-checkbox">
+                    </div>
+                    <div id="anilist-options-container" class="settings-section-content" style="border-top: none; padding-top: 0; padding-bottom: 0;">
+                        <hr class="settings-compact-separator">
+                        <div class="control-group" data-setting-name="lock panel anilist dragging">
+                            <label for="lock-anilist-panel-checkbox" class="settings-label">Lock Panel Position <span class="help-icon" title="Prevents the AniList dashboard from being dragged, locking it in place.">?</span>:</label>
+                            <input type="checkbox" id="lock-anilist-panel-checkbox" class="settings-checkbox">
                         </div>
-                        <div class="control-group" data-setting-name="force panel attached anilist">
-                            <label for="force-panel-attached-checkbox" class="settings-label">Force Panel Attached:</label>
-                            <input type="checkbox" id="force-panel-attached-checkbox" class="settings-checkbox" title="Forces the AniList panel to always be attached to the controller and hides it when the controller is minimized.">
+                        <hr class="settings-compact-separator">
+                        <div class="control-group" data-setting-name="force panel attached anilist controller">
+                            <label for="force-panel-attached-checkbox" class="settings-label">Force Attached <span class="help-icon" title="Snaps the AniList panel to the on-page controller and hides it when minimized.">?</span>:</label>
+                            <input type="checkbox" id="force-panel-attached-checkbox" class="settings-checkbox">
                         </div>
-                        <div class="control-group" data-setting-name="attach on open anilist">
-                            <label for="anilist-attach-on-open-checkbox" class="settings-label">Attach on Open:</label>
-                            <input type="checkbox" id="anilist-attach-on-open-checkbox" class="settings-checkbox" title="If checked, the AniList panel will snap to the side of the controller each time it is opened.">
+                        <hr class="settings-compact-separator">
+                        <div class="control-group" data-setting-name="attach on open anilist snap">
+                            <label for="anilist-attach-on-open-checkbox" class="settings-label">Snap on Open <span class="help-icon" title="If the panel is free-floating, it will snap back to the side of the controller whenever the page reloads.">?</span>:</label>
+                            <input type="checkbox" id="anilist-attach-on-open-checkbox" class="settings-checkbox">
                         </div>
-                        <div class="control-group stacked-control" data-setting-name="cover image size anilist">
-                            <label for="anilist-image-height-slider" class="settings-label">Cover Image Size:</label>
+                        <hr class="settings-compact-separator">
+                        <div class="control-group stacked-control" data-setting-name="cover image size anilist thumbnail">
+                            <label for="anilist-image-height-slider" class="settings-label">Cover Image Size <span class="help-icon" title="Slide to adjust the size of anime posters in the dashboard.">?</span>:</label>
                             <div class="input-group">
-                                <input type="range" id="anilist-image-height-slider" min="40" max="200" step="2" title="Adjust cover image size">
-                                <span id="anilist-image-size-current" class="current-value-display" title="Current height"></span>
+                                <input type="range" id="anilist-image-height-slider" min="40" max="200" step="2">
+                                <span id="anilist-image-size-current" class="current-value-display" title="Current image height in pixels."></span>
                             </div>
                         </div>
-                        <div class="control-group" data-setting-name="disable cache anilist">
-                            <label for="disable-anilist-cache-checkbox" class="settings-label" title="Forces a fresh API call every time. Useful for debugging.">Disable Cache:</label>
+                        <hr class="settings-compact-separator">
+                        <div class="control-group" data-setting-name="disable cache anilist debug">
+                            <label for="disable-anilist-cache-checkbox" class="settings-label">Disable API Cache <span class="help-icon" title="Forces the extension to fetch fresh data from AniList every time. Useful for debugging.">?</span>:</label>
                             <input type="checkbox" id="disable-anilist-cache-checkbox" class="settings-checkbox">
                         </div>
                     </div>
+
+                    <hr class="settings-compact-separator">
+
+                    <!-- Scraper -->
+                    <div class="settings-group-header">Title Scraper & Scanner</div>
+                    <div class="setting-item stacked-control" data-setting-name="add filter word scraper cleanup">
+                        <label for="scraper-filter-input" class="settings-label">Add Cleanup Word <span class="help-icon" title="Words to remove from titles generated by the scraper. Refine generated titles by removing unwanted recurring words.">?</span>:</label>
+                        <input type="text" id="scraper-filter-input" placeholder="Type a word (e.g. 'Crunchyroll') and press Enter...">
+                        <div id="scraper-filter-list-container" class="filter-list-container" title="Click a word to remove it from the filter."></div>
+                        <small>Refine generated titles by removing unwanted recurring words.</small>
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="setting-item stacked-control" style="margin-top: 12px;" data-setting-name="built-in filters scraper core">
+                        <label class="settings-label">Standard Core Filters <span class="help-icon" title="These filters are essential for title cleaning. These are essential system filters that cannot be modified.">?</span>:</label>
+                        <div id="scraper-builtin-filter-list-container" class="filter-list-container readonly"></div>
+                        <small>Essential system filters that cannot be modified.</small>
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" style="margin-top: 12px;" data-setting-name="scanner timeout detection">
+                        <label for="scanner-timeout-input" class="settings-label">Scanner Timeout (s) <span class="help-icon" title="How many seconds to wait for a stream to be detected in the scanner window.">?</span>:</label>
+                        <input type="number" id="scanner-timeout-input" class="settings-input" min="10" max="300" step="1">
+                    </div>
                 </div>
             </details>
-            <details class="settings-section" data-section-name="networking & buffering">
+
+            <!-- 4. Networking & Performance -->
+            <details class="settings-section" data-section-name="networking buffering performance speed cache">
                 <summary class="settings-section-header">
-                    <span>Networking & Buffering</span>
+                    <span>Networking & Performance</span>
                     <div class="header-actions">
-                        <button class="section-reload-btn" title="Sync & Refresh Settings">
+                        <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
                         </button>
                     </div>
                 </summary>
                 <div class="settings-section-content">
-                    <div class="control-group" style="padding-bottom: 8px; border-bottom: 1px solid var(--border-color); margin-bottom: 8px;" data-setting-name="disable all network overrides">
-                        <label for="disable-network-overrides-checkbox" class="settings-label" style="font-weight: bold; color: var(--accent-color);">Disable all overrides:</label>
-                        <input type="checkbox" id="disable-network-overrides-checkbox" class="settings-checkbox" title="If checked, the extension will NOT pass any of the networking flags below to MPV, letting it use its own defaults.">
+                    <div class="control-group" style="padding-bottom: 8px; border-bottom: 1px solid var(--border-color); margin-bottom: 8px;" data-setting-name="disable all network overrides default">
+                        <label for="disable-network-overrides-checkbox" class="settings-label" style="font-weight: bold; color: var(--accent-primary);">Use MPV Defaults <span class="help-icon" title="If checked, the extension will NOT apply any of the performance tweaks below, letting MPV handle buffering its own way.">?</span>:</label>
+                        <input type="checkbox" id="disable-network-overrides-checkbox" class="settings-checkbox">
                     </div>
-                    <div class="control-group" data-setting-name="enable cache networking">
-                        <label for="enable-cache-checkbox" class="settings-label">Enable Cache <span class="help-icon" title="Use a disk/RAM cache for streams. Helps with stuttering on slow connections.">?</span>:</label>
+                    <div class="control-group" data-setting-name="enable cache networking disk ram">
+                        <label for="enable-cache-checkbox" class="settings-label">Enable Buffering <span class="help-icon" title="Recommended for slow connections. Enables MPV's disk/RAM cache to prevent stuttering.">?</span>:</label>
                         <input type="checkbox" id="enable-cache-checkbox" class="settings-checkbox">
                     </div>
-                    <div class="control-group" data-setting-name="http persistence networking">
-                        <label for="http-persistence-select" class="settings-label">HTTP Persistence <span class="help-icon" title="Reuse connections to improve performance. 'Auto' follows site-specific stability recommendations.">?</span>:</label>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="http persistence networking connection">
+                        <label for="http-persistence-select" class="settings-label">HTTP Persistence <span class="help-icon" title="Reuse connections to improve load times. 'Auto' follows site-specific recommendations.">?</span>:</label>
                         <select id="http-persistence-select" class="settings-select networking-small-input" style="width: 100px;">
                             <option value="auto">Auto</option>
                             <option value="on">Always On</option>
                             <option value="off">Always Off</option>
                         </select>
                     </div>
-                    <div class="control-group" data-setting-name="max buffer ram networking">
-                        <label for="demuxer-max-bytes-input" class="settings-label">Max Buffer (RAM) <span class="help-icon" title="Max RAM used for buffering ahead. (e.g. 500M, 1G)">?</span>:</label>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="max buffer ram networking size">
+                        <label for="demuxer-max-bytes-input" class="settings-label">Max Buffer (RAM) <span class="help-icon" title="Total RAM allocated for forward buffering. (e.g. 500M, 1G)">?</span>:</label>
                         <input type="text" id="demuxer-max-bytes-input" class="settings-input networking-small-input" placeholder="1G">
                     </div>
-                    <div class="control-group" data-setting-name="max back-buffer networking">
-                        <label for="demuxer-max-back-bytes-input" class="settings-label">Max Back-Buffer <span class="help-icon" title="RAM used to keep already played video for instant rewinding.">?</span>:</label>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="max back-buffer networking rewind">
+                        <label for="demuxer-max-back-bytes-input" class="settings-label">Max Back-Buffer <span class="help-icon" title="RAM used to keep already played segments for instant rewinding.">?</span>:</label>
                         <input type="text" id="demuxer-max-back-bytes-input" class="settings-input networking-small-input" placeholder="500M">
                     </div>
-                    <div class="control-group" data-setting-name="cache seconds networking">
-                        <label for="cache-secs-input" class="settings-label">Cache Seconds <span class="help-icon" title="How many seconds of video to try and cache ahead.">?</span>:</label>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="cache seconds networking forward">
+                        <label for="cache-secs-input" class="settings-label">Buffer Ahead (s) <span class="help-icon" title="How many seconds of video MPV should try to buffer ahead of your current position.">?</span>:</label>
                         <input type="number" id="cache-secs-input" class="settings-input networking-small-input" min="10" max="3600">
                     </div>
-                    <div class="control-group" data-setting-name="readahead secs networking">
-                        <label for="demuxer-readahead-secs-input" class="settings-label">Readahead Secs <span class="help-icon" title="How many seconds the demuxer should read ahead.">?</span>:</label>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="readahead secs networking demuxer">
+                        <label for="demuxer-readahead-secs-input" class="settings-label">Readahead Secs <span class="help-icon" title="Maximum duration the demuxer is allowed to read ahead.">?</span>:</label>
                         <input type="number" id="demuxer-readahead-secs-input" class="settings-input networking-small-input" min="10" max="3600">
                     </div>
-                    <div class="control-group" data-setting-name="stream buffer size networking">
-                        <label for="stream-buffer-size-input" class="settings-label">Stream Buffer <span class="help-icon" title="Size of the low-level stream read buffer. Higher can help with very high bitrate 4K content.">?</span>:</label>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="stream buffer size networking raw">
+                        <label for="stream-buffer-size-input" class="settings-label">Stream Buffer <span class="help-icon" title="Size of the raw data buffer. Higher values can help with high-bitrate 4K content.">?</span>:</label>
                         <input type="text" id="stream-buffer-size-input" class="settings-input networking-small-input" placeholder="10M">
                     </div>
-                    <small style="color: var(--text-secondary); margin-top: 4px;">Higher values improve stability on slow links but use more RAM and can slightly delay initial start.</small>
+                    <small style="color: var(--text-secondary); margin-top: 4px;">Higher values improve stability but increase RAM usage and initial load times.</small>
                 </div>
             </details>
-            <details class="settings-section" data-section-name="confirmation prompts">
+
+            <!-- 5. Keybindings -->
+            <details class="settings-section" data-section-name="keybindings shortcuts keyboard">
                 <summary class="settings-section-header">
-                    <span>Confirmation Prompts</span>
+                    <span>Keybindings</span>
                     <div class="header-actions">
-                        <button class="section-reload-btn" title="Sync & Refresh Settings">
+                        <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
                         </button>
                     </div>
                 </summary>
                 <div class="settings-section-content">
-                    <div class="control-group" data-setting-name="confirm delete folder confirmation">
-                        <label for="confirm-remove-folder-checkbox" class="settings-label">Confirm Delete:</label>
-                        <input type="checkbox" id="confirm-remove-folder-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before removing a folder.">
+                    <div class="control-group stacked-control" data-setting-name="add to playlist keybind shortcut">
+                        <label for="kb-add-playlist-input" class="settings-label">Add Active Stream <span class="help-icon" title="Shortcut to add the currently detected stream on the page.">?</span>:</label>
+                        <div class="input-group">
+                            <input type="text" id="kb-add-playlist-input" class="settings-input" placeholder="e.g. Shift+A" readonly>
+                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                        </div>
                     </div>
-                    <div class="control-group" data-setting-name="confirm clear playlist confirmation">
-                        <label for="confirm-clear-playlist-checkbox" class="settings-label">Confirm Clear:</label>
-                        <input type="checkbox" id="confirm-clear-playlist-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before clearing a playlist.">
+                    <hr class="settings-compact-separator">
+                    <div class="control-group stacked-control" data-setting-name="play selected playlist keybind shortcut">
+                        <label for="kb-play-playlist-input" class="settings-label">Play Selected Playlist <span class="help-icon" title="Shortcut to launch MPV with the currently active folder.">?</span>:</label>
+                        <div class="input-group">
+                            <input type="text" id="kb-play-playlist-input" class="settings-input" placeholder="e.g. Shift+P" readonly>
+                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                        </div>
                     </div>
-                    <div class="control-group" data-setting-name="confirm close mpv confirmation">
-                        <label for="confirm-close-mpv-checkbox" class="settings-label">Confirm Close:</label>
-                        <input type="checkbox" id="confirm-close-mpv-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before closing a running MPV instance.">
+                    <hr class="settings-compact-separator">
+                    <div class="control-group stacked-control" data-setting-name="toggle controller keybind shortcut">
+                        <label for="kb-toggle-ui-input" class="settings-label">Toggle On-Page Controller <span class="help-icon" title="Shortcut to hide/show the on-page floating UI.">?</span>:</label>
+                        <div class="input-group">
+                            <input type="text" id="kb-toggle-ui-input" class="settings-input" placeholder="e.g. Shift+S" readonly>
+                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                        </div>
                     </div>
-                    <div class="control-group" data-setting-name="confirm play new confirmation">
-                        <label for="confirm-play-new-checkbox" class="settings-label">Confirm "Play New":</label>
-                        <input type="checkbox" id="confirm-play-new-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before launching a new MPV instance.">
-                    </div>
-                    <div class="control-group" data-setting-name="confirm switch folder confirmation">
-                        <label for="confirm-folder-switch-checkbox" class="settings-label">Confirm Switch Folder:</label>
-                        <input type="checkbox" id="confirm-folder-switch-checkbox" class="settings-checkbox" title="If checked, ask for confirmation before switching playback to a different folder.">
+                    <hr class="settings-compact-separator">
+                    <div class="control-group stacked-control" data-setting-name="open popup keybind shortcut">
+                        <label for="kb-open-popup-input" class="settings-label">Open Browser Popup <span class="help-icon" title="Shortcut to open this extension popup directly.">?</span>:</label>
+                        <div class="input-group">
+                            <input type="text" id="kb-open-popup-input" class="settings-input" placeholder="e.g. Alt+P" readonly>
+                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                        </div>
                     </div>
                 </div>
             </details>
+
+            <!-- 6. Confirmation Prompts -->
+            <details class="settings-section" data-section-name="confirmation prompts safety delete clear">
+                <summary class="settings-section-header">
+                    <span>Safety & Confirmations</span>
+                    <div class="header-actions">
+                        <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+                        </button>
+                    </div>
+                </summary>
+                <div class="settings-section-content">
+                    <div class="control-group" data-setting-name="confirm delete folder safety">
+                        <label for="confirm-remove-folder-checkbox" class="settings-label">Confirm Delete Folder <span class="help-icon" title="Ask before permanently deleting a playlist folder and its contents.">?</span>:</label>
+                        <input type="checkbox" id="confirm-remove-folder-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="confirm clear playlist safety">
+                        <label for="confirm-clear-playlist-checkbox" class="settings-label">Confirm Clear Playlist <span class="help-icon" title="Ask before wiping all items from a playlist.">?</span>:</label>
+                        <input type="checkbox" id="confirm-clear-playlist-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="confirm close mpv safety">
+                        <label for="confirm-close-mpv-checkbox" class="settings-label">Confirm Close MPV <span class="help-icon" title="Ask before closing a running MPV instance via the UI.">?</span>:</label>
+                        <input type="checkbox" id="confirm-close-mpv-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="confirm play new safety">
+                        <label for="confirm-play-new-checkbox" class="settings-label">Confirm 'Play New' <span class="help-icon" title="Ask before launching a second MPV instance.">?</span>:</label>
+                        <input type="checkbox" id="confirm-play-new-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="confirm switch folder safety">
+                        <label for="confirm-folder-switch-checkbox" class="settings-label">Confirm Folder Switch <span class="help-icon" title="Ask for confirmation if you try to play a folder while another one is already active in MPV.">?</span>:</label>
+                        <input type="checkbox" id="confirm-folder-switch-checkbox" class="settings-checkbox">
+                    </div>
+                </div>
+            </details>
+
     </details>
 
     <script src="utils/anilist_renderer.js"></script>

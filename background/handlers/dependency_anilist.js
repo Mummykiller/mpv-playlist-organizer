@@ -5,6 +5,9 @@ let _broadcastLog;
 let _broadcastToTabs;
 let _callNativeHost;
 
+// In-flight request tracker to prevent redundant calls to the native host
+let _inFlightReleasesRequest = null;
+
 export function init(dependencies) {
     _storage = dependencies.storage;
     _broadcastLog = dependencies.broadcastLog;
@@ -21,28 +24,43 @@ export async function handleGetAnilistReleases(request) {
     const data = await _storage.get();
     const isCacheDisabled = data.settings.ui_preferences.global.disable_anilist_cache ?? false;
 
-    // If the cache is disabled, we instruct the native host to delete the cache file.
-    // This ensures no stale data is ever used when this setting is on.
-    const deleteCache = isCacheDisabled;
-
-    const nativeResponse = await _callNativeHost({
-        action: 'get_anilist_releases',
-        force: forceRefresh || isCacheDisabled, // Also force a refresh if cache is disabled.
-        delete_cache: deleteCache,
-        is_cache_disabled: isCacheDisabled // New flag to prevent writing to cache
-    });
-
-    if (nativeResponse.success && nativeResponse.output) {
-        try {
-            // The native host now returns a JSON string, so we parse it here before sending to the UI.
-            const data = JSON.parse(nativeResponse.output);
-            return { success: true, output: data };
-        } catch (e) {
-            return { success: false, error: `Failed to parse JSON response from native host: ${e.message}` };
-        }
+    // If a request is already in flight and this isn't a force refresh, return the in-flight promise.
+    if (_inFlightReleasesRequest && !forceRefresh && !isCacheDisabled) {
+        return _inFlightReleasesRequest;
     }
-    // Forward any errors from the native host.
-    return nativeResponse;
+
+    // Wrap the request in a promise that we can track
+    _inFlightReleasesRequest = (async () => {
+        try {
+            // If the cache is disabled, we instruct the native host to delete the cache file.
+            // This ensures no stale data is ever used when this setting is on.
+            const deleteCache = isCacheDisabled;
+
+            const nativeResponse = await _callNativeHost({
+                action: 'get_anilist_releases',
+                force: forceRefresh || isCacheDisabled, // Also force a refresh if cache is disabled.
+                delete_cache: deleteCache,
+                is_cache_disabled: isCacheDisabled // New flag to prevent writing to cache
+            });
+
+            if (nativeResponse.success && nativeResponse.output) {
+                try {
+                    // The native host now returns a JSON string, so we parse it here before sending to the UI.
+                    const data = JSON.parse(nativeResponse.output);
+                    return { success: true, output: data };
+                } catch (e) {
+                    return { success: false, error: `Failed to parse JSON response from native host: ${e.message}` };
+                }
+            }
+            // Forward any errors from the native host.
+            return nativeResponse;
+        } finally {
+            // Clear the in-flight tracker once the request completes
+            _inFlightReleasesRequest = null;
+        }
+    })();
+
+    return _inFlightReleasesRequest;
 }
 
 export async function handleYtdlpUpdateCheck(request) {

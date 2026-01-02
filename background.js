@@ -110,7 +110,8 @@ injectNativeConnectionDependencies({
     broadcastLog, 
     handleMpvExited: playback_handlers.handleMpvExited,
     handleUpdateLastPlayed: playback_handlers.handleUpdateLastPlayed,
-    handleUpdateItemResumeTime: playback_handlers.handleUpdateItemResumeTime
+    handleUpdateItemResumeTime: playback_handlers.handleUpdateItemResumeTime,
+    handleSessionRestored: playback_handlers.handleSessionRestored
 });
 
 playlistManager.injectDependencies({

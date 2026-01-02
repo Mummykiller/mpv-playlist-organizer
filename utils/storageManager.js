@@ -55,6 +55,8 @@ export class StorageManager {
                         lockAnilistPanel: false,
                         forcePanelAttached: false,
                         anilistAttachOnOpen: true,
+                        popup_width: 600,
+                        popup_width_locked: false,
                         yt_use_cookies: true,
                         yt_mark_watched: true,
                         yt_ignore_config: true,

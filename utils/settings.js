@@ -60,7 +60,9 @@ class OptionsManager {
             { key: 'demuxer_max_back_bytes', elementId: 'demuxer-max-back-bytes-input', type: 'input' },
             { key: 'cache_secs', elementId: 'cache-secs-input', type: 'input', transform: Number },
             { key: 'demuxer_readahead_secs', elementId: 'demuxer-readahead-secs-input', type: 'input', transform: Number },
-            { key: 'stream_buffer_size', elementId: 'stream-buffer-size-input', type: 'input' }
+            { key: 'stream_buffer_size', elementId: 'stream-buffer-size-input', type: 'input' },
+            { key: 'popup_width', elementId: 'popup-width-slider', type: 'slider', transform: Number },
+            { key: 'popup_width_locked', elementId: 'btn-lock-popup-width', type: 'custom' }
         ];
 
         this.debouncedSaveAllPreferences = this._debounce(this.saveAllPreferences.bind(this), 400);
@@ -135,6 +137,8 @@ class OptionsManager {
         this._renderAutomaticMpvFlagsList(automaticFlags);
 
         this._updateAnilistImageSize(prefs.anilist_image_height || 126);
+        this._updatePopupWidth(prefs.popup_width || 600);
+        this._updatePopupWidthLock(prefs.popup_width_locked || false);
 
         this._renderScraperFilterList(prefs.scraper_filter_words || []);
         this._renderBuiltInFilterList();
@@ -221,6 +225,36 @@ class OptionsManager {
         document.documentElement.style.setProperty('--anilist-item-width', `${effectiveWidth}px`);
         document.documentElement.style.setProperty('--anilist-image-height', `${effectiveHeight}px`);
         document.getElementById('anilist-image-size-current').textContent = `${effectiveHeight}px`;
+    }
+
+    _updatePopupWidth(width) {
+        let effectiveWidth = Number(width || 600);
+        if (effectiveWidth > 780) effectiveWidth = 780;
+        
+        // Apply to both html and body to push browser limits
+        document.documentElement.style.width = `${effectiveWidth}px`;
+        document.body.style.width = `${effectiveWidth}px`;
+        const currentPopupWidthEl = document.getElementById('popup-width-current');
+        if (currentPopupWidthEl) {
+            currentPopupWidthEl.textContent = `${effectiveWidth}px`;
+        }
+    }
+
+    _updatePopupWidthLock(isLocked) {
+        const container = document.getElementById('popup-width-controls-container');
+        const lockBtn = document.getElementById('btn-lock-popup-width');
+        if (container) {
+            container.style.display = isLocked ? 'none' : 'flex';
+        }
+        if (lockBtn) {
+            const lockIcon = lockBtn.querySelector('.lock-icon');
+            const unlockIcon = lockBtn.querySelector('.unlock-icon');
+            if (lockIcon && unlockIcon) {
+                lockIcon.style.display = isLocked ? 'block' : 'none';
+                unlockIcon.style.display = isLocked ? 'none' : 'block';
+            }
+            lockBtn.classList.toggle('active', isLocked);
+        }
     }
 
     _renderMpvFlagsList(flags = []) {
@@ -394,6 +428,26 @@ class OptionsManager {
         const anilistSlider = document.getElementById('anilist-image-height-slider');
         if (anilistSlider) {
             anilistSlider.addEventListener('input', () => this._updateAnilistImageSize(anilistSlider.value));
+        }
+
+        const popupWidthSlider = document.getElementById('popup-width-slider');
+        if (popupWidthSlider) {
+            popupWidthSlider.addEventListener('input', () => this._updatePopupWidth(popupWidthSlider.value));
+        }
+
+        const lockBtn = document.getElementById('btn-lock-popup-width');
+        if (lockBtn) {
+            lockBtn.addEventListener('click', async () => {
+                const response = await this.sendMessageAsync({ action: 'get_ui_preferences' });
+                const currentlyLocked = response?.preferences?.popup_width_locked || false;
+                const newLockedState = !currentlyLocked;
+                
+                await this.sendMessageAsync({ 
+                    action: 'set_ui_preferences', 
+                    preferences: { popup_width_locked: newLockedState } 
+                });
+                this._updatePopupWidthLock(newLockedState);
+            });
         }
 
         const anilistEnableCheck = document.getElementById('enable-anilist-integration-checkbox');

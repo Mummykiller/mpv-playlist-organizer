@@ -98,7 +98,12 @@ class MpvSessionManager:
 
     def restore(self):
         """Checks for a persisted session file and restores state if the process is still alive."""
+        if self.is_alive and self.pid and ipc_utils.is_pid_running(self.pid):
+            logging.info(f"Restore: Session for PID {self.pid} is already active in this host instance. Returning current state.")
+            return {"was_stale": False, "folderId": self.owner_folder_id, "lastPlayedId": getattr(self, 'last_played_id_cache', None)}
+
         if not os.path.exists(self.session_file):
+            logging.debug("Restore: No session file found.")
             return None
 
         logging.info(f"Found session file: {self.session_file}. Checking for live process.")
@@ -127,6 +132,7 @@ class MpvSessionManager:
                 
                 # Initialize the IPC manager for the restored session
                 self.ipc_manager = ipc_utils.IPCSocketManager()
+                logging.info(f"Restore: Attempting to connect to existing IPC at {self.ipc_path}...")
                 if not self.ipc_manager.connect(self.ipc_path):
                     logging.warning(f"Restored session found, but failed to connect to IPC at {self.ipc_path}.")
                     # Don't fail the whole restore, but we won't have IPC until it reconnects
@@ -144,18 +150,16 @@ class MpvSessionManager:
 
                         if current_path or current_title:
                             for item in self.playlist:
-                                # 1. Check ID directly if we can (unlikely unless we store it in a custom property)
-                                # 2. Check URL match
                                 if current_path and (item.get('url') == current_path or item.get('original_url') == current_path):
                                     last_played_id = item.get('id')
                                     break
-                                # 3. Check Title match
                                 if current_title and item.get('title') == current_title:
                                     last_played_id = item.get('id')
                                     break
                             
                             if last_played_id:
                                 logging.info(f"Restore: Identified active item ID: {last_played_id}")
+                                self.last_played_id_cache = last_played_id
                     except Exception as e:
                         logging.warning(f"Failed to query active item during restore: {e}")
                 
@@ -169,13 +173,11 @@ class MpvSessionManager:
                     file_io, 
                     settings, 
                     self.ipc_path, 
-                    self.dependencies['send_message']
+                    self.send_message
                 )
                 self.playlist_tracker.start_tracking()
 
                 # --- CRITICAL: Start a watcher thread for the restored orphaned process ---
-                # Since this native_host instance didn't start the MPV process, it can't .wait() on it.
-                # We must poll for its existence to trigger the 'mpv_exited' event and playlist clearing.
                 self._start_restored_process_watcher(pid, ipc_path, owner_folder_id)
 
                 logging.info(f"Successfully restored session and tracker for MPV process (PID: {pid}) owned by folder '{owner_folder_id}'.")
