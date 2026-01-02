@@ -81,13 +81,27 @@ class MpvController {
     checkContext() {
         if (!chrome.runtime?.id) {
             if (!this.isTearingDown) {
-                console.warn("MPV Controller: Extension context invalidated detected. Tearing down.");
                 this.teardown();
             }
             return false;
         }
         return true;
     }
+
+    /**
+     * Checks if an error is a standard "Extension Reloaded" error.
+     * @param {Error|object} e The error to check.
+     * @returns {boolean} True if it's a reload error.
+     */
+    isReloadError(e) {
+        if (!e || !e.message) return false;
+        const msg = e.message;
+        return msg.includes("Extension context invalidated") || 
+               msg.includes("Receiving end does not exist") ||
+               msg.includes("message channel closed");
+    }
+
+
 
     /**
      * Handles messages from the background script.
@@ -99,16 +113,25 @@ class MpvController {
         // Critical safety check: If we are in the middle of tearing down, ignore incoming messages.
         if (this.isTearingDown) return;
 
-        if (request.action === 'init_ui_state' && this.uiManager.controllerHost) {
+        if (request.action === 'ping') {
+            sendResponse({ success: true });
+            return;
+        } else if (request.action === 'init_ui_state' && this.uiManager.controllerHost) {
             // The background script has sent the initial state. Apply it now.
             // This is the single point of truth for whether the UI should be visible on load.
-            const { shouldBeMinimized } = request;
-            // We must apply the initial state (including AniList visibility) *before*
-            // setting the minimized state. This ensures the AniList panel's visibility
-            // is restored correctly even when the main UI starts as minimized.
+            const { shouldBeMinimized, folderId, lastPlayedId, isFolderActive } = request;
+            
+            // Apply the initial visual state
             this.applyInitialState();
             this.setMinimizedState(shouldBeMinimized, false);
+
+            // Sync the folder and active item
+            if (folderId) {
+                this.updateFolderDropdowns(folderId, lastPlayedId, isFolderActive);
+            }
         } else if (request.m3u8) {
+
+
             this.detectedUrl = request.m3u8;
             // Report the detected stream URL to the background script
             if (this.checkContext()) {
@@ -232,7 +255,7 @@ class MpvController {
             // as the latter may be null when the request is made.
             const scrapedDetails = this.pageScraper.scrapePageDetails(window.location.href);
             sendResponse(scrapedDetails);
-            return true; // Indicate async response.
+            // return true; // Removed: sendResponse is called synchronously.
         } else if (request.action === 'set_minimized_state') {
             // The background script (relaying from the popup) is telling us to show or hide the UI.
             this.setMinimizedState(request.minimized);
@@ -290,7 +313,7 @@ class MpvController {
                 title = this.pageScraper.scrapePageDetails(url).title;
             }
             sendResponse({ url: url, title: title });
-            return true; // Indicate async response.
+            // return true; // Removed: sendResponse is called synchronously.
         }
     }
 
@@ -539,9 +562,15 @@ class MpvController {
         let prefs = initialPrefs;
         // Only fetch preferences if not provided and if we need them (either to save or to decide position when minimizing).
         if (!prefs && (savePref || shouldBeMinimized)) {
-            const response = await chrome.runtime.sendMessage({ action: 'get_ui_preferences' });
-            if (response?.success && response.preferences) {
-                prefs = response.preferences;
+            try {
+                const response = await chrome.runtime.sendMessage({ action: 'get_ui_preferences' });
+                if (response?.success && response.preferences) {
+                    prefs = response.preferences;
+                }
+            } catch (e) {
+                if (!this.isReloadError(e)) {
+                    console.error("Error fetching preferences in setMinimizedState:", e);
+                }
             }
         }
 
@@ -811,41 +840,59 @@ class MpvController {
         };
 
         const handleClearClick = async () => {
-            const folderId = getCurrentFolderId();
-            if (!folderId) return;
-            const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
-            if (prefsResponse?.preferences?.confirm_clear_playlist ?? true) {
-                const confirmed = await this.showPageLevelConfirmation(`Are you sure you want to clear the playlist in "${folderId}"?`);
-                if (!confirmed) return this.addLogEntry({ text: `[Content]: Clear action cancelled by user.`, type: 'info' });
+            try {
+                const folderId = getCurrentFolderId();
+                if (!folderId) return;
+                const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
+                if (prefsResponse?.preferences?.confirm_clear_playlist ?? true) {
+                    const confirmed = await this.showPageLevelConfirmation(`Are you sure you want to clear the playlist in "${folderId}"?`);
+                    if (!confirmed) return this.addLogEntry({ text: `[Content]: Clear action cancelled by user.`, type: 'info' });
+                }
+                this.sendCommandToBackground('clear', folderId);
+            } catch (e) {
+                if (!this.isReloadError(e)) {
+                    this.addLogEntry({ text: `[Content]: Error in clear action: ${e.message}`, type: 'error' });
+                }
             }
-            this.sendCommandToBackground('clear', folderId);
         };
 
         const handleCloseMpvClick = async () => {
-            const [isRunning, prefsResponse] = await Promise.all([
-                this.isMpvRunningFromBackground(),
-                sendMessageAsync({ action: 'get_ui_preferences' })
-            ]);
-            if (!isRunning) return this.addLogEntry({ text: `[Content]: Close command ignored, MPV is not running.`, type: 'info' });
-            if (prefsResponse?.preferences?.confirm_close_mpv ?? true) {
-                const confirmed = await this.showPageLevelConfirmation('Are you sure you want to close MPV?');
-                if (!confirmed) return this.addLogEntry({ text: `[Content]: Close MPV action cancelled by user.`, type: 'info' });
+            try {
+                const [isRunning, prefsResponse] = await Promise.all([
+                    this.isMpvRunningFromBackground(),
+                    sendMessageAsync({ action: 'get_ui_preferences' })
+                ]);
+                if (!isRunning) return this.addLogEntry({ text: `[Content]: Close command ignored, MPV is not running.`, type: 'info' });
+                if (prefsResponse?.preferences?.confirm_close_mpv ?? true) {
+                    const confirmed = await this.showPageLevelConfirmation('Are you sure you want to close MPV?');
+                    if (!confirmed) return this.addLogEntry({ text: `[Content]: Close MPV action cancelled by user.`, type: 'info' });
+                }
+                this.sendCommandToBackground('close_mpv', getCurrentFolderId());
+            } catch (e) {
+                if (!this.isReloadError(e)) {
+                    this.addLogEntry({ text: `[Content]: Error closing MPV: ${e.message}`, type: 'error' });
+                }
             }
-            this.sendCommandToBackground('close_mpv', getCurrentFolderId());
         };
 
         const handlePlayNewClick = async () => {
-            const folderId = getCurrentFolderId();
-            if (!folderId) return;
-            const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
-            if (prefsResponse?.preferences?.confirm_play_new ?? true) {
-                const confirmed = await this.showPageLevelConfirmation("Launching a new MPV instance while another is running may cause issues. Continue?");
-                if (!confirmed) return this.addLogEntry({ text: `[Content]: 'Play New' action cancelled by user.`, type: 'info' });
+            try {
+                const folderId = getCurrentFolderId();
+                if (!folderId) return;
+                const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
+                if (prefsResponse?.preferences?.confirm_play_new ?? true) {
+                    const confirmed = await this.showPageLevelConfirmation("Launching a new MPV instance while another is running may cause issues. Continue?");
+                    if (!confirmed) return this.addLogEntry({ text: `[Content]: 'Play New' action cancelled by user.`, type: 'info' });
+                }
+                // Send the 'play' action with a flag for a new instance
+                this.sendCommandToBackground('play', folderId, { 
+                    play_new_instance: true // Flag to launch in a new instance
+                });
+            } catch (e) {
+                if (!this.isReloadError(e)) {
+                    this.addLogEntry({ text: `[Content]: Error in play new action: ${e.message}`, type: 'error' });
+                }
             }
-            // Send the 'play' action with a flag for a new instance
-            this.sendCommandToBackground('play', folderId, { 
-                play_new_instance: true // Flag to launch in a new instance
-            });
         };
 
         const actionMap = { add: handleAddClick, play: handlePlayClick, clear: handleClearClick, 'close-mpv': handleCloseMpvClick };
@@ -1040,6 +1087,8 @@ class MpvController {
                         if (!response || !response.success) {
                             this.addLogEntry({ text: `[Content]: Failed to open popup: ${response?.error || 'Unknown error'}`, type: 'error' });
                         }
+                    }).catch(e => {
+                         this.addLogEntry({ text: `[Content]: Error opening popup: ${e.message}`, type: 'error' });
                     });
                 }
             }
@@ -1150,10 +1199,13 @@ class MpvController {
      * @param {object|null} positionOverride - An optional position object to use instead of fetching from storage.
      */
     async applyInitialState(positionOverride = null) {
-        const response = await chrome.runtime.sendMessage({ action: 'get_ui_preferences' });
-        if (!this.uiManager.shadowRoot || !this.uiManager.controllerHost) return; // UI not ready
+        try {
+            const response = await chrome.runtime.sendMessage({ action: 'get_ui_preferences' });
+            if (!this.uiManager.shadowRoot || !this.uiManager.controllerHost) return; // UI not ready
 
-        const prefs = response?.preferences;
+            const prefs = response?.preferences;
+            // ... (rest of the function logic)
+
 
         // Use the position override if provided (from exiting fullscreen),
         // otherwise use the position from saved preferences.
@@ -1265,7 +1317,14 @@ class MpvController {
             this.validateAndRepositionController();
         }
         this.updateAdaptiveElements();
+        } catch (e) {
+            if (!this.isReloadError(e)) {
+                console.error("Error applying initial state:", e);
+            }
+        }
     }
+
+
 
     // --- Main Initialization Orchestrator ---
     async initializeMpvController() {
@@ -1282,9 +1341,10 @@ class MpvController {
         if (this.checkContext()) {
             chrome.runtime.sendMessage({ action: 'content_script_init' });
         }
-        console.log("MPV Controller content script initialized and ready.");
+        // console.log("MPV Controller content script initialized and ready.");
 
         // After initializing, check if we are in fullscreen mode and hide the UI if so.
+
         // This handles cases where the UI is re-injected on a page that is already fullscreen
         if (document.fullscreenElement && this.uiManager.controllerHost) {
             this.uiManager.controllerHost.style.display = 'none';
@@ -1394,7 +1454,7 @@ class MpvController {
         logContainer.scrollTop = logContainer.scrollHeight;
     }
 
-    async updateFolderDropdowns() {
+    async updateFolderDropdowns(targetFolderId = null, targetLastPlayedId = null, targetIsFolderActive = null) {
         if (!this.uiManager.shadowRoot) return;
     
         try {
@@ -1421,25 +1481,48 @@ class MpvController {
             fullSelect.appendChild(optionsFragment.cloneNode(true));
             compactSelect.appendChild(optionsFragment);
     
-            const lastFolderResponse = await sendMessageAsync({ action: 'get_last_folder_id' });
-            if (lastFolderResponse ?.success && lastFolderResponse.folderId) {
-                fullSelect.value = lastFolderResponse.folderId;
-                compactSelect.value = lastFolderResponse.folderId;
+            if (targetFolderId) {
+                fullSelect.value = targetFolderId;
+                compactSelect.value = targetFolderId;
+            } else {
+                const lastFolderResponse = await sendMessageAsync({ action: 'get_last_folder_id' });
+                if (lastFolderResponse ?.success && lastFolderResponse.folderId) {
+                    fullSelect.value = lastFolderResponse.folderId;
+                    compactSelect.value = lastFolderResponse.folderId;
+                }
             }
     
             // After the dropdowns are populated and the correct folder is selected,
             // we must explicitly refresh the playlist for that folder. This will, in turn,
             // call updateAddButtonState with the fresh playlist data, ensuring the UI is correct.
             // This is the key to fixing the SPA navigation race condition.
-            this.refreshPlaylist(); // This also calls updateAddButtonState()
+            this.refreshPlaylist(targetLastPlayedId, targetIsFolderActive); // This also calls updateAddButtonState()
 
-        } catch (error) {
-            this.addLogEntry({ text: `[Content]: Error updating folders: ${error.message}`, type: 'error' });
-        }
-    }
+                } catch (error) {
 
-    refreshPlaylist() {
+                    if (!this.isReloadError(error)) {
+
+                        this.addLogEntry({ text: `[Content]: Error updating folders: ${error.message}`, type: 'error' });
+
+                    }
+
+                }
+
+            }
+
+        
+
+    refreshPlaylist(targetLastPlayedId = null, targetIsFolderActive = null) {
         if (!this.uiManager.shadowRoot) return;
+        
+        // Cache the target state to ensure it persists through rapid-fire render messages during load
+        if (targetLastPlayedId) {
+            this._initialLastPlayedId = targetLastPlayedId;
+        }
+        if (targetIsFolderActive !== null) {
+            this._initialIsFolderActive = targetIsFolderActive;
+        }
+
         // The folder dropdowns are always kept in sync, so we can reliably get the
         // current folder ID from the main dropdown without checking the UI mode.
         const folderSelect = this.uiManager.shadowRoot.getElementById('folder-select');
@@ -1448,8 +1531,11 @@ class MpvController {
         }
         const currentFolderId = folderSelect.value;
         // Fetch the playlist and then render it. The render call will also update the button state.
-        this.sendCommandToBackground('get_playlist', currentFolderId); // This will trigger a 'render_playlist' message
+        this.sendCommandToBackground('get_playlist', currentFolderId); 
     }
+
+
+
 
     /**
      * Checks if MPV is running by querying the background script.
@@ -1459,11 +1545,14 @@ class MpvController {
         return new Promise((resolve) => {
             chrome.runtime.sendMessage({ action: 'is_mpv_running' }, (response) => {
                 if (chrome.runtime.lastError) {
-                    if (!this.isTearingDown) {
-                        this.addLogEntry({ text: `[Content]: Error checking MPV status: ${chrome.runtime.lastError.message}`, type: 'error' });
+                    const err = chrome.runtime.lastError;
+                    if (!this.isTearingDown && !this.isReloadError(err)) {
+                        this.addLogEntry({ text: `[Content]: Error checking MPV status: ${err.message}`, type: 'error' });
                     }
                     return resolve(false);
                 }
+
+
                 if (response?.success) {
                     resolve(response.is_running);
                 } else {
@@ -1508,17 +1597,31 @@ class MpvController {
 
         chrome.runtime.sendMessage(payload, (response) => {
             if (chrome.runtime.lastError) {
-                if (!this.isTearingDown) {
-                    this.addLogEntry({ text: `[Content]: Error sending '${action}': ${chrome.runtime.lastError.message}`, type: 'error' });
+                const err = chrome.runtime.lastError;
+                if (!this.isTearingDown && !this.isReloadError(err)) {
+                    this.addLogEntry({ text: `[Content]: Error sending '${action}': ${err.message}`, type: 'error' });
                 }
                 return;
             }
 
+
+
             if (response) {
                 // The 'get_playlist' command is the only one that returns a list to render.
                 if (action === 'get_playlist' && response.success) {
-                    this.playlistUI?.render(response.list, response.last_played_id);
+                    // Prioritize the targetLastPlayedId if provided (e.g., during initialization)
+                    const lastPlayedToRender = this._initialLastPlayedId || response.last_played_id;
+                    const isFolderActiveToRender = this._initialIsFolderActive !== undefined && this._initialIsFolderActive !== null ? this._initialIsFolderActive : response.isFolderActive;
+                    
+                    this.playlistUI?.render(response.list, lastPlayedToRender, isFolderActiveToRender);
+                    
+                    // Clear the initial state after the first render
+                    this._initialLastPlayedId = null;
+                    this._initialIsFolderActive = null;
                 }
+
+
+
                 // Log success/info messages from the background script.
                 if (response.message && action !== 'get_playlist' && !this.isTearingDown) {
                     this.addLogEntry({ text: `[Background]: ${response.message}`, type: 'info' });
@@ -1674,16 +1777,51 @@ class MpvController {
                 const response = await sendMessageAsync({ action: 'heartbeat' });
                 if (!response?.success) throw new Error("Invalid heartbeat response.");
             } catch (e) {
-                // The background script is unresponsive (likely extension reloaded).
-                console.warn("MPV Controller: Background script disconnected. Stopping UI updates.");
-                
+                // Determine if this is a standard reload/orphaned script situation
+                const isReload = this.isReloadError(e);
+
                 // Stop everything
                 this.teardown();
-                
-                // Provide visual feedback if the UI was visible
-                this.addLogEntry({ text: "[Content]: Connection to extension lost. Please refresh the page.", type: "error" });
+
+                if (!isReload) {
+                    console.warn("MPV Controller: Unexpected background script disconnection:", e.message);
+                    this.addLogEntry({ text: "[Content]: Unexpected connection loss to extension.", type: "error" });
+                }
             }
+
+
+
         }, 30000); // Check every 30 seconds to be less intrusive
+    }
+
+    /**
+     * Safely executes a function, catching extension reload errors and tearing down if necessary.
+     * @private
+     */
+    _safeWrap(fn) {
+        return (...args) => {
+            if (this.isTearingDown || !this.checkContext()) return;
+            try {
+                const result = fn.apply(this, args);
+                if (result instanceof Promise) {
+                    result.catch(e => {
+                        if (this.isReloadError(e)) {
+                            this.teardown();
+                        } else {
+                            console.error("MPV Controller: Async error:", e);
+                        }
+                    });
+                }
+                return result;
+            } catch (e) {
+                if (this.isReloadError(e)) {
+                    this.teardown();
+                } else {
+                    console.error("MPV Controller: Error:", e);
+                }
+            }
+
+        };
     }
 
     /**
@@ -1713,20 +1851,21 @@ class MpvController {
         // --- END AI GUARD ---
 
         // --- SPA Handling using MutationObserver ---
-        this.observer = new MutationObserver(() => {
-            if (this.checkContext()) {
-                this.handlePageUpdate();
-            }
-        });
+        this.observer = new MutationObserver(this._safeWrap(() => {
+            this.handlePageUpdate();
+        }));
         this.observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
         // Also, poll the URL periodically. This is more reliable for SPA navigations. This interval is cleared in teardown().
-        this.pageUpdateInterval = setInterval(this.handlePageUpdate, 500);
+        this.pageUpdateInterval = setInterval(this._safeWrap(() => {
+            this.handlePageUpdate();
+        }), 500);
         this.initializeMpvController();
 
         // Start the heartbeat to detect extension reloads.
         this.startHeartbeat();
     }
+
 
 }
 (function () {

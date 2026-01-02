@@ -97,7 +97,9 @@ class UIManager {
 
         // Inject styles for the host elements into the main document's head.
         this.hostStyle = document.createElement('style');
+        this.hostStyle.id = 'mpv-organizer-host-styles';
         this.hostStyle.textContent = `
+
             #m3u8-controller-host, #m3u8-minimized-host { position: fixed; z-index: 2147483647; } /* Default position is top-left (0,0) until JS moves it */
             #m3u8-minimized-host.top-left { top: 15px; left: 15px; right: auto; bottom: auto; }
             #m3u8-minimized-host.top-right { top: 15px; right: 15px; left: auto; bottom: auto; }

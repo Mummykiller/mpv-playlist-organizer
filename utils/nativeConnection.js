@@ -46,22 +46,37 @@ function connectToNativeHost() {
     dependencies.broadcastLog({ text: `[Background]: Establishing connection to native host...`, type: 'info' });
 
     connectionPromise = new Promise((resolve, reject) => {
+
+
         nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
 
         const onDisconnect = () => {
-            const errorMessage = chrome.runtime.lastError ? chrome.runtime.lastError.message : "Native host disconnected.";
-            console.error("Native host disconnected:", errorMessage);
-            dependencies.broadcastLog({ text: `[Background]: Native host disconnected. It may need to be re-installed. Error: ${errorMessage}`, type: 'error' });
+            const lastError = chrome.runtime.lastError ? chrome.runtime.lastError.message : "Native host disconnected.";
+            let friendlyError = lastError;
+
+            // Provide more helpful messages for common installation/permission issues.
+            if (lastError.includes("Access denied")) {
+                friendlyError = "Access denied. Please ensure the installer.py script has been run to register the native host.";
+            } else if (lastError.includes("Specified native messaging host not found")) {
+                friendlyError = "Native host not found. Please run installer.py to register the extension with your system.";
+            }
+
+            console.error("Native host disconnected:", lastError);
+            dependencies.broadcastLog({ 
+                text: `[Background]: Fatal Connection Error: ${friendlyError}`, 
+                type: 'error' 
+            });
 
             for (const id in requestPromises) {
-                requestPromises[id].reject(new Error(`Native host disconnected: ${errorMessage}`));
+                requestPromises[id].reject(new Error(friendlyError));
             }
+
 
             nativePort = null;
             connectionStatus = ConnectionStatus.DISCONNECTED;
             requestPromises = {};
             connectionPromise = null;
-            reject(new Error(errorMessage));
+            reject(new Error(friendlyError));
         };
 
         nativePort.onDisconnect.addListener(onDisconnect);
@@ -116,6 +131,8 @@ function connectToNativeHost() {
         dependencies.broadcastLog({ text: `[Background]: Sending session restoration handshake...`, type: 'info' });
         nativePort.postMessage({ action: 'restore_session', request_id: restoreRequestId });
     });
+
+
 
     return connectionPromise;
 }

@@ -133,8 +133,10 @@ ui_state_handlers.init({
     callNativeHost,
     updateContextMenus,
     tabUiState, // Pass the shared state
-    m3u8_scanner_handlers // Pass m3u8_scanner_handlers
+    m3u8_scanner_handlers, // Pass m3u8_scanner_handlers
+    playback_handlers
 });
+
 
 m3u8_scanner_handlers.init({
     storage,
@@ -290,3 +292,101 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // The context menu now uses the exact same centralized handler as the on-page button.
     playlistManager.handleAddFromContextMenu(folderId, urlToAdd, null, tab);
 });
+
+// --- Auto-Reinjection Logic ---
+/**
+ * Re-injects content scripts into all open tabs.
+ * This ensures the extension UI continues to work after an extension reload
+ * without requiring the user to refresh their pages.
+ */
+async function reinjectContentScripts() {
+    const manifest = chrome.runtime.getManifest();
+    const jsFiles = manifest.content_scripts[0].js;
+    let reinjectedCount = 0;
+
+    try {
+        const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+        console.log(`[Background]: Checking ${tabs.length} tabs for MPV UI re-injection...`);
+
+        for (const tab of tabs) {
+            // Skip restricted tabs (like chrome:// or extension pages)
+            if (tab.url.startsWith("chrome://") || tab.url.startsWith("about:")) continue;
+
+            try {
+                // Check if the content script is alive and responding
+                const isAlive = await chrome.tabs.sendMessage(tab.id, { action: 'ping' })
+                    .then(res => res && res.success)
+                    .catch(() => false);
+
+                if (isAlive) continue;
+
+                // Define the core injection logic for potential retry
+                const performInjection = async () => {
+                    // Clean up any existing (dead) UI elements first
+                    await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        func: () => {
+                            const ids = [
+                                'm3u8-controller-host', 
+                                'm3u8-minimized-host', 
+                                'anilist-panel-host',
+                                'mpv-organizer-host-styles'
+                            ];
+                            ids.forEach(id => document.getElementById(id)?.remove());
+                            window.mpvControllerInitialized = false;
+                            window.mpvMessageListenerAttached = false;
+                        }
+                    }).catch(() => {});
+
+                    // Inject JS files
+                    await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        files: jsFiles
+                    });
+                    
+                    // After re-injection, trigger a UI sync
+                    chrome.tabs.sendMessage(tab.id, { foldersChanged: true }).catch(() => {});
+                };
+
+                try {
+                    await performInjection();
+                    reinjectedCount++;
+                } catch (firstErr) {
+                    // Ignore expected errors immediately (restricted browser pages, webstore, etc.)
+                    const isRestricted = firstErr.message.includes("cannot be scripted") || 
+                                        firstErr.message.includes("Access denied") ||
+                                        firstErr.message.includes("restricted") ||
+                                        firstErr.message.includes("not allowed") ||
+                                        firstErr.message.includes("Cannot access contents");
+                    
+                    if (isRestricted) continue;
+
+
+                    // If it was an unexpected error, try one more time after a short delay
+                    // This handles transient "error then works" situations.
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    try {
+                        await performInjection();
+                        reinjectedCount++;
+                    } catch (secondErr) {
+                        console.error(`[Background]: Persistent re-injection failure for Tab ${tab.id} (tried 2 times):`, secondErr.message);
+                    }
+                }
+            } catch (tabErr) {
+                // This catch handles errors in the outer loop logic (like sendMessage failing in an unusual way)
+                // but usually the inner try/catch handles the scripting errors.
+            }
+
+        }
+        if (reinjectedCount > 0) {
+            console.log(`[Background]: Auto-reinjection complete. Restored MPV UI in ${reinjectedCount} tabs.`);
+        }
+    } catch (err) {
+        console.error("[Background]: Error during auto-reinjection loop:", err);
+        broadcastLog({ text: `[Background]: Auto-reinjection failed. You may need to refresh your tabs manually.`, type: 'error' });
+    }
+}
+
+
+// Perform re-injection on startup/reload
+reinjectContentScripts();
