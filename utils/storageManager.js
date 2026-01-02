@@ -102,12 +102,26 @@ export class StorageManager {
     }
 
     async get() {
-        const data = await chrome.storage.local.get(this.STORAGE_KEY);
-        return data[this.STORAGE_KEY] || this._getDefaultData();
+        try {
+            const data = await chrome.storage.local.get(this.STORAGE_KEY);
+            return data[this.STORAGE_KEY] || this._getDefaultData();
+        } catch (e) {
+            console.error("Storage get failed:", e);
+            // Return default data on error to prevent app crash, 
+            // though this might mask persistence issues.
+            return this._getDefaultData();
+        }
     }
 
     async set(data) {
-        await chrome.storage.local.set({ [this.STORAGE_KEY]: data });
+        try {
+            await chrome.storage.local.set({ [this.STORAGE_KEY]: data });
+        } catch (e) {
+            console.error("Storage set failed:", e);
+            if (this.broadcastLog) {
+                this.broadcastLog({ text: `[Background]: Storage write failed: ${e.message}`, type: 'error' });
+            }
+        }
     }
 
     async _runDataMigrations() {

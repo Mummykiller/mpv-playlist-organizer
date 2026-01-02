@@ -133,10 +133,11 @@ class PlaybackQueue {
     }
 }
 
-const playbackQueueInstance = new PlaybackQueue(); // Create a single instance
+export const playbackQueueInstance = new PlaybackQueue(); // Create and export a single instance
 
 /**
  * Checks if a specific folder is currently active in MPV.
+
  * @param {string} folderId The ID of the folder to check.
  * @returns {boolean} True if the folder is active and playing.
  */

@@ -7,6 +7,7 @@ let _callNativeHost;
 let _updateContextMenus;
 let _tabUiState; // Shared state from background.js
 let _m3u8_scanner_handlers;
+let _playback_handlers;
 
 export function init(dependencies) {
     _storage = dependencies.storage;
@@ -16,7 +17,9 @@ export function init(dependencies) {
     _updateContextMenus = dependencies.updateContextMenus;
     _tabUiState = dependencies.tabUiState;
     _m3u8_scanner_handlers = dependencies.m3u8_scanner_handlers;
+    _playback_handlers = dependencies.playback_handlers;
 }
+
 
 export async function handleContentScriptInit(request, sender) {
     const tabId = sender.tab?.id; // Ensure tab exists
@@ -47,10 +50,43 @@ export async function handleContentScriptInit(request, sender) {
             isMinimized = (globalPrefs.mode === 'minimized');
         }
 
-        // Send a single message with the determined state. The content script will handle showing/hiding.
-        chrome.tabs.sendMessage(tabId, { action: 'init_ui_state', shouldBeMinimized: isMinimized }).catch(() => {});
+        // --- NEW: Prioritize Live Session Data ---
+        // If a folder is currently playing, we should default to that folder
+        // and its active item, rather than just the last used folder from settings.
+        let folderId = _playback_handlers.playbackQueueInstance?.currentPlayingItem?.folderId;
+        let isFolderActive = !!folderId;
+        let lastPlayedId = null;
+
+        if (!folderId) {
+            folderId = data.settings.last_used_folder_id || Object.keys(data.folders)[0];
+        }
+
+        const folder = data.folders[folderId];
+        lastPlayedId = folder?.last_played_id;
+
+        // Send a single message with the determined state.
+        await chrome.tabs.sendMessage(tabId, { 
+            action: 'init_ui_state', 
+            shouldBeMinimized: isMinimized,
+            folderId: folderId,
+            lastPlayedId: lastPlayedId,
+            isFolderActive: isFolderActive
+        }).catch(() => {});
+
+        // Proactively trigger a folder and playlist refresh.
+        chrome.tabs.sendMessage(tabId, { 
+            action: 'render_playlist', 
+            folderId: folderId, 
+            playlist: folder?.playlist || [],
+            last_played_id: lastPlayedId,
+            isFolderActive: isFolderActive
+        }).catch(() => {});
     }
 }
+
+
+
+
 
 export async function handleGetUiStateForTab(request) {
     const tabId = request.tabId;
@@ -192,12 +228,13 @@ export function handleForceReloadSettings() {
 export async function handleOpenPopup(request, sender) {
     _broadcastLog({ text: `[Background]: Attempting to open popup...`, type: 'info' });
     if (chrome.action && chrome.action.openPopup) {
-        try {
-            await chrome.action.openPopup({ windowId: sender.tab.windowId });
-            return { success: true };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
+        // Fire and forget (but log errors) to avoid blocking the message response
+        // or timing out the message channel if the popup takes time to init.
+        chrome.action.openPopup({ windowId: sender.tab.windowId }).catch(e => {
+            console.error("Popup open failed:", e);
+            _broadcastLog({ text: `[Background]: Popup open failed: ${e.message}`, type: 'error' });
+        });
+        return { success: true };
     }
     return { success: false, error: 'chrome.action.openPopup is not supported in this browser version.' };
 }

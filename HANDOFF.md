@@ -1,69 +1,57 @@
-# MPV Playlist Organizer - Stability & UI Polish (Technical Handoff V2)
+# MPV Playlist Organizer - Auto-Recovery & UI Sync (Technical Handoff V3)
 
-This handoff details the latest set of fixes focused on connection stability, race condition elimination, log decluttering, and UI user experience.
+This handoff details the transition to a self-healing UI architecture and improved synchronization during session restoration and page refreshes.
 
 ## 🛠️ Key Improvements & Fixes
 
-### 1. Robust Restoration Handshake (Synchronized)
-*   **Issue:** A race condition existed where the extension would ask for the playlist state before the Native Host had finished its IPC/network pings during session restoration. This caused the UI to temporarily lose its "active" highlight on page refresh.
-*   **Fix (Handshake Sync):** Updated `utils/nativeConnection.js` to make the initial connection promise wait for the `restore_session` handshake to fully complete. Commands like `get_playlist` now queue behind this handshake.
-*   **Fix (AttributeError):** Resolved a crash in `mpv_session.py` where the restorer incorrectly tried to access `self.dependencies['send_message']` instead of the unpacked `self.send_message`.
-*   **Redundancy Check:** Updated `mpv_session.py` to skip restoration if a session is already active in the current host instance, preventing duplicate tracker threads.
+### 1. Auto-Reinjection (Self-Healing)
+*   **Feature:** The extension now automatically detects if it has been reloaded (e.g., during development) and "re-attaches" itself to all open tabs.
+*   **Implementation:** `background.js` iterates through all valid tabs on startup, pings the content script, and re-injects the JS/CSS if the script is dead or missing.
+*   **Retry Logic:** Includes a 500ms retry mechanism to handle transient race conditions during browser/extension startup.
+*   **Silent Success:** Re-injection logs are condensed into a single summary line in the background console to keep logs clean.
 
-### 2. AniList Log Spam & Efficiency
-*   **Issue:** Opening multiple tabs or the popup triggered redundant AniList fetch requests, spamming the log with "cache is fresh" messages.
-*   **Fix (Log Cooldown):** Implemented a **5-minute cooldown** in `services.py` for "cache is fresh" and "no new releases" UI log messages.
-*   **Fix (In-Flight Tracking):** Added request deduplication in `background/handlers/dependency_anilist.js` and a **1-minute memory cache** in `utils/anilist_renderer.js`. If multiple tabs request data simultaneously, they now share a single response.
+### 2. Consolidated Reload Error Handling
+*   **Issue:** "Spamming reload" during development often triggered multiple "Extension context invalidated" or "message channel closed" errors in the console.
+*   **Fix:** Added a centralized `isReloadError(e)` helper in `content.js`.
+*   **Outcome:** All background loops (MutationObservers, URL pollers, heartbeats) now detect these specific "reload" errors and shut themselves down silently. Genuine errors are still logged.
 
-### 3. Refined Janitor (The 72-Hour Rule)
-*   **Issue:** The previous janitor logic was too aggressive for some long-running sessions and had complex branching.
-*   **Fix:** Simplified the janitor in `utils/janitor.py`.
-    *   **Strict Threshold:** No files or IPC resources are considered for deletion unless they are older than **72 hours**.
-    *   **Smart Preservation:** Even after 72 hours, resources are preserved if the associated PID is still running or the IPC socket remains responsive.
-    *   **Removed Hard Limits:** Removed the 7-day automatic deletion for alive processes to support permanent sessions.
+### 3. Deep UI Sync Restoration
+*   **Feature:** Re-injected or refreshed tabs now accurately restore the full state of the active MPV session.
+*   **Implementation:**
+    *   `handleContentScriptInit` in `ui_state.js` now prioritizes live data from `playbackQueueInstance` over saved settings.
+    *   The `init_ui_state` message now carries the current `folderId`, `lastPlayedId`, and `isFolderActive` status.
+    *   `content.js` caches this initial state to ensure that subsequent background updates don't override the restoration highlight during the critical startup window.
+*   **Visuals:** Upon refresh, the UI should immediately select the correct folder, highlight the active item, and smooth-scroll it into view.
 
-### 4. Smart UI Auto-Scroll
-*   **Requirement:** Automatically center the playing video in the playlist on load and ensure new additions are visible.
-*   **Fix:** Updated `utils/PlaylistUI.js` and `popup.js`.
-    *   **Active Centering:** On load/refresh, the UI smooth-scrolls to center the "green" (active) item.
-    *   **Append Focus:** If a new video is added, the UI automatically scrolls to the bottom so the user can see the new entry.
+### 4. Log Decluttering (Phase 2)
+*   **Fix:** Silenced "Establishing connection" and "Handshake completed" messages in the main UI log. These are now internal-only or logged as `info` only when necessary.
+*   **Friendly Errors:** Updated `nativeConnection.js` to provide human-readable guidance for common fatal errors (e.g., "Access denied. Please run installer.py").
+
+### 5. Popup & Message Channel Robustness
+*   **Fix:** Resolved `Uncaught (in promise) Error` when opening the popup via keyboard shortcut.
+*   **Root Cause:** `chrome.action.openPopup` was potentially blocking or timing out the message channel response in `background.js`.
+*   **Resolution:**
+    *   Updated `handleOpenPopup` in `background/handlers/ui_state.js` to trigger the popup asynchronously (fire-and-forget) without blocking the response.
+    *   Added explicit `try/catch` blocks to `sendMessageAsync` calls in `content.js` (Popup, Clear, Play New, Close MPV) to prevent uncaught promise rejections during transport failures.
+
+### 6. Synchronous Response Fixes
+*   **Fix:** Resolved "Listener indicated an asynchronous response... but message channel closed" error in `content.js`.
+*   **Root Cause:**
+    *   Synchronous handlers (`scrape_and_get_details`, `get_details_for_last_right_click`) were returning `true`, falsely signaling an async response.
+    *   `setMinimizedState` in `content.js` was `await`-ing `chrome.runtime.sendMessage` without a `try/catch` block, causing uncaught promise rejections when the page was refreshed during the request.
+*   **Resolution:**
+    *   Removed `return true` from synchronous handlers in `content.js`.
+    *   Wrapped the preference fetch in `setMinimizedState` with `try/catch`.
 
 ## 📂 Verification Steps
-1.  **Restoration:** Start a video, refresh the page. The video should stay green and the UI should automatically scroll to it.
-2.  **Log Spam:** Open the AniList panel in 5 different tabs. You should only see one "cache is fresh" message across all logs.
-3.  **Janitor:** Verify in `native_host.log` that the Janitor reports using the "72h threshold."
-4.  **Scrolling:** Add a new video while one is playing. The UI should scroll to the bottom to show the new item.
+1.  **Auto-Recovery:** Open 3 tabs, reload the extension from the `chrome://extensions` page. The MPV UI should reappear in all tabs automatically without a page refresh.
+2.  **Highlight Persistence:** Start a video, then refresh the page. The video item should stay highlighted (green if playing) and the list should scroll to it automatically.
+3.  **Popup Shortcut:** Press the `Alt+P` (or configured) shortcut. The popup should open immediately without console errors in the background or content script.
+4.  **Silent Reload:** Spam the "Reload" button in the extensions page (or refresh the YouTube page repeatedly). The console should remain relatively quiet.
+
+## ⚠️ Known Issues & Potential Work
+*   **Full Synchronization:** While major improvements were made, a standard page refresh still sometimes struggles to *fully* re-establish the exact location/highlight in every edge case.
+*   **Note:** The user has noted that we might not have fully "cracked" the refresh synchronization logic yet. More work may be required to make the handshake between the Native Host's tracker and the newly re-injected content script perfectly atomic.
 
 ## 🚀 Next Steps
-*   **Auto-Reinjection:** Consider implementing logic to re-inject content scripts into existing tabs when the extension is manually reloaded during development.
-
-> is it possible that the extension could detect when the extension was refreshed and
-  then force a refresh on itself?
-
-  Responding with gemini-3-flash-preview
-✦ Yes, it is definitely possible and is a highly recommended practice for robust
-  extensions.
-
-  There are two main ways to handle this:
-
-  1. The "Re-injection" Method (Background Script)
-  When the extension starts up (either because the browser started or you clicked
-  "Reload" in the extensions page), the background script can iterate through all
-  open tabs and "re-inject" the content scripts. This makes the UI reappear and start
-  working immediately without you having to touch the page.
-
-  2. The "Auto-Reload" Method (Content Script)
-  The content script can detect that it has lost its "lifeline" to the background
-  script (this happens the instant the extension is refreshed). Instead of just
-  showing an error message, it can force the tab to refresh.
-
-  ---
-
-  Recommended Implementation: Auto Re-Injection
-
-  I will implement the Auto Re-Injection logic in background.js. This is the most
-  seamless method because it doesn't force you to lose your place on the page—it just
-  "re-attaches" the MPV Organizer UI to your current tabs automatically.
-
-  I'll start by checking your manifest.json to see which scripts need to be
-  re-injected.
+*   **Handshake Atomicity:** Investigate making the `restore_session` handshake even more robust by having the content script wait for a confirmed "Tracker Ready" signal from the background.
