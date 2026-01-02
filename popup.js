@@ -525,8 +525,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         const isScrollable = playlistContainer.scrollHeight > playlistContainer.clientHeight;
 
         if (wasItemAdded && isScrollable) {
+            // If a new item was added and the list is scrollable, scroll to the bottom.
             playlistContainer.scrollTop = playlistContainer.scrollHeight;
+        } else if (isFolderActive && lastPlayedId) {
+            // If the folder is active, find the active item and scroll it into view (centered).
+            const activeItem = playlistContainer.querySelector('.active-item');
+            if (activeItem) {
+                activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else {
+                playlistContainer.scrollTop = scrollPosition;
+            }
         } else {
+            // Otherwise, restore the previous scroll position.
             playlistContainer.scrollTop = scrollPosition;
         }
     }

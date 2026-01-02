@@ -116,6 +116,14 @@ class PlaylistUI {
         if (wasItemAdded && isScrollable) {
             // If a new item was added and the list is scrollable, scroll to the bottom.
             this.fullContainer.scrollTop = this.fullContainer.scrollHeight;
+        } else if (isFolderActive && lastPlayedId) {
+            // If the folder is active, find the active item and scroll it into view (centered).
+            const activeItem = this.fullContainer.querySelector('.active-item');
+            if (activeItem) {
+                activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else {
+                this.fullContainer.scrollTop = scrollPosition;
+            }
         } else {
             // Otherwise, restore the previous scroll position.
             this.fullContainer.scrollTop = scrollPosition;

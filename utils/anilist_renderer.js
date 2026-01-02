@@ -17,17 +17,45 @@ const sendMessageAsyncInternal = (payload) => new Promise((resolve, reject) => {
 });
 
 class AniListRenderer {
+    // --- Memory Cache & In-flight Tracker ---
+    static _cache = null;
+    static _cacheTimestamp = 0;
+    static _inFlightRequest = null;
+    static CACHE_DURATION_MS = 60 * 1000; // 1 minute local cache
+
     /**
      * Fetches AniList releases from the background script.
      * @param {boolean} forceRefresh - Whether to force a refresh of the data.
      * @returns {Promise<object>} The release data.
      */
     static async fetchReleases(forceRefresh = false) {
-        const response = await sendMessageAsyncInternal({ action: 'get_anilist_releases', force: forceRefresh });
-        if (response.success) {
-            return response.output;
+        const now = Date.now();
+
+        // 1. Check Memory Cache (unless forcing refresh)
+        if (!forceRefresh && this._cache && (now - this._cacheTimestamp < this.CACHE_DURATION_MS)) {
+            return this._cache;
         }
-        throw new Error(response.error || 'Failed to fetch releases.');
+
+        // 2. Check In-flight Request (deduplicate simultaneous calls)
+        if (this._inFlightRequest && !forceRefresh) {
+            return this._inFlightRequest;
+        }
+
+        this._inFlightRequest = (async () => {
+            try {
+                const response = await sendMessageAsyncInternal({ action: 'get_anilist_releases', force: forceRefresh });
+                if (response.success) {
+                    this._cache = response.output;
+                    this._cacheTimestamp = Date.now();
+                    return response.output;
+                }
+                throw new Error(response.error || 'Failed to fetch releases.');
+            } finally {
+                this._inFlightRequest = null;
+            }
+        })();
+
+        return this._inFlightRequest;
     }
 
     /**

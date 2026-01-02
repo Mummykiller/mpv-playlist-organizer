@@ -68,12 +68,15 @@ function connectToNativeHost() {
 
         nativePort.onMessage.addListener((response) => {
             const { request_id, ...responseData } = response;
+            
+            // 1. Handle tracked requests (including the restoration handshake)
             if (request_id && requestPromises[request_id]) {
                 requestPromises[request_id].resolve(responseData);
                 delete requestPromises[request_id];
+                return; // Stop here; responses to requests shouldn't trigger unsolicited action handlers
             }
             
-            // Handle actions (including restore_session result which is returned as an action)
+            // 2. Handle unsolicited actions from the native host
             if (responseData.action === 'mpv_exited') {
                 dependencies.handleMpvExited(responseData);
             } else if (responseData.action === 'update_last_played') {
@@ -83,6 +86,7 @@ function connectToNativeHost() {
             } else if (responseData.log) {
                 dependencies.broadcastLog(responseData.log);
             } else if (responseData.action === 'session_restored') {
+                // This is now only for truly unsolicited restoration signals (rare)
                 dependencies.handleSessionRestored(responseData);
             } else if (request_id === undefined) {
                 console.warn("Received unexpected message from native host:", response);
@@ -93,10 +97,24 @@ function connectToNativeHost() {
         dependencies.broadcastLog({ text: `[Background]: Successfully connected to native host.`, type: 'info' });
         
         // Trigger session restoration immediately upon connection
+        // We use a manual request_id to track this specific internal request
+        const restoreRequestId = `internal_restore_${Date.now()}`;
+        requestPromises[restoreRequestId] = {
+            resolve: (responseData) => {
+                dependencies.broadcastLog({ text: `[Background]: Session restoration handshake completed.`, type: 'info' });
+                if (responseData.action === 'session_restored') {
+                    dependencies.handleSessionRestored(responseData);
+                }
+                resolve(); // Now resolve the main connection promise
+            },
+            reject: (err) => {
+                dependencies.broadcastLog({ text: `[Background]: Session restoration handshake failed: ${err.message}`, type: 'error' });
+                resolve(); // Still resolve so other commands can proceed
+            }
+        };
+
         dependencies.broadcastLog({ text: `[Background]: Sending session restoration handshake...`, type: 'info' });
-        nativePort.postMessage({ action: 'restore_session' });
-        
-        resolve();
+        nativePort.postMessage({ action: 'restore_session', request_id: restoreRequestId });
     });
 
     return connectionPromise;

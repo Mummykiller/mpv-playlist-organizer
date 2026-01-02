@@ -620,6 +620,9 @@ def apply_bypass_script(url_item, send_message_func):
         return (original_url, None, None, False, is_youtube, None, False, None) # Return 8-tuple here too
 # --- AniList Service ---
 
+# Global variable to track the last time a "cache is fresh" message was sent to the UI
+LAST_ANILIST_FRESH_LOG_TIME = 0
+
 class AniListCache:
     def __init__(self, cache_file, script_dir, send_message_func):
         self.cache_file = cache_file
@@ -665,7 +668,7 @@ class AniListCache:
 
 def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabled, cache_file, script_dir, send_message_func):
     """Handles fetching AniList releases with a file-based caching mechanism."""
-    
+    global LAST_ANILIST_FRESH_LOG_TIME
     anilist_cache = AniListCache(cache_file, script_dir, send_message_func)
     now = time.time()
 
@@ -702,7 +705,9 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
 
         if not is_expired_by_timer and not is_expired_by_release and not is_new_day:
             logging.info("Serving AniList data from fresh local file cache.")
-            send_message_func({"log": {"text": "[AniList]: Loaded from local file (cache is fresh).", "type": "info"}})
+            if now - LAST_ANILIST_FRESH_LOG_TIME > 300:
+                send_message_func({"log": {"text": "[AniList]: Loaded from local file (cache is fresh).", "type": "info"}})
+                LAST_ANILIST_FRESH_LOG_TIME = now
             return {"success": True, "output": json.dumps(cache['data'])}
 
     if cache and 'data' in cache and 'total' in cache['data']:
@@ -719,7 +724,9 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
 
                 if sorted(ping_airing_ats) == cached_airing_ats:
                     logging.info("No change in release timestamps. Serving from local file and updating timestamp.")
-                    send_message_func({"log": {"text": "[AniList]: Loaded from local file (no new releases found).", "type": "info"}})
+                    if now - LAST_ANILIST_FRESH_LOG_TIME > 300:
+                        send_message_func({"log": {"text": "[AniList]: Loaded from local file (no new releases found).", "type": "info"}})
+                        LAST_ANILIST_FRESH_LOG_TIME = now
                     
                     cache['timestamp'] = now
                     anilist_cache._save_cache(cache)
