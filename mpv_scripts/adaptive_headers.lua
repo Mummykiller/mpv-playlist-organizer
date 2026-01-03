@@ -7,6 +7,13 @@ local function debug_log(msg)
     mp.msg.info(msg)
 end
 
+debug_log("AdaptiveHeaders: Script loaded and initializing...")
+
+-- Allow Python to print logs to the MPV terminal for visibility
+mp.register_script_message("python_log", function(msg)
+    debug_log(msg)
+end)
+
 -- Receive per-URL options directly from Python
 mp.register_script_message("set_url_options", function(url, options_json)
     local ok, options = pcall(utils.parse_json, options_json)
@@ -36,16 +43,29 @@ mp.add_hook("on_load", 1, function()
     -- Check current properties BEFORE applying
     local current_headers = mp.get_property("http-header-fields")
     local current_ytdl_opts = mp.get_property("ytdl-raw-options")
-    debug_log("AdaptiveHeaders: Current properties BEFORE apply: Headers=" .. tostring(current_headers) .. ", YTDL-Opts=" .. tostring(current_ytdl_opts))
-
+    
+    -- TRY 1: Direct path match
     local opts = url_options[path]
     
+    -- TRY 2: check if we have an original URL stored in user-data
     if not opts then
-        -- Fallback: check if we have an original URL stored in user-data
         local original_url = mp.get_property("user-data/original-url")
         if original_url and url_options[original_url] then
             debug_log("AdaptiveHeaders: Using options from original-url: " .. original_url)
             opts = url_options[original_url]
+        end
+    end
+    
+    -- TRY 3: Fuzzy match (handle cases where one might have a trailing slash or different protocol)
+    if not opts then
+        for k, v in pairs(url_options) do
+            -- Simple check: does the path contain the registered URL or vice-versa?
+            -- (Useful for YouTube where the path is a long blob but contains the original ID)
+            if path:find(k, 1, true) or k:find(path, 1, true) then
+                debug_log("AdaptiveHeaders: Fuzzy match found for '" .. k .. "'")
+                opts = v
+                break
+            end
         end
     end
 
@@ -53,25 +73,14 @@ mp.add_hook("on_load", 1, function()
         debug_log("AdaptiveHeaders: Found registered options for " .. path)
     else
         -- Item has no registered options. 
-        debug_log("AdaptiveHeaders: No options found for " .. path .. ". Keeping current properties.")
-        debug_log("AdaptiveHeaders: Path Hex: " .. to_hex(path))
+        debug_log("AdaptiveHeaders: No options found for " .. path)
         
         -- DIAGNOSTIC: Count and list registered URLs
         local count = 0
         for _ in pairs(url_options) do count = count + 1 end
         debug_log("AdaptiveHeaders: Total registered URLs: " .. count)
-        if count > 0 then
-            debug_log("AdaptiveHeaders: Registered keys:")
-            for k, _ in pairs(url_options) do
-                debug_log("  - '" .. k .. "' (len: " .. #k .. ")")
-                debug_log("    Hex: " .. to_hex(k))
-            end
-        end
     end
     
-    -- (We'll re-fetch opts to avoid duplicating the apply logic here for the 'if opts' block)
-    opts = url_options[path]
-
     -- DEFAULT STATE: Assume we handle resolution externally unless told otherwise
     local use_ytdl = "no"
     local raw_options = ""

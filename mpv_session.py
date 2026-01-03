@@ -245,7 +245,10 @@ class MpvSessionManager:
 
         # 1. Register options for all items with the Lua script first
         import file_io
+        import shutil
         settings = file_io.get_settings()
+        ytdlp_path = shutil.which("yt-dlp") or "yt-dlp"
+        
         for item in items:
             lua_options = {
                 "id": item.get('id'), # Pass the ID for live deduplication
@@ -602,7 +605,8 @@ class MpvSessionManager:
             is_youtube_flag_from_script,
             entries,
             disable_http_persistent_flag,
-            cookies_file
+            cookies_file,
+            mark_watched_flag
         ) = apply_bypass_script(url_dict_for_analysis, self.send_message)
         
         if entries:
@@ -649,6 +653,7 @@ class MpvSessionManager:
         item['is_youtube'] = is_youtube_flag_from_script
         item['disable_http_persistent'] = disable_http_persistent_flag
         item['cookies_file'] = cookies_file
+        item['mark_watched'] = mark_watched_flag
         if cookies_file:
             with self.sync_lock:
                 self.session_cookies.add(cookies_file)
@@ -675,7 +680,7 @@ class MpvSessionManager:
                 if is_youtube_playlist:
                     logging.info(f"Expanding YouTube playlist before enrichment: {url_items_or_m3u}")
                     # Use apply_bypass_script directly to get expansion results
-                    _, _, _, _, _, entries, _, _ = apply_bypass_script({'url': url_items_or_m3u}, self.send_message)
+                    _, _, _, _, _, entries, _, _, _ = apply_bypass_script({'url': url_items_or_m3u}, self.send_message)
                     if entries:
                         _url_items_list = entries
                         m3u_input_was_raw_content_or_items = True # Trigger enrichment for children
@@ -882,23 +887,35 @@ class MpvSessionManager:
                 # 5. Sequential Resolution and Update (The original logic for metadata)
                 # Since we already updated 'self.playlist' in append_batch, we just need to resolve them
                 logging.info(f"Standard Flow: Starting sequential resolution for metadata.")
+                
                 # 2. Sequential Resolution and Update
-                for idx, item in enumerate(rest_items):
+                for idx, item in enumerate(_url_items_list):
+                    if idx == playlist_start_index:
+                        continue
+                        
                     if not self.is_alive: break
                     
                     # Resolve background item
-                    logging.debug(f"Enriching background item {idx+2}: {item.get('url')}")
-                    enriched_results = self.enrich_single_item(item)
-                    # Note: Expansion here is rare for YT, we take the first result
+                    logging.debug(f"Enriching background item {idx+1}: {item.get('url')}")
+                    # Pass folder_id to enrichment for metadata sync
+                    enriched_results = self.enrich_single_item(item, folder_id)
                     enriched_item = enriched_results[0]
 
-                    logging.info(f"Updating item {idx+2}/{len(_url_items_list)}: {enriched_item.get('title', 'Unknown')}")
+                    logging.info(f"Updating item {idx+1}/{len(_url_items_list)}: {enriched_item.get('title', 'Unknown')}")
                     
                     try:
-                        # Index in MPV: 0 is launch_item, 1 is rest_items[0], etc.
-                        mpv_index = idx + 1
+                        # Index in MPV matches idx now that order is restored
+                        mpv_index = idx
                         
-                        # Register options for the NEW direct stream URL in Lua
+                        # --- Watch History Fix ---
+                        # If it's a YouTube item, we MUST NOT overwrite the URL with a direct stream
+                        # if we want mark-watched to work. We only update the metadata/options.
+                        target_url = enriched_item['url']
+                        if enriched_item.get('is_youtube') and enriched_item.get('original_url'):
+                            logging.debug(f"YouTube detected for item {idx+1}. Preserving original URL for watch history.")
+                            target_url = enriched_item['original_url']
+
+                        # Register options for the URL in Lua
                         lua_options = {
                             "id": enriched_item.get('id'),
                             "title": enriched_item.get('title'),
@@ -907,14 +924,15 @@ class MpvSessionManager:
                             "use_ytdl_mpv": enriched_item.get('use_ytdl_mpv', False),
                             "original_url": enriched_item.get('original_url') or enriched_item.get('url'),
                             "disable_http_persistent": enriched_item.get('disable_http_persistent', False),
-                            "cookies_file": enriched_item.get('cookies_file'),
-                            "disable_network_overrides": settings.get('disable_network_overrides', False),
+                                                    "cookies_file": enriched_item.get('cookies_file'),
+                                                    "disable_network_overrides": settings.get('disable_network_overrides', False),
+                            
                             "http_persistence": settings.get('http_persistence', 'auto')
                         }
-                        self.ipc_manager.send({"command": ["script-message", "set_url_options", enriched_item['url'], json.dumps(lua_options)]})
+                        self.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options)]})
                         
                         # Update the URL in MPV's live playlist
-                        self.ipc_manager.send({"command": ["set_property", f"playlist/{mpv_index}/url", enriched_item['url']]})
+                        self.ipc_manager.send({"command": ["set_property", f"playlist/{mpv_index}/url", target_url]})
                         
                         # Sync local state
                         if mpv_index < len(self.playlist):
@@ -923,7 +941,7 @@ class MpvSessionManager:
                                 self.playlist_tracker.update_playlist_order(self.playlist)
 
                     except Exception as e:
-                        logging.error(f"Exception during background update for item {idx+2}: {e}")
+                        logging.error(f"Exception during background update for item {idx+1}: {e}")
                     
                     time.sleep(0.05) # Tiny delay
                 logging.info("Standard Flow: Background resolution and updates finished.")

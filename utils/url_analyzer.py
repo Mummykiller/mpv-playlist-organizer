@@ -169,8 +169,6 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                         
                         ytdl_opts = []
                         if is_yt_enabled:
-                            if is_mark_watched_enabled and is_yt_cookies_enabled:
-                                ytdl_opts.append("mark-watched=")
                             if cookies_file:
                                 ytdl_opts.append(f"cookies={cookies_file}")
 
@@ -178,11 +176,12 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                             "title": title,
                             "url": webpage_url,
                             "is_youtube": True,
-                            "use_ytdl_mpv": True, # Allow MPV to handle if played before background resolution
+                            "use_ytdl_mpv": True, 
                             "disable_http_persistent": True,
                             "headers": {"User-Agent": effective_user_agent},
                             "ytdl_raw_options": ",".join(ytdl_opts) if ytdl_opts else None,
-                            "cookies_file": cookies_file
+                            "cookies_file": cookies_file,
+                            "mark_watched": is_mark_watched_enabled and is_yt_cookies_enabled
                         })
                 
                 if entries:
@@ -218,8 +217,6 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
             logging.info(f"YouTube resolution enabled. Using original URL with cookies for MPV: {url}")
 
             ytdl_opts = []
-            if is_mark_watched_enabled and is_yt_cookies_enabled:
-                ytdl_opts.append("mark-watched=")
             if cookies_file:
                 ytdl_opts.append(f"cookies={cookies_file}")
 
@@ -232,7 +229,8 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 "is_youtube": True,
                 "disable_http_persistent": True,
                 "cookies_file": cookies_file,
-                "original_url": url
+                "original_url": url,
+                "mark_watched": is_mark_watched_enabled and is_yt_cookies_enabled
             }
         except Exception as e:
             logging.warning(f"YouTube cookie extraction failed: {e}. Falling back to original URL.")

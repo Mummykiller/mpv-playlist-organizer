@@ -293,6 +293,14 @@ class MpvCommandBuilder:
                 logging.info(f"MPV will load thumbnailer fix script: {lua_script_path}")
         return self
 
+    def with_vulkan_fallback_script(self, script_dir):
+        if script_dir:
+            lua_script_path = os.path.join(script_dir, "mpv_scripts", "vulkan_fallback.lua")
+            if os.path.exists(lua_script_path):
+                self.mpv_args.append(f'--script={lua_script_path}')
+                logging.info(f"MPV will load Vulkan fallback script: {lua_script_path}")
+        return self
+
     def with_title(self, title):
         if title:
             # Set the initial title for the first file loaded
@@ -516,6 +524,7 @@ def construct_mpv_command(
         .with_completion_script(script_dir if load_on_completion_script else None) \
         .with_adaptive_headers_script(script_dir) \
         .with_fix_thumbnailer_script(script_dir) \
+        .with_vulkan_fallback_script(script_dir) \
         .with_title(title) \
         .with_automatic_flags(automatic_mpv_flags) \
         .with_headers(headers) \
@@ -611,13 +620,14 @@ def apply_bypass_script(url_item, send_message_func):
         entries = result.get("entries")
         disable_http_persistent = result.get("disable_http_persistent", False)
         cookies_file = result.get("cookies_file")
+        mark_watched = result.get("mark_watched", False)
 
-        return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script, entries, disable_http_persistent, cookies_file)
+        return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script, entries, disable_http_persistent, cookies_file, mark_watched)
 
     except Exception as e:
         logging.error(f"Error during URL analysis: {e}")
         send_message_func({"action": "log_from_native_host", "log": {"text": f"URL analysis failed with exception: {e}. Playing original URL.", "type": "error"}})
-        return (original_url, None, None, False, is_youtube, None, False, None) # Return 8-tuple here too
+        return (original_url, None, None, False, is_youtube, None, False, None, False) # Return 9-tuple here too
 # --- AniList Service ---
 
 # Global variable to track the last time a "cache is fresh" message was sent to the UI
