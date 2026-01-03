@@ -19,6 +19,7 @@ class PlaylistTracker:
         self.folder_id = folder_id
         self.playlist = []
         self.played_item_ids = set()
+        self.watched_this_session = set() # Track items already marked as watched this session
         self.file_io = file_io
         self.ipc_path = ipc_path # Store the IPC path to create a dedicated connection
         self.send_message = send_message_func
@@ -128,6 +129,10 @@ class PlaylistTracker:
                         logging.debug(f"Tracker: property-change 'user-data/id' detected. Old: {current_id}, New: {new_id}")
 
                         if new_id and new_id != current_id:
+                            # Reset watch timer flag for the new item if needed
+                            # (The set already handles deduplication per session)
+                            pass
+
                             # 1. If we were playing something else, do a FINAL save for it
                             if current_id and current_time > 2:
                                 logging.info(f"Tracker: Saving final position for old item {current_id}: {int(current_time)}s")
@@ -137,14 +142,22 @@ class PlaylistTracker:
                             # 2. Update the active item ID
                             current_id = new_id
                             
-                            # 3. Immediately notify the extension to update the UI highlight
+                            # 3. Notify the MPV terminal that we are tracking this new video
+                            self._remote_log(f"AdaptiveHeaders: Watch history tracking started (Python) for ID: {current_id}")
+
+                            # 4. Immediately notify the extension to update the UI highlight
                             logging.info(f"Tracker: Active episode changed to ID {current_id}. Notifying UI.")
                             self._update_last_played(current_id)
                     
                     elif prop_name == 'time-pos':
                         if current_id and data is not None:
                             current_time = data
-                            # Periodic save every 5 seconds, but don't let it block the loop
+                            
+                            # 1. Check for mark-as-watched threshold (30s)
+                            if current_time >= 30:
+                                self._check_mark_watched(current_id)
+
+                            # 2. Periodic save every 5 seconds, but don't let it block the loop
                             if int(current_time) > 0 and int(current_time) % 5 == 0:
                                 self._update_resume_time(current_id, current_time)
 
@@ -230,3 +243,72 @@ class PlaylistTracker:
                         break
         except Exception as e:
             logging.error(f"Tracker: Failed to update resume_time: {e}")
+
+    def _check_mark_watched(self, item_id):
+        """Checks if the item should be marked as watched on YouTube and triggers the call if so."""
+        if item_id in self.watched_this_session:
+            return
+
+        target_item = None
+        with self.lock:
+            for item in self.playlist:
+                if item.get('id') == item_id:
+                    target_item = item
+                    break
+        
+        if not target_item:
+            return
+
+        if target_item.get('mark_watched') and target_item.get('cookies_file') and target_item.get('original_url'):
+            self.watched_this_session.add(item_id)
+            
+            watch_url = target_item['original_url']
+            cookies = target_item['cookies_file']
+            
+            # Run yt-dlp in a separate thread to avoid blocking the tracker
+            def mark():
+                try:
+                    import subprocess
+                    import shutil
+                    ytdlp_path = shutil.which("yt-dlp") or "yt-dlp"
+                    
+                    cmd = [
+                        ytdlp_path,
+                        "--ignore-config",
+                        "--cookies", cookies,
+                        "--mark-watched",
+                        "--simulate",
+                        "--quiet"
+                    ]
+                    
+                    # Add User-Agent if available from headers
+                    headers = target_item.get('headers', {})
+                    if headers and 'User-Agent' in headers:
+                        cmd.extend(["--user-agent", headers['User-Agent']])
+                    
+                    cmd.append(watch_url)
+                    
+                    logging.info(f"Tracker: Marking as watched: {watch_url}")
+                    logging.debug(f"Tracker: Executing command: {' '.join(cmd)}")
+                    self._remote_log(f"AdaptiveHeaders: Threshold met. Marking {watch_url} as watched via background process.")
+                    
+                    # Use subprocess.run with a timeout
+                    subprocess.run(cmd, timeout=30, capture_output=True)
+                    
+                    # Show OSD message via IPC if still connected
+                    if self.ipc_manager and self.ipc_manager.is_connected():
+                        self.ipc_manager.send({"command": ["show-text", "YouTube: Video marked as watched", 2000]})
+                        self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {watch_url}")
+                        
+                except Exception as e:
+                    logging.error(f"Tracker: Failed to mark {watch_url} as watched: {e}")
+
+            threading.Thread(target=mark, daemon=True).start()
+
+    def _remote_log(self, message):
+        """Sends a message to MPV to be printed in its terminal."""
+        if self.ipc_manager and self.ipc_manager.is_connected():
+            try:
+                self.ipc_manager.send({"command": ["script-message", "python_log", message]})
+            except:
+                pass

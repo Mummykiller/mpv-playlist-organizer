@@ -45,8 +45,8 @@ class HandlerManager:
         # Call the refactored _resolve_or_assign_item_id
         url_item, all_folders = self._resolve_or_assign_item_id(url_item, folder_id, all_folders)
         
-        # New return signature from apply_bypass_script (8 values)
-        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, entries, disable_http_persistent_flag, cookies_file = self.services.apply_bypass_script(
+        # New return signature from apply_bypass_script (9 values)
+        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, entries, disable_http_persistent_flag, cookies_file, mark_watched_flag = self.services.apply_bypass_script(
             url_item, self.send_message
         )
 
@@ -79,6 +79,7 @@ class HandlerManager:
         url_item['use_ytdl_mpv'] = use_ytdl_mpv_flag
         url_item['is_youtube'] = is_youtube_flag
         url_item['cookies_file'] = cookies_file # Store cookie path
+        url_item['mark_watched'] = mark_watched_flag # Store mark watched flag
         
         # Respect the flag from url_analyzer or fallback to header-based logic
         url_item['disable_http_persistent'] = disable_http_persistent_flag
