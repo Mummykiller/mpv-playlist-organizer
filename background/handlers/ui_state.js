@@ -141,7 +141,30 @@ export async function handleSetLastFolderId(request) {
 
 export async function handleGetUiPreferences(request, sender) {
     const data = await _storage.get();
-    const globalPrefs = data.settings.ui_preferences.global;
+    let globalPrefs = { ...data.settings.ui_preferences.global };
+
+    // --- NEW: Sync Hardware Decoder from Native Host ---
+    // If the setting is 'auto', we ask the native host what the OS recommendation is.
+    if (globalPrefs.mpv_decoder === 'auto' || !globalPrefs.mpv_decoder) {
+        try {
+            const status = await _callNativeHost({ action: 'check_dependencies' });
+            if (status?.success) {
+                // If native host has a specific decoder in its config, use it.
+                // This allows the installer's automatic pick to show up in the UI.
+                const nativeSettings = await _callNativeHost({ action: 'get_all_folders' }); // Just to get settings context if needed, but check_dependencies is better
+                // Actually, let's add a specific 'get_settings' call or use dependency check
+                const settingsResponse = await _callNativeHost({ action: 'get_default_automatic_flags' }); // This usually returns settings
+                
+                // Let's use a simpler approach: get the actual settings from the native host
+                const actualSettings = await _callNativeHost({ action: 'get_ui_preferences' }); // The native host has its own version
+                if (actualSettings?.preferences?.mpv_decoder) {
+                    globalPrefs.mpv_decoder = actualSettings.preferences.mpv_decoder;
+                }
+            }
+        } catch (e) {
+            console.warn("Could not sync native decoder settings:", e);
+        }
+    }
 
     let domain = null;
     if (sender.origin && (sender.origin.startsWith('http:') || sender.origin.startsWith('https:'))) {
@@ -176,6 +199,34 @@ export async function handleSetUiPreferences(request, sender) {
     }
 
     await _storage.set(data);
+
+    // --- NEW: Sync Global Preferences to Native Host config.json ---
+    if (!domain) {
+        try {
+            // Only sync keys that the native host actually cares about to avoid bloat
+            const nativeSyncKeys = [
+                'mpv_path', 'mpv_decoder', 'enable_url_analysis', 'browser_for_url_analysis',
+                'enable_youtube_analysis', 'user_agent_string', 'enable_smart_resume',
+                'enable_active_item_highlight', 'disable_network_overrides', 'enable_cache',
+                'http_persistence', 'demuxer_max_bytes', 'demuxer_max_back_bytes',
+                'cache_secs', 'demuxer_readahead_secs', 'stream_buffer_size', 
+                'ytdlp_concurrent_fragments', 'enable_reconnect', 'reconnect_delay', 
+                'automatic_mpv_flags'
+            ];
+            
+            const syncPrefs = {};
+            nativeSyncKeys.forEach(key => {
+                if (newPreferences[key] !== undefined) syncPrefs[key] = newPreferences[key];
+            });
+
+            if (Object.keys(syncPrefs).length > 0) {
+                await _callNativeHost({ action: 'set_ui_preferences', preferences: syncPrefs });
+            }
+        } catch (e) {
+            console.warn("Failed to sync preferences to native host:", e);
+        }
+    }
+
     // Broadcast the change, but also include the domain it applies to.
     // This allows other tabs to ignore UI changes that aren't for them.
     _broadcastToTabs({

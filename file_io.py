@@ -50,6 +50,32 @@ def get_mpv_executable():
     
     return mpv_default_name
 
+def sanitize_string(s, is_filename=False):
+    """Sanitizes a string. preserves URL integrity while preventing shell/M3U issues."""
+    if not isinstance(s, str):
+        return s
+    
+    if is_filename:
+        # Strict blacklist for folder names / filenames used in filesystem paths.
+        # Strips: / \ : * ? " < > | $ ; & ` and newlines.
+        restricted = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '$', ';', '&', '`', '\n', '\r', '\t']
+        for char in restricted:
+            s = s.replace(char, '')
+    else:
+        # Minimal destruction for URLs and Titles.
+        # Only remove characters that are strictly illegal in M3U or break our JSON/logging.
+        # We allow $, &, ;, |, and others because they are functional in many stream URLs.
+        # We rely on list-based subprocess calls for shell safety.
+        restricted = ['"', '`', '\n', '\r', '\t']
+        for char in restricted:
+            s = s.replace(char, '')
+            
+    return s.strip()
+
+def sanitize_folder_name(name):
+    """Specific strict sanitization for folder names used in filesystem paths."""
+    return sanitize_string(name, is_filename=True)
+
 def _migrate_legacy_data(raw_folders):
     """
     Normalizes folder data structures, converting legacy formats if necessary.
@@ -59,28 +85,51 @@ def _migrate_legacy_data(raw_folders):
     needs_resave = False
     
     for folder_id, folder_content in raw_folders.items():
+        # Sanitize the folder ID itself if it's new/changed
+        clean_folder_id = sanitize_folder_name(folder_id)
+        if clean_folder_id != folder_id:
+            needs_resave = True
+
         # Standard format: {"playlist": [{"url": "...", "title": "..."}, ...]}
         if isinstance(folder_content, dict) and "playlist" in folder_content:
             playlist = folder_content.get("playlist", [])
-            # Check for legacy list-of-strings inside "playlist"
-            if playlist and isinstance(playlist[0], str):
-                 needs_resave = True
-                 playlist = [{"url": url, "title": url} for url in playlist]
+            sanitized_playlist = []
+            
+            for item in playlist:
+                if isinstance(item, str):
+                    # Legacy list-of-strings inside "playlist"
+                    needs_resave = True
+                    sanitized_playlist.append({"url": sanitize_string(item), "title": sanitize_string(item)})
+                elif isinstance(item, dict) and "url" in item:
+                    # Standard dict format
+                    original_url = item["url"]
+                    original_title = item.get("title", "")
+                    
+                    sanitized_url = sanitize_string(original_url)
+                    sanitized_title = sanitize_string(original_title)
+                    
+                    if sanitized_url != original_url or sanitized_title != original_title:
+                        item["url"] = sanitized_url
+                        item["title"] = sanitized_title
+                        needs_resave = True
+                    sanitized_playlist.append(item)
+                else:
+                    sanitized_playlist.append(item)
             
             # Preserve all existing keys (like last_played_id) and update playlist
-            converted_folders[folder_id] = folder_content
-            converted_folders[folder_id]["playlist"] = playlist
+            converted_folders[clean_folder_id] = folder_content
+            converted_folders[clean_folder_id]["playlist"] = sanitized_playlist
             
         # Legacy format: List of strings directly
         elif isinstance(folder_content, list):
             logging.info(f"Converting old format (list) for folder '{folder_id}' to new format.")
-            converted_folders[folder_id] = {"playlist": [{"url": url, "title": url} for url in folder_content]}
+            converted_folders[clean_folder_id] = {"playlist": [{"url": sanitize_string(url), "title": sanitize_string(url)} for url in folder_content]}
             needs_resave = True
             
         # Legacy format: Dict with "urls" key
         elif isinstance(folder_content, dict) and "urls" in folder_content:
             logging.info(f"Converting old format (dict with 'urls') for folder '{folder_id}' to new format.")
-            converted_folders[folder_id] = {"playlist": [{"url": url, "title": url} for url in folder_content.get("urls", [])]}
+            converted_folders[clean_folder_id] = {"playlist": [{"url": sanitize_string(url), "title": sanitize_string(url)} for url in folder_content.get("urls", [])]}
             needs_resave = True
             
         else:
@@ -187,11 +236,14 @@ def get_settings():
         "cache_secs": 500,
         "demuxer_readahead_secs": 500,
         "stream_buffer_size": "10M",
+        "ytdlp_concurrent_fragments": 4,
+        "enable_reconnect": True,
+        "reconnect_delay": 4,
+        "mpv_decoder": "auto",
         "automatic_mpv_flags": [
             {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
             {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
             {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True},
-            {"flag": "--hwdec=auto", "description": "Enable hardware video decoding.", "enabled": True},
             {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
             {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
             {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}

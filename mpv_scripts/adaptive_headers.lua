@@ -141,13 +141,18 @@ mp.add_hook("on_load", 1, function()
         -- We add reconnect options for direct streams to handle transient errors
         -- Skip if user has requested to use MPV's native defaults
         if not opts.disable_network_overrides then
+            local network_threads = tostring(opts.ytdlp_concurrent_fragments or 4)
             local lavf_dict = {
-                reconnect = "1",
-                reconnect_at_eof = "1",
-                reconnect_streamed = "1",
-                reconnect_delay_max = "2", -- Reduced for faster recovery
-                hls_segment_parallel_downloads = "8" -- Parallel segment downloading (FFmpeg option)
+                hls_segment_parallel_downloads = network_threads -- Sync with user's Network Threads setting
             }
+
+            -- Only add reconnect options if enabled in settings
+            if opts.enable_reconnect ~= false then
+                lavf_dict.reconnect = "1"
+                lavf_dict.reconnect_at_eof = "1"
+                lavf_dict.reconnect_streamed = "1"
+                lavf_dict.reconnect_delay_max = tostring(opts.reconnect_delay or 4)
+            end
             
             local force_persist = opts.http_persistence or "auto"
             if force_persist == "on" then

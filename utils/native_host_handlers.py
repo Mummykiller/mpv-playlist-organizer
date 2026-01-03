@@ -133,6 +133,14 @@ class HandlerManager:
         
         # Get settings from config file
         settings = self.file_io.get_settings()
+        
+        # Merge extension-provided networking and performance overrides
+        for key in ['disable_network_overrides', 'enable_cache', 'http_persistence', 
+                    'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs', 
+                    'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments', 
+                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder']:
+            if key in message:
+                settings[key] = message[key]
 
         # --- STEP 1: Process and Enrich ---
         # Call mpv_session.start() with the raw item to trigger enrichment.
@@ -190,6 +198,14 @@ class HandlerManager:
         logging.info(f"Processing play_batch request for folder '{folder_id}' with {len(playlist)} items.")
         
         settings = self.file_io.get_settings()
+        
+        # Merge extension-provided networking and performance overrides
+        for key in ['disable_network_overrides', 'enable_cache', 'http_persistence', 
+                    'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs', 
+                    'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments', 
+                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder']:
+            if key in message:
+                settings[key] = message[key]
 
         # --- STEP 1: Process and Enrich ---
         # Call mpv_session.start() with the list to trigger parallel enrichment.
@@ -285,16 +301,18 @@ class HandlerManager:
         """Helper to launch unmanaged MPV, moved from native_host.py."""
         logging.info("Launching a new, unmanaged MPV instance.")
         mpv_exe = self.file_io.get_mpv_executable()
+        settings = self.file_io.get_settings()
         
         try:
             full_command, has_terminal_flag = self.services.construct_mpv_command(
                 mpv_exe=mpv_exe,
-                urls=playlist,
+                url=playlist,
                 geometry=geometry,
                 custom_width=custom_width,
                 custom_height=custom_height,
                 custom_mpv_flags=custom_mpv_flags,
-                automatic_mpv_flags=automatic_mpv_flags
+                automatic_mpv_flags=automatic_mpv_flags,
+                settings=settings
             )
 
             popen_kwargs = self.services.get_mpv_popen_kwargs(has_terminal_flag)
@@ -399,12 +417,20 @@ class HandlerManager:
     def handle_get_all_folders(self, message):
         return {"success": True, "folders": self.file_io.get_all_folders_from_file()}
 
+    def handle_get_ui_preferences(self, message):
+        return {"success": True, "preferences": self.file_io.get_settings()}
+
+    def handle_set_ui_preferences(self, message):
+        preferences = message.get('preferences')
+        if preferences is None:
+            return {"success": False, "error": "No preferences provided."}
+        return self.file_io.set_settings(preferences)
+
     def handle_get_default_automatic_flags(self, message):
         return {"success": True, "flags": [
             {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
             {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
             {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True},
-            {"flag": "--hwdec=auto", "description": "Enable hardware video decoding.", "enabled": True},
             {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
             {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
             {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
@@ -527,6 +553,14 @@ class HandlerManager:
 
         # Get common settings for both mpv_session.start calls
         settings = self.file_io.get_settings()
+        
+        # Merge extension-provided networking and performance overrides
+        for key in ['disable_network_overrides', 'enable_cache', 'http_persistence', 
+                    'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs', 
+                    'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments', 
+                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder']:
+            if key in message:
+                settings[key] = message[key]
         
         try:
             # Call mpv_session.start() with the raw M3U content/URL/path.

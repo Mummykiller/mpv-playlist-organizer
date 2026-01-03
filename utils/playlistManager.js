@@ -51,6 +51,18 @@ function normalizeYouTubeUrlForCheck(ytUrl) {
 }
 
 /**
+ * Sanitizes a string to prevent command injection risks and M3U/JSON breakage.
+ * @param {string} str The string to sanitize.
+ * @returns {string} The sanitized string.
+ */
+function sanitizeString(str) {
+    if (typeof str !== 'string') return str;
+    // Minimal destruction for URLs/Titles. 
+    // Only strip characters that break M3U files or our internal JSON logging.
+    return str.replace(/["`\n\r\t]/g, '').trim();
+}
+
+/**
  * Encapsulates the logic of adding an item to a folder's playlist.
  * @param {string} folderId The ID of the folder to add to.
  * @param {string} url The URL to add.
@@ -60,17 +72,21 @@ function normalizeYouTubeUrlForCheck(ytUrl) {
  */
 async function addUrlToFolder(folderId, url, title, originalTab = null, sender = null) {
     try {
+        const sanitizedUrl = sanitizeString(url);
+        const sanitizedTitle = sanitizeString(title);
+
         const data = await storage.get();
         const playlist = data.folders[folderId]?.playlist || [];
         const duplicateBehavior = data.settings.ui_preferences.global.duplicate_url_behavior || 'ask';
-        const normalizedUrl = normalizeYouTubeUrlForCheck(url);
+        const normalizedUrl = normalizeYouTubeUrlForCheck(sanitizedUrl);
         const isDuplicate = playlist.some(item => normalizeYouTubeUrlForCheck(item.url) === normalizedUrl);
 
         if (isDuplicate) {
+            // ... (Duplicate check logic) ...
             if (duplicateBehavior === 'never') {
                 const logMessage = `[Background]: URL already in folder '${folderId}'. "Never Add" is on.`;
                 broadcastLog({ text: logMessage, type: 'info' });
-                return { success: true, message: logMessage }; // Stop here
+                return { success: true, message: logMessage };
             }
             if (duplicateBehavior === 'ask') {
                 const isFromPopup = sender?.url?.startsWith('chrome-extension://');
@@ -109,10 +125,9 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
         }
 
         // Generate a stable ID for the item immediately.
-        // This ensures the browser and native host agree on the ID without race conditions.
         const newItem = { 
-            url, 
-            title, 
+            url: sanitizedUrl, 
+            title: sanitizedTitle, 
             id: crypto.randomUUID() 
         };
 
@@ -129,10 +144,7 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
             fromContextMenu: true 
         });
 
-        // NOTE FOR FUTURE EDITORS: We trigger a live 'append' here to keep the player in sync.
-        // The backend reroutes this through 'append_batch' using a temporary M3U file.
-        // This is the ONLY way to reliably pass custom titles to MPV natively via IPC; 
-        // using a standard 'loadfile' command would only show the raw URL in the player.
+        // ... (Live append logic) ...
         const globalPrefs = data.settings.ui_preferences.global;
         if (globalPrefs.auto_append_on_add !== false) {
             callNativeHost({ 
@@ -142,7 +154,7 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
             }).catch(() => {});
         }
 
-        const logMessage = `[Background]: Added "${title}" to folder '${folderId}'.`;
+        const logMessage = `[Background]: Added "${sanitizedTitle}" to folder '${folderId}'.`;
 
         broadcastLog({ text: logMessage, type: 'info' });
         return { success: true, message: logMessage };

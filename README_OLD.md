@@ -3,7 +3,7 @@
 <div align="center">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-2.1.0-blue)](https://github.com/Mummykiller/mpv-playlist-organizer/releases)
+[![Version](https://img.shields.io/badge/version-2.6.0-blue)](https://github.com/Mummykiller/mpv-playlist-organizer/releases)
 [![MPV](https://img.shields.io/badge/MPV-Player-purple)](https://mpv.io/)
 
 **A powerful browser extension for capturing video streams and managing playlists with MPV**

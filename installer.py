@@ -25,17 +25,101 @@ import queue
 import services
 import file_io
 
-# --- GUI Imports ---
+# --- GUI Imports with Fallback ---
+GUI_AVAILABLE = True
 try:
     import tkinter as tk
     from tkinter import ttk, scrolledtext, messagebox, filedialog
 except ImportError:
-    print("Tkinter is not installed. Please install it to run the GUI installer.", file=sys.stderr)
-    sys.exit(1)
+    GUI_AVAILABLE = False
 
 # --- Platform-specific imports ---
 if platform.system() == "Windows":
     import winreg
+
+# --- Centralized Font Configuration ---
+MODERN_FONT = ("Segoe UI", "Roboto", "Ubuntu", "Helvetica Neue", "Arial")
+MONO_FONT = ("Consolas", "Monaco", "DejaVu Sans Mono", "monospace")
+
+# --- Command Line Interface Installer (Fallback for Linux) ---
+class CommandLineApp:
+    def __init__(self):
+        self.logic = self._get_logic_strategy()
+
+    def _get_logic_strategy(self):
+        system = platform.system()
+        if system == "Windows":
+            return WindowsLogic(print)
+        elif system == "Linux":
+            return LinuxLogic(print)
+        elif system == "Darwin":
+            return MacOSLogic(print)
+        return UnixLogic(print)
+
+    def run(self):
+        print("\n" + "="*50)
+        print("   MPV PLAYLIST ORGANIZER - TERMINAL INSTALLER")
+        print("="*50)
+        print("\nTkinter (GUI) not found. Falling back to Guided CLI mode.\n")
+
+        # 1. Get Extension ID
+        current_id = ""
+        # Try to find existing manifest
+        manifest_filename = f"{HOST_NAME}-chrome.json" if platform.system() == "Windows" else f"{HOST_NAME}.json"
+        manifest_path = os.path.join(file_io.DATA_DIR, manifest_filename)
+        if os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, 'r') as f:
+                    data = json.load(f)
+                    current_id = data.get("allowed_origins", [""])[0].replace("chrome-extension://", "").replace("/", "")
+            except: pass
+
+        print(f"Step 1: Enter your Extension ID")
+        if current_id:
+            print(f"(Current: {current_id})")
+
+        ext_id = input(f"ID: ").strip() or current_id
+        if not ext_id:
+            print("Error: Extension ID is required.")
+            return
+
+        # 2. Advanced URL Analysis
+        print("\nStep 2: Enable Advanced URL Analysis? (y/n)")
+        print("(Uses yt-dlp for difficult streams like AnimePahe)")
+        use_bypass = input("Choice [n]: ").lower().startswith('y')
+
+        # 3. Browser Selection
+        selected_browser = "brave"
+        if use_bypass:
+            print("\nStep 3: Which browser do you use? (brave/chrome/edge/vivaldi/opera)")
+            selected_browser = input("Browser [brave]: ").strip().lower() or "brave"
+
+        # 4. YouTube Integration
+        use_youtube = False
+        if use_bypass:
+            print("\nStep 4: Enable YouTube Account Integration? (y/n)")
+            use_youtube = input("Choice [n]: ").lower().startswith('y')
+
+        print("\n" + "-"*30)
+        print("Starting Installation...")
+        try:
+            self.logic.install(ext_id, use_bypass, selected_browser, use_youtube)
+            print("\n✅ SUCCESS: Native host installed.")
+            print("[IMPORTANT] Restart your browser for changes to take effect.")
+
+            print("\nWould you like to install the 'mpv-cli' wrapper? (y/n)")
+            if input("Choice [y]: ").lower() != 'n':
+                self.logic.install_cli()
+                print("✅ mpv-cli installed.")
+
+            if platform.system() != "Windows":
+                print(f"\nManual Step: To use 'mpv-cli', add this to your PATH:")
+                print(f'export PATH=\"$PATH:{INSTALL_DIR}\"')
+
+        except Exception as e:
+            print(f"\n❌ ERROR during installation: {e}")
+
+# --- GUI Application Class ---
 
 # --- Configuration (merged from config.py) ---
 HOST_NAME = "com.mpv_playlist_organizer.handler"
@@ -50,7 +134,7 @@ CONFIG_FILE = file_io.CONFIG_FILE
 def _generate_user_agent(browser_name, os_name):
     """Generates a plausible User-Agent string based on browser and OS."""
     base_ua = "Mozilla/5.0 ({os_part}; K) AppleWebKit/537.36 (KHTML, like Gecko)"
-    
+
     os_map = {
         "Linux": "X11; Linux x86_64",
         "Windows": "Windows NT 10.0; Win64; x64",
@@ -112,7 +196,7 @@ class InstallerLogic:
             warnings.append(f"'{status['mpv']['error']}'\nPlayback will fail unless you select the executable manually.")
         else:
             self.log("mpv found in PATH.")
-            
+
         return warnings
 
     def get_browser_user_data_dir(self, browser_name):
@@ -144,7 +228,7 @@ class InstallerLogic:
                 try:
                     with open(pref_path, 'r', encoding='utf-8', errors='ignore') as f:
                         data = json.load(f)
-                    
+
                     settings = data.get('extensions', {}).get('settings', {})
                     for ext_id, details in settings.items():
                         path = details.get('path')
@@ -162,7 +246,7 @@ class InstallerLogic:
                                 return ext_id
                 except Exception as e:
                     continue
-        
+
         self.log(f"❌ Could not find an unpacked extension pointing to {INSTALL_DIR}")
         return None
 
@@ -207,7 +291,7 @@ class InstallerLogic:
                     startupinfo.wShowWindow = subprocess.SW_HIDE
 
                 proc = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, timeout=20)
-                
+
                 if proc.returncode == 0:
                     results.append(f"✅ Cookie access successful for {browser}")
                 else:
@@ -240,12 +324,12 @@ class WindowsLogic(InstallerLogic):
     def get_browser_configs(self):
         manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
         return {
-            "Google Chrome": ("SOFTWARE\\Google\\Chrome\\NativeMessagingHosts", manifest_path),
-            "Brave": ("SOFTWARE\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts", manifest_path),
-            "Microsoft Edge": ("SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts", manifest_path),
-            "Chromium": ("SOFTWARE\\Chromium\\NativeMessagingHosts", manifest_path),
-            "Vivaldi": ("SOFTWARE\\Vivaldi\\NativeMessagingHosts", manifest_path),
-            "Opera": ("SOFTWARE\\Opera Software\\Opera Stable\\NativeMessagingHosts", manifest_path),
+            "Google Chrome": (r"SOFTWARE\Google\Chrome\NativeMessagingHosts", manifest_path),
+            "Brave": (r"SOFTWARE\BraveSoftware\Brave-Browser\NativeMessagingHosts", manifest_path),
+            "Microsoft Edge": (r"SOFTWARE\Microsoft\Edge\NativeMessagingHosts", manifest_path),
+            "Chromium": (r"SOFTWARE\Chromium\NativeMessagingHosts", manifest_path),
+            "Vivaldi": (r"SOFTWARE\Vivaldi\NativeMessagingHosts", manifest_path),
+            "Opera": (r"SOFTWARE\Opera Software\Opera Stable\NativeMessagingHosts", manifest_path),
         }
 
     def get_browser_user_data_dir(self, browser_name):
@@ -262,7 +346,7 @@ class WindowsLogic(InstallerLogic):
 
     def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
         self.log("Detected Windows OS.")
-        
+
         # 1. Find mpv.exe
         self.log("Searching for mpv.exe...")
         mpv_path = shutil.which('mpv.exe')
@@ -282,13 +366,20 @@ class WindowsLogic(InstallerLogic):
 
         if not mpv_path:
             raise FileNotFoundError("mpv.exe not found in PATH or config. Please add it to PATH or edit data/config.json.")
-        
+
         self.log(f"Found mpv.exe at: {mpv_path}")
 
         # 2. Save config (mpv path and URL analysis settings)
         os.makedirs(file_io.DATA_DIR, exist_ok=True)
+
+        gpu_vendor = services.get_gpu_vendor()
+        # On Windows, NVIDIA users should use nvdec, others d3d11va
+        best_decoder = "nvdec" if gpu_vendor == "nvidia" else "d3d11va"
+        self.log(f"Detected GPU vendor: {gpu_vendor.upper()}. Automatically picking decoder: {best_decoder}")
+
         config_to_save = {
             "mpv_path": mpv_path,
+            "mpv_decoder": best_decoder,
             "enable_url_analysis": create_bypass, # Renamed from create_bypass
             "browser_for_url_analysis": browser_for_bypass,
             "enable_youtube_analysis": enable_youtube_bypass,
@@ -320,9 +411,24 @@ class WindowsLogic(InstallerLogic):
             json.dump(chrome_manifest, f, indent=4)
         self.log(f"Created manifest: {os.path.relpath(manifest_path, INSTALL_DIR)}")
 
-        # 6. Register with browsers
+        # 6. Register with the selected browser
         browsers = self.get_browser_configs()
+        # Map the internal name to the config key
+        browser_mapping = {
+            "chrome": "Google Chrome",
+            "brave": "Brave",
+            "edge": "Microsoft Edge",
+            "chromium": "Chromium",
+            "vivaldi": "Vivaldi",
+            "opera": "Opera"
+        }
+        
+        target_key = browser_mapping.get(browser_for_bypass)
+        
         for browser, (reg_path, manifest_to_register) in browsers.items():
+            if target_key and browser != target_key:
+                continue
+                
             try:
                 key_path = os.path.join(reg_path, HOST_NAME)
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
@@ -391,7 +497,7 @@ class UnixLogic(InstallerLogic):
 
     def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
         self.log(f"Detected {platform.system()} OS.")
-        
+
         # 1. Check mpv
         mpv_path = shutil.which('mpv')
         if not mpv_path:
@@ -402,8 +508,21 @@ class UnixLogic(InstallerLogic):
 
         # 2. Save config (mpv path and URL analysis settings)
         os.makedirs(file_io.DATA_DIR, exist_ok=True)
+
+        # Detect best decoder for Unix platforms
+        gpu_vendor = services.get_gpu_vendor()
+        if platform.system() == "Darwin":
+            unix_decoder = "videotoolbox"
+        elif gpu_vendor == "nvidia":
+            unix_decoder = "nvdec"
+        else:
+            unix_decoder = "vaapi"
+
+        self.log(f"Detected GPU vendor: {gpu_vendor.upper()}. Automatically picking decoder: {unix_decoder}")
+
         config_to_save = {
             "mpv_path": mpv_path,
+            "mpv_decoder": unix_decoder,
             "enable_url_analysis": create_bypass, # Renamed from create_bypass
             "browser_for_url_analysis": browser_for_bypass,
             "enable_youtube_analysis": enable_youtube_bypass,
@@ -437,9 +556,24 @@ class UnixLogic(InstallerLogic):
             json.dump(chrome_manifest, f, indent=4)
         self.log(f"Created manifest: {os.path.relpath(manifest_path, INSTALL_DIR)}")
 
-        # 7. Symlink Manifest
+        # 7. Symlink Manifest for the selected browser
         browser_paths = self.get_browser_configs()
+        # Map the internal name to the config key
+        browser_mapping = {
+            "chrome": "Google Chrome",
+            "brave": "Brave",
+            "edge": "Microsoft Edge",
+            "chromium": "Chromium",
+            "vivaldi": "Vivaldi",
+            "opera": "Opera"
+        }
+        
+        target_key = browser_mapping.get(browser_for_bypass)
+
         for browser, path in browser_paths.items():
+            if target_key and browser != target_key:
+                continue
+
             if os.path.isdir(os.path.dirname(path)):
                 try:
                     os.makedirs(path, exist_ok=True)
@@ -554,7 +688,7 @@ class Tooltip:
         # Don't show tooltip if the widget is disabled
         if str(self.widget['state']) == 'disabled':
             return
-            
+
         x, y, _, _ = self.widget.bbox("insert")
         x += self.widget.winfo_rootx() + 25
         y += self.widget.winfo_rooty() + 25
@@ -579,14 +713,14 @@ class HostManagerApp:
         self.root = root
         self.root.title("MPV Playlist Organizer - Host Manager")
         self.log_queue = queue.Queue()
-        
+
         self._setup_ui()
-        
+
         self.root.resizable(False, False)
 
         # --- Center the window on the screen ---
-        window_width = 600
-        window_height = 500
+        window_width = 640
+        window_height = 600
         # Get screen dimensions
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
@@ -597,10 +731,10 @@ class HostManagerApp:
 
         # --- Initialize Logic ---
         self.logic = self._get_logic_strategy()
-        
+
         # --- Start Log Poller ---
         self.root.after(100, self._process_log_queue)
-        
+
         # --- Initial Dependency Check ---
         self.root.after(200, self._check_dependencies_async)
 
@@ -632,19 +766,20 @@ class HostManagerApp:
 
         style = ttk.Style()
         style.theme_use('clam')
-        
-        style.configure(".", background=bg_color, font=("Segoe UI", 10))
+
+        # Increased base font size and weight
+        style.configure(".", background=bg_color, font=("Segoe UI", 11, "normal"))
         style.configure("TFrame", background=bg_color)
         style.configure("TLabel", background=bg_color)
         style.configure("TCheckbutton", background=bg_color)
-        
-        style.configure("TButton", padding=8, relief="flat", background="#5865f2", foreground="white", borderwidth=0)
+
+        style.configure("TButton", padding=8, relief="flat", background="#5865f2", foreground="white", borderwidth=0, font=("Segoe UI", 11, "bold"))
         style.map("TButton", background=[('active', '#4f5bda'), ('disabled', '#cccccc')])
-        
-        style.configure("Uninstall.TButton", background="#ed4245")
+
+        style.configure("Uninstall.TButton", background="#ed4245", font=("Segoe UI", 11, "bold"))
         style.map("Uninstall.TButton", background=[('active', '#da3739')])
-        
-        style.configure("Header.TLabel", font=("Segoe UI", 16, "bold"), foreground="#2c2f33")
+
+        style.configure("Header.TLabel", font=("Segoe UI", 18, "bold"), foreground="#2c2f33")
 
         # --- Main Frame ---
         main_frame = ttk.Frame(self.root, padding="25")
@@ -659,14 +794,14 @@ class HostManagerApp:
         settings_frame.columnconfigure(1, weight=1) # Make the input column expandable
 
         # --- Row 0: Extension ID ---
-        ttk.Label(settings_frame, text="Extension ID:", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=4)
-        
+        ttk.Label(settings_frame, text="Extension ID:", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky=tk.W, pady=4)
+
         id_input_frame = ttk.Frame(settings_frame)
         id_input_frame.grid(row=0, column=1, sticky="ew", padx=(10, 0))
         id_input_frame.columnconfigure(0, weight=1)
 
         self.extension_id_var = tk.StringVar()
-        self.extension_id_entry = ttk.Entry(id_input_frame, textvariable=self.extension_id_var, font=("Segoe UI", 10))
+        self.extension_id_entry = ttk.Entry(id_input_frame, textvariable=self.extension_id_var, font=("Segoe UI", 11))
         self.extension_id_entry.grid(row=0, column=0, sticky="ew")
 
         self.detect_id_btn = ttk.Button(id_input_frame, text="Detect", command=self.run_detect_id, width=7)
@@ -674,16 +809,16 @@ class HostManagerApp:
         Tooltip(self.detect_id_btn, "Automatically find the Extension ID for the selected browser")
 
         # --- Row 1: Enable URL Analysis Option ---
-        bypass_label = ttk.Label(settings_frame, text="Advanced URL Analysis:", font=("Segoe UI", 10, "bold"))
+        bypass_label = ttk.Label(settings_frame, text="Advanced URL Analysis:", font=("Segoe UI", 11, "bold"))
         bypass_label.grid(row=1, column=0, sticky=tk.W, pady=4)
-        
+
         self.create_bypass_var = tk.BooleanVar(value=False) # Default to False, will be loaded from config
         self.bypass_checkbutton = ttk.Checkbutton(
             settings_frame,
             variable=self.create_bypass_var
         )
         self.bypass_checkbutton.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
-        
+
         tooltip_text = (
             "🔓 ENABLE ADVANCED URL ANALYSIS\n\n"
             "What this does:\n"
@@ -697,9 +832,9 @@ class HostManagerApp:
         Tooltip(self.bypass_checkbutton, tooltip_text)
 
         # --- Row 2: Enable YouTube Analysis Option ---
-        yt_bypass_label = ttk.Label(settings_frame, text="YouTube Account Integration:", font=("Segoe UI", 10, "bold"))
+        yt_bypass_label = ttk.Label(settings_frame, text="YouTube Account Integration:", font=("Segoe UI", 11, "bold"))
         yt_bypass_label.grid(row=2, column=0, sticky=tk.W, pady=4)
-        
+
         self.enable_youtube_bypass_var = tk.BooleanVar(value=False) # Default to False, will be loaded from config
         self.yt_bypass_checkbutton = ttk.Checkbutton(
             settings_frame,
@@ -720,7 +855,7 @@ class HostManagerApp:
         Tooltip(self.yt_bypass_checkbutton, yt_tooltip_text)
 
         # --- Row 3: Browser for URL Analysis ---
-        browser_label = ttk.Label(settings_frame, text="Browser for Analysis:", font=("Segoe UI", 10, "bold"))
+        browser_label = ttk.Label(settings_frame, text="Browser for Analysis:", font=("Segoe UI", 11, "bold"))
         browser_label.grid(row=3, column=0, sticky=tk.W, pady=4)
 
         browser_input_frame = ttk.Frame(settings_frame)
@@ -728,7 +863,7 @@ class HostManagerApp:
         browser_input_frame.columnconfigure(0, weight=1)
 
         self.browser_var = tk.StringVar()
-        self.browser_combobox = ttk.Combobox(browser_input_frame, textvariable=self.browser_var, state="readonly", font=("Segoe UI", 10))
+        self.browser_combobox = ttk.Combobox(browser_input_frame, textvariable=self.browser_var, state="readonly", font=("Segoe UI", 11))
         self.browser_combobox['values'] = ('brave', 'chrome', 'edge', 'vivaldi', 'opera')
         self.browser_combobox.grid(row=0, column=0, sticky="ew")
 
@@ -771,7 +906,7 @@ class HostManagerApp:
         self.create_bypass_var.set(current_config.get("enable_url_analysis", False))
         self.enable_youtube_bypass_var.set(current_config.get("enable_youtube_analysis", False))
         self.browser_var.set(current_config.get("browser_for_url_analysis", "brave"))
-        
+
         # Call toggle function once to set initial state of widgets based on loaded config
         toggle_url_analysis_widgets()
 
@@ -795,13 +930,10 @@ class HostManagerApp:
         self.path_button = ttk.Button(path_button_frame, text="Add Folder to User PATH", command=self.run_add_to_path)
         self.path_button.pack(fill=tk.X, expand=True)
         # --- Log Area ---
-        ttk.Label(main_frame, text="Log Output:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, pady=(10, 5))
-        self.log_area = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, height=10, font=("Consolas", 9), relief="flat", borderwidth=1)
+        ttk.Label(main_frame, text="Log Output:", font=(MODERN_FONT, 11, "bold")).pack(anchor=tk.W, pady=(10, 5))
+        self.log_area = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, height=14, font=(MONO_FONT, 10), relief="flat", borderwidth=1)
         self.log_area.pack(fill=tk.BOTH, expand=True)
         self.log_area.configure(state='disabled')
-        
-        # Load prefs
-        self._load_installer_prefs()
 
     def _process_log_queue(self):
         try:
@@ -823,7 +955,7 @@ class HostManagerApp:
         if not extension_id:
             messagebox.showerror("Error", "Extension ID cannot be empty.")
             return
-        
+
         # Basic validation for Chrome extension ID format (32 characters, a-p)
         if not re.match(r"^[a-p]{32}$", extension_id):
             if not messagebox.askyesno("Warning", "The Extension ID doesn't look like a standard Chrome extension ID (32 characters, a-p).\n\nAre you sure you want to proceed?"):
@@ -833,7 +965,7 @@ class HostManagerApp:
         self.uninstall_button.config(state=tk.DISABLED)
         self.cli_button.config(state=tk.DISABLED)
         self.browser_combobox.config(state=tk.DISABLED)
-        
+
         # Run in a separate thread to keep the GUI responsive
         threading.Thread(target=self._install_thread, args=(extension_id,)).start()
 
@@ -873,94 +1005,184 @@ class HostManagerApp:
         threading.Thread(target=self._check_dependencies_thread, daemon=True).start()
 
     def _check_dependencies_thread(self):
+        status = services.check_mpv_and_ytdlp_status(file_io.get_mpv_executable, lambda msg: None)
+        
+        # Proactive alert if MPV is missing
+        if not status['mpv']['found']:
+            self.root.after(0, self._prompt_for_mpv)
+
         warnings = self.logic.check_dependencies()
         for w in warnings:
             self.log(f"WARNING: {w.splitlines()[0]}")
             self.root.after(0, lambda msg=w: messagebox.showwarning("Dependency Missing", msg))
 
+    def _prompt_for_mpv(self):
+        """Displays a professional custom dialog when MPV is missing with a copyable link."""
+        top = tk.Toplevel(self.root)
+        top.title("MPV Not Found")
+        top.geometry("650x420")
+        top.resizable(False, False)
+        top.transient(self.root)
+        top.grab_set()
+
+        padding = 30
+        frame = ttk.Frame(top, padding=padding)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="⚠️ MPV Media Player Missing", font=(MODERN_FONT, 14, "bold"), foreground="#ed4245").pack(anchor=tk.W, pady=(0, 10))
+        
+        msg = (
+            "The extension requires the MPV player to function. We couldn't find it "
+            "in your system's PATH or configuration."
+        )
+        tk.Label(frame, text=msg, wraplength=590, justify=tk.LEFT, font=(MODERN_FONT, 11)).pack(anchor=tk.W, pady=(0, 20))
+
+        # --- Link Section ---
+        ttk.Label(frame, text="To install MPV, visit the official page:", font=(MODERN_FONT, 11, "bold")).pack(anchor=tk.W, pady=(0, 5))
+        
+        link_url = "https://mpv.io/installation/"
+        
+        link_frame = ttk.Frame(frame)
+        link_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        link_text = tk.Text(link_frame, height=1, font=(MONO_FONT, 11), bg="#2c2f33", fg="#ffffff", 
+                           padx=10, pady=10, relief="flat")
+        link_text.insert(tk.END, link_url)
+        link_text.config(state=tk.DISABLED)
+        link_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        def copy_link():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(link_url)
+            copy_link_btn.config(text="✅ COPIED")
+            self.root.after(2000, lambda: copy_link_btn.config(text="Copy Link"))
+
+        copy_link_btn = ttk.Button(link_frame, text="Copy Link", command=copy_link)
+        copy_link_btn.pack(side=tk.RIGHT, padx=(10, 0))
+
+        # --- Manual Selection Section ---
+        ttk.Label(frame, text="Or if it's already installed elsewhere:", font=(MODERN_FONT, 11, "bold")).pack(anchor=tk.W, pady=(0, 5))
+        
+        def browse_path():
+            ext = "*.exe" if platform.system() == "Windows" else "*"
+            path = filedialog.askopenfilename(
+                title="Select mpv executable", 
+                filetypes=[("Executable", ext), ("All Files", "*.*")]
+            )
+            if path:
+                file_io.set_settings({"mpv_path": path})
+                self.log(f"Custom MPV path saved: {path}")
+                top.destroy()
+                self._check_dependencies_async()
+
+        browse_btn = ttk.Button(frame, text="📂 Select mpv executable manually...", command=browse_path)
+        browse_btn.pack(fill=tk.X, pady=(0, 20))
+
+        ttk.Button(frame, text="Ignore for now", command=top.destroy).pack(side=tk.BOTTOM, anchor=tk.E)
+
     def run_diagnostics(self):
         """Runs a suite of diagnostic tests including dependency checks and cookie access."""
         browser = self.browser_var.get()
-        
+
         self.install_button.config(state=tk.DISABLED) # Disable install while testing
         self.log(f"Starting diagnostics for '{browser}'...")
-        
+
         def _test():
             report_text, has_critical_error = self.logic.run_diagnostics(browser)
             self.log("Diagnostics Results:\n" + report_text)
-            
+
             title = "Diagnostics Failed" if has_critical_error else "Diagnostics Passed"
-            
+
             self.root.after(0, lambda: messagebox.showinfo(title, report_text) if not has_critical_error else messagebox.showerror(title, report_text))
             self.root.after(0, lambda: self.install_button.config(state=tk.NORMAL))
-        
+
         threading.Thread(target=_test, daemon=True).start()
 
     def run_detect_id(self):
         """Attempts to automatically detect the Extension ID for the selected browser."""
         browser = self.browser_var.get()
         self.log(f"Attempting to detect Extension ID for {browser}...")
-        
+
         self.detect_id_btn.config(state=tk.DISABLED)
-        
+
         def _detect():
             ext_id = self.logic.find_extension_id(browser)
             if ext_id:
                 self.root.after(0, lambda: self.extension_id_var.set(ext_id))
                 self.log(f"Auto-detection successful: {ext_id}")
             else:
-                self.root.after(0, lambda: messagebox.showwarning("Not Found", 
+                self.root.after(0, lambda: messagebox.showwarning("Not Found",
                     f"Could not find the extension ID in {browser}'s profiles.\n\n"
                     "Make sure you have loaded the unpacked extension in the browser first!"))
-            
+
             self.root.after(0, lambda: self.detect_id_btn.config(state=tk.NORMAL))
 
         threading.Thread(target=_detect, daemon=True).start()
 
-    def _load_installer_prefs(self):
-        """Loads installer preferences like the last selected browser."""
-        prefs_file = os.path.join(DATA_DIR, "installer_prefs.json")
-        default_browser = 'brave'
-        if os.path.exists(prefs_file):
-            try:
-                with open(prefs_file, 'r', encoding='utf-8') as f:
-                    prefs = json.load(f)
-                last_browser = prefs.get('last_selected_browser')
-                if last_browser in self.browser_combobox['values']:
-                    self.browser_var.set(last_browser)
-                    return # Success
-            except (IOError, json.JSONDecodeError):
-                # Fail silently on load error, will use default.
-                pass
-        
-        self.browser_var.set(default_browser)
+    def _show_linux_path_instructions(self):
+        """Displays a custom dialog with copyable PATH instructions for Linux/macOS users."""
+        top = tk.Toplevel(self.root)
+        top.title("Manual PATH Configuration")
+        top.geometry("700x550")
+        top.resizable(False, False)
+        top.transient(self.root)
+        top.grab_set()
 
-    def _save_installer_prefs(self):
-        """Saves installer preferences to a file."""
-        prefs_file = os.path.join(DATA_DIR, "installer_prefs.json")
-        selected_browser = self.browser_var.get()
-        prefs = {'last_selected_browser': selected_browser}
-        try:
-            os.makedirs(DATA_DIR, exist_ok=True)
-            with open(prefs_file, 'w', encoding='utf-8') as f:
-                json.dump(prefs, f, indent=4)
-            self.log(f"Saved selected browser '{selected_browser}' for next time.")
-        except Exception as e:
-            self.log(f"ERROR: Could not save installer preferences: {e}")
+        padding = 30
+        frame = ttk.Frame(top, padding=padding)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="🚀 Almost there!", font=(MODERN_FONT, 16, "bold"), foreground="#5865f2").pack(anchor=tk.W, pady=(0, 5))
+        ttk.Label(frame, text="To use 'mpv-cli' from any terminal, follow these steps:", font=(MODERN_FONT, 11, "bold")).pack(anchor=tk.W, pady=(0, 20))
+
+        # --- Step 1 ---
+        step1_frame = ttk.Frame(frame)
+        step1_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(step1_frame, text="1. Copy this command:", font=(MODERN_FONT, 11, "bold")).pack(anchor=tk.W)
+
+        path_command = f'export PATH="$PATH:{INSTALL_DIR}"'
+
+        # Code-block style box
+        cmd_text = tk.Text(frame, height=2, font=(MONO_FONT, 12), bg="#2c2f33", fg="#ffffff",
+                          padx=15, pady=15, relief="flat", insertbackground="white")
+        cmd_text.insert(tk.END, path_command)
+        cmd_text.config(state=tk.DISABLED)
+        cmd_text.pack(fill=tk.X, pady=(5, 10))
+
+        def copy_path():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(path_command)
+            copy_btn.config(text="✅ COPIED TO CLIPBOARD")
+            self.root.after(2000, lambda: copy_btn.config(text="Copy Command"))
+
+        copy_btn = ttk.Button(frame, text="Copy Command", command=copy_path)
+        copy_btn.pack(pady=(0, 25))
+
+        # --- Step 2 ---
+        ttk.Label(frame, text="2. Paste it at the bottom of your config file:", font=(MODERN_FONT, 11, "bold")).pack(anchor=tk.W)
+
+        config_info = (
+            "• If you use Zsh (macOS Default):  ~/.zshrc\n"
+            "• If you use Bash (Linux Default): ~/.bashrc"
+        )
+        tk.Label(frame, text=config_info, justify=tk.LEFT, font=(MODERN_FONT, 11), padx=10).pack(anchor=tk.W, pady=(5, 20))
+
+        # --- Step 3 ---
+        ttk.Label(frame, text="3. Reload your profile or restart terminal:", font=(MODERN_FONT, 11, "bold")).pack(anchor=tk.W)
+        ttk.Label(frame, text="Run:  source ~/.bashrc  (or ~/.zshrc)", font=(MONO_FONT, 11), foreground="#555").pack(anchor=tk.W, padx=10, pady=(2, 20))
+
+        ttk.Button(frame, text="Done", command=top.destroy).pack(side=tk.BOTTOM, pady=(10, 0))
 
     def _install_thread(self, extension_id):
         self.log("--- Starting Installation ---")
         try:
-            # Save preferences before starting the main install process
-            self._save_installer_prefs()
-
             # Get URL analysis settings. Renamed 'create_bypass' to 'enable_url_analysis' for clarity.
             enable_url_analysis = self.create_bypass_var.get()
             selected_browser = self.browser_var.get()
             enable_youtube_analysis = self.enable_youtube_bypass_var.get()
 
             self.logic.install(extension_id, enable_url_analysis, selected_browser, enable_youtube_analysis)
-            
+
             self.log("\n--- Installation Finished! ---")
             self.log("[IMPORTANT] You must now RESTART your browser completely for the changes to take effect.")
         except Exception as e:
@@ -1014,8 +1236,7 @@ class HostManagerApp:
                 self.log("Successfully added directory to user PATH.")
                 self.root.after(0, lambda: messagebox.showinfo("Success", "Directory added to user PATH. Please restart any open terminals."))
             elif result == "Manual":
-                instruction_message = f"Please add the following line to your shell's startup file:\n\nexport PATH=\"$PATH:{INSTALL_DIR}\""
-                self.root.after(0, lambda: messagebox.showinfo("Add to PATH Manually", instruction_message))
+                self.root.after(0, self._show_linux_path_instructions)
             else:
                 self.log(result)
 
@@ -1029,9 +1250,13 @@ class HostManagerApp:
             self.browser_combobox.config(state="readonly")
 
 def main():
-    root = tk.Tk()
-    app = HostManagerApp(root)
-    root.mainloop()
+    if GUI_AVAILABLE:
+        root = tk.Tk()
+        app = HostManagerApp(root)
+        root.mainloop()
+    else:
+        app = CommandLineApp()
+        app.run()
 
 if __name__ == "__main__":
     main()

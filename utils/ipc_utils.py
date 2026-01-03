@@ -14,6 +14,8 @@ import collections
 import threading # Added this import
 import select
 
+ipc_logger = logging.getLogger("ipc_events")
+
 def is_pid_running(pid):
     """Checks if a process ID is currently running on the system using native APIs."""
     if pid <= 0: return False
@@ -137,12 +139,12 @@ class IPCSocketManager:
                             if args and isinstance(args[0], str) and args[0].startswith("mpv_thumbnail_script"):
                                 continue
 
-                        logging.info(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
+                        ipc_logger.info(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
                         with self._buffer_lock:
                             self._event_buffer.append(event)
                     else:
                         # EOF detected, connection closed by MPV or remote end
-                        logging.info("IPC event reader detected EOF. Signaling connection closure.")
+                        ipc_logger.info("IPC event reader detected EOF. Signaling connection closure.")
                         self._event_reader_running = False # Signal thread to stop
                         # No self.close() here; let main thread detect and handle connection loss
             except (ConnectionResetError, BrokenPipeError, OSError) as e:
@@ -175,7 +177,7 @@ class IPCSocketManager:
         else:
             req_id = command_dict["request_id"]
 
-        logging.info(f"IPC SEND: {json.dumps(command_dict)}")
+        ipc_logger.info(f"IPC SEND: {json.dumps(command_dict)}")
         command_str = json.dumps(command_dict) + '\n'
 
         try:
@@ -197,11 +199,11 @@ class IPCSocketManager:
                                 self.close()
                                 return None
                             response = json.loads(response_line.decode('utf-8').strip())
-                            logging.info(f"IPC RECV: {json.dumps(response)}")
+                            ipc_logger.info(f"IPC RECV: {json.dumps(response)}")
                             if "event" not in response:
                                 self._sock.settimeout(original_timeout) # Restore original timeout
                                 return response
-                            logging.debug(f"Received event '{response.get('event')}' while waiting for command response. Buffering.")
+                            ipc_logger.debug(f"Received event '{response.get('event')}' while waiting for command response. Buffering.")
                             with self._buffer_lock:
                                 self._event_buffer.append(response) # Still buffer events received
                         logging.warning(f"Timed out waiting for command response on Windows after {timeout} seconds.")
@@ -236,7 +238,7 @@ class IPCSocketManager:
                             if item.get("request_id") == req_id or ("event" not in item and "request_id" not in item):
                                 del self._event_buffer[i] # Remove it from buffer
                                 response = item
-                                logging.info(f"IPC RECV (from buffer): {json.dumps(response)}")
+                                ipc_logger.info(f"IPC RECV (from buffer): {json.dumps(response)}")
                                 return response
                     
                     time.sleep(0.01) # Small sleep to avoid busy-waiting for the buffer
@@ -267,7 +269,7 @@ class IPCSocketManager:
             with self._buffer_lock:
                 if self._event_buffer:
                     event = self._event_buffer.popleft()
-                    logging.info(f"IPC EVENT (from buffer): {json.dumps(event)}")
+                    ipc_logger.info(f"IPC EVENT (from buffer): {json.dumps(event)}")
                     return event
             
             if timeout is not None and (time.time() - start_time) > timeout:

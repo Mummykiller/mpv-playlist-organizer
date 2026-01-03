@@ -99,6 +99,17 @@ try:
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
 
+    # --- Dedicated IPC Event Logger ---
+    # This separates high-frequency tracking noise (like time-pos) into its own file.
+    IPC_LOG_FILE = os.path.join(DATA_DIR, "ipc_events.log")
+    ipc_logger = logging.getLogger("ipc_events")
+    ipc_logger.setLevel(logging.DEBUG)
+    ipc_logger.propagate = False # Prevent noise from reaching native_host.log
+    
+    ipc_handler = RotatingFileHandler(IPC_LOG_FILE, maxBytes=MAX_LOG_BYTES, backupCount=BACKUP_COUNT, encoding='utf-8')
+    ipc_handler.setFormatter(formatter)
+    ipc_logger.addHandler(ipc_handler)
+
     # Prevent logs from propagating to the console (important for clean CLI)
     root_logger.propagate = False
 
@@ -260,6 +271,8 @@ try:
             'run_ytdlp_update': handler_manager.handle_run_ytdlp_update,
             'check_dependencies': handler_manager.handle_check_dependencies,
             'get_all_folders': handler_manager.handle_get_all_folders,
+            'get_ui_preferences': handler_manager.handle_get_ui_preferences,
+            'set_ui_preferences': handler_manager.handle_set_ui_preferences,
             'get_default_automatic_flags': handler_manager.handle_get_default_automatic_flags
         }
 

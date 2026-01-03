@@ -24,87 +24,76 @@ export function init(dependencies) {
     // Register webRequest listener
     chrome.webRequest.onBeforeRequest.addListener(
         (details) => {
-            // --- NEW: Inactivity timeout logic for scanner windows ---
+            // ... (Inactivity timeout logic) ...
             const promiseInfo = m3u8DetectionPromises[details.tabId];
             if (promiseInfo) {
-                const INACTIVITY_TIMEOUT_MS = 15000; // 15 seconds of inactivity
-                clearTimeout(promiseInfo.timeoutId); // Clear the previous timeout
-
-                // Set a new inactivity timeout
+                const INACTIVITY_TIMEOUT_MS = 15000;
+                clearTimeout(promiseInfo.timeoutId);
                 promiseInfo.timeoutId = setTimeout(() => {
-                    // Check if the promise is still pending before rejecting
                     if (m3u8DetectionPromises[details.tabId]) {
-                        // Use the reject function from the promise which will also clean up the map entry
                         m3u8DetectionPromises[details.tabId].reject(new Error(`M3U8 detection timed out after ${INACTIVITY_TIMEOUT_MS / 1000} seconds of network inactivity.`));
                     }
                 }, INACTIVITY_TIMEOUT_MS);
             }
-            // --- END of new logic ---
 
-            // Optimization: Ignore requests originating from our own extension to prevent loops.
-            if (details.initiator && details.initiator.startsWith(`chrome-extension://${chrome.runtime.id}`)) {
+            // Extremely lenient M3U8 detection: look for .m3u8 anywhere in the URL.
+            if (!details.url.toLowerCase().includes('.m3u8')) return;
+
+            const detectedUrl = details.url;
+            _broadcastLog({ text: `[Scanner]: Detected stream: ${detectedUrl}`, type: 'info' });
+
+            // Avoid sending the same URL repeatedly for the same tab in short succession.
+            const now = Date.now();
+            const lastData = lastDetectedUrls[details.tabId];
+            if (lastData && lastData.url === detectedUrl && (now - lastData.timestamp < 2000)) {
                 return;
             }
-
-            // Check if the URL's path ends with .m3u8.
-            try {
-                const url = new URL(details.url);
-                if (!url.pathname.endsWith('.m3u8')) return;
-            } catch (e) {
-                return; // Invalid URL, ignore.
-            }
-
-            // Avoid sending the same URL repeatedly for the same tab.
-            if (lastDetectedUrls[details.tabId] === details.url) {
-                return;
-            }
-            lastDetectedUrls[details.tabId] = details.url;
+            lastDetectedUrls[details.tabId] = { url: detectedUrl, timestamp: now };
 
             // Update state immediately and notify popup
-            _detectedUrlsState[details.tabId] = details.url;
-            _broadcastToTabs({ action: 'detected_url_changed', tabId: details.tabId, url: details.url });
+            _detectedUrlsState[details.tabId] = detectedUrl;
+            _broadcastToTabs({ action: 'detected_url_changed', tabId: details.tabId, url: detectedUrl });
 
             // Check if a scanner window is waiting for this URL.
-            // Re-use promiseInfo from the inactivity check
             if (promiseInfo) {
-                promiseInfo.resolve(details.url);
+                promiseInfo.resolve(detectedUrl);
                 return;
             }
 
-            // Send the detected URL to the content script of the tab where the request originated.
-            chrome.tabs.sendMessage(details.tabId, { m3u8: details.url })
-                .catch(error => {
-                    if (!error.message.includes('Receiving end does not exist')) {
-                        console.error(`[Background]: Error sending M3U8 URL to tab ${details.tabId}:`, error);
-                    }
-                });
+            // Send the detected URL to the content script.
+            chrome.tabs.sendMessage(details.tabId, { m3u8: detectedUrl })
+                .catch(() => {}); 
         },
         {
             urls: ["<all_urls>"],
-            types: ["xmlhttprequest", "other", "media", "main_frame"] // Listen on more types for broader compatibility
+            types: ["xmlhttprequest", "other", "media", "main_frame", "sub_frame"]
         }
     );
 
     // Register tab lifecycle listeners
     chrome.tabs.onRemoved.addListener((tabId) => {
-        if (_detectedUrlsState[tabId]) {
-            delete _detectedUrlsState[tabId];
-        }
-        // If a tab with a pending detection is closed, reject the promise.
+        delete _detectedUrlsState[tabId];
+        delete lastDetectedUrls[tabId];
         if (m3u8DetectionPromises[tabId]) {
             m3u8DetectionPromises[tabId].reject(new Error('Tab was closed before M3U8 detection completed.'));
-        }
-        if (lastDetectedUrls[tabId]) {
-            delete lastDetectedUrls[tabId];
         }
     });
 
     chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-        if (changeInfo.status === 'loading') {
-            // A new page is loading, so reset the stream detection caches for this tab.
-            if (lastDetectedUrls[tabId]) delete lastDetectedUrls[tabId];
-            if (_detectedUrlsState[tabId]) delete _detectedUrlsState[tabId];
-            _broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: null }); // Notify UI that detected URL is cleared
+        // Only clear detection state on actual URL changes.
+        if (changeInfo.url) {
+            delete lastDetectedUrls[tabId];
+            delete _detectedUrlsState[tabId];
+            _broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: null });
+        } else if (changeInfo.status === 'loading' && !tab.url.startsWith('chrome')) {
+            // Check if we just detected something. If so, don't clear it yet.
+            const now = Date.now();
+            const lastData = lastDetectedUrls[tabId];
+            if (!lastData || (now - lastData.timestamp > 5000)) { 
+                delete lastDetectedUrls[tabId];
+                delete _detectedUrlsState[tabId];
+                _broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: null });
+            }
         }
     });
 }

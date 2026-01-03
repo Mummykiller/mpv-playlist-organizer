@@ -104,6 +104,26 @@ class MpvController {
 
 
     /**
+     * Sanitizes a string to prevent command injection risks and M3U/JSON breakage.
+     * @param {string} str The string to sanitize.
+     * @param {boolean} isFilename If true, also removes filesystem-restricted characters like /.
+     * @returns {string} The sanitized string.
+     */
+    sanitizeString(str, isFilename = false) {
+        if (typeof str !== 'string') return str;
+        
+        if (isFilename) {
+            // Strict blacklist for folder names / filenames: / \ : * ? " < > | $ ; & `
+            return str.replace(/[\/\\:*?"<>|$;&`\n\r\t]/g, '').trim();
+        } else {
+            // Minimal destruction for URLs/Titles. 
+            // Only strip characters that break M3U files or our internal JSON logging.
+            // Quotes and backticks are removed as they are the primary injection risks.
+            return str.replace(/["`\n\r\t]/g, '').trim();
+        }
+    }
+
+    /**
      * Handles messages from the background script.
      * @param {object} request - The message object.
      * @param {object} sender - The sender of the message.
@@ -130,9 +150,9 @@ class MpvController {
                 this.updateFolderDropdowns(folderId, lastPlayedId, isFolderActive);
             }
         } else if (request.m3u8) {
-
-
-            this.detectedUrl = request.m3u8;
+            console.log("[MPV Controller] Stream detected by background:", request.m3u8);
+            this.detectedUrl = this.sanitizeString(request.m3u8);
+            console.log("[MPV Controller] Sanitized URL:", this.detectedUrl);
             // Report the detected stream URL to the background script
             if (this.checkContext()) {
                 chrome.runtime.sendMessage({ action: 'report_detected_url', url: this.detectedUrl });
@@ -1679,10 +1699,10 @@ class MpvController {
         let isPlaylist = false;
 
         if (YOUTUBE_PLAYLIST_REGEX.test(currentUrl)) {
-            this.detectedUrl = currentUrl;
+            this.detectedUrl = this.sanitizeString(currentUrl);
             isPlaylist = true;
         } else if (YOUTUBE_VIDEO_REGEX.test(currentUrl)) {
-            this.detectedUrl = currentUrl;
+            this.detectedUrl = this.sanitizeString(currentUrl);
         } else {
             // Not a YT video or playlist page, do nothing with this.detectedUrl
             return;

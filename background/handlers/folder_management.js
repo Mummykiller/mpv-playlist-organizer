@@ -12,21 +12,34 @@ export function init(dependencies) {
     _debouncedSyncToNativeHostFile = dependencies.debouncedSyncToNativeHostFile;
 }
 
+/**
+ * Sanitizes a string for use as a folder name/filename.
+ * @param {string} str The string to sanitize.
+ * @returns {string} The sanitized string.
+ */
+function sanitizeString(str) {
+    if (typeof str !== 'string') return str;
+    // Strict blacklist for filenames: / \ : * ? " < > | $ ; & `
+    // Also remove newlines
+    return str.replace(/[\/\\:*?"<>|$;&`\n\r]/g, '').trim();
+}
+
 export async function handleCreateFolder(request) {
-    if (!request.folderId || !request.folderId.trim()) {
-        return { success: false, error: 'Folder name cannot be empty.' };
+    const sanitizedFolderId = sanitizeString(request.folderId);
+    if (!sanitizedFolderId) {
+        return { success: false, error: 'Folder name cannot be empty or contain illegal characters.' };
     }
     const data = await _storage.get();
-    if (data.folders[request.folderId]) {
+    if (data.folders[sanitizedFolderId]) {
         return { success: false, error: 'A folder with that name already exists.' };
     }
-    data.folderOrder.push(request.folderId);
-    data.folders[request.folderId] = { playlist: [] };
+    data.folderOrder.push(sanitizedFolderId);
+    data.folders[sanitizedFolderId] = { playlist: [] };
     await _storage.set(data);
     await _updateContextMenus(_storage);
     _broadcastToTabs({ foldersChanged: true });
     _debouncedSyncToNativeHostFile();
-    return { success: true, message: `Folder "${request.folderId}" created.` };
+    return { success: true, message: `Folder "${sanitizedFolderId}" created.` };
 }
 
 export async function handleGetAllFolderIds() {
@@ -63,8 +76,10 @@ export async function handleRemoveFolder(request) {
 }
 
 export async function handleRenameFolder(request) {
-    const { oldFolderId, newFolderId } = request;
-    if (!oldFolderId || !newFolderId || !newFolderId.trim()) {
+    const oldFolderId = request.oldFolderId;
+    const newFolderId = sanitizeString(request.newFolderId);
+    
+    if (!oldFolderId || !newFolderId) {
         return { success: false, error: 'Invalid folder names provided.' };
     }
     const data = await _storage.get();

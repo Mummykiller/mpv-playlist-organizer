@@ -17,6 +17,7 @@ class OptionsManager {
             { key: 'launch_geometry', elementId: 'geometry-select', type: 'select' },
             { key: 'custom_geometry_width', elementId: 'custom-width', type: 'input' },
             { key: 'custom_geometry_height', elementId: 'custom-height', type: 'input' },
+            { key: 'mpv_decoder', elementId: 'mpv-decoder-select', type: 'select' },
             { key: 'force_terminal', elementId: 'force-terminal-checkbox', type: 'checkbox' },
             { key: 'show_play_new_button', elementId: 'show-play-new-button-checkbox', type: 'checkbox' },
             { key: 'duplicate_url_behavior', elementId: 'duplicate-behavior-select', type: 'select' },
@@ -56,11 +57,14 @@ class OptionsManager {
             { key: 'disable_network_overrides', elementId: 'disable-network-overrides-checkbox', type: 'checkbox' },
             { key: 'enable_cache', elementId: 'enable-cache-checkbox', type: 'checkbox' },
             { key: 'http_persistence', elementId: 'http-persistence-select', type: 'select' },
-            { key: 'demuxer_max_bytes', elementId: 'demuxer_max_bytes-input', type: 'input' },
+            { key: 'demuxer_max_bytes', elementId: 'demuxer-max-bytes-input', type: 'input' },
             { key: 'demuxer_max_back_bytes', elementId: 'demuxer-max-back-bytes-input', type: 'input' },
             { key: 'cache_secs', elementId: 'cache-secs-input', type: 'input', transform: Number },
             { key: 'demuxer_readahead_secs', elementId: 'demuxer-readahead-secs-input', type: 'input', transform: Number },
             { key: 'stream_buffer_size', elementId: 'stream-buffer-size-input', type: 'input' },
+            { key: 'ytdlp_concurrent_fragments', elementId: 'ytdlp-concurrent-fragments-input', type: 'input', transform: Number },
+            { key: 'enable_reconnect', elementId: 'enable-reconnect-checkbox', type: 'checkbox' },
+            { key: 'reconnect_delay', elementId: 'reconnect-delay-input', type: 'input', transform: Number },
             { key: 'popup_width', elementId: 'popup-width-slider', type: 'slider', transform: Number },
             { key: 'popup_width_locked', elementId: 'btn-lock-popup-width', type: 'custom' }
         ];

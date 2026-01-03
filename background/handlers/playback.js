@@ -44,7 +44,20 @@ class PlaybackQueue {
             force_terminal: globalPrefs.force_terminal ?? false,
             clear_on_completion: globalPrefs.clear_on_completion ?? false,
             start_paused: false, // Default to not paused when playing sequentially
-            bypassScripts: globalPrefs.bypassScripts || {} // Pass bypass scripts config
+            bypassScripts: globalPrefs.bypassScripts || {}, // Pass bypass scripts config
+            // Networking & Performance Sync
+            disable_network_overrides: globalPrefs.disable_network_overrides ?? false,
+            enable_cache: globalPrefs.enable_cache ?? true,
+            http_persistence: globalPrefs.http_persistence || 'auto',
+            demuxer_max_bytes: globalPrefs.demuxer_max_bytes || '1G',
+            demuxer_max_back_bytes: globalPrefs.demuxer_max_back_bytes || '500M',
+            cache_secs: globalPrefs.cache_secs || 500,
+            demuxer_readahead_secs: globalPrefs.demuxer_readahead_secs || 500,
+            stream_buffer_size: globalPrefs.stream_buffer_size || '10M',
+            ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
+            enable_reconnect: globalPrefs.enable_reconnect ?? true,
+            reconnect_delay: globalPrefs.reconnect_delay || 4,
+            mpv_decoder: globalPrefs.mpv_decoder || 'auto'
         });
     }
 
@@ -154,10 +167,11 @@ export function init(dependencies) {
 }
 
 export async function handleMpvExited(data) {
-    const { folderId, returnCode } = data;
+    const { folderId, returnCode, reason } = data;
     if (!folderId) return;
     
-    _broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' has ended with exit code ${returnCode}.`, type: 'info' });
+    const displayReason = reason ? ` (Reason: ${reason})` : '';
+    _broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' has ended with exit code ${returnCode}${displayReason}.`, type: 'info' });
 
     playbackQueueInstance.isPlaying = false; // Reset isPlaying flag
 
@@ -165,15 +179,18 @@ export async function handleMpvExited(data) {
     const globalPrefs = storageData.settings.ui_preferences.global;
     const shouldClear = globalPrefs.clear_on_completion ?? false;
 
-    _broadcastLog({ text: `[Background]: 'Clear on Completion' setting is ${shouldClear ? 'ENABLED' : 'DISABLED'}.`, type: 'info' });
+    // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion via custom script.
+    const isNaturalCompletion = (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE);
+
+    if (isNaturalCompletion) {
+        _broadcastLog({ text: `[Background]: Playlist for folder '${folderId}' finished naturally.`, type: 'info' });
+    }
 
     // Only attempt to clear if the item that just finished was the last one in its folder/batch
     if (playbackQueueInstance.currentPlayingItem && playbackQueueInstance.currentPlayingItem.folderId === folderId && playbackQueueInstance.currentPlayingItem.isLastInFolder) {
         if (shouldClear) {
-            // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion via custom script.
-            if (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE) {
-                const completionType = 'naturally completed (custom exit code 99)';
-                _broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' ${completionType}. Auto-clearing playlist as per settings.`, type: 'info' });
+            if (isNaturalCompletion) {
+                _broadcastLog({ text: `[Background]: Auto-clearing playlist for '${folderId}' as per settings.`, type: 'info' });
                 
                 // Perform the clearing in the extension's storage (Source of Truth)
                 if (storageData.folders[folderId]) {
@@ -188,17 +205,12 @@ export async function handleMpvExited(data) {
                     });
                 }
             } else {
-                // If the user quits manually (e.g., 'q') or MPV exits with any other code,
-                // we assume it's not a natural completion for clearing purposes.
-                _broadcastLog({ text: `[Background]: MPV exited with code ${returnCode}. Playlist for '${folderId}' will not be cleared. (Requires exit code ${MPV_PLAYLIST_COMPLETED_EXIT_CODE} for clearing)`, type: 'info' });
+                _broadcastLog({ text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion code 99).`, type: 'info' });
             }
-        } else {
-            _broadcastLog({ text: `[Background]: Playlist for '${folderId}' will not be cleared because the setting is disabled.`, type: 'info' });
         }
     }
     
     // We don't need to trigger processQueue here because we drain the queue immediately.
-    // However, if the user adds items *after* MPV exits, processQueue will be triggered by the 'play' action.
 }
 
 export async function handleIsMpvRunning() {
@@ -305,7 +317,20 @@ export async function handlePlay(request) {
             force_terminal: globalPrefs.force_terminal ?? false,
             clear_on_completion: request.clear_on_completion ?? (globalPrefs.clear_on_completion ?? false),
             start_paused: start_paused ?? false,
-            bypassScripts: globalPrefs.bypassScripts || {}
+            bypassScripts: globalPrefs.bypassScripts || {},
+            // Networking & Performance Sync
+            disable_network_overrides: globalPrefs.disable_network_overrides ?? false,
+            enable_cache: globalPrefs.enable_cache ?? true,
+            http_persistence: globalPrefs.http_persistence || 'auto',
+            demuxer_max_bytes: globalPrefs.demuxer_max_bytes || '1G',
+            demuxer_max_back_bytes: globalPrefs.demuxer_max_back_bytes || '500M',
+            cache_secs: globalPrefs.cache_secs || 500,
+            demuxer_readahead_secs: globalPrefs.demuxer_readahead_secs || 500,
+            stream_buffer_size: globalPrefs.stream_buffer_size || '10M',
+            ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
+            enable_reconnect: globalPrefs.enable_reconnect ?? true,
+            reconnect_delay: globalPrefs.reconnect_delay || 4,
+            mpv_decoder: globalPrefs.mpv_decoder || 'auto'
         });
 
         if (response.success) {
@@ -386,7 +411,20 @@ export async function handlePlayM3U(request) {
         force_terminal: globalPrefs.force_terminal ?? false,
         clear_on_completion: clear_on_completion ?? (globalPrefs.clear_on_completion ?? false),
         start_paused: start_paused ?? false,
-        bypassScripts: globalPrefs.bypassScripts || {} // Pass bypass scripts config (though less relevant now with dynamic analysis)
+        bypassScripts: globalPrefs.bypassScripts || {}, // Pass bypass scripts config (though less relevant now with dynamic analysis)
+        // Networking & Performance Sync
+        disable_network_overrides: globalPrefs.disable_network_overrides ?? false,
+        enable_cache: globalPrefs.enable_cache ?? true,
+        http_persistence: globalPrefs.http_persistence || 'auto',
+        demuxer_max_bytes: globalPrefs.demuxer_max_bytes || '1G',
+        demuxer_max_back_bytes: globalPrefs.demuxer_max_back_bytes || '500M',
+        cache_secs: globalPrefs.cache_secs || 500,
+        demuxer_readahead_secs: globalPrefs.demuxer_readahead_secs || 500,
+        stream_buffer_size: globalPrefs.stream_buffer_size || '10M',
+        ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
+        enable_reconnect: globalPrefs.enable_reconnect ?? true,
+        reconnect_delay: globalPrefs.reconnect_delay || 4,
+        mpv_decoder: globalPrefs.mpv_decoder || 'auto'
     });
 
     if (response.success) {
