@@ -270,6 +270,26 @@
                         <input type="text" id="custom-height" class="custom-geometry-input" placeholder="Height" pattern="[0-9]{1,4}" maxlength="4" title="Height in pixels (e.g. 720)">
                     </div>
 
+                    <div class="control-group stacked-control" data-setting-name="mpv hardware decoder hwdec">
+                        <label for="mpv-decoder-select" class="settings-label">Hardware Decoder <span class="help-icon" title="Select the hardware video decoder. 'Auto' is usually safe.">?</span>:</label>
+                        <select id="mpv-decoder-select">
+                            <option value="auto">Auto</option>
+                            <option value="no">Disabled (Software Only)</option>
+                            <optgroup label="Linux">
+                                <option value="vaapi">VA-API (Intel/AMD)</option>
+                                <option value="nvdec">NVDEC (NVIDIA)</option>
+                            </optgroup>
+                            <optgroup label="Windows">
+                                <option value="d3d11va">D3D11VA (Modern)</option>
+                                <option value="dxva2">DXVA2 (Legacy)</option>
+                                <option value="nvdec">NVDEC (NVIDIA)</option>
+                            </optgroup>
+                            <optgroup label="macOS">
+                                <option value="videotoolbox">VideoToolbox</option>
+                            </optgroup>
+                        </select>
+                    </div>
+
                     <hr class="settings-compact-separator">
 
                     <div class="control-group" data-setting-name="always show terminal window mpv">
@@ -540,6 +560,21 @@
                     <div class="control-group" data-setting-name="stream buffer size networking raw">
                         <label for="stream-buffer-size-input" class="settings-label">Stream Buffer <span class="help-icon" title="Size of the raw data buffer. Higher values can help with high-bitrate 4K content.">?</span>:</label>
                         <input type="text" id="stream-buffer-size-input" class="settings-input networking-small-input" placeholder="10M">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="ytdlp concurrent fragments threads networking">
+                        <label for="ytdlp-concurrent-fragments-input" class="settings-label">Network Threads <span class="help-icon" title="Number of parallel fragments to download simultaneously (yt-dlp). Recommended: 3-5.">?</span>:</label>
+                        <input type="number" id="ytdlp-concurrent-fragments-input" class="settings-input networking-small-input" min="1" max="16" step="1">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="enable reconnect networking logic">
+                        <label for="enable-reconnect-checkbox" class="settings-label">Enable Auto-Reconnect <span class="help-icon" title="If enabled, MPV will try to reconnect to the stream if the connection is lost.">?</span>:</label>
+                        <input type="checkbox" id="enable-reconnect-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="reconnect delay networking seconds">
+                        <label for="reconnect-delay-input" class="settings-label">Reconnect Delay (s) <span class="help-icon" title="Maximum time to wait between reconnection attempts.">?</span>:</label>
+                        <input type="number" id="reconnect-delay-input" class="settings-input networking-small-input" min="1" max="30" step="1">
                     </div>
                     <small style="color: var(--text-secondary); margin-top: 4px;">Higher values improve stability but increase RAM usage and initial load times.</small>
                 </div>

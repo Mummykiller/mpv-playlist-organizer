@@ -67,6 +67,40 @@ SAFE_MPV_FLAGS_ALLOWLIST = {
 }
 
 
+def get_gpu_vendor():
+    """Detects the GPU vendor (nvidia, intel, amd, or apple) for hardware decoding selection."""
+    system = platform.system()
+    try:
+        if system == "Windows":
+            # Use wmic to get GPU name on Windows
+            cmd = ["wmic", "path", "win32_VideoController", "get", "name"]
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+            output = output.lower()
+        elif system == "Darwin":
+            return "apple"
+        else:
+            # Use lspci on Linux
+            if shutil.which("lspci"):
+                output = subprocess.check_output(["lspci"], stderr=subprocess.STDOUT, text=True).lower()
+            else:
+                # Fallback for systems without lspci
+                return "unknown"
+
+        if "nvidia" in output:
+            return "nvidia"
+        elif "intel" in output:
+            return "intel"
+        elif "amd" in output or "radeon" in output:
+            return "amd"
+    except Exception as e:
+        logging.debug(f"GPU detection failed: {e}")
+    
+    return "unknown"
+
+def sanitize_url(url):
+    """Sanitizes a URL by removing potentially dangerous characters for shell commands."""
+    return file_io.sanitize_string(url, is_filename=False)
+
 # --- Dependency Checking & Updating ---
 
 def _find_ytdlp_executable():
@@ -248,6 +282,11 @@ class MpvCommandBuilder:
                         self.mpv_args.append(f"--demuxer-readahead-secs={settings['demuxer_readahead_secs']}")
                     if settings.get('stream_buffer_size'):
                         self.mpv_args.append(f"--stream-buffer-size={settings['stream_buffer_size']}")
+
+            # Apply Hardware Decoder
+            decoder = settings.get('mpv_decoder', 'auto')
+            if decoder:
+                self.mpv_args.append(f"--hwdec={decoder}")
             
         self.has_terminal_flag = False
         self.is_forced_terminal = False
@@ -264,7 +303,10 @@ class MpvCommandBuilder:
 
     def with_url(self, url):
         if url:
-            self.url = url
+            if isinstance(url, list):
+                self.url = [sanitize_url(u) for u in url]
+            else:
+                self.url = sanitize_url(url)
         return self
 
     def with_completion_script(self, script_dir):
@@ -293,14 +335,6 @@ class MpvCommandBuilder:
                 logging.info(f"MPV will load thumbnailer fix script: {lua_script_path}")
         return self
 
-    def with_vulkan_fallback_script(self, script_dir):
-        if script_dir:
-            lua_script_path = os.path.join(script_dir, "mpv_scripts", "vulkan_fallback.lua")
-            if os.path.exists(lua_script_path):
-                self.mpv_args.append(f'--script={lua_script_path}')
-                logging.info(f"MPV will load Vulkan fallback script: {lua_script_path}")
-        return self
-
     def with_title(self, title):
         if title:
             # Set the initial title for the first file loaded
@@ -311,10 +345,19 @@ class MpvCommandBuilder:
         if automatic_mpv_flags:
             for flag_info in automatic_mpv_flags:
                 if flag_info.get('enabled'):
-                    if flag_info.get('flag') == '--terminal':
+                    flag = flag_info.get('flag')
+                    if not flag:
+                        continue
+                        
+                    if flag == '--terminal':
                         self.has_terminal_flag = True
-                    elif flag_info.get('flag'):
-                        self.mpv_args.append(flag_info.get('flag'))
+                    elif flag.startswith('--hwdec'):
+                        # Skip hwdec flags in automatic flags to avoid conflicts with 
+                        # the dedicated dropdown setting.
+                        logging.debug(f"MpvCommandBuilder: Ignoring redundant hwdec flag in automatic flags: {flag}")
+                        continue
+                    else:
+                        self.mpv_args.append(flag)
         return self
 
     def with_force_terminal(self, force):
@@ -400,16 +443,35 @@ class MpvCommandBuilder:
         # ONLY enable ytdl if we actually want MPV to do the resolution.
         if self.use_ytdl_mpv:
             self.mpv_args.append('--ytdl=yes')
-            effective_ytdl_opts = ytdl_raw_options or self.ytdl_raw_options_from_bypass
             
-            if effective_ytdl_opts:
-                self.mpv_args.append(f'--ytdl-raw-options={effective_ytdl_opts}')
+            # Combine raw options with the concurrent fragments setting
+            raw_opts = ytdl_raw_options or self.ytdl_raw_options_from_bypass or ""
+            
+            # Add concurrent fragments if specified in settings
+            if self.settings and self.settings.get('ytdlp_concurrent_fragments', 1) > 1:
+                frag_opt = f"concurrent-fragments={self.settings['ytdlp_concurrent_fragments']}"
+                if raw_opts:
+                    raw_opts = f"{raw_opts} {frag_opt}"
+                else:
+                    raw_opts = frag_opt
+            
+            if raw_opts:
+                self.mpv_args.append(f'--ytdl-raw-options={raw_opts}')
         # Original is_youtube flag is only used if not overridden by url_analyzer result
         elif original_is_youtube and not self.is_youtube_override:
             # This is for the case where analyzer didn't run or didn't override
             self.mpv_args.append('--ytdl=yes')
-            if ytdl_raw_options:
-                self.mpv_args.append(f'--ytdl-raw-options={ytdl_raw_options}')
+            
+            raw_opts = ytdl_raw_options or ""
+            if self.settings and self.settings.get('ytdlp_concurrent_fragments', 1) > 1:
+                frag_opt = f"concurrent-fragments={self.settings['ytdlp_concurrent_fragments']}"
+                if raw_opts:
+                    raw_opts = f"{raw_opts} {frag_opt}"
+                else:
+                    raw_opts = frag_opt
+
+            if raw_opts:
+                self.mpv_args.append(f'--ytdl-raw-options={raw_opts}')
         return self
 
     def build(self):
@@ -421,7 +483,10 @@ class MpvCommandBuilder:
 
         # Only add the separator and URL if a URL is actually provided
         if self.url:
-            full_command = self.mpv_args + ['--'] + [self.url]
+            if isinstance(self.url, list):
+                full_command = self.mpv_args + ['--'] + self.url
+            else:
+                full_command = self.mpv_args + ['--'] + [self.url]
         else:
             full_command = self.mpv_args
             
@@ -524,7 +589,6 @@ def construct_mpv_command(
         .with_completion_script(script_dir if load_on_completion_script else None) \
         .with_adaptive_headers_script(script_dir) \
         .with_fix_thumbnailer_script(script_dir) \
-        .with_vulkan_fallback_script(script_dir) \
         .with_title(title) \
         .with_automatic_flags(automatic_mpv_flags) \
         .with_headers(headers) \
@@ -562,7 +626,7 @@ def apply_bypass_script(url_item, send_message_func):
     if not isinstance(url_item, dict):
         url_item = {'url': url_item if url_item else "", 'settings': {}}
 
-    original_url = url_item['url']
+    original_url = sanitize_url(url_item['url'])
     
     # Load URL analysis settings from config
     settings = file_io.get_settings()
@@ -573,7 +637,7 @@ def apply_bypass_script(url_item, send_message_func):
 
     # The default fallback return values
     is_youtube = "youtube.com/" in original_url or "youtu.be/" in original_url
-    default_return_tuple = (original_url, None, None, False, is_youtube, None, False, None)
+    default_return_tuple = (original_url, None, None, False, is_youtube, None, False, None, False)
 
     if not enable_url_analysis:
         return default_return_tuple

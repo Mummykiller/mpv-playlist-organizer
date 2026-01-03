@@ -185,6 +185,35 @@ class Janitor:
                 except Exception as e:
                     logging.warning(f"Janitor: Failed to remove {pycache_path}: {e}")
 
+    def cleanup_flags(self):
+        """Scans for stale natural completion flags in the dedicated flags directory."""
+        flag_dir = os.path.join(self.data_dir, "flags")
+        if not os.path.exists(flag_dir):
+            return
+
+        logging.info(f"Janitor: Checking for stale flags in {flag_dir} (72h threshold)")
+        now = time.time()
+        three_days_ago = now - (72 * 3600)
+        
+        flag_re = re.compile(r'^mpv_natural_completion_(?P<pid>\d+)\.flag$')
+        
+        try:
+            for item in os.listdir(flag_dir):
+                item_path = os.path.join(flag_dir, item)
+                match = flag_re.match(item)
+                if match:
+                    try:
+                        if os.path.getmtime(item_path) < three_days_ago:
+                            pid = int(match.group('pid'))
+                            if not is_pid_running(pid):
+                                logging.info(f"Janitor: Removing stale flag file older than 72h: {item}")
+                                os.remove(item_path)
+                    except FileNotFoundError: pass
+                    except OSError as e:
+                        logging.warning(f"Janitor: Error removing stale flag {item}: {e}")
+        except Exception as e:
+            logging.warning(f"Janitor: Error during flag cleanup: {e}")
+
     def run_startup_sweep(self, extension_root=None):
         """Executes a full cleanup suite on startup with concurrency protection."""
         lock_file = os.path.join(self.data_dir, ".janitor.lock")
@@ -199,6 +228,7 @@ class Janitor:
 
             self.clean_temp_dir()
             self.cleanup_stale_ipc()
+            self.cleanup_flags()
             # We skip pycache cleanup on standard startup to avoid race conditions and unnecessary disk I/O.
         except Exception as e:
             logging.warning(f"Janitor: Startup sweep encountered an error: {e}")

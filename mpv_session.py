@@ -28,6 +28,12 @@ DELTA_EXT = ".m3u"
 NATURAL_COMPLETION_FLAG = "mpv_natural_completion_"
 
 
+def sanitize_url(url):
+    """Sanitizes a URL by removing potentially dangerous characters for shell commands."""
+    import file_io
+    return file_io.sanitize_string(url, is_filename=False)
+
+
 class MpvSessionManager:
     def __init__(self, session_file_path, dependencies):
         self.process = None
@@ -50,6 +56,13 @@ class MpvSessionManager:
         self.send_message = dependencies['send_message']
         self.SCRIPT_DIR = dependencies['SCRIPT_DIR']
         self.TEMP_PLAYLISTS_DIR = dependencies['TEMP_PLAYLISTS_DIR']
+        self.FLAG_DIR = os.path.join(os.path.dirname(self.TEMP_PLAYLISTS_DIR), "flags")
+        
+        # Ensure flag directory exists
+        try:
+            os.makedirs(self.FLAG_DIR, exist_ok=True)
+        except Exception as e:
+            logging.warning(f"Could not create flag directory {self.FLAG_DIR}: {e}")
 
     def clear(self, mpv_return_code=None):
         """Clears the session state and removes the session file."""
@@ -250,19 +263,22 @@ class MpvSessionManager:
         ytdlp_path = shutil.which("yt-dlp") or "yt-dlp"
         
         for item in items:
+            item_url = sanitize_url(item['url'])
             lua_options = {
                 "id": item.get('id'), # Pass the ID for live deduplication
                 "title": item.get('title'),
                 "headers": item.get('headers'),
                 "ytdl_raw_options": item.get('ytdl_raw_options'),
                 "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
-                "original_url": item.get('original_url') or item.get('url'),
+                "original_url": sanitize_url(item.get('original_url') or item.get('url')),
                 "disable_http_persistent": item.get('disable_http_persistent', False),
                 "cookies_file": item.get('cookies_file'),
                 "disable_network_overrides": settings.get('disable_network_overrides', False),
-                "http_persistence": settings.get('http_persistence', 'auto')
+                "http_persistence": settings.get('http_persistence', 'auto'),
+                "enable_reconnect": settings.get('enable_reconnect', True),
+                "reconnect_delay": settings.get('reconnect_delay', 4)
             }
-            self.ipc_manager.send({"command": ["script-message", "set_url_options", item['url'], json.dumps(lua_options)]})
+            self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
             
             # Sync internal playlist state
             if self.playlist is None: self.playlist = []
@@ -273,6 +289,7 @@ class MpvSessionManager:
             is_duplicate = any(i.get('id') == item_id for i in self.playlist)
 
             if not is_duplicate:
+                item['url'] = item_url # Store sanitized URL
                 self.playlist.append(item)
                 if self.playlist_tracker: self.playlist_tracker.add_item(item)
 
@@ -280,7 +297,7 @@ class MpvSessionManager:
         m3u_lines = ["#EXTM3U"]
         for item in items:
             m3u_lines.append(f"#EXTINF:-1,{item.get('title', item['url'])}")
-            m3u_lines.append(item['url'])
+            m3u_lines.append(sanitize_url(item['url']))
         
         m3u_content = "\n".join(m3u_lines)
         
@@ -359,7 +376,7 @@ class MpvSessionManager:
                 if self.playlist_tracker:
                     self.playlist_tracker.remove_item_internal(item_id)
                 
-                title = removed_item.get('title') or "Item"
+                title = sanitize_url(removed_item.get('title') or "Item")
                 if len(title) > 60: title = title[:57] + "..."
                 self.ipc_manager.send({"command": ["show-text", f"Removed: {title}", 2000]}, expect_response=True)
                 
@@ -439,7 +456,7 @@ class MpvSessionManager:
                 title=url_item.get('title'),
                 use_ytdl_mpv=use_ytdl_mpv,
                 is_youtube_override=use_ytdl_mpv,
-                idle="once", # Use 'once' so mpv waits for the first file but exits on error/finish
+                idle="yes", # Use 'yes' so we have full control over the exit via Lua
                 force_terminal=force_terminal,
                 settings=settings
             )
@@ -473,6 +490,7 @@ class MpvSessionManager:
             # --- Register options for ALL items BEFORE starting playback ---
             if self.playlist:
                 for item in self.playlist:
+                    item_url = sanitize_url(item['url'])
                     item_headers = item.get('headers')
                     item_ytdl_raw_options = item.get('ytdl_raw_options')
                     item_use_ytdl_mpv = item.get('use_ytdl_mpv', False) or item.get('is_youtube', False)
@@ -483,17 +501,20 @@ class MpvSessionManager:
                         "headers": item_headers,
                         "ytdl_raw_options": item_ytdl_raw_options,
                         "use_ytdl_mpv": item_use_ytdl_mpv,
-                        "original_url": item.get('original_url') or item.get('url'),
+                        "original_url": sanitize_url(item.get('original_url') or item.get('url')),
                         "disable_http_persistent": item.get('disable_http_persistent', False) or disable_http_persistent,
                         "cookies_file": item.get('cookies_file'),
                         "disable_network_overrides": settings.get('disable_network_overrides', False),
-                        "http_persistence": settings.get('http_persistence', 'auto')
+                        "http_persistence": settings.get('http_persistence', 'auto'),
+                        "enable_reconnect": settings.get('enable_reconnect', True),
+                        "reconnect_delay": settings.get('reconnect_delay', 4)
                     }
-                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item['url'], json.dumps(lua_options)]})
+                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
                 logging.info(f"Registered options for {len(self.playlist)} items with adaptive_headers.lua")
 
             # Now start playback of the actual URL
             loadfile_opts = {}
+            sanitized_launch_url = sanitize_url(url_item['url'])
             if settings.get('enable_precise_resume') and url_item.get('resume_time'):
                 resume_time = url_item.get('resume_time')
                 if resume_time > 0:
@@ -501,9 +522,9 @@ class MpvSessionManager:
                     loadfile_opts["start"] = f"{resume_time}"
 
             if loadfile_opts:
-                self.ipc_manager.send({"command": ["loadfile", url_item['url'], "replace", loadfile_opts]})
+                self.ipc_manager.send({"command": ["loadfile", sanitized_launch_url, "replace", loadfile_opts]})
             else:
-                self.ipc_manager.send({"command": ["loadfile", url_item['url'], "replace"]})
+                self.ipc_manager.send({"command": ["loadfile", sanitized_launch_url, "replace"]})
 
             self.pid = self.process.pid
             self.owner_folder_id = folder_id
@@ -539,32 +560,49 @@ class MpvSessionManager:
 
             def process_waiter(proc, f_id):
                 return_code = proc.wait()
+                exit_reason = None
                 
                 # Robust Completion Check: Check for the flag file written by on_completion.lua
                 # This handles cases where MPV exits with code 0 but actually finished the playlist.
-                if self.ipc_path:
-                    ipc_dir = os.path.dirname(self.ipc_path)
-                    actual_pid = getattr(self, 'pid', None)
-                    if actual_pid:
-                        flag_file = os.path.join(ipc_dir, f'mpv_natural_completion_{actual_pid}.flag')
+                actual_pid = getattr(self, 'pid', None)
+                if actual_pid:
+                    # Potential locations for the flag file
+                    flag_candidates = [
+                        os.path.join(self.FLAG_DIR, f'mpv_natural_completion_{actual_pid}.flag'),
+                    ]
+                    
+                    if self.ipc_path:
+                        flag_candidates.append(os.path.join(os.path.dirname(self.ipc_path), f'mpv_natural_completion_{actual_pid}.flag'))
+
+                    for flag_file in flag_candidates:
                         logging.info(f"Checking for natural completion flag at: {flag_file}")
-                        
                         if os.path.exists(flag_file):
                             if getattr(self, 'manual_quit', False):
                                 logging.info(f"Natural completion flag found, but manual_quit is TRUE. Ignoring flag for folder '{f_id}'.")
                             else:
-                                logging.info(f"Natural completion flag FOUND for folder '{f_id}'. Overriding return code to 99.")
+                                try:
+                                    with open(flag_file, 'r', encoding='utf-8') as f:
+                                        exit_reason = f.read().strip()
+                                    logging.info(f"Natural completion flag FOUND for folder '{f_id}'. Reason: {exit_reason}")
+                                except Exception as e:
+                                    logging.warning(f"Failed to read flag file: {e}")
+                                    exit_reason = "completed"
+                                
                                 return_code = 99
                             
                             try:
                                 os.remove(flag_file)
                             except Exception as e: 
                                 logging.warning(f"Failed to remove flag file: {e}")
-                    else:
-                        logging.info(f"Natural completion flag NOT found for folder '{f_id}'.")
+                            break # Found and processed one candidate
 
-                logging.info(f"MPV process for folder '{f_id}' exited with code {return_code}.")
-                self.send_message({"action": "mpv_exited", "folderId": f_id, "returnCode": return_code})
+                logging.info(f"MPV process for folder '{f_id}' exited with code {return_code}. Reason: {exit_reason or 'manual/unknown'}")
+                self.send_message({
+                    "action": "mpv_exited", 
+                    "folderId": f_id, 
+                    "returnCode": return_code,
+                    "reason": exit_reason
+                })
                 self.clear(mpv_return_code=return_code)
 
             waiter_thread = threading.Thread(target=process_waiter, args=(self.process, folder_id))
@@ -763,7 +801,7 @@ class MpvSessionManager:
                 # Generate Enriched M3U Content
                 m3u_output_lines = ["#EXTM3U"]
                 for item in _url_items_list:
-                    title = item.get('title', item['url'])
+                    title = sanitize_url(item.get('title', item['url'])) # Re-using sanitize_url for titles
                     m3u_output_lines.append(f"#EXTINF:-1,{title}")
                     if item.get('headers'):
                         header_string = "|".join([f"{k}={v}" for k, v in item['headers'].items()])
@@ -771,7 +809,7 @@ class MpvSessionManager:
                     if item.get('ytdl_raw_options'):
                         options_val = item['ytdl_raw_options'].replace(',', '|')
                         m3u_output_lines.append(f"#EXTYTDLOPTIONS:{options_val}")
-                    m3u_output_lines.append(item['url'])
+                    m3u_output_lines.append(sanitize_url(item['url']))
                 
                 enriched_m3u_content = "\n".join(m3u_output_lines)
                 return {
@@ -816,8 +854,9 @@ class MpvSessionManager:
         # Generate the enriched M3U content for the caller (Step 1 completion)
         enriched_m3u_lines = ["#EXTM3U"]
         for item in _url_items_list:
-            enriched_m3u_lines.append(f"#EXTINF:-1,{item.get('title', item['url'])}")
-            enriched_m3u_lines.append(item['url'])
+            title = sanitize_url(item.get('title', item['url']))
+            enriched_m3u_lines.append(f"#EXTINF:-1,{title}")
+            enriched_m3u_lines.append(sanitize_url(item['url']))
         enriched_m3u_content = "\n".join(enriched_m3u_lines)
 
         # Check if we should skip the launch because the session is already active
@@ -858,15 +897,37 @@ class MpvSessionManager:
                 history_items = _url_items_list[:playlist_start_index]
                 future_items = _url_items_list[playlist_start_index + 1:]
                 
-                logging.info(f"Standard Flow (Phase 1): Appending {len(future_items)} future items.")
+                # Expected count after Phase 1: The item we started with + all future items.
+                expected_after_future = 1 + len(future_items)
+
+                logging.info(f"Standard Flow (Phase 1): Appending {len(future_items)} future items. Expected count: {expected_after_future}")
                 # 2. Append Future Items (They go to the end, doesn't affect current playback)
                 if future_items:
                     self.append_batch(future_items, mode="append")
-                
+                    
+                    # Verification Loop: Wait for MPV to acknowledge the new items
+                    for _ in range(20): # Up to 2s
+                        if not self.is_alive: return
+                        count_resp = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True)
+                        if count_resp and count_resp.get("data") == expected_after_future:
+                            logging.debug(f"Standard Flow: Phase 1 verified. Playlist count is {expected_after_future}.")
+                            break
+                        time.sleep(0.1)
+
                 if history_items:
                     logging.info(f"Standard Flow (Phase 2): Prepending {len(history_items)} history items.")
                     # 3. Append History Items to the end temporarily
                     self.append_batch(history_items, mode="append")
+                    
+                    # Verification Loop: Wait for MPV to acknowledge history items before moving
+                    expected_total = len(_url_items_list)
+                    for _ in range(20):
+                        if not self.is_alive: return
+                        count_resp = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True)
+                        if count_resp and count_resp.get("data") == expected_total:
+                            logging.debug(f"Standard Flow: Phase 2 append verified. Playlist count is {expected_total}.")
+                            break
+                        time.sleep(0.1)
                     
                     # 4. Move History Items to the very front one by one
                     # They are currently at the end of the playlist. 
@@ -875,12 +936,23 @@ class MpvSessionManager:
                     history_count = len(history_items)
                     
                     for i in range(history_count):
-                        # The items to move are at the VERY end
-                        # Move from (TotalLen - HistoryCount + i) to index (i)
-                        source_idx = total_len - history_count
+                        # The items to move are at the end of the current playlist.
+                        # Since we are moving them one by one to the front (0, 1, 2...),
+                        # and target_idx < source_idx, the items remaining at the end
+                        # of the history block maintain their absolute indices.
+                        source_idx = (total_len - history_count) + i
                         target_idx = i
                         logging.debug(f"Standard Flow: Moving history item from {source_idx} to {target_idx}")
                         self.ipc_manager.send({"command": ["playlist-move", source_idx, target_idx]})
+                        
+                        # Sync local playlist state to match MPV's reordering
+                        if self.playlist and source_idx < len(self.playlist):
+                            item_to_move = self.playlist.pop(source_idx)
+                            self.playlist.insert(target_idx, item_to_move)
+
+                    # Update tracker with the fully restored playlist order
+                    if self.playlist_tracker:
+                        self.playlist_tracker.update_playlist_order(self.playlist)
                 
                 logging.info("Standard Flow: Playlist order restored successfully.")
                 
@@ -910,10 +982,10 @@ class MpvSessionManager:
                         # --- Watch History Fix ---
                         # If it's a YouTube item, we MUST NOT overwrite the URL with a direct stream
                         # if we want mark-watched to work. We only update the metadata/options.
-                        target_url = enriched_item['url']
+                        target_url = sanitize_url(enriched_item['url'])
                         if enriched_item.get('is_youtube') and enriched_item.get('original_url'):
                             logging.debug(f"YouTube detected for item {idx+1}. Preserving original URL for watch history.")
-                            target_url = enriched_item['original_url']
+                            target_url = sanitize_url(enriched_item['original_url'])
 
                         # Register options for the URL in Lua
                         lua_options = {
@@ -922,7 +994,7 @@ class MpvSessionManager:
                             "headers": enriched_item.get('headers'),
                             "ytdl_raw_options": enriched_item.get('ytdl_raw_options'),
                             "use_ytdl_mpv": enriched_item.get('use_ytdl_mpv', False),
-                            "original_url": enriched_item.get('original_url') or enriched_item.get('url'),
+                            "original_url": sanitize_url(enriched_item.get('original_url') or enriched_item.get('url')),
                             "disable_http_persistent": enriched_item.get('disable_http_persistent', False),
                                                     "cookies_file": enriched_item.get('cookies_file'),
                                                     "disable_network_overrides": settings.get('disable_network_overrides', False),

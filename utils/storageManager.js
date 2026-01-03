@@ -37,6 +37,7 @@ export class StorageManager {
                         position: { top: '10px', left: 'auto', right: '10px', bottom: 'auto' },
                         launch_geometry: '', custom_geometry_width: '', custom_geometry_height: '',
                         custom_mpv_flags: '',
+                        mpv_decoder: 'auto',
                         automatic_mpv_flags: [
                             { flag: '--force-window=yes', description: 'Create a video output window even if there is no video.', enabled: true },
                             { flag: '--save-position-on-quit', description: 'Always save the current playback position on quit.', enabled: true }
@@ -75,6 +76,9 @@ export class StorageManager {
                         cache_secs: 500,
                         demuxer_readahead_secs: 500,
                         stream_buffer_size: '10M',
+                        ytdlp_concurrent_fragments: 4,
+                        enable_reconnect: true,
+                        reconnect_delay: 4,
                         // Keybindings
                         kb_add_playlist: 'Shift+A',
                         kb_play_playlist: 'Shift+P',

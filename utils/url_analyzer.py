@@ -29,11 +29,18 @@ _COOKIES_CACHE = {
     "timestamp": 0
 }
 
+def sanitize_url(url):
+    """Sanitizes a URL by removing potentially dangerous characters for shell commands."""
+    return file_io.sanitize_string(url, is_filename=False)
+
 def get_cookies_file(browser, url, ignore_config=True):
     """Extracts cookies once and caches the path."""
     global _COOKIES_CACHE
     import time
     import shutil
+    
+    # Sanitize the URL before using it in a command
+    url = sanitize_url(url)
     
     now = time.time()
     # Cache for 10 minutes
@@ -94,6 +101,9 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     """
     Runs bypass logic to extract direct URLs or provide options for MPV's internal handlers.
     """
+    # First line of defense inside analyzer: sanitize the URL
+    url = sanitize_url(url)
+    
     # Use provided UA or a reasonable Chrome-like default
     effective_user_agent = user_agent_str if user_agent_str else "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     

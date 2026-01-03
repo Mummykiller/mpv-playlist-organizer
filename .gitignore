@@ -1,10 +1,30 @@
 data/
+flags/
 mpv-cli
+mpv-cli.bat
 play_with_bypass.sh
 run_native_host.sh
+run_native_host.bat
 *.log
+*.log.*
 GEMINI.md
 plan.md
 CLEANUP.md
 Verification Report.md
 testing_tools/
+issues.md
+mpv_scripts/vulkan_fallback.lua
+
+
+# Python
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
