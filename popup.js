@@ -5,38 +5,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     // <script src="settings.js"></script>
 
     /**
-     * Creates a debounced function that delays invoking `func` until after `wait`
-     * milliseconds have elapsed since the last time the debounced function was
-     * invoked.
-     * @param {Function} func The function to debounce.
-     * @param {number} wait The number of milliseconds to delay.
-     * @returns {Function} Returns the new debounced function.
-     */
-    function debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func.apply(this, args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    }
-
-    /**
-     * A promise-based wrapper for chrome.runtime.sendMessage.
-     * @param {object} payload The message to send.
-     * @returns {Promise<any>} A promise that resolves with the response.
-     */
-    const sendMessageAsync = (payload) => new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage(payload, (response) => {
-            if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-            resolve(response);
-        });
-    });
-
-    /**
      * Smoothly scrolls the window to a target vertical position with a custom animation.
      * @param {number} to - The target Y position to scroll to.
      * @param {number} duration - The duration of the scroll in milliseconds.
@@ -153,6 +121,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             let showMiniView = false;
             if (isHttp) {
                 showMiniView = uiState?.minimized ?? (prefs?.mode === 'minimized');
+            } else {
+                // On restricted pages (like brave://), use the global preference.
+                // This allows users to access playback controls via the mini-popup
+                // even when the on-page controller cannot be injected.
+                showMiniView = (prefs?.mode === 'minimized');
             }
             this.setMode(showMiniView ? 'mini' : 'full');
         }
@@ -321,10 +294,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             removeFolderSelect.innerHTML = '<option value="">Select folder to remove...</option>';
             miniFolderSelect.innerHTML = '';
 
-            response.folderIds.forEach(id => {
+            response.folderIds.forEach((id, index) => {
                 const option = document.createElement('option');
                 option.value = id;
-                option.textContent = id;
+                option.textContent = `${index + 1}. ${id}`;
                 removeFolderSelect.appendChild(option.cloneNode(true));
                 miniFolderSelect.appendChild(option);
             });
@@ -336,6 +309,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             updateRemoveButtonState();
             refreshPlaylist(); // Now fetches the full playlist
+        }).catch(e => {
+            console.error("Failed to populate folder dropdowns:", e);
+            showStatus("Connection to background script lost.", true);
         });
     }
 
@@ -365,6 +341,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             } else {
                 showStatus(response.error || 'An unknown error occurred.', true);
             }
+        }).catch(e => {
+            showStatus("Failed to create folder: " + e.message, true);
         });
     }
 
@@ -377,20 +355,24 @@ document.addEventListener('DOMContentLoaded', async () => {
             return showStatus('No folder selected to remove.', true);
         }
 
-        const prefs = (await sendMessageAsync({ action: 'get_ui_preferences' })).preferences;
-        if (prefs?.preferences?.confirm_remove_folder ?? true) {
-            const confirmed = await showPopupConfirmation(`Are you sure you want to remove the folder "${folderId}"? This action cannot be undone.`);
-            if (!confirmed) return;
-        }
+        try {
+            const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
+            const prefs = prefsResponse?.preferences;
+            if (prefs?.preferences?.confirm_remove_folder ?? true) {
+                const confirmed = await showPopupConfirmation(`Are you sure you want to remove the folder "${folderId}"? This action cannot be undone.`);
+                if (!confirmed) return;
+            }
 
-        sendMessageAsync({ action: 'remove_folder', folderId: folderId }).then(response => {
+            const response = await sendMessageAsync({ action: 'remove_folder', folderId: folderId });
             if (response.success) {
                 showStatus(`Folder "${folderId}" removed.`);
                 populateFolderDropdowns();
             } else {
                 showStatus(response.error || 'An unknown error occurred.', true);
             }
-        });
+        } catch (e) {
+            showStatus("Failed to remove folder: " + e.message, true);
+        }
     }
 
     function handleRenameFolder() {
@@ -426,13 +408,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
-        const response = await sendMessageAsync({ action: 'rename_folder', oldFolderId, newFolderId });
+        try {
+            const response = await sendMessageAsync({ action: 'rename_folder', oldFolderId, newFolderId });
 
-        if (response.success) {
-            showStatus(response.message);
-            populateFolderDropdowns();
-        } else {
-            showStatus(response.error || 'Failed to rename folder.', true);
+            if (response.success) {
+                showStatus(response.message);
+                populateFolderDropdowns();
+            } else {
+                showStatus(response.error || 'Failed to rename folder.', true);
+            }
+        } catch (e) {
+            showStatus("Failed to rename folder: " + e.message, true);
         }
 
         renameFolderModal.style.display = 'none';
@@ -455,9 +441,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         const folderId = miniFolderSelect.value;
         if (!folderId) return;
 
-        const response = await sendMessageAsync({ action: 'get_playlist', folderId });
-        if (response?.success) {
-            renderPlaylist(response.list, response.last_played_id, response.isFolderActive);
+        try {
+            const response = await sendMessageAsync({ action: 'get_playlist', folderId });
+            if (response?.success) {
+                renderPlaylist(response.list, response.last_played_id, response.isFolderActive);
+            }
+        } catch (e) {
+            console.error("Failed to refresh playlist:", e);
         }
     }
 
@@ -678,17 +668,25 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             elementsToHide.forEach(el => el.style.display = 'none');
             container.style.display = 'block';
-            const response = await sendMessageAsync({ action: 'get_all_folder_ids' });
-            if (response.success) {
-                renderReorderList(container, response.folderIds);
+            try {
+                const response = await sendMessageAsync({ action: 'get_all_folder_ids' });
+                if (response.success) {
+                    renderReorderList(container, response.folderIds);
+                }
+            } catch (e) {
+                showStatus("Failed to load folders for reordering.", true);
             }
 
         } else {
             const list = container.querySelector('.reorder-list');
             if (list) {
                 const newOrder = [...list.children].map(item => item.dataset.folderId);
-                await sendMessageAsync({ action: 'set_folder_order', order: newOrder });
-                showStatus('Folder order saved.');
+                try {
+                    await sendMessageAsync({ action: 'set_folder_order', order: newOrder });
+                    showStatus('Folder order saved.');
+                } catch (e) {
+                    showStatus("Failed to save folder order.", true);
+                }
             }
 
             if (toggleBtn === toggleReorderBtn) { // Main view only
@@ -813,7 +811,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         exportFilenameModal.style.display = 'none';
     });
 
-    const handleSaveExport = () => {
+    const handleSaveExport = async () => {
         let filename = exportFilenameInput.value.trim();
         if (!filename) {
             return showStatus('Filename cannot be empty.', true);
@@ -830,17 +828,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             return showStatus('Please select a folder to export.', true);
         }
 
-        chrome.runtime.sendMessage({
-            action: 'export_folder_playlist',
-            filename: filename,
-            folderId: folderId
-        }, (response) => {
+        try {
+            const response = await sendMessageAsync({
+                action: 'export_folder_playlist',
+                filename: filename,
+                folderId: folderId
+            });
             if (response?.success) {
                 showStatus(response.message);
             } else {
                 showStatus(response?.error || 'Export failed.', true);
             }
-        });
+        } catch (e) {
+            showStatus("Export failed: " + e.message, true);
+        }
         exportFilenameModal.style.display = 'none';
     };
     
@@ -864,6 +865,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             } else {
                 showStatus(response?.error || 'Could not list import files.', true);
             }
+        }).catch(e => {
+            showStatus("Failed to list import files: " + e.message, true);
         });
     }
 
@@ -880,6 +883,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                         }
                     });
                 }
+            }).catch(e => {
+                showStatus("Export all failed: " + e.message, true);
             });
     }
 
@@ -938,10 +943,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         importSelectionModal.style.display = 'none';
     });
-    miniFolderSelect.addEventListener('change', () => {
+    miniFolderSelect.addEventListener('change', async () => {
         const newFolderId = miniFolderSelect.value;
         refreshPlaylist();
-        sendMessageAsync({ action: 'set_last_folder_id', folderId: newFolderId });
+        try {
+            await sendMessageAsync({ action: 'set_last_folder_id', folderId: newFolderId });
+        } catch (e) {
+            console.error("Failed to set last folder ID:", e);
+        }
     });
 
     // Helper to scrape page details directly from popup
@@ -951,6 +960,37 @@ document.addEventListener('DOMContentLoaded', async () => {
             resolve(response);
         });
     });
+
+    /**
+     * Fetches the native host status from the background script and updates the UI.
+     */
+    async function updateNativeHostStatusUI() {
+        const diagEl = document.querySelector('#diag-native-host-status .dependency-value');
+        if (!diagEl) return;
+
+        try {
+            const response = await sendMessageAsync({ action: 'get_native_host_status' });
+            if (response?.success) {
+                const status = response.status || 'unknown';
+                diagEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+                
+                if (status === 'online') {
+                    diagEl.style.color = 'var(--accent-positive)';
+                    if (response.info?.python) {
+                        diagEl.title = `Python: ${response.info.python}\nPlatform: ${response.info.platform}`;
+                    }
+                } else if (status === 'offline') {
+                    diagEl.style.color = 'var(--accent-danger)';
+                    diagEl.title = 'Native host is not running or not installed.';
+                } else {
+                    diagEl.style.color = 'var(--text-secondary)';
+                }
+            }
+        } catch (e) {
+            diagEl.textContent = 'Error';
+            diagEl.style.color = 'var(--accent-danger)';
+        }
+    }
 
     // --- Mini Controller Logic (Refactored for Clarity) ---
 
@@ -1020,12 +1060,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!folderId) return showStatus('Please select a folder.', true);
 
         if (action === 'clear') {
-            const prefs = await sendMessageAsync({ action: 'get_ui_preferences' });
-            if (prefs?.preferences?.confirm_clear_playlist ?? true) {
-                const confirmed = await showPopupConfirmation(`Are you sure you want to clear the playlist in "${folderId}"?`);
-                if (!confirmed) {
-                    return showStatus('Clear action cancelled.');
+            try {
+                const prefs = await sendMessageAsync({ action: 'get_ui_preferences' });
+                if (prefs?.preferences?.confirm_clear_playlist ?? true) {
+                    const confirmed = await showPopupConfirmation(`Are you sure you want to clear the playlist in "${folderId}"?`);
+                    if (!confirmed) {
+                        return showStatus('Clear action cancelled.');
+                    }
                 }
+            } catch (e) {
+                console.error("Failed to get preferences for clear action:", e);
             }
         }
 
@@ -1077,7 +1121,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             const index = parseInt(removeBtn.dataset.index, 10);
             const folderId = miniFolderSelect.value;
             if (!isNaN(index)) {
-                 sendMessageAsync({ action: 'remove_item', folderId, data: { index } });
+                 sendMessageAsync({ action: 'remove_item', folderId, data: { index } }).catch(err => {
+                     showStatus("Failed to remove item: " + err.message, true);
+                 });
             }
         }
     });
@@ -1097,7 +1143,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 title: item.dataset.title,
                 id: item.dataset.id 
             }));
-            sendMessageAsync({ action: 'set_playlist_order', folderId, data: { order: newOrder } });
+            sendMessageAsync({ action: 'set_playlist_order', folderId, data: { order: newOrder } }).catch(err => {
+                showStatus("Failed to save playlist order: " + err.message, true);
+            });
         }
     });
 
@@ -1108,11 +1156,64 @@ document.addEventListener('DOMContentLoaded', async () => {
         miniClearBtn.addEventListener('click', () => handleMiniSimpleCommand('clear'));
     miniCloseMpvBtn.addEventListener('click', handleMiniCloseMpv);
 
+    const popupKeybinds = { openPopup: null };
+
+    /**
+     * Handles global keyboard shortcuts for the popup.
+     * Allows toggling the popup closed with the same keybind used to open it.
+     */
+    function handleGlobalKeydown(e) {
+        if (!popupKeybinds.openPopup) return;
+        
+        // Ignore if typing in an input
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) {
+            // Special case: recording a new keybind in OptionsManager. 
+            // We shouldn't close the popup if the user is literally setting the shortcut.
+            if (e.target.classList.contains('recording-active')) return;
+        }
+
+        const modifiers = [];
+        if (e.ctrlKey) modifiers.push('Ctrl');
+        if (e.shiftKey) modifiers.push('Shift');
+        if (e.altKey) modifiers.push('Alt');
+        if (e.metaKey) modifiers.push('Meta');
+        
+        let key = e.key;
+        if (key === ' ') key = 'Space';
+        if (key.length === 1) key = key.toUpperCase();
+        
+        if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+
+        const combo = [...modifiers, key].join('+').toLowerCase();
+        const normalize = (str) => {
+            if (!str) return '';
+            return str.replace(/\s+/g, '')
+                      .toLowerCase()
+                      .replace('control', 'ctrl')
+                      .replace('command', 'meta')
+                      .replace('cmd', 'meta')
+                      .replace('option', 'alt');
+        };
+
+        if (combo === normalize(popupKeybinds.openPopup)) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.close();
+        }
+    }
+
+    // Attach global listener
+    window.addEventListener('keydown', handleGlobalKeydown, true);
+
     // --- Main Initialization ---
     async function initializePopup() {
         try {
+            // Update native host status immediately
+            updateNativeHostStatusUI();
+
             // Fetch all necessary data in parallel for faster startup
-            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+            const activeTab = tabs && tabs.length > 0 ? tabs[0] : null;
             const isHttp = activeTab?.url?.startsWith('http');
 
             const [uiStateResponse, prefsResponse] = await Promise.all([
@@ -1122,6 +1223,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const prefs = prefsResponse?.preferences;
             const uiState = uiStateResponse?.state;
+
+            // Store the open-popup keybind for toggle behavior
+            if (prefs?.kb_open_popup) {
+                popupKeybinds.openPopup = prefs.kb_open_popup;
+            }
 
             // New: Check for a detected URL on initialization and update the button state.
             if (uiState?.detectedUrl) {
@@ -1145,7 +1251,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (uiManager.isMiniView()) {
                 refreshPlaylist();
-                showOnPageControllerBtn.style.display = 'block';
+                showOnPageControllerBtn.style.display = isHttp ? 'block' : 'none';
                 hideOnPageControllerBtn.style.display = 'none';
                 if (miniAddBtn) miniAddBtn.focus();
             } else {
@@ -1154,7 +1260,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     newFolderNameInput.focus();
                 }
                 // Hide the 'hide' button if the full view is active, show it otherwise.
-                hideOnPageControllerBtn.style.display = 'block';
+                // Only show if on an HTTP page.
+                hideOnPageControllerBtn.style.display = isHttp ? 'block' : 'none';
             }
 
         } catch (error) {
@@ -1165,6 +1272,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             showStatus(`Error initializing popup: ${error.message}`, true);
         }
     }
+
+    // --- Popup Lifecycle Port ---
+    // This allows the background script to detect if the popup is open
+    // and send a message to close it, enabling the "toggle" keybind.
+    const lifecyclePort = chrome.runtime.connect({ name: "popup-lifecycle" });
+    lifecyclePort.onMessage.addListener((msg) => {
+        if (msg.action === 'close_popup') {
+            window.close();
+        }
+    });
 
     // Close the popup whenever it loses focus. This handles both clicking away
     // within the browser and switching to another application, which is the
@@ -1208,7 +1325,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     currentDetectedUrl = request.url;
                     miniAddBtn.classList.toggle('stream-present', !!request.url);
                 }
-            });
+            }).catch(e => console.error("Failed to query tabs for detected_url_changed:", e));
         }
 
         // If preferences changed in another context (e.g., dragging the anilist panel), update our UI.
@@ -1219,15 +1336,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const isStubEnabled = response.preferences.show_minimized_stub ?? true;
                     btnMiniToggleStub.style.opacity = isStubEnabled ? '1' : '0.5';
                 }
-            });
+            }).catch(e => console.error("Failed to get preferences for preferences_changed:", e));
         }
 
         // New: Handle confirmation requests from the background script
         if (request.action === 'show_popup_confirmation') {
             // This is an async action, so we must return true.
             (async () => {
-                const confirmed = await showPopupConfirmation(request.message);
-                sendResponse({ confirmed });
+                try {
+                    const confirmed = await showPopupConfirmation(request.message);
+                    sendResponse({ confirmed });
+                } catch (e) {
+                    sendResponse({ confirmed: false });
+                }
             })();
             return true;
         }

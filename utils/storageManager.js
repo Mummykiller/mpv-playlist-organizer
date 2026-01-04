@@ -7,6 +7,7 @@ export class StorageManager {
         this.STORAGE_KEY = storageKey;
         this.initPromise = null;
         this.broadcastLog = broadcastLog; // Dependency for logging during migrations
+        this.writeQueue = Promise.resolve(); // Queue for serializing write operations
     }
 
     /**
@@ -21,8 +22,51 @@ export class StorageManager {
         this.initPromise = (async () => {
             await this._migrateStorageToOneObject();
             await this._runDataMigrations();
+            await this.runJanitorTasks();
         })();
         return this.initPromise;
+    }
+
+    /**
+     * Performs maintenance tasks like pruning orphaned data.
+     */
+    async runJanitorTasks() {
+        const data = await this.get();
+        let modified = false;
+
+        // 1. Sync folders and folderOrder
+        const folderIds = Object.keys(data.folders);
+        const orderedIds = data.folderOrder || [];
+
+        // Remove from folderOrder if folder no longer exists
+        const validOrder = orderedIds.filter(id => data.folders[id]);
+        if (validOrder.length !== orderedIds.length) {
+            data.folderOrder = validOrder;
+            modified = true;
+        }
+
+        // Add to folderOrder if folder exists but is not ordered
+        folderIds.forEach(id => {
+            if (!data.folderOrder.includes(id)) {
+                data.folderOrder.push(id);
+                modified = true;
+            }
+        });
+
+        // 2. Prune domain preferences (optional: only if they are empty)
+        if (data.settings.ui_preferences.domains) {
+            for (const domain in data.settings.ui_preferences.domains) {
+                if (Object.keys(data.settings.ui_preferences.domains[domain]).length === 0) {
+                    delete data.settings.ui_preferences.domains[domain];
+                    modified = true;
+                }
+            }
+        }
+
+        if (modified) {
+            await this.set(data);
+            console.log("Storage Janitor: Cleaned up orphaned/inconsistent metadata.");
+        }
     }
 
     _getDefaultData() {
@@ -83,6 +127,7 @@ export class StorageManager {
                         kb_add_playlist: 'Shift+A',
                         kb_play_playlist: 'Shift+P',
                         kb_toggle_controller: 'Shift+S',
+                        kb_switch_playlist: 'Shift+Tab',
                         kb_open_popup: 'Alt+P',
                         dependencyStatus: {
                             mpv: { found: null, path: null, error: null },
@@ -118,14 +163,18 @@ export class StorageManager {
     }
 
     async set(data) {
-        try {
-            await chrome.storage.local.set({ [this.STORAGE_KEY]: data });
-        } catch (e) {
-            console.error("Storage set failed:", e);
-            if (this.broadcastLog) {
-                this.broadcastLog({ text: `[Background]: Storage write failed: ${e.message}`, type: 'error' });
+        // Use a promise chain to ensure sequential execution of write operations.
+        this.writeQueue = this.writeQueue.then(async () => {
+            try {
+                await chrome.storage.local.set({ [this.STORAGE_KEY]: data });
+            } catch (e) {
+                console.error("Storage set failed:", e);
+                if (this.broadcastLog) {
+                    this.broadcastLog({ text: `[Background]: Storage write failed: ${e.message}`, type: 'error' });
+                }
             }
-        }
+        });
+        return this.writeQueue;
     }
 
     async _runDataMigrations() {

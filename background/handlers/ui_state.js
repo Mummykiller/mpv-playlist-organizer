@@ -8,6 +8,7 @@ let _updateContextMenus;
 let _tabUiState; // Shared state from background.js
 let _m3u8_scanner_handlers;
 let _playback_handlers;
+let _getPopupPort; // Function to get the current popup port
 
 // Cache for native host info to speed up UI preference retrieval
 let _nativeInfoCache = {
@@ -25,6 +26,7 @@ export function init(dependencies) {
     _tabUiState = dependencies.tabUiState;
     _m3u8_scanner_handlers = dependencies.m3u8_scanner_handlers;
     _playback_handlers = dependencies.playback_handlers;
+    _getPopupPort = dependencies.getPopupPort;
 }
 
 
@@ -144,6 +146,41 @@ export async function handleSetLastFolderId(request) {
         return { success: true };
     }
     return { success: false, error: 'No folderId provided.' };
+}
+
+export async function handleSwitchPlaylist() {
+    const data = await _storage.get();
+    const folderOrder = data.folderOrder || Object.keys(data.folders);
+    
+    if (folderOrder.length <= 1) return { success: true }; // Nothing to switch to
+
+    const currentFolderId = data.settings.last_used_folder_id || folderOrder[0];
+    let currentIndex = folderOrder.indexOf(currentFolderId);
+    
+    const nextIndex = (currentIndex + 1) % folderOrder.length;
+    const nextFolderId = folderOrder[nextIndex];
+
+    data.settings.last_used_folder_id = nextFolderId;
+    await _storage.set(data);
+
+    // --- NEW: Gather full state for the new folder to eliminate round-trips ---
+    const folder = data.folders[nextFolderId] || { playlist: [] };
+    const mpvStatus = await _playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
+    const isFolderActive = !!(mpvStatus?.is_running && (mpvStatus.folderId === nextFolderId || _playback_handlers.isFolderActive(nextFolderId)));
+
+    // Broadcast the full state so all tabs sync and render instantly
+    _broadcastToTabs({ 
+        action: 'last_folder_changed', 
+        folderId: nextFolderId,
+        playlist: folder.playlist,
+        lastPlayedId: folder.last_played_id,
+        isFolderActive: isFolderActive
+    });
+    
+    // Non-blocking: Update context menus in the background
+    _updateContextMenus(_storage).catch(e => console.error("Failed to update context menus:", e));
+
+    return { success: true, folderId: nextFolderId };
 }
 
 export async function handleGetUiPreferences(request, sender) {
@@ -310,13 +347,22 @@ export async function handleForceRefreshDependencies() {
 }
 
 export async function handleOpenPopup(request, sender) {
-    _broadcastLog({ text: `[Background]: Attempting to open popup...`, type: 'info' });
+    const popupPort = _getPopupPort ? _getPopupPort() : null;
+    
+    if (popupPort) {
+        try {
+            popupPort.postMessage({ action: 'close_popup' });
+        } catch (e) {
+            console.error("Failed to send close message to popup:", e);
+        }
+        return { success: true };
+    }
+
     if (chrome.action && chrome.action.openPopup) {
-        // Fire and forget (but log errors) to avoid blocking the message response
+        // Fire and forget (but log errors to console) to avoid blocking the message response
         // or timing out the message channel if the popup takes time to init.
         chrome.action.openPopup({ windowId: sender.tab.windowId }).catch(e => {
             console.error("Popup open failed:", e);
-            _broadcastLog({ text: `[Background]: Popup open failed: ${e.message}`, type: 'error' });
         });
         return { success: true };
     }

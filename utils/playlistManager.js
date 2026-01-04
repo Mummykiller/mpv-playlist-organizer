@@ -123,7 +123,7 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
 
         data.folders[folderId].playlist.push(newItem);
         await storage.set(data);
-        debouncedSyncToNativeHostFile();
+        debouncedSyncToNativeHostFile(true);
 
         broadcastToTabs({ 
             action: 'render_playlist', 
@@ -221,11 +221,12 @@ async function _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, skipYouTubeChec
 export async function handleAdd(request, sender) {
     const tabId = request.tabId || sender.tab?.id;
     const folderId = request.folderId;
-    const tab = sender.tab; // Only trust the sender's tab object
+    // Use the tab object from the request (sent by popup) or the sender (sent by content script)
+    const tab = request.tab || sender.tab; 
 
     // --- Loop/Spam Prevention ---
     const urlToProcess = request.data?.url || tab?.url;
-    if (scrapingInProgress.has(urlToProcess)) {
+    if (urlToProcess && scrapingInProgress.has(urlToProcess)) {
         broadcastLog({ text: `[Background]: A request to add "${urlToProcess}" is already in progress. Ignoring.`, type: 'info' });
         return { success: true, message: 'Scraping already in progress for this URL.' };
     }
@@ -248,9 +249,15 @@ export async function handleAdd(request, sender) {
     } else {
         // Otherwise (e.g., from the popup), trigger the full scrape-and-add process
         // using the tab's main URL. This will use the scanner.
-        scrapingInProgress.add(tab.url);
-        const result = await _scrapeAndAddUrl(folderId, tab.url, tab, sender);
-        scrapingInProgress.delete(tab.url);
+        // On restricted pages, tab.url might be missing.
+        const urlToScan = tab?.url;
+        if (!urlToScan) {
+            return { success: false, error: 'Cannot scrape this page. Use the on-page "Add" button if available, or copy-paste the URL into a folder.' };
+        }
+
+        scrapingInProgress.add(urlToScan);
+        const result = await _scrapeAndAddUrl(folderId, urlToScan, tab, sender);
+        scrapingInProgress.delete(urlToScan);
         return result;
     }
 }
@@ -267,7 +274,7 @@ export async function handleClear(request) {
             isFolderActive: isFolderActive(request.folderId)
         });
     } catch (e) { /* Suppress errors if no content scripts exist */ }
-    debouncedSyncToNativeHostFile();
+    debouncedSyncToNativeHostFile(true);
     return { success: true, message: `Playlist in folder ${request.folderId} cleared` };
 }
 
@@ -287,7 +294,7 @@ export async function handleRemoveItem(request) {
             last_played_id: last_played_id,
             isFolderActive: isFolderActive(request.folderId)
         });
-        debouncedSyncToNativeHostFile();
+        debouncedSyncToNativeHostFile(true);
 
         // Attempt to remove from live MPV session if running AND live removal is enabled
         const globalPrefs = data.settings.ui_preferences.global;
@@ -317,7 +324,7 @@ export async function handleSetPlaylistOrder(request) {
 
     storageData.folders[folderId].playlist = order;
     await storage.set(storageData);
-    debouncedSyncToNativeHostFile();
+    debouncedSyncToNativeHostFile(true);
 
     // Attempt to reorder live MPV session
     callNativeHost({

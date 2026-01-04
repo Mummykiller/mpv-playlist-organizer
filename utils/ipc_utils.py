@@ -83,6 +83,7 @@ class IPCSocketManager:
                     # On Windows, named pipes are opened like files.
                     # We open in r+b mode for reading and writing.
                     self._sock = open(ipc_path, "r+b", buffering=0)
+                    self._sock_file = self._sock # On Windows, open() returns a file-like object directly
                 else: # Linux/macOS
                     self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                     self._sock.connect(ipc_path)
@@ -90,12 +91,11 @@ class IPCSocketManager:
                 
                 logging.info(f"Successfully connected to MPV IPC: {ipc_path}")
                 
-                if self._system != "Windows": # Start reader thread only for Unix sockets
-                    self._event_reader_running = True
-                    self._event_reader_thread = threading.Thread(target=self._event_reader_loop)
-                    self._event_reader_thread.daemon = True # Allow program to exit even if thread is running
-                    self._event_reader_thread.start()
-                    logging.debug("IPC event reader thread started.")
+                self._event_reader_running = True
+                self._event_reader_thread = threading.Thread(target=self._event_reader_loop)
+                self._event_reader_thread.daemon = True # Allow program to exit even if thread is running
+                self._event_reader_thread.start()
+                logging.debug("IPC event reader thread started.")
                 
                 return True
             except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
@@ -118,45 +118,48 @@ class IPCSocketManager:
         Runs in a separate thread to prevent mpv's output buffer from filling up.
         """
         while self._event_reader_running:
-            if not self._sock or self._system == "Windows": # Windows named pipes don't use _sock_file for event reading in this model
-                time.sleep(0.1) # Avoid busy-looping if not connected or on Windows
+            if not self._sock or not self._sock_file:
+                time.sleep(0.1)
                 continue
 
             try:
-                # Use select to check for data availability with a timeout
-                # This avoids using socket.settimeout() which can interfere with makefile() buffering
-                readable, _, _ = select.select([self._sock], [], [], 0.1)
+                if self._system != "Windows":
+                    # Use select to check for data availability with a timeout on Unix
+                    readable, _, _ = select.select([self._sock], [], [], 0.1)
+                    if self._sock not in readable:
+                        continue
 
-                if self._sock in readable:
-                    response_line = self._sock_file.readline()
+                # On Windows, named pipes are blocking by default. readline() will block until data arrives.
+                # This is why we use a separate thread.
+                response_line = self._sock_file.readline()
 
-                    if response_line:
-                        event = json.loads(response_line.decode('utf-8').strip())
-                        
-                        # Filter out noisy thumbnail script events
-                        if event.get("event") == "client-message":
-                            args = event.get("args", [])
-                            if args and isinstance(args[0], str) and args[0].startswith("mpv_thumbnail_script"):
-                                continue
+                if response_line:
+                    line_str = response_line.decode('utf-8').strip()
+                    if not line_str: continue # Skip empty lines
+                    
+                    event = json.loads(line_str)
+                    
+                    # Filter out noisy thumbnail script events
+                    if event.get("event") == "client-message":
+                        args = event.get("args", [])
+                        if args and isinstance(args[0], str) and args[0].startswith("mpv_thumbnail_script"):
+                            continue
 
-                        ipc_logger.info(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
-                        with self._buffer_lock:
-                            self._event_buffer.append(event)
-                    else:
-                        # EOF detected, connection closed by MPV or remote end
-                        ipc_logger.info("IPC event reader detected EOF. Signaling connection closure.")
-                        self._event_reader_running = False # Signal thread to stop
-                        # No self.close() here; let main thread detect and handle connection loss
+                    ipc_logger.info(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
+                    with self._buffer_lock:
+                        self._event_buffer.append(event)
+                else:
+                    # EOF detected, connection closed by MPV or remote end
+                    ipc_logger.info("IPC event reader detected EOF. Signaling connection closure.")
+                    self._event_reader_running = False 
             except (ConnectionResetError, BrokenPipeError, OSError) as e:
-                logging.debug(f"IPC event reader thread connection error: {e}. Stopping thread and closing socket.")
-                self._event_reader_running = False # Signal thread to stop
-                self.close() # Explicitly close on connection loss
+                logging.debug(f"IPC event reader thread connection error: {e}. Stopping.")
+                self._event_reader_running = False 
             except json.JSONDecodeError as e:
-                logging.error(f"IPC event reader thread failed to decode JSON: {response_line.decode('utf-8', errors='ignore')}. Error: {e}")
+                logging.error(f"IPC event reader thread failed to decode JSON. Error: {e}")
             except Exception as e:
-                logging.error(f"IPC event reader thread unexpected error: {e}. Stopping thread and closing socket.")
-                self._event_reader_running = False # Signal thread to stop
-                self.close()
+                logging.error(f"IPC event reader thread unexpected error: {e}. Stopping.")
+                self._event_reader_running = False
         logging.debug("IPC event reader thread stopped.")
 
 
@@ -186,65 +189,36 @@ class IPCSocketManager:
                 # For Windows named pipes, writing and flushing is the way to send.
                 self._sock.write(encoded)
                 self._sock.flush()
-                # On Windows, receive_event does not work correctly. So we will block for response.
-                if expect_response:
-                    try:
-                        # Temporary set timeout for the synchronous readline on Windows
-                        original_timeout = self._sock.gettimeout()
-                        self._sock.settimeout(timeout)
-                        start_read_time = time.time()
-                        while (time.time() - start_read_time) < timeout:
-                            response_line = self._sock.readline()
-                            if not response_line: # EOF
-                                self.close()
-                                return None
-                            response = json.loads(response_line.decode('utf-8').strip())
-                            ipc_logger.info(f"IPC RECV: {json.dumps(response)}")
-                            if "event" not in response:
-                                self._sock.settimeout(original_timeout) # Restore original timeout
-                                return response
-                            ipc_logger.debug(f"Received event '{response.get('event')}' while waiting for command response. Buffering.")
-                            with self._buffer_lock:
-                                self._event_buffer.append(response) # Still buffer events received
-                        logging.warning(f"Timed out waiting for command response on Windows after {timeout} seconds.")
-                        self._sock.settimeout(original_timeout) # Restore original timeout
-                        return None
-                    except socket.timeout:
-                        logging.warning(f"Timed out reading response on Windows after {timeout} seconds.")
-                        self._sock.settimeout(original_timeout) # Restore original timeout
-                        return None
-                    except Exception as e:
-                        logging.error(f"Error reading response on Windows: {e}")
-                        self.close()
-                        return None
-                return {"error": "success"} # If not expecting response
             else: # Linux/macOS
-                # For Unix sockets, the background reader thread handles event buffering.
-                # Here, we only concern ourselves with sending the command and waiting for *its* response.
-                # We'll try to retrieve the response from the buffered events.
-
                 self._sock.sendall(encoded)
 
-                if not expect_response:
-                    return {"error": "success"} # Command sent, no response expected
+            if not expect_response:
+                return {"error": "success"} # Command sent, no response expected
 
-                start_read_time = time.time()
-                while (time.time() - start_read_time) < timeout:
-                    # Check internal buffer for a command response
-                    with self._buffer_lock:
-                        for i in range(len(self._event_buffer)):
-                            item = self._event_buffer[i]
-                            # Match by request_id if present, or fallback to non-event items
-                            if item.get("request_id") == req_id or ("event" not in item and "request_id" not in item):
-                                del self._event_buffer[i] # Remove it from buffer
-                                response = item
-                                ipc_logger.info(f"IPC RECV (from buffer): {json.dumps(response)}")
-                                return response
-                    
-                    time.sleep(0.01) # Small sleep to avoid busy-waiting for the buffer
+            start_read_time = time.time()
+            while (time.time() - start_read_time) < timeout:
+                # Check internal buffer for a command response (matching request_id)
+                with self._buffer_lock:
+                    for i in range(len(self._event_buffer)):
+                        item = self._event_buffer[i]
+                        if item.get("request_id") == req_id or ("event" not in item and "request_id" not in item):
+                            del self._event_buffer[i] 
+                            response = item
+                            ipc_logger.info(f"IPC RECV (from buffer): {json.dumps(response)}")
+                            return response
                 
-                logging.warning(f"Timed out waiting for command response after {timeout} seconds, or connection closed.")
-                return None # No valid command response received within timeout
+                time.sleep(0.01) # Small sleep
+            
+            logging.warning(f"Timed out waiting for command response for id {req_id} after {timeout} seconds.")
+            return None 
+        except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError) as e:
+            logging.debug(f"IPC send error (connection likely lost): {e}")
+            self.close() 
+            return None
+        except Exception as e:
+            logging.error(f"Unexpected error during IPC send command: {e}")
+            self.close()
+            return None
         except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError) as e:
             logging.debug(f"IPC send/receive error (connection likely lost): {e}")
             self.close() # Connection is broken, close it.

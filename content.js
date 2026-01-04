@@ -5,34 +5,7 @@
 
 
 
-// --- Utility Functions ---
-
-function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-        const later = () => {
-            clearTimeout(timeout);
-            func(...args);
-        };
-        clearTimeout(timeout);
-        timeout = setTimeout(later, wait);
-    };
-}
-
-const sendMessageAsync = (payload) => new Promise((resolve, reject) => {
-    // Safety check: if extension context is invalidated, fail gracefully instead of throwing TypeError
-    if (!chrome.runtime?.id) {
-        return reject(new Error("Extension context invalidated."));
-    }
-    chrome.runtime.sendMessage(payload, (response) => {
-        if (chrome.runtime.lastError) {
-            // The error message is more useful than a generic rejection.
-            return reject(new Error(chrome.runtime.lastError.message));
-        }
-        resolve(response);
-    });
-});
-
+// --- MpvController Class ---
 class MpvController {
     constructor() {
         // --- State ---
@@ -54,7 +27,7 @@ class MpvController {
         this.enableDblclickCopy = false; // New: Preference for double-click copy
         this.showCopyTitleButton = false; // New: Preference for the copy title button
         this.lastRightClickedElement = null; // New: To track right-clicks for context menu actions
-        this.keybinds = { add: null, playPlaylist: null, toggle: null, openPopup: null };
+        this.keybinds = { add: null, playPlaylist: null, toggle: null, switchPlaylist: null, openPopup: null };
         this.observer = null; // Store observer for cleanup
 
         // --- Smart Update State ---
@@ -64,6 +37,7 @@ class MpvController {
 
         // Bind `this` for methods that are used as event listeners or callbacks
         this.handleMessage = this.handleMessage.bind(this);
+        this.handleGlobalKeydown = this.handleGlobalKeydown.bind(this);
         this.handleFullscreenChange = this.handleFullscreenChange.bind(this); // This is correct
         this.handleMouseDown = this.handleMouseDown.bind(this);
         this.handlePageUpdate = debounce(this.handlePageUpdate.bind(this), 250); // Debounce the handler
@@ -237,7 +211,29 @@ class MpvController {
                 if (fullSelect.value !== request.folderId) {
                     fullSelect.value = request.folderId;
                     compactSelect.value = request.folderId;
-                    this.requestUpdate();
+                    
+                    // Optimization: If the full state was pre-delivered, render it instantly
+                    if (request.playlist) {
+                        this._lastUpdateHash = JSON.stringify({
+                            folderId: request.folderId,
+                            playlist: request.playlist,
+                            lastPlayedId: request.lastPlayedId,
+                            isFolderActive: request.isFolderActive,
+                            uiMode: this.currentUiMode,
+                            anilistVisible: this.anilistUI?.isVisible ?? false,
+                            detectedUrl: this.detectedUrl,
+                            settings: {
+                                highlight: this.settings?.enable_active_item_highlight,
+                                anilist: this.showAnilistReleases,
+                                minimizedStub: this.showMinimizedStub
+                            }
+                        });
+                        this.playlistUI?.render(request.playlist, request.lastPlayedId, request.isFolderActive);
+                        this.updateAddButtonState();
+                    } else {
+                        // Fallback to full fetch if data missing
+                        this.performSmartUpdate();
+                    }
                 }
             }
         } else if (request.log) {
@@ -1099,70 +1095,75 @@ class MpvController {
      * @private
      */
     _bindGlobalShortcuts() {
-        window.addEventListener('keydown', (e) => {
-            if (!this.keybinds.add && !this.keybinds.toggle && !this.keybinds.openPopup) return;
-            
-            // Ignore if typing in an input
-            if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) return;
+        window.addEventListener('keydown', this.handleGlobalKeydown, true);
+    }
 
-            const modifiers = [];
-            if (e.ctrlKey) modifiers.push('Ctrl');
-            if (e.shiftKey) modifiers.push('Shift');
-            if (e.altKey) modifiers.push('Alt');
-            if (e.metaKey) modifiers.push('Meta');
-            
-            let key = e.key;
-            if (key === ' ') key = 'Space';
-            if (key.length === 1) key = key.toUpperCase();
-            
-            if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+    /**
+     * Handles global keyboard shortcuts.
+     * @param {KeyboardEvent} e - The keyboard event.
+     */
+    handleGlobalKeydown(e) {
+        if (!this.keybinds.add && !this.keybinds.toggle && !this.keybinds.openPopup) return;
+        
+        // Ignore if typing in an input
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) return;
 
-            const combo = [...modifiers, key].join('+').toLowerCase();
-            const normalize = (str) => {
-                if (!str) return '';
-                return str.replace(/\s+/g, '')
-                          .toLowerCase()
-                          .replace('control', 'ctrl')
-                          .replace('command', 'meta')
-                          .replace('cmd', 'meta')
-                          .replace('option', 'alt');
-            };
+        const modifiers = [];
+        if (e.ctrlKey) modifiers.push('Ctrl');
+        if (e.shiftKey) modifiers.push('Shift');
+        if (e.altKey) modifiers.push('Alt');
+        if (e.metaKey) modifiers.push('Meta');
+        
+        let key = e.key;
+        if (key === ' ') key = 'Space';
+        if (key.length === 1) key = key.toUpperCase();
+        
+        if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
 
-            if (this.keybinds.add && combo === normalize(this.keybinds.add)) {
-                e.preventDefault();
-                e.stopPropagation();
-                const folderSelect = this.uiManager.shadowRoot?.getElementById('folder-select');
-                const folderId = folderSelect?.value;
-                if (folderId) {
-                    this.addDetectedUrlToFolder(folderId, { isUiVisible: this.uiManager.controllerHost.style.display !== 'none' });
-                }
-            } else if (this.keybinds.playPlaylist && combo === normalize(this.keybinds.playPlaylist)) {
-                e.preventDefault();
-                e.stopPropagation();
-                const folderSelect = this.uiManager.shadowRoot?.getElementById('folder-select');
-                const folderId = folderSelect?.value;
-                if (folderId) {
-                    this.sendCommandToBackground('play', folderId);
-                }
-            } else if (this.keybinds.toggle && combo === normalize(this.keybinds.toggle)) {
-                e.preventDefault();
-                e.stopPropagation();
-                const isMinimized = this.uiManager.controllerHost.style.display === 'none';
-                this.setMinimizedState(!isMinimized);
-            } else if (this.keybinds.openPopup && combo === normalize(this.keybinds.openPopup)) {
-                e.preventDefault();
-                e.stopPropagation();
-                if (this.checkContext()) {
-                    sendMessageAsync({ action: 'open_popup' }).then(response => {
-                        if (!response || !response.success) {
-                            this.addLogEntry({ text: `[Content]: Failed to open popup: ${response?.error || 'Unknown error'}`, type: 'error' });
-                        }
-                    }).catch(e => {
-                         this.addLogEntry({ text: `[Content]: Error opening popup: ${e.message}`, type: 'error' });
-                    });
-                }
+        const combo = [...modifiers, key].join('+').toLowerCase();
+        const normalize = (str) => {
+            if (!str) return '';
+            return str.replace(/\s+/g, '')
+                      .toLowerCase()
+                      .replace('control', 'ctrl')
+                      .replace('command', 'meta')
+                      .replace('cmd', 'meta')
+                      .replace('option', 'alt');
+        };
+
+        if (this.keybinds.add && combo === normalize(this.keybinds.add)) {
+            e.preventDefault();
+            e.stopPropagation();
+            const folderSelect = this.uiManager.shadowRoot?.getElementById('folder-select');
+            const folderId = folderSelect?.value;
+            if (folderId) {
+                this.addDetectedUrlToFolder(folderId, { isUiVisible: this.uiManager.controllerHost.style.display !== 'none' });
             }
-        }, true);
+        } else if (this.keybinds.playPlaylist && combo === normalize(this.keybinds.playPlaylist)) {
+            e.preventDefault();
+            e.stopPropagation();
+            const folderSelect = this.uiManager.shadowRoot?.getElementById('folder-select');
+            const folderId = folderSelect?.value;
+            if (folderId) {
+                this.sendCommandToBackground('play', folderId);
+            }
+                    } else if (this.keybinds.toggle && combo === normalize(this.keybinds.toggle)) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const isMinimized = this.uiManager.controllerHost.style.display === 'none';
+                        this.setMinimizedState(!isMinimized);
+                    } else if (this.keybinds.switchPlaylist && combo === normalize(this.keybinds.switchPlaylist)) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (this.checkContext()) {
+                            sendMessageAsync({ action: 'switch_playlist' }).catch(() => {});
+                        }
+                    } else if (this.keybinds.openPopup && combo === normalize(this.keybinds.openPopup)) {            e.preventDefault();
+            e.stopPropagation();
+            if (this.checkContext()) {
+                sendMessageAsync({ action: 'open_popup' }).catch(() => {});
+            }
+        }
     }
 
     /**
@@ -1307,6 +1308,7 @@ class MpvController {
         this.keybinds.add = prefs?.kb_add_playlist || null;
         this.keybinds.playPlaylist = prefs?.kb_play_playlist || null;
         this.keybinds.toggle = prefs?.kb_toggle_controller || null;
+        this.keybinds.switchPlaylist = prefs?.kb_switch_playlist || null;
         this.keybinds.openPopup = prefs?.kb_open_popup || null;
 
         // Restore AniList panel position first.
@@ -1536,10 +1538,10 @@ class MpvController {
             fullSelect.innerHTML = '';
             compactSelect.innerHTML = '';
             const optionsFragment = document.createDocumentFragment();
-            folderResponse.folderIds.forEach(id => {
+            folderResponse.folderIds.forEach((id, index) => {
                 const option = document.createElement('option');
                 option.value = id;
-                option.textContent = id;
+                option.textContent = `${index + 1}. ${id}`;
                 optionsFragment.appendChild(option);
             });
             fullSelect.appendChild(optionsFragment.cloneNode(true));
@@ -1800,6 +1802,12 @@ class MpvController {
         
         document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
         if (this.handleMouseDown) document.removeEventListener('mousedown', this.handleMouseDown, true);
+        window.removeEventListener('keydown', this.handleGlobalKeydown, true);
+
+        if (this.messageListener) {
+            chrome.runtime.onMessage.removeListener(this.messageListener);
+            this.messageListener = null;
+        }
         
         if (this.observer) {
             this.observer.disconnect();
@@ -1925,7 +1933,8 @@ class MpvController {
       // The scanner window doesn't need a controller UI, but it still needs to
       // listen for messages from the background script (e.g., to perform a scrape).
       const controller = new MpvController();
-      chrome.runtime.onMessage.addListener(controller.handleMessage);
+      controller.messageListener = controller.handleMessage;
+      chrome.runtime.onMessage.addListener(controller.messageListener);
       return; // Abort UI injection.
     }
   } catch (e) { /* Ignore invalid URLs */ }
@@ -1940,7 +1949,8 @@ class MpvController {
     // Attach the message listener to the single controller instance.
     // Use a flag to ensure we only attach it once per script execution context
     if (!window.mpvMessageListenerAttached) {
-        chrome.runtime.onMessage.addListener(controller.handleMessage);
+        controller.messageListener = controller.handleMessage;
+        chrome.runtime.onMessage.addListener(controller.messageListener);
         window.mpvMessageListenerAttached = true;
     }
   };

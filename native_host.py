@@ -250,7 +250,17 @@ try:
                 return {"success": True, "action": "session_restored", "result": res}
             return {"success": True, "action": "session_restored", "result": None}
 
+        def handle_ping(message):
+            """Returns basic system info to verify connectivity."""
+            return {
+                "success": True, 
+                "python_version": sys.version,
+                "platform": platform.platform(),
+                "status": "online"
+            }
+
         COMMAND_HANDLERS = {
+            'ping': handle_ping,
             'restore_session': handle_restore_session,
             'play': handler_manager.handle_play,
             'play_batch': handler_manager.handle_play_batch,
