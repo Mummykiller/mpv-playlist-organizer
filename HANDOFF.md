@@ -1,37 +1,38 @@
-# MPV Playlist Organizer - Sanitization Pass & Performance Optimization (Technical Handoff V7)
+# MPV Playlist Organizer - Handoff V8
 
-This handoff details the implementation of a project-wide security/sanitization audit and a significant performance optimization pass to improve UI responsiveness and reduce system overhead.
+This handoff details the implementation of the "Smart Update" system, the centralization of sanitization logic, and new diagnostic capabilities.
 
 ## 🛠️ Key Improvements & Fixes
 
-### 1. Robust Sanitization Pass (Defense-in-Depth)
-*   **Regex Synchronization:** Unified `sanitizeString` logic across all JavaScript handlers (`content.js`, `folder_management.js`, `import_export.js`).
-    *   **Filenames/Folders:** Strict blacklist: `/ \ : * ? " < > | $ ; & ` ` and line breaks/tabs.
-    *   **URLs/Titles (Minimal Destruction):** Strips only `"`, `` ` ``, and line breaks/tabs while **strictly preserving** `&`, `?`, `=`, `;`, and `$` to maintain URL functionality.
-*   **Import Security:** Hardened `import_export.js` to re-sanitize all URLs, titles, and derived folder names during file imports, preventing malicious JSON from entering storage.
-*   **yt-dlp Hardening:** Expanded the `BLOCKED_KEYS` list in `file_io.py` to include more dangerous flags such as `--downloader`, `--plugin-dirs`, and `--ffmpeg-location` to prevent Remote Code Execution (RCE).
-*   **Sanitization Plan Sync:** Updated `SANITATION_PLAN.md` to accurately reflect the 4-layer defense strategy and the actual characters being stripped vs. preserved.
+### 1. Smart Update System (Performance & Accuracy)
+*   **Hashed State Tracking:** `content.js` now uses a hashing mechanism (`performSmartUpdate`) to track the controller's state (playlist content, MPV status, AniList visibility). It only triggers a DOM redraw if the state actually changes.
+*   **Debounced Refreshing:** Added `requestUpdate` (50ms debounce) to handle rapid-fire messages from the background script without UI flickering or CPU spikes.
+*   **Proactive Broadcasts:** Updated `playback.js` to broadcast updates on critical events (MPV exit, item append, last played update), ensuring all tabs and the popup are perfectly synchronized.
 
-### 2. Performance & Bottleneck Optimization
-*   **Settings Load Speed:** 
-    *   Implemented a 10-minute in-memory cache for native host info (like the recommended hardware decoder) in `ui_state.js`.
-    *   Consolidated redundant IPC calls during the settings initialization flow.
-*   **Python-Side Caching:** Added a 5-minute memory cache in `services.py` for dependency status checks. Slow shell commands (like `yt-dlp --version`) are now only executed once every few minutes instead of on every request.
-*   **UI Responsiveness:**
-    *   **Playlist Caching:** `PlaylistUI.js` now maintains a local `currentPlaylist` cache.
-    *   **Messaging Efficiency:** `content.js` now uses this local cache for its 500ms `updateAddButtonState` loop, eliminating thousands of redundant background messages.
-    *   **Observer Optimization:** Streamlined the `MutationObserver` in `content.js` to be less aggressive, reducing CPU overhead on dynamic sites like YouTube.
-*   **Consolidated Fetching:** Combined `get_all_folder_ids` and `get_last_folder_id` into a single logic flow in `updateFolderDropdowns`.
+### 2. Centralized Sanitization
+*   **New Utility:** Created `utils/sanitization.js` to house the unified `sanitizeString` logic.
+*   **Deduplication:** Removed local `sanitizeString` copies from `playlistManager.js`, `folder_management.js`, and `import_export.js`.
+*   **Strict vs. Minimal:** The utility correctly distinguishes between "Strict" filename sanitization (for folders) and "Minimal" destruction (preserving URL parameters).
 
-### 3. Bug Fixes
-*   **Null Pointer Guard:** Fixed a `TypeError: Cannot read properties of undefined (reading 'startsWith')` in `m3u8_scanner.js` by adding a safety check for `tab.url` during early "loading" states.
+### 3. Diagnostics & Cache Control
+*   **Diagnostics UI:** Added a "Diagnostics & Dependencies" section to the settings popup.
+*   **Cache Invalidation:** Implemented a "Force Refresh Dependencies" button that clears the 5-10 minute caches in both JS and Python, triggering a fresh system scan for `mpv` and `yt-dlp`.
+
+### 4. Issue Tracking
+*   **Expanded Backlog:** Updated `issues.md` with 5 new architectural improvements, including utility consolidation, standardized logging, and native host health checks.
 
 ## 📂 Verification Steps
-1.  **Sanitization Test:** Create a folder with characters like `&` or `$`. Verify it is cleaned. Add a URL with complex parameters. Verify the parameters are **preserved** and the video plays.
-2.  **Settings Snapiness:** Open the settings tab, close the popup, and re-open it immediately. The hardware decoder and other native info should load instantly from the cache.
-3.  **CPU/Network Audit:** Monitor the "Background Page" console and "Network" tab. You should see significantly fewer messages being sent between the content script and background script during normal browsing.
+1.  **Smart Update Test:** Open multiple tabs. Add an item in one tab; verify the controller in other tabs updates its count immediately without a page refresh.
+2.  **MPV Sync:** Close MPV. Verify the green "active" highlight disappears in all open tabs and the popup simultaneously.
+3.  **Sanitization Check:** Rename a folder using illegal characters (e.g. `Folder/Name?`). Verify it is cleaned correctly using the new shared utility.
 
 ## 🚀 Next Steps
-*   **Global Sanitization Utility:** Consider moving the duplicated `sanitizeString` JS logic into a shared utility module to prevent future drift.
-*   **Cache Invalidation UI:** Add a "Force Refresh Dependencies" button in the diagnostics section to manually clear the new 5-minute status cache.
-*   **Multi-Instance Tracking:** (Carried forward) Investigate supporting multiple simultaneous MPV windows via a Map-based tracker.
+*   **Consolidate Infrastructure:** Move `debounce` and `sendMessageAsync` into a shared utility file.
+*   **Heartbeat Mechanism:** Implement a proactive "Native Host Status" check to detect Python crashes.
+*   **Storage Maintenance:** Add a janitor task for pruning orphaned metadata in `chrome.storage`.
+
+## ⏭️ Instructions for the Next Agent
+1.  **Read Issues:** Open `issues.md` and read the listed issues one by one.
+2.  **Verify Issues:** For each issue, perform the necessary steps to verify its existence and understand its impact.
+3.  **Develop Plans:** Come up with a clear, grounded plan for resolving each verified issue.
+4.  **Communicate:** Share your findings and the proposed plan with the user before proceeding with implementation.

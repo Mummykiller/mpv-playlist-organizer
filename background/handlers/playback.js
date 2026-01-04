@@ -211,6 +211,17 @@ export async function handleMpvExited(data) {
     }
     
     // We don't need to trigger processQueue here because we drain the queue immediately.
+    
+    // ALWAYS broadcast a refresh to all tabs after an exit to ensure UI state (like active highlight) is updated.
+    const finalData = await _storage.get();
+    const folder = finalData.folders[folderId] || { playlist: [] };
+    _broadcastToTabs({ 
+        action: 'render_playlist', 
+        folderId: folderId, 
+        playlist: folder.playlist,
+        last_played_id: folder.last_played_id,
+        isFolderActive: false 
+    });
 }
 
 export async function handleIsMpvRunning() {

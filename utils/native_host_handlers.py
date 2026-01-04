@@ -412,7 +412,11 @@ class HandlerManager:
         return self.services.update_ytdlp(self.send_message)
 
     def handle_check_dependencies(self, message):
-        return self.services.check_mpv_and_ytdlp_status(self.file_io.get_mpv_executable, self.send_message)
+        return self.services.check_mpv_and_ytdlp_status(
+            self.file_io.get_mpv_executable, 
+            self.send_message, 
+            force_refresh=message.get('force_refresh', False)
+        )
 
     def handle_get_all_folders(self, message):
         return {"success": True, "folders": self.file_io.get_all_folders_from_file()}

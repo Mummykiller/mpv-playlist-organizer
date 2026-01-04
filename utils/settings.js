@@ -147,6 +147,34 @@ class OptionsManager {
 
         this._renderScraperFilterList(prefs.scraper_filter_words || []);
         this._renderBuiltInFilterList();
+        this._renderDependencyStatus(prefs.dependencyStatus);
+    }
+
+    _renderDependencyStatus(status) {
+        if (!status) return;
+
+        const mpvEl = document.querySelector('#diag-mpv-status .dependency-value');
+        const ytdlpEl = document.querySelector('#diag-ytdlp-status .dependency-value');
+
+        if (mpvEl) {
+            if (status.mpv?.found) {
+                mpvEl.textContent = `Found at ${status.mpv.path}`;
+                mpvEl.style.color = 'var(--accent-primary)';
+            } else {
+                mpvEl.textContent = status.mpv?.error || 'Not Found';
+                mpvEl.style.color = 'var(--text-error)';
+            }
+        }
+
+        if (ytdlpEl) {
+            if (status.ytdlp?.found) {
+                ytdlpEl.textContent = `${status.ytdlp.version || 'Found'} at ${status.ytdlp.path}`;
+                ytdlpEl.style.color = 'var(--accent-primary)';
+            } else {
+                ytdlpEl.textContent = status.ytdlp?.error || 'Not Found';
+                ytdlpEl.style.color = 'var(--text-error)';
+            }
+        }
     }
 
     _updateNetworkingSectionState(isDisabled) {
@@ -580,6 +608,36 @@ class OptionsManager {
                 this._handleSectionReload(btn);
             });
         });
+
+        const refreshDepsBtn = document.getElementById('btn-force-refresh-dependencies');
+        if (refreshDepsBtn) {
+            refreshDepsBtn.addEventListener('click', () => this._handleForceRefreshDependencies(refreshDepsBtn));
+        }
+    }
+
+    async _handleForceRefreshDependencies(btn) {
+        if (btn.disabled) return;
+        
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = 'Refreshing...';
+        
+        this.showStatus('Refreshing system dependencies...');
+        
+        try {
+            const response = await this.sendMessageAsync({ action: 'force_refresh_dependencies' });
+            if (response?.success) {
+                this._renderDependencyStatus({ mpv: response.mpv, ytdlp: response.ytdlp });
+                this.showStatus('Dependencies refreshed!');
+            } else {
+                this.showStatus('Failed to refresh dependencies.', true);
+            }
+        } catch (e) {
+            this.showStatus('Error: ' + e.message, true);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
     }
 
     async _handleSectionReload(btn) {
