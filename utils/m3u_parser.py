@@ -7,6 +7,7 @@ sys.dont_write_bytecode = True
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
 from typing import List, Dict, Optional
+import file_io
 
 def parse_m3u(m3u_content: str) -> List[Dict]:
     """
@@ -46,34 +47,40 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
         if line.startswith('#EXTINF:'):
             match = re.search(r'#EXTINF:[-0-9]+,(.*)', line)
             if match:
-                current_title = match.group(1).strip()
+                raw_title = match.group(1).strip()
+                current_title = file_io.sanitize_string(raw_title)
             else:
                 current_title = "Unknown Title"
-        elif line.startswith('#EXTHTTPHEADERS:'):
-            headers_str = line[len('#EXTHTTPHEADERS:'):].strip()
+        elif line.startswith('#EXTHTTPHEADERS:') or line.startswith('#EXT-X-HEADERS:'):
+            tag = '#EXTHTTPHEADERS:' if line.startswith('#EXTHTTPHEADERS:') else '#EXT-X-HEADERS:'
+            headers_str = line[len(tag):].strip()
             for pair in split_pairs(headers_str):
                 k, v = parse_pair(pair)
                 if k:
                     current_headers[k.strip()] = v.strip()
-        elif line.startswith('#EXTYTDLOPTIONS:'):
-            options_str = line[len('#EXTYTDLOPTIONS:'):].strip()
+        elif line.startswith('#EXTYTDLOPTIONS:') or line.startswith('#EXT-X-YTDL-OPTIONS:'):
+            tag = '#EXTYTDLOPTIONS:' if line.startswith('#EXTYTDLOPTIONS:') else '#EXT-X-YTDL-OPTIONS:'
+            options_str = line[len(tag):].strip()
             for pair in split_pairs(options_str):
                 if pair:
                     k, v = parse_pair(pair)
                     if k:
+                        # Sanitize key/value if needed, but we sanitize ytdl options later too
                         current_ytdl_options.append(f"{k.strip()}={v.strip()}")
                     else:
                         # For boolean flags, append as key=
                         current_ytdl_options.append(f"{pair.strip()}=")
         elif not line.startswith('#'):
-            # This is a URL
+            # This is a URL - sanitize it
+            sanitized_url = file_io.sanitize_string(line)
+            
             url_item = {
-                'url': line,
-                'title': current_title if current_title else line,
+                'url': sanitized_url,
+                'title': current_title if current_title else sanitized_url,
                 'headers': current_headers if current_headers else None,
                 'ytdl_raw_options': ','.join(current_ytdl_options) if current_ytdl_options else None,
                 'use_ytdl_mpv': False,
-                'is_youtube': 'youtube.com/' in line or 'youtu.be/' in line
+                'is_youtube': 'youtube.com/' in sanitized_url or 'youtu.be/' in sanitized_url
             }
             url_items.append(url_item)
             current_title = None

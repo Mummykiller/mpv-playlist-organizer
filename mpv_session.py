@@ -64,6 +64,17 @@ class MpvSessionManager:
         except Exception as e:
             logging.warning(f"Could not create flag directory {self.FLAG_DIR}: {e}")
 
+    def _log_audit(self, message):
+        """Appends a message to the human-readable audit file."""
+        try:
+            import file_io
+            from datetime import datetime
+            inspection_path = os.path.join(file_io.DATA_DIR, "last_mpv_command.txt")
+            with open(inspection_path, 'a', encoding='utf-8') as f:
+                f.write(f"\n[{datetime.now().strftime('%H:%M:%S')}] SESSION UPDATE: {message}\n")
+        except Exception:
+            pass
+
     def clear(self, mpv_return_code=None):
         """Clears the session state and removes the session file."""
         # Immediately signal that the session is no longer active.
@@ -268,7 +279,7 @@ class MpvSessionManager:
                 "id": item.get('id'), # Pass the ID for live deduplication
                 "title": item.get('title'),
                 "headers": item.get('headers'),
-                "ytdl_raw_options": item.get('ytdl_raw_options'),
+                "ytdl_raw_options": file_io.sanitize_ytdlp_options(item.get('ytdl_raw_options')),
                 "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
                 "original_url": sanitize_url(item.get('original_url') or item.get('url')),
                 "disable_http_persistent": item.get('disable_http_persistent', False),
@@ -279,6 +290,7 @@ class MpvSessionManager:
                 "reconnect_delay": settings.get('reconnect_delay', 4)
             }
             self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
+            self._log_audit(f"Registered Metadata for {item.get('title', 'Unknown')}\n  URL: {item_url}\n  YT-DLP Opts: {lua_options['ytdl_raw_options']}")
             
             # Sync internal playlist state
             if self.playlist is None: self.playlist = []
@@ -296,7 +308,9 @@ class MpvSessionManager:
         # 2. Create a Delta M3U string
         m3u_lines = ["#EXTM3U"]
         for item in items:
-            m3u_lines.append(f"#EXTINF:-1,{item.get('title', item['url'])}")
+            # Sanitize title to prevent M3U injection via newlines
+            safe_title = sanitize_url(item.get('title', item['url']))
+            m3u_lines.append(f"#EXTINF:-1,{safe_title}")
             m3u_lines.append(sanitize_url(item['url']))
         
         m3u_content = "\n".join(m3u_lines)
@@ -316,6 +330,7 @@ class MpvSessionManager:
                 tf.write(m3u_content)
             
             logging.info(f"Linked Playlist: Created delta M3U at {temp_path}")
+            self._log_audit(f"Loading Delta M3U: {temp_path}\n--- M3U CONTENT ---\n{m3u_content}\n-------------------")
 
             # 4. Tell MPV to load this M3U as a list
             # We use loadlist because it parses #EXTINF titles natively.
@@ -458,7 +473,8 @@ class MpvSessionManager:
                 is_youtube_override=use_ytdl_mpv,
                 idle="yes", # Use 'yes' so we have full control over the exit via Lua
                 force_terminal=force_terminal,
-                settings=settings
+                settings=settings,
+                flag_dir=self.FLAG_DIR
             )
 
             # Manually add playlist-start if needed (CommandBuilder might not handle it via construct_mpv_command)
@@ -492,7 +508,7 @@ class MpvSessionManager:
                 for item in self.playlist:
                     item_url = sanitize_url(item['url'])
                     item_headers = item.get('headers')
-                    item_ytdl_raw_options = item.get('ytdl_raw_options')
+                    item_ytdl_raw_options = file_io.sanitize_ytdlp_options(item.get('ytdl_raw_options'))
                     item_use_ytdl_mpv = item.get('use_ytdl_mpv', False) or item.get('is_youtube', False)
                     
                     lua_options = {
@@ -807,8 +823,10 @@ class MpvSessionManager:
                         header_string = "|".join([f"{k}={v}" for k, v in item['headers'].items()])
                         m3u_output_lines.append(f"#EXTHTTPHEADERS:{header_string}")
                     if item.get('ytdl_raw_options'):
-                        options_val = item['ytdl_raw_options'].replace(',', '|')
-                        m3u_output_lines.append(f"#EXTYTDLOPTIONS:{options_val}")
+                        clean_opts = file_io.sanitize_ytdlp_options(item['ytdl_raw_options'])
+                        if clean_opts:
+                            options_val = clean_opts.replace(',', '|')
+                            m3u_output_lines.append(f"#EXTYTDLOPTIONS:{options_val}")
                     m3u_output_lines.append(sanitize_url(item['url']))
                 
                 enriched_m3u_content = "\n".join(m3u_output_lines)
@@ -992,7 +1010,7 @@ class MpvSessionManager:
                             "id": enriched_item.get('id'),
                             "title": enriched_item.get('title'),
                             "headers": enriched_item.get('headers'),
-                            "ytdl_raw_options": enriched_item.get('ytdl_raw_options'),
+                            "ytdl_raw_options": file_io.sanitize_ytdlp_options(enriched_item.get('ytdl_raw_options')),
                             "use_ytdl_mpv": enriched_item.get('use_ytdl_mpv', False),
                             "original_url": sanitize_url(enriched_item.get('original_url') or enriched_item.get('url')),
                             "disable_http_persistent": enriched_item.get('disable_http_persistent', False),

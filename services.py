@@ -5,6 +5,7 @@ import platform
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 
 # Prevent __pycache__ generation
 sys.dont_write_bytecode = True
@@ -25,7 +26,10 @@ SAFE_MPV_FLAGS_ALLOWLIST = {
     '--end',
     '--speed',
     '--loop',
+    '--loop-playlist',
+    '--loop-file',
     '--pause',
+    '--save-position-on-quit',
 
     # Window
     '--fullscreen',
@@ -215,8 +219,22 @@ def update_ytdlp(send_message_func):
         send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
         return {"success": False, "error": error_msg}
 
-def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func):
-    """Checks for the presence and version of mpv and yt-dlp executables."""
+# Global cache for dependency status to avoid redundant shell calls
+_DEPENDENCY_STATUS_CACHE = {
+    "data": None,
+    "timestamp": 0
+}
+CACHE_EXPIRY_SECONDS = 300 # 5 minutes
+
+def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force_refresh=False):
+    """Checks for the presence and version of mpv and yt-dlp executables. Results are cached."""
+    global _DEPENDENCY_STATUS_CACHE
+    
+    now = time.time()
+    if not force_refresh and _DEPENDENCY_STATUS_CACHE["data"] and (now - _DEPENDENCY_STATUS_CACHE["timestamp"] < CACHE_EXPIRY_SECONDS):
+        logging.debug("Using cached dependency status.")
+        return _DEPENDENCY_STATUS_CACHE["data"]
+
     mpv_status = {"found": False, "path": None, "error": None}
     ytdlp_status = {"found": False, "path": None, "version": None, "error": None}
     system = platform.system()
@@ -252,7 +270,14 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func):
         ytdlp_status["error"] = f"'{ytdlp_exe_name}' not found in system PATH."
 
     logging.info(f"Dependency check: MPV={mpv_status['found']}, YTDLP={ytdlp_status['found']}")
-    return {"success": True, "mpv": mpv_status, "ytdlp": ytdlp_status}
+    
+    result = {"success": True, "mpv": mpv_status, "ytdlp": ytdlp_status}
+    
+    # Update cache
+    _DEPENDENCY_STATUS_CACHE["data"] = result
+    _DEPENDENCY_STATUS_CACHE["timestamp"] = now
+    
+    return result
 
 # --- MPV Command Construction ---
 
@@ -309,11 +334,13 @@ class MpvCommandBuilder:
                 self.url = sanitize_url(url)
         return self
 
-    def with_completion_script(self, script_dir):
+    def with_completion_script(self, script_dir, flag_dir=None):
         if script_dir:
             lua_script_path = os.path.join(script_dir, "mpv_scripts", "on_completion.lua")
             if os.path.exists(lua_script_path):
                 self.mpv_args.append(f'--script={lua_script_path}')
+                if flag_dir:
+                    self.mpv_args.append(f'--script-opts=on_completion-flag_dir={flag_dir}')
                 logging.info(f"MPV will load completion script: {lua_script_path}")
             else:
                 logging.warning(f"Completion script not found at {lua_script_path}. MPV will not use it.")
@@ -338,7 +365,9 @@ class MpvCommandBuilder:
     def with_title(self, title):
         if title:
             # Set the initial title for the first file loaded
-            self.mpv_args.append(f'--force-media-title={title}')
+            # Use file_io to remove newlines and other dangerous chars
+            clean_title = file_io.sanitize_string(title)
+            self.mpv_args.append(f'--force-media-title={clean_title}')
         return self
 
     def with_automatic_flags(self, automatic_mpv_flags):
@@ -357,7 +386,13 @@ class MpvCommandBuilder:
                         logging.debug(f"MpvCommandBuilder: Ignoring redundant hwdec flag in automatic flags: {flag}")
                         continue
                     else:
-                        self.mpv_args.append(flag)
+                        # --- SANITIZATION CHECK ---
+                        # Extract flag name (left of '=')
+                        flag_name = flag.split('=', 1)[0]
+                        if flag_name in SAFE_MPV_FLAGS_ALLOWLIST:
+                            self.mpv_args.append(flag)
+                        else:
+                            logging.warning(f"Security: Dropped automatic flag '{flag}' because '{flag_name}' is not in the allowlist.")
         return self
 
     def with_force_terminal(self, force):
@@ -369,12 +404,19 @@ class MpvCommandBuilder:
     def with_headers(self, headers):
         effective_headers = self.headers_from_bypass if self.headers_from_bypass else headers
         if effective_headers:
-            header_list = [f"{k}: {v.replace(',', '')}" for k, v in effective_headers.items()]
+            header_list = []
+            for k, v in effective_headers.items():
+                # Sanitize value: remove dangerous characters and commas
+                clean_v = file_io.sanitize_string(v).replace(',', '')
+                header_list.append(f"{k}: {clean_v}")
+                
             self.mpv_args.append(f'--http-header-fields={",".join(header_list)}')
+            
+            # Sanitize specific UA/Referer if they exist
             if 'User-Agent' in effective_headers:
-                self.mpv_args.append(f'--user-agent={effective_headers["User-Agent"]}')
+                self.mpv_args.append(f'--user-agent={file_io.sanitize_string(effective_headers["User-Agent"])}')
             if 'Referer' in effective_headers:
-                self.mpv_args.append(f'--referrer={effective_headers["Referer"]}')
+                self.mpv_args.append(f'--referrer={file_io.sanitize_string(effective_headers["Referer"])}')
         return self
 
     def with_disable_http_persistent(self, disable_http_persistent):
@@ -401,6 +443,7 @@ class MpvCommandBuilder:
 
     def with_custom_flags(self, custom_mpv_flags):
         if custom_mpv_flags:
+            parsed_args = []
             try:
                 # Handle new format: List of objects [{flag: "--x", enabled: true}, ...]
                 if isinstance(custom_mpv_flags, list):
@@ -408,21 +451,50 @@ class MpvCommandBuilder:
                         if isinstance(flag_info, dict) and flag_info.get('enabled', True):
                             flag = flag_info.get('flag')
                             if flag:
-                                self.mpv_args.extend(shlex.split(flag))
+                                parsed_args.extend(shlex.split(flag))
                         elif isinstance(flag_info, str):
-                            self.mpv_args.extend(shlex.split(flag_info))
+                            parsed_args.extend(shlex.split(flag_info))
                 # Handle legacy format: Plain string
                 elif isinstance(custom_mpv_flags, str):
-                    self.mpv_args.extend(shlex.split(custom_mpv_flags))
+                    parsed_args.extend(shlex.split(custom_mpv_flags))
             except Exception as e:
                 logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
+                return self
+
+            # --- SANITIZATION STEP ---
+            for arg in parsed_args:
+                # 1. Enforce --flag=value syntax (no space-separated args)
+                if not arg.startswith('--'):
+                    logging.warning(f"Security: Dropped custom flag '{arg}' because it does not start with '--'. "
+                                    f"Space-separated arguments are not allowed; use '--flag=value'.")
+                    continue
+                
+                # 2. Extract flag name
+                flag_name = arg.split('=', 1)[0]
+                
+                # 3. Allowlist check
+                if flag_name in SAFE_MPV_FLAGS_ALLOWLIST:
+                    self.mpv_args.append(arg)
+                else:
+                    logging.warning(f"Security: Dropped custom flag '{arg}' because '{flag_name}' is not in the allowlist.")
+
         return self
 
     def with_geometry(self, geometry, custom_width, custom_height):
+        # Strict regex for geometry: digits, x, +, -, %
+        # Prevents flag injection via geometry strings.
+        GEOM_PATTERN = re.compile(r'^[0-9x+%+-]+$')
+
         if custom_width and custom_height:
-            self.mpv_args.append(f'--geometry={custom_width}x{custom_height}')
+            w_str, h_str = str(custom_width), str(custom_height)
+            if GEOM_PATTERN.match(w_str) and GEOM_PATTERN.match(h_str):
+                self.mpv_args.append(f'--geometry={w_str}x{h_str}')
         elif geometry:
-            self.mpv_args.append(f'--geometry={geometry}')
+            geom_str = str(geometry)
+            if GEOM_PATTERN.match(geom_str):
+                self.mpv_args.append(f'--geometry={geom_str}')
+            else:
+                logging.warning(f"Security: Dropped invalid geometry string: '{geom_str}'")
         return self
     
     def with_playlist_start(self, index):
@@ -443,9 +515,22 @@ class MpvCommandBuilder:
         # ONLY enable ytdl if we actually want MPV to do the resolution.
         if self.use_ytdl_mpv:
             self.mpv_args.append('--ytdl=yes')
-            
-            # Combine raw options with the concurrent fragments setting
+
+            # Apply quality/resolution limit if configured
+            if self.settings and self.settings.get('ytdl_quality') and self.settings['ytdl_quality'] != 'best':
+                q = str(self.settings['ytdl_quality'])
+                # Strict whitelist validation before command construction
+                if q in ['2160', '1440', '1080', '720', '480']:
+                    # Standard yt-dlp format string for limiting height
+                    ytdl_format = f"bestvideo[height<={q}]+bestaudio/best[height<={q}]"
+                    self.mpv_args.append(f"--ytdl-format={ytdl_format}")
+                else:
+                    logging.warning(f"Sanitization: Blocked invalid quality setting: {q}")
+
             raw_opts = ytdl_raw_options or self.ytdl_raw_options_from_bypass or ""
+            
+            # Sanitize user/script provided options
+            raw_opts = file_io.sanitize_ytdlp_options(raw_opts)
             
             # Add concurrent fragments if specified in settings
             if self.settings and self.settings.get('ytdlp_concurrent_fragments', 1) > 1:
@@ -490,7 +575,23 @@ class MpvCommandBuilder:
         else:
             full_command = self.mpv_args
             
-        logging.info(f"Constructed MPV command: {' '.join(shlex.quote(arg) for arg in full_command)}")
+        logging.info(f"Constructed MPV command (Copy-Paste): {' '.join(shlex.quote(arg) for arg in full_command)}")
+        logging.info("MPV Command Arguments (Detailed):\n" + "\n".join(f"  [{i}] {arg}" for i, arg in enumerate(full_command)))
+
+        # Write to inspection file for easy user verification (overwrites every launch)
+        try:
+            inspection_path = os.path.join(file_io.DATA_DIR, "last_mpv_command.txt")
+            with open(inspection_path, 'w', encoding='utf-8') as f:
+                f.write(f"Launch Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("="*60 + "\n")
+                f.write("SHELL-QUOTED COMMAND (Copy-Paste into terminal):\n")
+                f.write(" ".join(shlex.quote(arg) for arg in full_command) + "\n\n")
+                f.write("DETAILED ARGUMENT LIST:\n")
+                for i, arg in enumerate(full_command):
+                    f.write(f"[{i:02d}] {arg}\n")
+            logging.debug(f"Successfully wrote launch command to {inspection_path}")
+        except Exception as e:
+            logging.warning(f"Failed to write inspection file 'last_mpv_command.txt': {e}")
 
         if platform.system() != "Windows" and self.has_terminal_flag:
             # We use a shell wrapper inside the terminal to ensure it stays open 
@@ -572,7 +673,8 @@ def construct_mpv_command(
     is_youtube_override=False,
     idle=False,
     force_terminal=False,
-    settings=None # Added parameter
+    settings=None,
+    flag_dir=None
 ):
     """Constructs the MPV command line arguments using MpvCommandBuilder."""
     builder = MpvCommandBuilder(
@@ -586,7 +688,7 @@ def construct_mpv_command(
         .with_url(url) \
         .with_idle(idle) \
         .with_force_terminal(force_terminal) \
-        .with_completion_script(script_dir if load_on_completion_script else None) \
+        .with_completion_script(script_dir if load_on_completion_script else None, flag_dir=flag_dir) \
         .with_adaptive_headers_script(script_dir) \
         .with_fix_thumbnailer_script(script_dir) \
         .with_title(title) \
@@ -634,6 +736,7 @@ def apply_bypass_script(url_item, send_message_func):
     browser_for_analysis = settings.get("browser_for_url_analysis", "chrome")
     enable_youtube_analysis = settings.get("enable_youtube_analysis", False)
     user_agent_string = settings.get("user_agent_string", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    ytdl_quality = settings.get("ytdl_quality", "best")
 
     # The default fallback return values
     is_youtube = "youtube.com/" in original_url or "youtu.be/" in original_url
@@ -665,7 +768,8 @@ def apply_bypass_script(url_item, send_message_func):
             yt_use_cookies=yt_use_cookies,
             yt_mark_watched=yt_mark_watched,
             yt_ignore_config=yt_ignore_config,
-            other_sites_use_cookies=other_sites_use_cookies
+            other_sites_use_cookies=other_sites_use_cookies,
+            ytdl_quality=ytdl_quality
         )
 
         if not result.get("success", False):

@@ -8,19 +8,31 @@ end
 
 -- Function to get the reliable flag directory
 local function get_flag_dir()
-    -- We try to use the extension's standard data directory first
-    local home = os.getenv('HOME')
-    local path = ""
-    if home then
-        path = home .. '/.local/share/MPVPlaylistOrganizer/flags/'
+    -- 1. Try script-opts passed from Python (highest priority)
+    local opt_dir = mp.get_opt("flag_dir")
+    if opt_dir and opt_dir ~= "" then
+        -- Ensure trailing slash
+        if not opt_dir:match("[/\\]$") then
+            opt_dir = opt_dir .. "/"
+        end
+        return opt_dir
+    end
+
+    -- 2. Fallback to platform-specific guesses
+    local is_windows = package.config:sub(1,1) == "\\"
+    if is_windows then
+        local appdata = os.getenv('APPDATA')
+        if appdata then
+            return appdata .. "\\MPVPlaylistOrganizer\\flags\\"
+        end
     else
-        path = '/tmp/mpv_playlist_organizer_flags/'
+        local home = os.getenv('HOME')
+        if home then
+            return home .. "/.local/share/MPVPlaylistOrganizer/flags/"
+        end
     end
     
-    -- Create the directory if it doesn't exist (using mpv's mkdir equivalent)
-    -- Note: io.open with "w" usually fails if the dir doesn't exist.
-    -- We'll just rely on Python creating this directory on startup.
-    return path
+    return "/tmp/mpv_playlist_organizer_flags/"
 end
 
 local function write_completion_flag(reason)

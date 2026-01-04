@@ -14,6 +14,24 @@ export function init(dependencies) {
     _debouncedSyncToNativeHostFile = dependencies.debouncedSyncToNativeHostFile;
 }
 
+/**
+ * Sanitizes a string to prevent command injection risks and M3U/JSON breakage.
+ * @param {string} str The string to sanitize.
+ * @param {boolean} isFilename If true, also removes filesystem-restricted characters like /.
+ * @returns {string} The sanitized string.
+ */
+function sanitizeString(str, isFilename = false) {
+    if (typeof str !== 'string') return str;
+    
+    if (isFilename) {
+        // Strict blacklist for folder names / filenames: / \ : * ? " < > | $ ; & `
+        return str.replace(/[\/\\:*?"<>|$;&`\n\r\t]/g, '').trim();
+    } else {
+        // Minimal destruction for URLs/Titles. 
+        return str.replace(/["`\n\r\t]/g, '').trim();
+    }
+}
+
 export async function handleImportFromFile(request) {
     const filename = request.filename;
     if (!filename) {
@@ -28,7 +46,12 @@ export async function handleImportFromFile(request) {
 
     try {
         // Derive folder name from filename, e.g., "my_backup.json" -> "my_backup"
-        const baseFolderName = filename.replace(/\.json$/i, '');
+        // And sanitize it for filesystem safety as it will become a folder ID.
+        const baseFolderName = sanitizeString(filename.replace(/\.json$/i, ''), true);
+
+        if (!baseFolderName) {
+            throw new Error("Invalid filename for folder creation.");
+        }
 
         // Parse content and build a single combined playlist
         const importedData = JSON.parse(response.data);
@@ -38,7 +61,12 @@ export async function handleImportFromFile(request) {
             // Case 1: The file is a simple JSON array of URLs.
             combinedPlaylist = importedData
                 .filter(item => typeof item === 'string')
-                .map(url => ({ url: url, title: url }));
+                .map(url => ({ 
+                    url: sanitizeString(url), 
+                    title: sanitizeString(url),
+                    id: crypto.randomUUID(),
+                    settings: {}
+                }));
         } else if (typeof importedData === 'object' && importedData !== null) {
             // Case 2: The file is an object of folders (like our export format).
             // We'll merge all playlists from within this file into one.
@@ -46,18 +74,27 @@ export async function handleImportFromFile(request) {
                 const folderContent = importedData[key];
                 if (folderContent && Array.isArray(folderContent.playlist)) {
                     // Handle both old (string) and new (object) formats within the import file.
-                    const items = folderContent.playlist.map(item => 
-                        typeof item === 'string' ? { url: item, title: item } : item
-                    );
-                    combinedPlaylist.push(...items.filter(item => item && typeof item.url === 'string'));
+                    const items = folderContent.playlist.map(item => {
+                        if (typeof item === 'string') {
+                            return { 
+                                url: sanitizeString(item), 
+                                title: sanitizeString(item),
+                                id: crypto.randomUUID(),
+                                settings: {}
+                            };
+                        } else if (item && typeof item.url === 'string') {
+                            return {
+                                ...item,
+                                url: sanitizeString(item.url),
+                                title: sanitizeString(item.title || item.url),
+                                id: item.id || crypto.randomUUID(),
+                                settings: item.settings || {}
+                            };
+                        }
+                        return null;
+                    });
+                    combinedPlaylist.push(...items.filter(item => item !== null));
                 }
-            }
-        } else {
-            // New: Handle single playlist export (just an array of URLs)
-            if (Array.isArray(importedData)) {
-                 combinedPlaylist = importedData.filter(url => typeof url === 'string').map(url => ({ url, title: url }));
-            } else {
-                throw new Error("Unsupported import file format. Must be a JSON array of URLs or an object of folders.");
             }
         }
 

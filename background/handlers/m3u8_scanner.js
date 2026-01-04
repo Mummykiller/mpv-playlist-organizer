@@ -85,7 +85,7 @@ export function init(dependencies) {
             delete lastDetectedUrls[tabId];
             delete _detectedUrlsState[tabId];
             _broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: null });
-        } else if (changeInfo.status === 'loading' && !tab.url.startsWith('chrome')) {
+        } else if (changeInfo.status === 'loading' && tab.url && !tab.url.startsWith('chrome')) {
             // Check if we just detected something. If so, don't clear it yet.
             const now = Date.now();
             const lastData = lastDetectedUrls[tabId];

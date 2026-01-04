@@ -76,6 +76,63 @@ def sanitize_folder_name(name):
     """Specific strict sanitization for folder names used in filesystem paths."""
     return sanitize_string(name, is_filename=True)
 
+def sanitize_ytdlp_options(options_str):
+    """
+    Sanitizes a comma-separated string of yt-dlp options (key=value).
+    Removes dangerous flags that could lead to RCE or arbitrary file writes.
+    """
+    if not options_str or not isinstance(options_str, str):
+        return ""
+
+    # Dangerous keys that should never be passed to MPV -> yt-dlp
+    # Normalized to lowercase for comparison.
+    BLOCKED_KEYS = {
+        'exec', 'exec-before-download', 'exec_before_download',
+        'output', 'o',
+        'paths', 'P',
+        'batch-file', 'batch_file', 'a',
+        'config-location', 'config_location',
+        'load-info-json', 'load_info_json',
+        'write-description', 'write_description',
+        'write-info-json', 'write_info_json',
+        'write-annotations', 'write_annotations',
+        'write-thumbnail', 'write_thumbnail',
+        'write-subs', 'write_subs',
+        'write-auto-subs', 'write_auto_subs',
+        'external-downloader', 'downloader',
+        'external-downloader-args', 'downloader-args',
+        'ffmpeg-location', 'python-interpreter',
+        'plugin-dirs', 'netrc-location', 'netrc'
+    }
+
+    safe_options = []
+    
+    # Split by comma, respecting that values might contain commas (though mpv format makes this hard)
+    # MPV simplistic parser splits by comma. We will do the same.
+    parts = options_str.split(',')
+    
+    for part in parts:
+        part = part.strip()
+        if not part: continue
+        
+        # Split key=value
+        if '=' in part:
+            key, value = part.split('=', 1)
+        else:
+            key = part
+            value = ""
+            
+        clean_key = key.strip().lower()
+        
+        # Check against blocklist
+        if clean_key in BLOCKED_KEYS:
+            logging.warning(f"Security: Removed dangerous yt-dlp option '{key}' from command.")
+            continue
+            
+        safe_options.append(part) # Keep original case/format
+        
+    return ",".join(safe_options)
+
 def _migrate_legacy_data(raw_folders):
     """
     Normalizes folder data structures, converting legacy formats if necessary.
@@ -237,6 +294,7 @@ def get_settings():
         "demuxer_readahead_secs": 500,
         "stream_buffer_size": "10M",
         "ytdlp_concurrent_fragments": 4,
+        "ytdl_quality": "best",
         "enable_reconnect": True,
         "reconnect_delay": 4,
         "mpv_decoder": "auto",
@@ -293,6 +351,14 @@ def set_settings(settings_dict):
     try:
         # Load existing settings to avoid overwriting unrelated keys
         current_settings = get_settings()
+
+        # --- Sanitization & Validation ---
+        if 'ytdl_quality' in settings_dict:
+            valid_qualities = ['best', '2160', '1440', '1080', '720', '480']
+            if str(settings_dict['ytdl_quality']) not in valid_qualities:
+                logging.warning(f"Security: Invalid ytdl_quality '{settings_dict['ytdl_quality']}' ignored.")
+                del settings_dict['ytdl_quality']
+
         # Merge new settings, prioritizing the provided settings_dict
         merged_settings = {**current_settings, **settings_dict}
 
