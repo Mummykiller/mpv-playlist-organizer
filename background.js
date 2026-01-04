@@ -193,6 +193,7 @@ const actionHandlers = {
     'set_ui_preferences': ui_state_handlers.handleSetUiPreferences,
     'set_minimized_state': ui_state_handlers.handleSetMinimizedState,
     'force_reload_settings': ui_state_handlers.handleForceReloadSettings,
+    'force_refresh_dependencies': ui_state_handlers.handleForceRefreshDependencies,
     'open_popup': ui_state_handlers.handleOpenPopup,
     'heartbeat': ui_state_handlers.handleHeartbeat,
     // Folder Management

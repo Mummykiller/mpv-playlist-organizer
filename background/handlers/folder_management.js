@@ -1,4 +1,5 @@
 // background/handlers/folder_management.js
+import { sanitizeString } from '../../utils/sanitization.js';
 
 let _storage;
 let _broadcastToTabs;
@@ -12,20 +13,8 @@ export function init(dependencies) {
     _debouncedSyncToNativeHostFile = dependencies.debouncedSyncToNativeHostFile;
 }
 
-/**
- * Sanitizes a string for use as a folder name/filename.
- * @param {string} str The string to sanitize.
- * @returns {string} The sanitized string.
- */
-function sanitizeString(str) {
-    if (typeof str !== 'string') return str;
-    // Strict blacklist for filenames: / \ : * ? " < > | $ ; & `
-    // Also remove newlines and tabs
-    return str.replace(/[\/\\:*?"<>|$;&`\n\r\t]/g, '').trim();
-}
-
 export async function handleCreateFolder(request) {
-    const sanitizedFolderId = sanitizeString(request.folderId);
+    const sanitizedFolderId = sanitizeString(request.folderId, true);
     if (!sanitizedFolderId) {
         return { success: false, error: 'Folder name cannot be empty or contain illegal characters.' };
     }
@@ -77,7 +66,7 @@ export async function handleRemoveFolder(request) {
 
 export async function handleRenameFolder(request) {
     const oldFolderId = request.oldFolderId;
-    const newFolderId = sanitizeString(request.newFolderId);
+    const newFolderId = sanitizeString(request.newFolderId, true);
     
     if (!oldFolderId || !newFolderId) {
         return { success: false, error: 'Invalid folder names provided.' };

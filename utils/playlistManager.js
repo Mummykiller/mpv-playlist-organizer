@@ -1,6 +1,8 @@
 /**
  * Manages all playlist-related actions like adding, removing, clearing, and reordering.
  */
+import { sanitizeString } from './sanitization.js';
+
 // --- Injected Dependencies ---
 let storage;
 let broadcastToTabs;
@@ -48,18 +50,6 @@ function normalizeYouTubeUrlForCheck(ytUrl) {
         // Not a valid URL, return original
     }
     return ytUrl;
-}
-
-/**
- * Sanitizes a string to prevent command injection risks and M3U/JSON breakage.
- * @param {string} str The string to sanitize.
- * @returns {string} The sanitized string.
- */
-function sanitizeString(str) {
-    if (typeof str !== 'string') return str;
-    // Minimal destruction for URLs/Titles. 
-    // Only strip characters that break M3U files or our internal JSON logging.
-    return str.replace(/["`\n\r\t]/g, '').trim();
 }
 
 /**

@@ -280,6 +280,35 @@ export function handleForceReloadSettings() {
     return { success: true };
 }
 
+export async function handleForceRefreshDependencies() {
+    // Clear JS-side cache
+    _nativeInfoCache.decoder = null;
+    _nativeInfoCache.timestamp = 0;
+    
+    // Call native host to clear Python-side cache and re-scan
+    const response = await _callNativeHost({ action: 'check_dependencies', force_refresh: true });
+    
+    if (response.success) {
+        // Update storage with fresh status
+        const data = await _storage.get();
+        data.settings.ui_preferences.global.dependencyStatus = {
+            mpv: response.mpv,
+            ytdlp: response.ytdlp
+        };
+        await _storage.set(data);
+        
+        // Broadcast the update so the UI can refresh
+        _broadcastToTabs({ 
+            action: 'preferences_changed', 
+            preferences: { dependencyStatus: data.settings.ui_preferences.global.dependencyStatus } 
+        });
+        
+        _broadcastLog({ text: "[Background]: Dependency status refreshed successfully.", type: "info" });
+    }
+    
+    return response;
+}
+
 export async function handleOpenPopup(request, sender) {
     _broadcastLog({ text: `[Background]: Attempting to open popup...`, type: 'info' });
     if (chrome.action && chrome.action.openPopup) {

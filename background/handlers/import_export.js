@@ -1,4 +1,5 @@
 // background/handlers/import_export.js
+import { sanitizeString } from '../../utils/sanitization.js';
 
 let _storage;
 let _broadcastToTabs;
@@ -12,24 +13,6 @@ export function init(dependencies) {
     _callNativeHost = dependencies.callNativeHost;
     _updateContextMenus = dependencies.updateContextMenus;
     _debouncedSyncToNativeHostFile = dependencies.debouncedSyncToNativeHostFile;
-}
-
-/**
- * Sanitizes a string to prevent command injection risks and M3U/JSON breakage.
- * @param {string} str The string to sanitize.
- * @param {boolean} isFilename If true, also removes filesystem-restricted characters like /.
- * @returns {string} The sanitized string.
- */
-function sanitizeString(str, isFilename = false) {
-    if (typeof str !== 'string') return str;
-    
-    if (isFilename) {
-        // Strict blacklist for folder names / filenames: / \ : * ? " < > | $ ; & `
-        return str.replace(/[\/\\:*?"<>|$;&`\n\r\t]/g, '').trim();
-    } else {
-        // Minimal destruction for URLs/Titles. 
-        return str.replace(/["`\n\r\t]/g, '').trim();
-    }
 }
 
 export async function handleImportFromFile(request) {

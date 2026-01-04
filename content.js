@@ -57,6 +57,11 @@ class MpvController {
         this.keybinds = { add: null, playPlaylist: null, toggle: null, openPopup: null };
         this.observer = null; // Store observer for cleanup
 
+        // --- Smart Update State ---
+        this._lastUpdateHash = '';
+        this._updatePending = false;
+        this.requestUpdate = debounce(this.performSmartUpdate.bind(this), 50);
+
         // Bind `this` for methods that are used as event listeners or callbacks
         this.handleMessage = this.handleMessage.bind(this);
         this.handleFullscreenChange = this.handleFullscreenChange.bind(this); // This is correct
@@ -124,6 +129,61 @@ class MpvController {
     }
 
     /**
+     * Gathers the current state, compares it to the last known state,
+     * and triggers a redraw only if something has changed.
+     */
+    async performSmartUpdate() {
+        if (!this.uiManager.shadowRoot || this.isTearingDown) return;
+
+        try {
+            const currentFolderId = this.uiManager.shadowRoot.getElementById('folder-select')?.value;
+            if (!currentFolderId) return;
+
+            // Gather all pieces of state that affect the UI
+            const [playlistResponse, mpvStatusResponse] = await Promise.all([
+                sendMessageAsync({ action: 'get_playlist', folderId: currentFolderId }),
+                sendMessageAsync({ action: 'is_mpv_running' })
+            ]);
+
+            if (!playlistResponse?.success) return;
+
+            const state = {
+                folderId: currentFolderId,
+                playlist: playlistResponse.list,
+                lastPlayedId: playlistResponse.last_played_id,
+                isFolderActive: mpvStatusResponse?.is_running && mpvStatusResponse?.folderId === currentFolderId,
+                uiMode: this.currentUiMode,
+                anilistVisible: this.anilistUI?.isVisible ?? false,
+                detectedUrl: this.detectedUrl,
+                settings: {
+                    highlight: this.settings?.enable_active_item_highlight,
+                    anilist: this.showAnilistReleases,
+                    minimizedStub: this.showMinimizedStub
+                }
+            };
+
+            // Simple hash of the state
+            const stateHash = JSON.stringify(state);
+
+            if (stateHash !== this._lastUpdateHash) {
+                this._lastUpdateHash = stateHash;
+                
+                // Trigger the actual rendering
+                this.playlistUI?.render(state.playlist, state.lastPlayedId, state.isFolderActive);
+                this.updateAddButtonState();
+                
+                // If folder list might have changed, refresh it too
+                // (Note: updateFolderDropdowns also calls refreshPlaylist, so we must be careful)
+                // For now, we assume dropdowns are handled by specific messages to avoid loops.
+            }
+        } catch (e) {
+            if (!this.isReloadError(e)) {
+                console.error("[Content] Smart update failed:", e);
+            }
+        }
+    }
+
+    /**
      * Handles messages from the background script.
      * @param {object} request - The message object.
      * @param {object} sender - The sender of the message.
@@ -161,22 +221,11 @@ class MpvController {
             // Update the button state, which will also update the status banner.
             this.updateAddButtonState();
         } else if (request.action === 'render_playlist') {
-            // The background has sent an updated list. Render it only if it
-            // matches the currently selected folder.
-            if (!this.uiManager.shadowRoot) return;
-            const currentFolderId = this.uiManager.shadowRoot.getElementById('folder-select')?.value;
-            if (currentFolderId === request.action_folder_id || currentFolderId === request.folderId) {
-                this.playlistUI?.render(request.playlist, request.last_played_id, request.isFolderActive);
-            } else if (request.fromContextMenu) {
-                // If the update came from a context menu action for a *different* folder,
-                // the user might switch to that folder later and expect to see the new item.
-                // To ensure this, we'll silently refresh the folder dropdowns and the playlist for the *new* folder.
-                this.updateFolderDropdowns();
-                this.updateAddButtonState(); // Re-check if the URL is in the newly updated list
-            }
+            // Background reported a playlist/state change.
+            this.requestUpdate();
         } else if (request.foldersChanged) {
-            // The list of available folders has changed (e.g., a new one was created)
-            this.updateFolderDropdowns();
+            // Available folders changed, update dropdowns then smart update UI.
+            this.updateFolderDropdowns().then(() => this.requestUpdate());
         } else if (request.action === 'last_folder_changed') {
             // The selected folder was changed in another context (e.g., the popup).
             // We need to sync our dropdowns to reflect this change.
@@ -188,8 +237,7 @@ class MpvController {
                 if (fullSelect.value !== request.folderId) {
                     fullSelect.value = request.folderId;
                     compactSelect.value = request.folderId;
-                    this.refreshPlaylist(); // Refresh the playlist view for the new folder.
-                    this.updateAddButtonState(); // Re-check against the new folder's playlist
+                    this.requestUpdate();
                 }
             }
         } else if (request.log) {
@@ -251,10 +299,12 @@ class MpvController {
                     }
                     this.updateAdaptiveElements();
                 }
+                this.requestUpdate();
             } else {
                 // If it's a global change (or not a domain-specific one), re-apply the initial state
                 // to ensure all settings (like AniList image size, etc.) are updated everywhere.
                 this.applyInitialState();
+                this.requestUpdate();
             }
         } else if (request.action === 'show_confirmation') {
             // This is an async action that requires a response, so we must return true.
@@ -1526,23 +1576,8 @@ class MpvController {
     refreshPlaylist(targetLastPlayedId = null, targetIsFolderActive = null) {
         if (!this.uiManager.shadowRoot) return;
         
-        // Cache the target state to ensure it persists through rapid-fire render messages during load
-        if (targetLastPlayedId) {
-            this._initialLastPlayedId = targetLastPlayedId;
-        }
-        if (targetIsFolderActive !== null) {
-            this._initialIsFolderActive = targetIsFolderActive;
-        }
-
-        // The folder dropdowns are always kept in sync, so we can reliably get the
-        // current folder ID from the main dropdown without checking the UI mode.
-        const folderSelect = this.uiManager.shadowRoot.getElementById('folder-select');
-        if (!folderSelect || !folderSelect.value) {
-            return; // UI not ready or no folder selected.
-        }
-        const currentFolderId = folderSelect.value;
-        // Fetch the playlist and then render it. The render call will also update the button state.
-        this.sendCommandToBackground('get_playlist', currentFolderId); 
+        // Use the smart update system instead of a direct IPC call
+        this.requestUpdate();
     }
 
 
