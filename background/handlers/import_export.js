@@ -102,7 +102,7 @@ export async function handleImportFromFile(request) {
         // Update UI and sync data to the native host's file
         await _updateContextMenus(_storage);
         _broadcastToTabs({ foldersChanged: true });
-        _debouncedSyncToNativeHostFile();
+        _debouncedSyncToNativeHostFile(true);
         return { success: true, message: `Imported '${filename}' as new folder '${newFolderId}' with ${combinedPlaylist.length} URL(s).` };
     } catch (e) {
         return { success: false, error: `Failed to parse or process import file: ${e.message}` };

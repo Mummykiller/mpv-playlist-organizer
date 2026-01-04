@@ -123,8 +123,15 @@ function connectToNativeHost() {
                 resolve(); // Now resolve the main connection promise
             },
             reject: (err) => {
-                dependencies.broadcastLog({ text: `[Background]: Session restoration handshake failed: ${err.message}`, type: 'error' });
-                resolve(); // Still resolve so other commands can proceed
+                // If we are still in the process of connecting, this means the initial handshake failed.
+                // We should reject the main connection promise in this case.
+                if (connectionStatus === ConnectionStatus.CONNECTING) {
+                    dependencies.broadcastLog({ text: `[Background]: Session restoration handshake failed: ${err.message}`, type: 'error' });
+                    reject(err);
+                } else {
+                    // If we were already CONNECTED, just log it.
+                    dependencies.broadcastLog({ text: `[Background]: Session restoration handshake failed: ${err.message}`, type: 'error' });
+                }
             }
         };
 

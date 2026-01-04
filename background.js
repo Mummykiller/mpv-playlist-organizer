@@ -1,4 +1,5 @@
 // --- Module Imports ---
+import { debounce, sendMessageAsync } from './utils/commUtils.module.js';
 import { StorageManager } from './utils/storageManager.js';
 import { callNativeHost, injectDependencies as injectNativeConnectionDependencies } from './utils/nativeConnection.js';
 import { updateContextMenus } from './utils/contextMenu.js';
@@ -13,38 +14,16 @@ import * as dependency_anilist_handlers from './background/handlers/dependency_a
 
 // --- Shared State ---
 let tabUiState = {}; // Tracks the UI state for each tab (e.g., minimized status, detected URL for content script)
+let nativeHostStatus = { status: 'unknown', lastCheck: 0, info: null };
+let popupPort = null; // Port for communication with the open popup
 
-// --- Utility Functions ---
-/**
- * Creates a debounced function that delays invoking `func` until after `wait`
- * milliseconds have elapsed since the last time the debounced function was
- * invoked.
- * @param {Function} func The function to debounce.
- * @param {number} wait The number of milliseconds to delay.
- * @returns {Function} Returns the new debounced function.
- */
-function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-        const later = () => {
-            clearTimeout(timeout);
-            func.apply(this, args);
-        };
-        clearTimeout(timeout);
-        timeout = setTimeout(later, wait);
-    };
-}
-
-/**
- * A promise-based wrapper for chrome.runtime.sendMessage.
- * @param {object} payload The message to send.
- * @returns {Promise<any>} A promise that resolves with the response.
- */
-const sendMessageAsync = (payload) => new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(payload, (response) => {
-        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-        resolve(response);
-    });
+chrome.runtime.onConnect.addListener((port) => {
+    if (port.name === "popup-lifecycle") {
+        popupPort = port;
+        port.onDisconnect.addListener(() => {
+            popupPort = null;
+        });
+    }
 });
 
 // --- Messaging Helpers ---
@@ -89,7 +68,7 @@ const storage = new StorageManager('mpv_organizer_data', broadcastLog);
 // Debounce the sync function to avoid rapid-fire writes to the native host.
 // A 1-second delay is reasonable. If multiple changes happen in quick succession,
 // it will only sync once after the user is done.
-const debouncedSyncToNativeHostFile = debounce(async () => {
+const _syncToNativeHostFile = async () => {
     const data = await storage.get();
     try {
         await callNativeHost({
@@ -101,7 +80,17 @@ const debouncedSyncToNativeHostFile = debounce(async () => {
         console.error(errorMessage);
         broadcastLog({ text: `[Background]: ${errorMessage}`, type: 'error' });
     }
-}, 1000);
+};
+
+const _debouncedSyncInner = debounce(_syncToNativeHostFile, 1000);
+
+const debouncedSyncToNativeHostFile = (immediate = false) => {
+    if (immediate) {
+        _syncToNativeHostFile();
+    } else {
+        _debouncedSyncInner();
+    }
+};
 
 // --- Initialize all handlers with shared dependencies ---
 // Dependencies injected here are defined above this point.
@@ -134,7 +123,8 @@ ui_state_handlers.init({
     updateContextMenus,
     tabUiState, // Pass the shared state
     m3u8_scanner_handlers, // Pass m3u8_scanner_handlers
-    playback_handlers
+    playback_handlers,
+    getPopupPort: () => popupPort
 });
 
 
@@ -183,6 +173,7 @@ const actionHandlers = {
     'get_ui_state_for_tab': ui_state_handlers.handleGetUiStateForTab,
     'report_detected_url': ui_state_handlers.handleReportDetectedUrl,
     'set_last_folder_id': ui_state_handlers.handleSetLastFolderId,
+    'switch_playlist': ui_state_handlers.handleSwitchPlaylist,
     'get_last_folder_id': async () => {
         const data = await storage.get();
         const folderId = data.settings.last_used_folder_id || Object.keys(data.folders)[0];
@@ -196,6 +187,7 @@ const actionHandlers = {
     'force_refresh_dependencies': ui_state_handlers.handleForceRefreshDependencies,
     'open_popup': ui_state_handlers.handleOpenPopup,
     'heartbeat': ui_state_handlers.handleHeartbeat,
+    'get_native_host_status': () => ({ success: true, ...nativeHostStatus }),
     // Folder Management
     'create_folder': folder_management_handlers.handleCreateFolder,
     'get_all_folder_ids': folder_management_handlers.handleGetAllFolderIds,
@@ -228,6 +220,42 @@ const actionHandlers = {
 
 // New handler for the unsolicited 'session_restored' message from the native host
 actionHandlers['session_restored'] = playback_handlers.handleSessionRestored;
+
+/**
+ * Periodically pings the native host to verify it's still alive and responding.
+ */
+function startNativeHostHeartbeat() {
+    const HEARTBEAT_INTERVAL_MS = 300000; // 5 minutes
+
+    const performCheck = async () => {
+        try {
+            const response = await callNativeHost({ action: 'ping' });
+            if (response?.success) {
+                nativeHostStatus = {
+                    status: 'online',
+                    lastCheck: Date.now(),
+                    info: {
+                        python: response.python_version,
+                        platform: response.platform
+                    }
+                };
+            } else {
+                nativeHostStatus.status = 'error';
+                nativeHostStatus.lastCheck = Date.now();
+            }
+        } catch (e) {
+            nativeHostStatus.status = 'offline';
+            nativeHostStatus.lastCheck = Date.now();
+        }
+    };
+
+    // Initial check
+    performCheck();
+    // Regular interval
+    setInterval(performCheck, HEARTBEAT_INTERVAL_MS);
+}
+
+startNativeHostHeartbeat();
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Filter out broadcasted log messages that aren't commands.

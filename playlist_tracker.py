@@ -79,12 +79,18 @@ class PlaylistTracker:
         """
         The main tracking loop that connects to MPV's IPC socket and listens for events.
         """
-        time.sleep(2) # Wait for mpv to start and the IPC socket to be available
-
-        # Create a dedicated IPC manager for this thread
+        # Optimized: Poll for connection instead of fixed sleep
         self.ipc_manager = ipc_utils.IPCSocketManager()
-        if not self.ipc_manager.connect(self.ipc_path):
-            logging.error(f"Tracker failed to connect to IPC at {self.ipc_path}")
+        connected = False
+        for attempt in range(20): # Try for up to 4 seconds (20 * 0.2s)
+            if self.ipc_manager.connect(self.ipc_path, timeout=0.2):
+                connected = True
+                break
+            if not self.is_tracking: return
+            time.sleep(0.2)
+
+        if not connected:
+            logging.error(f"Tracker failed to connect to IPC at {self.ipc_path} after multiple attempts.")
             return
 
         # Observe 'user-data/id' to detect when the active file changes.

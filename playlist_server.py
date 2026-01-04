@@ -66,7 +66,7 @@ def start_playlist_server(start_port=8000, max_port_attempts=10, m3u_file_to_ser
 
     for _ in range(50): # Increased from 10 to 50 attempts
         try:
-            httpd = socketserver.TCPServer(("", actual_port), Handler)
+            httpd = socketserver.TCPServer(("127.0.0.1", actual_port), Handler)
             break # Successfully bound to a port
         except OSError as e:
             if "Address already in use" in str(e):

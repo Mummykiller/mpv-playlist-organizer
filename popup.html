@@ -629,6 +629,14 @@
                         </div>
                     </div>
                     <hr class="settings-compact-separator">
+                    <div class="control-group stacked-control" data-setting-name="switch playlist keybind shortcut">
+                        <label for="kb-switch-playlist-input" class="settings-label">Switch Playlist <span class="help-icon" title="Shortcut to cycle through your available playlist folders.">?</span>:</label>
+                        <div class="input-group">
+                            <input type="text" id="kb-switch-playlist-input" class="settings-input" placeholder="e.g. Shift+Tab" readonly>
+                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                        </div>
+                    </div>
+                    <hr class="settings-compact-separator">
                     <div class="control-group stacked-control" data-setting-name="open popup keybind shortcut">
                         <label for="kb-open-popup-input" class="settings-label">Open Browser Popup <span class="help-icon" title="Shortcut to open this extension popup directly.">?</span>:</label>
                         <div class="input-group">
@@ -684,6 +692,10 @@
                 </summary>
                 <div class="settings-section-content">
                     <div class="dependency-status-container">
+                        <div class="dependency-item" id="diag-native-host-status">
+                            <span class="dependency-label">Native Host:</span>
+                            <span class="dependency-value">Checking...</span>
+                        </div>
                         <div class="dependency-item" id="diag-mpv-status">
                             <span class="dependency-label">MPV:</span>
                             <span class="dependency-value">Checking...</span>
@@ -706,6 +718,7 @@
 
     </details>
 
+    <script src="utils/commUtils.js"></script>
     <script src="utils/anilist_renderer.js"></script>
     <script src="utils/settings.js"></script>
     <script src="popup.js"></script>

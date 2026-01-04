@@ -714,40 +714,34 @@ class MpvSessionManager:
         item['enriched'] = True
         return [item]
 
-    def start(self, url_items_or_m3u, folder_id, settings, file_io, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, start_paused=False, enriched_items_list=None, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False, force_terminal=False):
-        logging.info(f"DEBUG: Start function received enriched_items_list (len): {len(enriched_items_list) if enriched_items_list is not None else 'None'}")
-        """Starts a new mpv process with a playlist of URLs (or an M3U), loaded sequentially via IPC."""
-        
-        m3u_input_was_raw_content_or_items = False
+    def _resolve_input_items(self, url_items_or_m3u, enriched_items_list, headers):
+        """Normalizes various input formats into a list of items and handles M3U/YouTube parsing."""
         _url_items_list = enriched_items_list if enriched_items_list is not None else []
         m3u_content = None 
+        input_was_raw = False
 
         if isinstance(url_items_or_m3u, str):
             # 1. Local Server URL check
             if url_items_or_m3u.startswith('http://localhost') and enriched_items_list is not None:
-                 logging.info(f"Local M3U server URL detected: {url_items_or_m3u}. Skipping M3U parsing because enriched_items_list is provided.")
-                 m3u_input_was_raw_content_or_items = False
+                 logging.info(f"Local M3U server URL detected: {url_items_or_m3u}. Skipping M3U parsing.")
             else:
-                # 2. YouTube Playlist Check (Expansion before enrichment)
+                # 2. YouTube Playlist Check
                 is_youtube_playlist = "youtube.com/playlist" in url_items_or_m3u or ("youtube.com/watch" in url_items_or_m3u and "list=" in url_items_or_m3u)
                 
                 if is_youtube_playlist:
-                    logging.info(f"Expanding YouTube playlist before enrichment: {url_items_or_m3u}")
-                    # Use apply_bypass_script directly to get expansion results
+                    logging.info(f"Expanding YouTube playlist: {url_items_or_m3u}")
                     _, _, _, _, _, entries, _, _, _ = apply_bypass_script({'url': url_items_or_m3u}, self.send_message)
                     if entries:
                         _url_items_list = entries
-                        m3u_input_was_raw_content_or_items = True # Trigger enrichment for children
-                        logging.info(f"Expanded YouTube playlist into {len(_url_items_list)} items.")
+                        input_was_raw = True
                     else:
-                        logging.warning("YouTube playlist expansion returned no entries. Treating as single URL.")
                         _url_items_list = [{'url': url_items_or_m3u}]
-                        m3u_input_was_raw_content_or_items = True
+                        input_was_raw = True
 
                 # 3. M3U / Content check if not already expanded
                 if not _url_items_list:
                     if os.path.exists(url_items_or_m3u):
-                        m3u_input_was_raw_content_or_items = True
+                        input_was_raw = True
                         with open(url_items_or_m3u, 'r', encoding='utf-8') as f:
                             m3u_content = f.read()
                     elif urlparse(url_items_or_m3u).scheme in ['http', 'https']:
@@ -757,290 +751,137 @@ class MpvSessionManager:
                             req = Request(url_items_or_m3u, headers=fetch_headers)
                             with urlopen(req, timeout=10) as response:
                                 m3u_content = response.read().decode('utf-8')
-                            m3u_input_was_raw_content_or_items = True
+                            input_was_raw = True
                         except Exception as e:
-                            logging.error(f"Failed to fetch M3U from URL {url_items_or_m3u}: {e}")
-                            return {"success": False, "error": f"Failed to fetch M3U: {e}"}
+                            logging.error(f"Failed to fetch M3U: {e}")
+                            return None, False
                     else:
-                        m3u_input_was_raw_content_or_items = True
+                        input_was_raw = True
                         m3u_content = url_items_or_m3u
 
                 if m3u_content:
                     _url_items_list = parse_m3u(m3u_content)
-                    logging.info(f"Parsed M3U content ({len(_url_items_list)} items).")
 
         elif isinstance(url_items_or_m3u, list):
             _url_items_list = url_items_or_m3u
-            if enriched_items_list is None: m3u_input_was_raw_content_or_items = True
+            if enriched_items_list is None: input_was_raw = True
         elif isinstance(url_items_or_m3u, dict):
             _url_items_list = [url_items_or_m3u]
-            if enriched_items_list is None: m3u_input_was_raw_content_or_items = True
+            if enriched_items_list is None: input_was_raw = True
 
-        if not _url_items_list:
-            return {"success": False, "error": "No URL items provided or parsed from M3U."}
+        return _url_items_list, input_was_raw
 
-        # --- Enrichment Logic ---
-        if m3u_input_was_raw_content_or_items:
-            from concurrent.futures import ThreadPoolExecutor
-
-            # YouTube Playlist Check: Expansion if needed
-            is_youtube_playlist = False
-            if isinstance(url_items_or_m3u, str):
-                is_youtube_playlist = "youtube.com/playlist" in url_items_or_m3u or ("youtube.com/watch" in url_items_or_m3u and "list=" in url_items_or_m3u)
+    def _handle_standard_flow_launch(self, url_items, start_index, folder_id, settings, file_io):
+        """Handles the background restoration of playlist order and sequential metadata enrichment."""
+        def task():
+            time.sleep(2.0)
+            if not self.is_alive: return
             
-            # Use Standard Flow optimization for YouTube: Just resolve the first item now.
-            # Otherwise, for M3U flow (local files, non-YT URLs), resolve everything in parallel.
-            is_definitely_m3u_flow = m3u_content is not None or (isinstance(url_items_or_m3u, str) and not is_youtube_playlist)
+            history_items = url_items[:start_index]
+            future_items = url_items[start_index + 1:]
             
-            # --- Smart Resume: Check for last played item ---
-            enable_smart_resume = settings.get("enable_smart_resume", True)
-            all_folders = file_io.get_all_folders_from_file()
-            folder_metadata = all_folders.get(folder_id, {})
-            last_played_id = folder_metadata.get("last_played_id")
+            # 1. Restore Order
+            if future_items:
+                self.append_batch(future_items, mode="append")
+                time.sleep(0.5)
 
-            playlist_start_index = 0
-            if enable_smart_resume and last_played_id:
-                # Find the index of the last played item
-                for idx, item in enumerate(_url_items_list):
-                    if item.get('id') == last_played_id:
-                        playlist_start_index = idx
-                        logging.info(f"Smart Resume: Found last played item at index {idx}. Will start playback there.")
-                        break
-
-            if is_definitely_m3u_flow:
-                logging.info(f"M3U-Flow suspected. Enriching ALL {len(_url_items_list)} items in parallel...")
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    # Pass folder_id to enrichment for metadata sync
-                    results = list(executor.map(lambda x: self.enrich_single_item(x, folder_id), _url_items_list))
-                _url_items_list = [item for sublist in results for item in sublist]
-
-                # Generate Enriched M3U Content
-                m3u_output_lines = ["#EXTM3U"]
-                for item in _url_items_list:
-                    title = sanitize_url(item.get('title', item['url'])) # Re-using sanitize_url for titles
-                    m3u_output_lines.append(f"#EXTINF:-1,{title}")
-                    if item.get('headers'):
-                        header_string = "|".join([f"{k}={v}" for k, v in item['headers'].items()])
-                        m3u_output_lines.append(f"#EXTHTTPHEADERS:{header_string}")
-                    if item.get('ytdl_raw_options'):
-                        clean_opts = file_io.sanitize_ytdlp_options(item['ytdl_raw_options'])
-                        if clean_opts:
-                            options_val = clean_opts.replace(',', '|')
-                            m3u_output_lines.append(f"#EXTYTDLOPTIONS:{options_val}")
-                    m3u_output_lines.append(sanitize_url(item['url']))
+            if history_items:
+                self.append_batch(history_items, mode="append")
+                time.sleep(0.5)
                 
-                enriched_m3u_content = "\n".join(m3u_output_lines)
-                return {
-                    "success": True,
-                    "enriched_m3u_content": enriched_m3u_content,
-                    "enriched_url_items": _url_items_list,
-                    "message": "Enriched content generated."
-                }
-            else:
-                # Standard Flow optimization: Just resolve the first item now.
-                logging.info("Standard-Flow suspected. Resolving first item only for quick launch.")
-                first_item_list = self.enrich_single_item(_url_items_list[0], folder_id)
-                _url_items_list = first_item_list + _url_items_list[1:]
-                # Proceed to Launch Logic below instead of returning early.
+                total_len = len(url_items)
+                history_count = len(history_items)
+                for i in range(history_count):
+                    source_idx = (total_len - history_count) + i
+                    self.ipc_manager.send({"command": ["playlist-move", source_idx, i]})
+                    if self.playlist and source_idx < len(self.playlist):
+                        item = self.playlist.pop(source_idx)
+                        self.playlist.insert(i, item)
 
-        # --- Launch Logic ---
-        def get_opts(item):
-            if not isinstance(item, dict): return headers, disable_http_persistent, ytdl_raw_options, use_ytdl_mpv, is_youtube
-            h = item.get('headers') or headers
-            d = item.get('disable_http_persistent', disable_http_persistent)
-            y = item.get('ytdl_raw_options') or ytdl_raw_options
-            u = item.get('use_ytdl_mpv', use_ytdl_mpv)
-            i = item.get('is_youtube', is_youtube)
-            return h, d, y, u, i
-        
-        if isinstance(url_items_or_m3u, str) and url_items_or_m3u.startswith('http://localhost'):
-            launch_item = {'url': url_items_or_m3u}
-            rest_items = []
-            playlist_for_launch = _url_items_list
-        else:
-            # --- Delayed Prepend Logic ---
-            # We launch with exactly the item the user wants to see.
-            launch_item = _url_items_list[playlist_start_index]
+            if self.playlist_tracker:
+                self.playlist_tracker.update_playlist_order(self.playlist)
             
-            # We will append the FULL list afterwards to restore correct order.
-            rest_items = _url_items_list
-            playlist_for_launch = [launch_item]
+            # 2. Sequential Enrichment
+            for idx, item in enumerate(url_items):
+                if idx == start_index or not self.is_alive: continue
+                
+                enriched = self.enrich_single_item(item, folder_id)[0]
+                target_url = sanitize_url(enriched['url'])
+                if enriched.get('is_youtube') and enriched.get('original_url'):
+                    target_url = sanitize_url(enriched['original_url'])
 
-        if self.pid and not ipc_utils.is_process_alive(self.pid, self.ipc_path):
-            self.clear()
+                lua_options = {
+                    "id": enriched.get('id'), "title": enriched.get('title'),
+                    "headers": enriched.get('headers'),
+                    "ytdl_raw_options": file_io.sanitize_ytdlp_options(enriched.get('ytdl_raw_options')),
+                    "use_ytdl_mpv": enriched.get('use_ytdl_mpv', False),
+                    "original_url": sanitize_url(enriched.get('original_url') or enriched.get('url')),
+                    "disable_http_persistent": enriched.get('disable_http_persistent', False),
+                    "cookies_file": enriched.get('cookies_file'),
+                    "disable_network_overrides": settings.get('disable_network_overrides', False),
+                    "http_persistence": settings.get('http_persistence', 'auto')
+                }
+                self.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options)]})
+                self.ipc_manager.send({"command": ["set_property", f"playlist/{idx}/url", target_url]})
+                if idx < len(self.playlist): self.playlist[idx] = enriched
+                
+                time.sleep(0.05)
 
-        # Generate the enriched M3U content for the caller (Step 1 completion)
-        enriched_m3u_lines = ["#EXTM3U"]
-        for item in _url_items_list:
-            title = sanitize_url(item.get('title', item['url']))
-            enriched_m3u_lines.append(f"#EXTINF:-1,{title}")
-            enriched_m3u_lines.append(sanitize_url(item['url']))
-        enriched_m3u_content = "\n".join(enriched_m3u_lines)
+        threading.Thread(target=task, daemon=True).start()
 
-        # Check if we should skip the launch because the session is already active
-        if self.pid and folder_id == self.owner_folder_id:
-            logging.info(f"MPV session for folder '{folder_id}' already active. Skipping launch but returning enriched data for sync.")
-            return {
-                "success": True, 
-                "message": "MPV session already active.", 
-                "already_active": True,
-                "enriched_url_items": _url_items_list,
-                "enriched_m3u_content": enriched_m3u_content
-            }
+    def start(self, url_items_or_m3u, folder_id, settings, file_io, **kwargs):
+        """Starts a new mpv process with a playlist of URLs or an M3U."""
+        _url_items_list, input_was_raw = self._resolve_input_items(url_items_or_m3u, kwargs.get('enriched_items_list'), kwargs.get('headers'))
         
-        # If it's a DIFFERENT folder, we MUST close the old one before launching new
+        if not _url_items_list:
+            return {"success": False, "error": "No URL items provided or parsed."}
+
+        # Handle Enrichment for Raw Inputs
+        if input_was_raw:
+            is_m3u_flow = isinstance(url_items_or_m3u, str) and not ("youtube.com" in url_items_or_m3u)
+            if is_m3u_flow:
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    results = list(executor.map(lambda x: self.enrich_single_item(x, folder_id), _url_items_list))
+                _url_items_list = [i for r in results for i in r]
+                return {"success": True, "enriched_url_items": _url_items_list, "message": "Enriched content generated."}
+            else:
+                first_enriched = self.enrich_single_item(_url_items_list[0], folder_id)
+                _url_items_list = first_enriched + _url_items_list[1:]
+
+        # Smart Resume
+        playlist_start_index = 0
+        if settings.get("enable_smart_resume", True):
+            last_id = file_io.get_all_folders_from_file().get(folder_id, {}).get("last_played_id")
+            for idx, item in enumerate(_url_items_list):
+                if item.get('id') == last_id:
+                    playlist_start_index = idx
+                    break
+
+        launch_item = _url_items_list[playlist_start_index]
+        
         if self.pid:
-            self.close()
+            if not ipc_utils.is_process_alive(self.pid, self.ipc_path): self.clear()
+            elif folder_id == self.owner_folder_id: return {"success": True, "already_active": True}
+            else: self.close()
 
-        h, d, y, u, i = get_opts(launch_item)
-        logging.info(f"Launching MPV with item 1/{len(_url_items_list)}: {launch_item.get('title', 'Unknown')}")
-        
         launch_result = self._launch(
             launch_item, folder_id, settings, file_io,
-            geometry=geometry, custom_width=custom_width, custom_height=custom_height, 
-            custom_mpv_flags=custom_mpv_flags, automatic_mpv_flags=automatic_mpv_flags, 
-            start_paused=start_paused, headers=h, disable_http_persistent=d,
-            ytdl_raw_options=y, use_ytdl_mpv=u, is_youtube=i,
-            full_playlist=playlist_for_launch,
-            force_terminal=force_terminal,
-            playlist_start_index=0 # Launch as index 0 initially
+            geometry=kwargs.get('geometry'), custom_width=kwargs.get('custom_width'), 
+            custom_height=kwargs.get('custom_height'), custom_mpv_flags=kwargs.get('custom_mpv_flags'), 
+            automatic_mpv_flags=kwargs.get('automatic_mpv_flags'), start_paused=kwargs.get('start_paused'), 
+            headers=launch_item.get('headers') or kwargs.get('headers'), 
+            disable_http_persistent=launch_item.get('disable_http_persistent', kwargs.get('disable_http_persistent', False)),
+            ytdl_raw_options=launch_item.get('ytdl_raw_options') or kwargs.get('ytdl_raw_options'), 
+            use_ytdl_mpv=launch_item.get('use_ytdl_mpv', False) or kwargs.get('use_ytdl_mpv', False), 
+            is_youtube=launch_item.get('is_youtube', False) or kwargs.get('is_youtube', False),
+            full_playlist=[launch_item], force_terminal=kwargs.get('force_terminal', False)
         )
 
-        if launch_result and launch_result["success"] and rest_items:
-            def append_remaining_items():
-                time.sleep(2.0) # Reduced delay for faster restoration
-                if not self.is_alive: return
-                
-                # 1. Identify History (1 to N-1) and Future (N+1 to End)
-                history_items = _url_items_list[:playlist_start_index]
-                future_items = _url_items_list[playlist_start_index + 1:]
-                
-                # Expected count after Phase 1: The item we started with + all future items.
-                expected_after_future = 1 + len(future_items)
+        if launch_result.get("success") and len(_url_items_list) > 1:
+            self._handle_standard_flow_launch(_url_items_list, playlist_start_index, folder_id, settings, file_io)
 
-                logging.info(f"Standard Flow (Phase 1): Appending {len(future_items)} future items. Expected count: {expected_after_future}")
-                # 2. Append Future Items (They go to the end, doesn't affect current playback)
-                if future_items:
-                    self.append_batch(future_items, mode="append")
-                    
-                    # Verification Loop: Wait for MPV to acknowledge the new items
-                    for _ in range(20): # Up to 2s
-                        if not self.is_alive: return
-                        count_resp = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True)
-                        if count_resp and count_resp.get("data") == expected_after_future:
-                            logging.debug(f"Standard Flow: Phase 1 verified. Playlist count is {expected_after_future}.")
-                            break
-                        time.sleep(0.1)
-
-                if history_items:
-                    logging.info(f"Standard Flow (Phase 2): Prepending {len(history_items)} history items.")
-                    # 3. Append History Items to the end temporarily
-                    self.append_batch(history_items, mode="append")
-                    
-                    # Verification Loop: Wait for MPV to acknowledge history items before moving
-                    expected_total = len(_url_items_list)
-                    for _ in range(20):
-                        if not self.is_alive: return
-                        count_resp = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True)
-                        if count_resp and count_resp.get("data") == expected_total:
-                            logging.debug(f"Standard Flow: Phase 2 append verified. Playlist count is {expected_total}.")
-                            break
-                        time.sleep(0.1)
-                    
-                    # 4. Move History Items to the very front one by one
-                    # They are currently at the end of the playlist. 
-                    # Total length is len(_url_items_list).
-                    total_len = len(_url_items_list)
-                    history_count = len(history_items)
-                    
-                    for i in range(history_count):
-                        # The items to move are at the end of the current playlist.
-                        # Since we are moving them one by one to the front (0, 1, 2...),
-                        # and target_idx < source_idx, the items remaining at the end
-                        # of the history block maintain their absolute indices.
-                        source_idx = (total_len - history_count) + i
-                        target_idx = i
-                        logging.debug(f"Standard Flow: Moving history item from {source_idx} to {target_idx}")
-                        self.ipc_manager.send({"command": ["playlist-move", source_idx, target_idx]})
-                        
-                        # Sync local playlist state to match MPV's reordering
-                        if self.playlist and source_idx < len(self.playlist):
-                            item_to_move = self.playlist.pop(source_idx)
-                            self.playlist.insert(target_idx, item_to_move)
-
-                    # Update tracker with the fully restored playlist order
-                    if self.playlist_tracker:
-                        self.playlist_tracker.update_playlist_order(self.playlist)
-                
-                logging.info("Standard Flow: Playlist order restored successfully.")
-                
-                # 5. Sequential Resolution and Update (The original logic for metadata)
-                # Since we already updated 'self.playlist' in append_batch, we just need to resolve them
-                logging.info(f"Standard Flow: Starting sequential resolution for metadata.")
-                
-                # 2. Sequential Resolution and Update
-                for idx, item in enumerate(_url_items_list):
-                    if idx == playlist_start_index:
-                        continue
-                        
-                    if not self.is_alive: break
-                    
-                    # Resolve background item
-                    logging.debug(f"Enriching background item {idx+1}: {item.get('url')}")
-                    # Pass folder_id to enrichment for metadata sync
-                    enriched_results = self.enrich_single_item(item, folder_id)
-                    enriched_item = enriched_results[0]
-
-                    logging.info(f"Updating item {idx+1}/{len(_url_items_list)}: {enriched_item.get('title', 'Unknown')}")
-                    
-                    try:
-                        # Index in MPV matches idx now that order is restored
-                        mpv_index = idx
-                        
-                        # --- Watch History Fix ---
-                        # If it's a YouTube item, we MUST NOT overwrite the URL with a direct stream
-                        # if we want mark-watched to work. We only update the metadata/options.
-                        target_url = sanitize_url(enriched_item['url'])
-                        if enriched_item.get('is_youtube') and enriched_item.get('original_url'):
-                            logging.debug(f"YouTube detected for item {idx+1}. Preserving original URL for watch history.")
-                            target_url = sanitize_url(enriched_item['original_url'])
-
-                        # Register options for the URL in Lua
-                        lua_options = {
-                            "id": enriched_item.get('id'),
-                            "title": enriched_item.get('title'),
-                            "headers": enriched_item.get('headers'),
-                            "ytdl_raw_options": file_io.sanitize_ytdlp_options(enriched_item.get('ytdl_raw_options')),
-                            "use_ytdl_mpv": enriched_item.get('use_ytdl_mpv', False),
-                            "original_url": sanitize_url(enriched_item.get('original_url') or enriched_item.get('url')),
-                            "disable_http_persistent": enriched_item.get('disable_http_persistent', False),
-                                                    "cookies_file": enriched_item.get('cookies_file'),
-                                                    "disable_network_overrides": settings.get('disable_network_overrides', False),
-                            
-                            "http_persistence": settings.get('http_persistence', 'auto')
-                        }
-                        self.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options)]})
-                        
-                        # Update the URL in MPV's live playlist
-                        self.ipc_manager.send({"command": ["set_property", f"playlist/{mpv_index}/url", target_url]})
-                        
-                        # Sync local state
-                        if mpv_index < len(self.playlist):
-                            self.playlist[mpv_index] = enriched_item
-                            if self.playlist_tracker:
-                                self.playlist_tracker.update_playlist_order(self.playlist)
-
-                    except Exception as e:
-                        logging.error(f"Exception during background update for item {idx+1}: {e}")
-                    
-                    time.sleep(0.05) # Tiny delay
-                logging.info("Standard Flow: Background resolution and updates finished.")
-            
-            threading.Thread(target=append_remaining_items, daemon=True).start()
-
-        # If we reach here and launch was successful, and we were in enrichment phase,
-        # return handled_directly to signal the caller to stop.
-        if launch_result and launch_result.get("success") and m3u_input_was_raw_content_or_items:
+        if launch_result.get("success") and input_was_raw:
             launch_result["handled_directly"] = True
             launch_result["enriched_url_items"] = _url_items_list
 

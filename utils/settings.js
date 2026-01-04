@@ -51,6 +51,7 @@ class OptionsManager {
             { key: 'kb_add_playlist', elementId: 'kb-add-playlist-input', type: 'input' },
             { key: 'kb_play_playlist', elementId: 'kb-play-playlist-input', type: 'input' },
             { key: 'kb_toggle_controller', elementId: 'kb-toggle-ui-input', type: 'input' },
+            { key: 'kb_switch_playlist', elementId: 'kb-switch-playlist-input', type: 'input' },
             { key: 'kb_open_popup', elementId: 'kb-open-popup-input', type: 'input' },
             { key: 'enable_smart_resume', elementId: 'enable-smart-resume-checkbox', type: 'checkbox' },
             { key: 'enable_precise_resume', elementId: 'enable-precise-resume-checkbox', type: 'checkbox' },

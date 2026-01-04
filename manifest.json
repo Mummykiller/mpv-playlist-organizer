@@ -21,6 +21,7 @@
     {
       "matches": ["<all_urls>"],
       "js": [
+        "utils/commUtils.js",
         "utils/anilist_renderer.js",
         "utils/Draggable.js",
         "utils/Resizable.js",

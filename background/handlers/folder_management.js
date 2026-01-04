@@ -13,22 +13,30 @@ export function init(dependencies) {
     _debouncedSyncToNativeHostFile = dependencies.debouncedSyncToNativeHostFile;
 }
 
+function isValidFolderName(name) {
+    if (!name || typeof name !== 'string') return false;
+    // Strict whitelist: alphanumeric, underscores, hyphens, and spaces.
+    // Disallow leading/trailing spaces and path traversal dots.
+    const regex = /^[a-zA-Z0-9_\-\s]+$/;
+    return regex.test(name) && name.trim() === name && !name.includes('..');
+}
+
 export async function handleCreateFolder(request) {
-    const sanitizedFolderId = sanitizeString(request.folderId, true);
-    if (!sanitizedFolderId) {
-        return { success: false, error: 'Folder name cannot be empty or contain illegal characters.' };
+    const folderId = request.folderId;
+    if (!isValidFolderName(folderId)) {
+        return { success: false, error: 'Invalid folder name. Only alphanumeric characters, spaces, hyphens, and underscores are allowed.' };
     }
     const data = await _storage.get();
-    if (data.folders[sanitizedFolderId]) {
+    if (data.folders[folderId]) {
         return { success: false, error: 'A folder with that name already exists.' };
     }
-    data.folderOrder.push(sanitizedFolderId);
-    data.folders[sanitizedFolderId] = { playlist: [] };
+    data.folderOrder.push(folderId);
+    data.folders[folderId] = { playlist: [] };
     await _storage.set(data);
     await _updateContextMenus(_storage);
     _broadcastToTabs({ foldersChanged: true });
-    _debouncedSyncToNativeHostFile();
-    return { success: true, message: `Folder "${sanitizedFolderId}" created.` };
+    _debouncedSyncToNativeHostFile(true);
+    return { success: true, message: `Folder "${folderId}" created.` };
 }
 
 export async function handleGetAllFolderIds() {
@@ -60,15 +68,15 @@ export async function handleRemoveFolder(request) {
 
     await _updateContextMenus(_storage);
     _broadcastToTabs({ foldersChanged: true });
-    _debouncedSyncToNativeHostFile();
+    _debouncedSyncToNativeHostFile(true);
     return { success: true, message: `Folder "${folderIdToRemove}" removed.` };
 }
 
 export async function handleRenameFolder(request) {
     const oldFolderId = request.oldFolderId;
-    const newFolderId = sanitizeString(request.newFolderId, true);
+    const newFolderId = request.newFolderId;
     
-    if (!oldFolderId || !newFolderId) {
+    if (!oldFolderId || !isValidFolderName(newFolderId)) {
         return { success: false, error: 'Invalid folder names provided.' };
     }
     const data = await _storage.get();
@@ -92,7 +100,7 @@ export async function handleRenameFolder(request) {
     await _storage.set(data);
     await _updateContextMenus(_storage);
     _broadcastToTabs({ foldersChanged: true });
-    _debouncedSyncToNativeHostFile();
+    _debouncedSyncToNativeHostFile(true);
     return { success: true, message: `Folder renamed to "${newFolderId}".` };
 }
 
@@ -110,6 +118,6 @@ export async function handleSetFolderOrder(request) {
 
     data.folderOrder = newOrder;
     await _storage.set(data);
-    _debouncedSyncToNativeHostFile();
+    _debouncedSyncToNativeHostFile(true);
     return { success: true, message: 'Folder order updated.' };
 }

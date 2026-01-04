@@ -175,11 +175,21 @@ async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
  */
 async function _focusOriginalTab(originalTab) {
     if (!originalTab) return;
-    if (originalTab.windowId) {
-        await chrome.windows.update(originalTab.windowId, { focused: true }).catch(() => {});
-    }
-    if (originalTab.id) {
-        await chrome.tabs.update(originalTab.id, { active: true }).catch(() => {});
+    try {
+        if (originalTab.windowId) {
+            const win = await chrome.windows.get(originalTab.windowId).catch(() => null);
+            if (win) {
+                await chrome.windows.update(originalTab.windowId, { focused: true }).catch(() => {});
+            }
+        }
+        if (originalTab.id) {
+            const tab = await chrome.tabs.get(originalTab.id).catch(() => null);
+            if (tab) {
+                await chrome.tabs.update(originalTab.id, { active: true }).catch(() => {});
+            }
+        }
+    } catch (e) {
+        // Silently ignore if anything fails during focus restoration
     }
 }
 
