@@ -44,6 +44,7 @@ class OptionsManager {
             { key: 'enable_anilist_integration', elementId: 'enable-anilist-integration-checkbox', type: 'checkbox' },
             { key: 'disable_anilist_cache', elementId: 'disable-anilist-cache-checkbox', type: 'checkbox' },
             { key: 'anilist_image_height', elementId: 'anilist-image-height-slider', type: 'slider', transform: Number },
+            { key: 'ytdl_quality', elementId: 'ytdl-quality-select', type: 'select' },
             { key: 'show_minimized_stub', elementId: 'show-minimized-stub-checkbox', type: 'checkbox' },
             { key: 'ytdlp_update_behavior', elementId: 'ytdlp-update-behavior-select', type: 'select' },
             { key: 'mode', elementId: 'default-ui-mode-select', type: 'select' },

@@ -9,6 +9,13 @@ let _tabUiState; // Shared state from background.js
 let _m3u8_scanner_handlers;
 let _playback_handlers;
 
+// Cache for native host info to speed up UI preference retrieval
+let _nativeInfoCache = {
+    decoder: null,
+    timestamp: 0
+};
+const CACHE_TTL_MS = 600000; // 10 minutes
+
 export function init(dependencies) {
     _storage = dependencies.storage;
     _broadcastToTabs = dependencies.broadcastToTabs;
@@ -143,26 +150,23 @@ export async function handleGetUiPreferences(request, sender) {
     const data = await _storage.get();
     let globalPrefs = { ...data.settings.ui_preferences.global };
 
-    // --- NEW: Sync Hardware Decoder from Native Host ---
-    // If the setting is 'auto', we ask the native host what the OS recommendation is.
+    // --- OPTIMIZED: Sync Hardware Decoder from Native Host with Caching ---
     if (globalPrefs.mpv_decoder === 'auto' || !globalPrefs.mpv_decoder) {
-        try {
-            const status = await _callNativeHost({ action: 'check_dependencies' });
-            if (status?.success) {
-                // If native host has a specific decoder in its config, use it.
-                // This allows the installer's automatic pick to show up in the UI.
-                const nativeSettings = await _callNativeHost({ action: 'get_all_folders' }); // Just to get settings context if needed, but check_dependencies is better
-                // Actually, let's add a specific 'get_settings' call or use dependency check
-                const settingsResponse = await _callNativeHost({ action: 'get_default_automatic_flags' }); // This usually returns settings
-                
-                // Let's use a simpler approach: get the actual settings from the native host
-                const actualSettings = await _callNativeHost({ action: 'get_ui_preferences' }); // The native host has its own version
-                if (actualSettings?.preferences?.mpv_decoder) {
-                    globalPrefs.mpv_decoder = actualSettings.preferences.mpv_decoder;
+        const now = Date.now();
+        if (_nativeInfoCache.decoder && (now - _nativeInfoCache.timestamp < CACHE_TTL_MS)) {
+            globalPrefs.mpv_decoder = _nativeInfoCache.decoder;
+        } else {
+            try {
+                // Consolidation: Get everything we need in one call
+                const nativeSettings = await _callNativeHost({ action: 'get_ui_preferences' });
+                if (nativeSettings?.success && nativeSettings.preferences?.mpv_decoder) {
+                    globalPrefs.mpv_decoder = nativeSettings.preferences.mpv_decoder;
+                    _nativeInfoCache.decoder = nativeSettings.preferences.mpv_decoder;
+                    _nativeInfoCache.timestamp = now;
                 }
+            } catch (e) {
+                console.warn("Could not sync native decoder settings:", e);
             }
-        } catch (e) {
-            console.warn("Could not sync native decoder settings:", e);
         }
     }
 

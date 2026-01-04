@@ -97,7 +97,7 @@ def get_cookies_file(browser, url, ignore_config=True):
         logging.warning(f"Failed to extract cookies for MPV: {e}")
         return None
 
-def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cookies=True, yt_mark_watched=True, yt_ignore_config=True, other_sites_use_cookies=True):
+def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cookies=True, yt_mark_watched=True, yt_ignore_config=True, other_sites_use_cookies=True, ytdl_quality='best'):
     """
     Runs bypass logic to extract direct URLs or provide options for MPV's internal handlers.
     """
@@ -112,6 +112,15 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     is_mark_watched_enabled = str(yt_mark_watched).lower() == "true"
     is_yt_ignore_config_enabled = str(yt_ignore_config).lower() == "true"
     is_other_cookies_enabled = str(other_sites_use_cookies).lower() == "true"
+
+    # Determine format for external resolution with strict sanitization
+    ytdl_format = 'best'
+    if ytdl_quality and ytdl_quality != 'best':
+        q = str(ytdl_quality)
+        if q in ['2160', '1440', '1080', '720', '480']:
+            ytdl_format = f"bestvideo[height<={q}]+bestaudio/best[height<={q}]"
+        else:
+            logging.warning(f"URL Analyzer Sanitization: Ignored invalid quality '{q}'")
 
     # --- Case 1: Animepahe-like URLs (VAULT_RE) ---
     if VAULT_RE.search(url):
@@ -176,6 +185,8 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 for line in lines:
                     if '|' in line:
                         title, webpage_url = line.split('|', 1)
+                        # Sanitize extracted title
+                        title = file_io.sanitize_string(title)
                         
                         ytdl_opts = []
                         if is_yt_enabled:
@@ -254,7 +265,6 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
 
     # --- Case 3: Other URLs (External resolution as fallback) ---
     try:
-        ytdl_format = 'best'
         cmd = [
             'yt-dlp',
             '--force-ipv4',

@@ -20,8 +20,8 @@ export function init(dependencies) {
 function sanitizeString(str) {
     if (typeof str !== 'string') return str;
     // Strict blacklist for filenames: / \ : * ? " < > | $ ; & `
-    // Also remove newlines
-    return str.replace(/[\/\\:*?"<>|$;&`\n\r]/g, '').trim();
+    // Also remove newlines and tabs
+    return str.replace(/[\/\\:*?"<>|$;&`\n\r\t]/g, '').trim();
 }
 
 export async function handleCreateFolder(request) {

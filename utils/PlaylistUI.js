@@ -21,6 +21,7 @@ class PlaylistUI {
 
         // --- State ---
         this.draggedItem = null;
+        this.currentPlaylist = [];
     }
 
     /**
@@ -38,6 +39,7 @@ class PlaylistUI {
      * @param {boolean} [isFolderActive] - Whether this folder is currently being played.
      */
     render(playlist, lastPlayedId, isFolderActive = false) {
+        this.currentPlaylist = playlist || [];
         // Update compact UI count
         if (this.itemCountSpan) this.itemCountSpan.textContent = playlist?.length || 0;
 

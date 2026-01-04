@@ -1388,7 +1388,6 @@ class MpvController {
         const addBtn = this.uiManager.shadowRoot?.getElementById('btn-add');
         const compactAddBtn = this.uiManager.shadowRoot?.getElementById('btn-compact-add');
         const minimizedStub = this.uiManager.minimizedHost?.shadowRoot?.getElementById('m3u8-minimized-stub');
-        const folderSelect = this.uiManager.shadowRoot?.getElementById('folder-select');
 
         // Reset button states, but preserve the detected state if a URL is present.
         addBtn?.classList.remove('url-in-playlist');
@@ -1406,31 +1405,25 @@ class MpvController {
         } else {
             this.updateStatusBanner(isPlaylist ? 'Playlist detected' : 'Stream/video detected', true);
 
-            const currentFolderId = folderSelect?.value;
-            if (!currentFolderId) return; // Can't check playlist if no folder is selected.
+            // OPTIMIZED: Use cached playlist from PlaylistUI instead of fetching from background
+            const playlistObjects = this.playlistUI?.currentPlaylist || [];
+            const isUrlInPlaylist = playlistObjects.some(item => item.url === this.detectedUrl);
 
-            try {
-                const playlistObjects = await this.getPlaylistFromBackground(currentFolderId);
-                const isUrlInPlaylist = playlistObjects.some(item => item.url === this.detectedUrl);
+            // Set the green 'detected' state first.
+            addBtn?.classList.add('stream-present');
+            compactAddBtn?.classList.add('stream-present');
+            minimizedStub?.classList.add('stream-present');
+            if (minimizedStub) minimizedStub.title = 'Click to add URL to playlist';
 
-                // Set the green 'detected' state first.
-                addBtn?.classList.add('stream-present');
-                compactAddBtn?.classList.add('stream-present');
-                minimizedStub?.classList.add('stream-present');
-                if (minimizedStub) minimizedStub.title = 'Click to add URL to playlist';
-
-                if (isUrlInPlaylist) {
-                    // URL is already in the list, make buttons yellow.
-                    addBtn?.classList.remove('stream-present');
-                    compactAddBtn?.classList.remove('stream-present');
-                    minimizedStub?.classList.remove('stream-present');
-                    addBtn?.classList.add('url-in-playlist');
-                    compactAddBtn?.classList.add('url-in-playlist');
-                    minimizedStub?.classList.add('url-in-playlist');
-                    if (minimizedStub) minimizedStub.title = 'URL is already in this playlist';
-                }
-            } catch (error) {
-                // If there's an error checking the playlist, do nothing. The buttons will keep their default state.
+            if (isUrlInPlaylist) {
+                // URL is already in the list, make buttons yellow.
+                addBtn?.classList.remove('stream-present');
+                compactAddBtn?.classList.remove('stream-present');
+                minimizedStub?.classList.remove('stream-present');
+                addBtn?.classList.add('url-in-playlist');
+                compactAddBtn?.classList.add('url-in-playlist');
+                minimizedStub?.classList.add('url-in-playlist');
+                if (minimizedStub) minimizedStub.title = 'URL is already in this playlist';
             }
         }
     }
@@ -1478,6 +1471,7 @@ class MpvController {
         if (!this.uiManager.shadowRoot) return;
     
         try {
+            // OPTIMIZED: get_all_folder_ids already returns lastUsedFolderId, no need for extra message
             const folderResponse = await sendMessageAsync({ action: 'get_all_folder_ids' });
             if (!folderResponse ?.success) {
                 this.addLogEntry({ text: `[Content]: Failed to get folder list: ${folderResponse?.error || 'Unknown error'}`, type: 'error' });
@@ -1504,12 +1498,9 @@ class MpvController {
             if (targetFolderId) {
                 fullSelect.value = targetFolderId;
                 compactSelect.value = targetFolderId;
-            } else {
-                const lastFolderResponse = await sendMessageAsync({ action: 'get_last_folder_id' });
-                if (lastFolderResponse ?.success && lastFolderResponse.folderId) {
-                    fullSelect.value = lastFolderResponse.folderId;
-                    compactSelect.value = lastFolderResponse.folderId;
-                }
+            } else if (folderResponse.lastUsedFolderId) {
+                fullSelect.value = folderResponse.lastUsedFolderId;
+                compactSelect.value = folderResponse.lastUsedFolderId;
             }
     
             // After the dropdowns are populated and the correct folder is selected,
@@ -1874,7 +1865,7 @@ class MpvController {
         this.observer = new MutationObserver(this._safeWrap(() => {
             this.handlePageUpdate();
         }));
-        this.observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+        this.observer.observe(document.documentElement, { childList: true, subtree: true });
 
         // Also, poll the URL periodically. This is more reliable for SPA navigations. This interval is cleared in teardown().
         this.pageUpdateInterval = setInterval(this._safeWrap(() => {
