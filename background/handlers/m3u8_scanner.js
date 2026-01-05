@@ -177,13 +177,25 @@ async function _focusOriginalTab(originalTab) {
     if (!originalTab) return;
     try {
         if (originalTab.windowId) {
-            const win = await chrome.windows.get(originalTab.windowId).catch(() => null);
+            // Verify window still exists
+            const win = await new Promise(resolve => {
+                chrome.windows.get(originalTab.windowId, (win) => {
+                    if (chrome.runtime.lastError) resolve(null);
+                    else resolve(win);
+                });
+            });
             if (win) {
                 await chrome.windows.update(originalTab.windowId, { focused: true }).catch(() => {});
             }
         }
         if (originalTab.id) {
-            const tab = await chrome.tabs.get(originalTab.id).catch(() => null);
+            // Verify tab still exists
+            const tab = await new Promise(resolve => {
+                chrome.tabs.get(originalTab.id, (tab) => {
+                    if (chrome.runtime.lastError) resolve(null);
+                    else resolve(tab);
+                });
+            });
             if (tab) {
                 await chrome.tabs.update(originalTab.id, { active: true }).catch(() => {});
             }

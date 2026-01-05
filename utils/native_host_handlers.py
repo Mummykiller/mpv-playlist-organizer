@@ -6,6 +6,7 @@ import platform
 import subprocess
 import re # Added for parsing server output
 import sys # Added for sys.executable
+import threading
 from urllib.request import urlopen # Added for server readiness check
 
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
@@ -27,6 +28,7 @@ class HandlerManager:
         self.anilist_cache_file = anilist_cache_file
         self.temp_playlists_dir = temp_playlists_dir
         self.log_stream = log_stream_func # Passed from native_host for unmanaged MPV logging
+        self.all_folders_lock = threading.Lock() # Lock for thread-safe storage updates
 
         self.playlist_server_process = None
         self.playlist_server_port = None
@@ -104,33 +106,34 @@ class HandlerManager:
         """
         logging.debug(f"ResolveOrAssignId: Processing url_item: {url_item.get('title') or url_item['url']}, folder_id: {folder_id}")
         
-        if folder_id not in all_folders:
-            all_folders[folder_id] = {"playlist": []}
-            logging.debug(f"ResolveOrAssignId: Created new folder '{folder_id}'.")
+        with self.all_folders_lock:
+            if folder_id not in all_folders:
+                all_folders[folder_id] = {"playlist": []}
+                logging.debug(f"ResolveOrAssignId: Created new folder '{folder_id}'.")
 
-        folder_data = all_folders[folder_id]
-        playlist = folder_data.get("playlist", [])
+            folder_data = all_folders[folder_id]
+            playlist = folder_data.get("playlist", [])
 
-        item_id = url_item.get('id')
+            item_id = url_item.get('id')
 
-        if item_id:
-            # Check if this specific ID already exists in the playlist to update it
-            for stored_item in playlist:
-                if stored_item.get('id') == item_id:
-                    logging.debug(f"ResolveOrAssignId: Found existing item by ID: {item_id}. Updating.")
-                    stored_item.update(url_item)
-                    return url_item, all_folders
-        else:
-            # No ID provided, generate a new one
-            item_id = str(uuid.uuid4())
-            url_item['id'] = item_id
-            logging.debug(f"ResolveOrAssignId: Assigned new ID: {item_id}")
-        
-        # If we reach here, it's a new entry (even if URL is same as another)
-        playlist.append(url_item)
-        folder_data["playlist"] = playlist
-        logging.debug(f"ResolveOrAssignId: Added item to folder '{folder_id}'. Item ID: {item_id}")
-        return url_item, all_folders
+            if item_id:
+                # Check if this specific ID already exists in the playlist to update it
+                for stored_item in playlist:
+                    if stored_item.get('id') == item_id:
+                        logging.debug(f"ResolveOrAssignId: Found existing item by ID: {item_id}. Updating.")
+                        stored_item.update(url_item)
+                        return url_item, all_folders
+            else:
+                # No ID provided, generate a new one
+                item_id = str(uuid.uuid4())
+                url_item['id'] = item_id
+                logging.debug(f"ResolveOrAssignId: Assigned new ID: {item_id}")
+            
+            # If we reach here, it's a new entry (even if URL is same as another)
+            playlist.append(url_item)
+            folder_data["playlist"] = playlist
+            logging.debug(f"ResolveOrAssignId: Added item to folder '{folder_id}'. Item ID: {item_id}")
+            return url_item, all_folders
 
     def handle_play(self, message):
         url_item = message.get('url_item')
@@ -196,6 +199,7 @@ class HandlerManager:
             force_terminal=message.get('force_terminal', False)
         )
         
+
         return result if result else {"success": False, "error": "Failed to start MPV session."}
 
     def handle_play_batch(self, message):
@@ -268,6 +272,7 @@ class HandlerManager:
             force_terminal=message.get('force_terminal', False)
         )
         
+
         return result
 
     def handle_remove_item_live(self, message):
@@ -286,25 +291,38 @@ class HandlerManager:
 
     def handle_append(self, message):
         url_item = message.get('url_item')
-        folder_id = message.get('folderId') # Append also needs folder_id to resolve/assign ID
-        if not url_item or not folder_id:
-            return {"success": False, "error": "Missing url_item or folderId for append action."}
+        url_items_list = message.get('url_items')
+        folder_id = message.get('folderId') 
         
-        logging.debug(f"handle_append: Original url_item from extension: {url_item}")
+        if not folder_id or (not url_item and not url_items_list):
+            return {"success": False, "error": "Missing folderId or items for append action."}
         
         # Fetch all_folders once
         all_folders = self.file_io.get_all_folders_from_file()
-
-        # Prepare URL item (resolve ID, apply bypass scripts)
         bypass_scripts_config = message.get('bypassScripts', {})
-        url_items, _ = self._process_url_item(url_item, folder_id, bypass_scripts_config, all_folders)
-        logging.debug(f"handle_append: items after processing: {url_items}")
+        
+        # Normalize to a list of items to process
+        items_to_process = url_items_list if url_items_list else [url_item]
+        
+        from concurrent.futures import ThreadPoolExecutor
+        final_processed_items = []
+        
+        # Use ThreadPoolExecutor for parallel enrichment
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            # Create a wrapper function to pass all required arguments
+            def process_wrapper(item):
+                processed, _ = self._process_url_item(item, folder_id, bypass_scripts_config, all_folders)
+                return processed
+            
+            results = list(executor.map(process_wrapper, items_to_process))
+            for processed_list in results:
+                final_processed_items.extend(processed_list)
 
-        # NOTE FOR FUTURE EDITORS: We always use 'append_batch' (M3U method) even for single items.
-        # This is because 'loadlist' on a temporary M3U is the only IPC mechanism that forces 
-        # MPV to accept our custom titles via #EXTINF. Simple 'loadfile' calls will fail to 
-        # show titles. Do not "optimize" this to a single append call.
-        return self.mpv_session.append_batch(url_items)
+        if not final_processed_items:
+            return {"success": True, "message": "No new items to append."}
+
+        # Use batch append logic to preserve titles and settings natively.
+        return self.mpv_session.append_batch(final_processed_items)
 
     def _launch_unmanaged_mpv(self, playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags):
         """Helper to launch unmanaged MPV, moved from native_host.py."""
@@ -717,7 +735,7 @@ class HandlerManager:
             )
             
             if final_launch_result and final_launch_result.get("success"):
-                final_launch_result["playlist_items"] = enriched_url_items
+                pass
                 
             return final_launch_result if final_launch_result else {"success": False, "error": "Failed to start MPV session with M3U."}
 

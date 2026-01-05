@@ -1,31 +1,30 @@
-# MPV Playlist Organizer - Post-Modularization & Stability Handoff
+# MPV Playlist Organizer - Post-Optimization & Refactoring Handoff
 
-This document summarizes the state of the codebase after the final stability pass. All critical architectural issues, security vulnerabilities, and UI regressions identified in the modularization phase have been resolved.
+This document summarizes the final state of the codebase after completing the comprehensive optimization and refactoring roadmap. The system is now fully modular, highly performant, and follows industry-standard patterns for both JavaScript and Python.
 
-## 🛠️ Recent Refinements & Fixes
+## 🛠️ Major Improvements & Refinements
 
-### 1. UI Feedback & Responsiveness
-*   **Immediate Play Feedback:** Implemented a `.btn-loading` state with a spinning animation for all play buttons. Users now receive instant visual confirmation when clicking "Play," even during slow YouTube link resolutions.
-*   **Active Session Highlighting:** Added a `.btn-playing` (green glow) state that syncs with the background's playback status.
-*   **Play/Pause Toggle:** Clicking "Play" on a folder that is already active in MPV now toggles the `pause` state via IPC, rather than restarting or doing nothing.
+### 1. High-Performance IPC & Batching
+*   **Dynamic Flow Control:** Hardcoded delays in the background script have been eliminated. The system now uses **Batch Appending**, taking all queued items and sending them to the native host in a single IPC call.
+*   **Parallel Enrichment:** The Python backend now uses a `ThreadPoolExecutor` within `handle_append` to resolve site-specific metadata (headers, direct URLs) for multiple items in parallel, drastically reducing loading times for large batches.
+*   **Instant Tracker Connection:** The `PlaylistTracker` now uses an optimized polling loop (200ms intervals) instead of a fixed 2-second sleep, making the transition to the "Active" UI state nearly instantaneous.
 
-### 2. Python Backend Robustness
-*   **Safe Process Monitoring:** Fixed a crash in `ipc_utils.py` where `is_pid_running` could fail with a `TypeError` if a PID was `None` or not an integer.
-*   **Guaranteed Response Handlers:** Updated `mpv_session.py` so that `close()` always returns a success dictionary. This prevents the "NoneType assignment" error in the native host's main message loop.
-*   **Linked Playlist Stability:** Fixed a `KeyError` where `enriched_url_items` were missing when re-playing an active folder. The system now correctly synchronizes state without breaking.
+### 2. Service-Based Architecture
+*   **Decoupled Logic:** The monolithic `mpv_session.py` has been refactored. Core responsibilities are now delegated to specialized services in `utils/session_services.py`:
+    *   `EnrichmentService`: Handles URL resolution and metadata gathering.
+    *   `LauncherService`: Manages MPV process lifecycle and exit monitoring.
+    *   `IPCService`: Orchestrates live playlist commands (reordering, removal).
+*   **Standardized Logging:** Implemented a unified `Logger` class across JS and Python. All logs now follow a consistent `[Time] [Tag]: Message` format, making cross-layer debugging seamless.
 
-### 3. Log Streamlining
-*   **Noise Reduction:** Eliminated redundant "double logs" by centralizing feedback logic in `MessageBridge.js` and removing verbose technical logs from the playback handlers.
-*   **Heartbeat Silence:** The internal `heartbeat` action is now excluded from UI logging to keep the Communication Log focused on user actions.
+### 3. Stability & Robustness
+*   **Safe Connection Handshake:** `nativeConnection.js` now explicitly rejects the initial connection promise if the host crashes during startup, preventing the UI from hanging in a "Connecting" state.
+*   **Scanner Resilience:** The stream scanner now verifies the existence of the original tab and window before attempting to restore focus, eliminating "Tab not found" errors.
+*   **Storage Janitor:** A weekly background task (via `chrome.alarms`) now automatically prunes orphaned metadata from `chrome.storage.local`, ensuring long-term performance for heavy users.
 
-## 🛡️ Security & Sanitation Parity
-*   **Four-Layer Defense:** Verified that `PageScraper.js` (Origin), `playlistManager.js` (Management), `file_io.py` (Persistence), and `services.py` (Execution) all correctly employ the centralized `sanitizeString` logic.
-*   **Token Security:** Verified the 32-character UUID token system for the local M3U server. It is securely injected via environment variables and verified on every request.
+## 🛡️ Security & Integrity Parity
+*   **Thread-Safe Persistence:** Added an `all_folders_lock` to the Python handler manager to ensure that parallel enrichment tasks do not cause race conditions when updating the local `folders.json`.
+*   **Atomic Writes:** All filesystem operations continue to use the atomic `.tmp` -> `os.replace` pattern for data integrity.
+*   **Diagnostic Precision:** The `installer.py` diagnostics now correctly prioritize manually selected browser paths for cookie and dependency testing.
 
-## 📋 Roadmap Status (`issues.md`)
-*   **90%+ Completion:** All "High Priority" bugs (memory leaks, race conditions, server exposure) are **100% resolved**.
-*   **Cleanup:** Obsolete documentation (`RESTORATION_PLAN.md`, `javascript_plan.md`) has been removed.
-*   **Next Steps:** Remaining tasks are focused on "Low Priority" polish, such as implementing a standardized Logger class and further splitting the monolithic `mpv_session.py`.
-
-## ✅ Ready for Deployment
-The codebase is in its most stable state to date. The connection between the modular JS frontend and the Python-driven IPC layer is seamless, and session restoration is fully automatic.
+## ✅ Final Status
+The project has reached **100% completion** against the `issues.md` roadmap. The codebase is lean, documented, and ready for stable production use. The bridge between the browser's asynchronous nature and the OS's process management is now robust and efficient.

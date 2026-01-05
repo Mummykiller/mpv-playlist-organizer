@@ -301,7 +301,18 @@ class InstallerLogic:
         # 4. Check Cookies
         if status['ytdlp']['found'] and browser:
             try:
-                cmd = [status['ytdlp']['path'], "--cookies-from-browser", browser, "--simulate", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+                # Use manual path if available for this browser
+                manual_path = self.manual_user_data_paths.get(browser.lower())
+                
+                cmd = [status['ytdlp']['path'], "--cookies-from-browser", browser]
+                if manual_path:
+                    # If it's a profile path (contains 'Default' or 'Profile'), 
+                    # we might need to handle it differently depending on yt-dlp version, 
+                    # but usually --cookies-from-browser B:PATH works.
+                    cmd = [status['ytdlp']['path'], "--cookies-from-browser", f"{browser}:{manual_path}"]
+                
+                cmd.extend(["--simulate", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"])
+                
                 startupinfo = None
                 if platform.system() == "Windows":
                     startupinfo = subprocess.STARTUPINFO()

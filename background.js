@@ -296,7 +296,19 @@ chrome.runtime.onInstalled.addListener(async () => {
 
     await updateContextMenus(storage);
 
+    // Create a weekly alarm for storage janitor tasks
+    chrome.alarms.create('periodic-storage-janitor', {
+        periodInMinutes: 10080 // 7 days
+    });
+
     console.log("[BG] MPV Handler extension installed and initialized.");
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === 'periodic-storage-janitor') {
+        console.log("[BG] Running periodic storage janitor tasks...");
+        storage.runJanitorTasks().catch(e => console.error("Janitor alarm failed:", e));
+    }
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
