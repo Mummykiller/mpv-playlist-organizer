@@ -62,7 +62,8 @@ export async function handleContentScriptInit(request, sender) {
         // --- NEW: Prioritize Live Session Data ---
         // If a folder is currently playing, we should default to that folder
         // and its active item, rather than just the last used folder from settings.
-        let folderId = _playback_handlers.playbackQueueInstance?.currentPlayingItem?.folderId;
+        const mpvStatus = await _playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
+        let folderId = mpvStatus?.is_running ? mpvStatus.folderId : null;
         let isFolderActive = !!folderId;
         let lastPlayedId = null;
 

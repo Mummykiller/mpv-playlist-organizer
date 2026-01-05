@@ -2,6 +2,7 @@
  * Manages all playlist-related actions like adding, removing, clearing, and reordering.
  */
 import { sanitizeString } from './sanitization.js';
+import { normalizeYouTubeUrl } from './commUtils.module.js';
 
 // --- Injected Dependencies ---
 let storage;
@@ -33,33 +34,6 @@ export function injectDependencies(deps) {
     MPV_PLAYLIST_COMPLETED_EXIT_CODE = deps.MPV_PLAYLIST_COMPLETED_EXIT_CODE;
 }
 
-/**
- * Normalizes a YouTube URL by removing the 't' (timestamp) parameter.
- * This allows for more accurate duplicate detection.
- * @param {string} ytUrl The YouTube URL to normalize.
- * @returns {string} The normalized URL, or the original if not a YouTube video URL.
- */
-function normalizeYouTubeUrlForCheck(ytUrl) {
-    try {
-        const urlObj = new URL(ytUrl);
-        if (urlObj.hostname.includes('youtube.com') && urlObj.pathname === '/watch') {
-            urlObj.searchParams.delete('t');
-            return urlObj.toString();
-        }
-    } catch (e) {
-        // Not a valid URL, return original
-    }
-    return ytUrl;
-}
-
-/**
- * Encapsulates the logic of adding an item to a folder's playlist.
- * @param {string} folderId The ID of the folder to add to.
- * @param {string} url The URL to add.
- * @param {string} title The scraped title for the entry.
- * @param {chrome.tabs.Tab} originalTab The tab where the context menu was clicked.
- * @param {chrome.runtime.MessageSender} sender The sender of the original message.
- */
 async function addUrlToFolder(folderId, url, title, originalTab = null, sender = null) {
     try {
         const sanitizedUrl = sanitizeString(url);
@@ -68,8 +42,8 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
         const data = await storage.get();
         const playlist = data.folders[folderId]?.playlist || [];
         const duplicateBehavior = data.settings.ui_preferences.global.duplicate_url_behavior || 'ask';
-        const normalizedUrl = normalizeYouTubeUrlForCheck(sanitizedUrl);
-        const isDuplicate = playlist.some(item => normalizeYouTubeUrlForCheck(item.url) === normalizedUrl);
+        const normalizedUrl = normalizeYouTubeUrl(sanitizedUrl);
+        const isDuplicate = playlist.some(item => normalizeYouTubeUrl(item.url) === normalizedUrl);
 
         if (isDuplicate) {
             // ... (Duplicate check logic) ...

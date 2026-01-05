@@ -22,7 +22,7 @@ function isValidFolderName(name) {
 }
 
 export async function handleCreateFolder(request) {
-    const folderId = request.folderId;
+    const folderId = sanitizeString(request.folderId, true);
     if (!isValidFolderName(folderId)) {
         return { success: false, error: 'Invalid folder name. Only alphanumeric characters, spaces, hyphens, and underscores are allowed.' };
     }
@@ -74,7 +74,7 @@ export async function handleRemoveFolder(request) {
 
 export async function handleRenameFolder(request) {
     const oldFolderId = request.oldFolderId;
-    const newFolderId = request.newFolderId;
+    const newFolderId = sanitizeString(request.newFolderId, true);
     
     if (!oldFolderId || !isValidFolderName(newFolderId)) {
         return { success: false, error: 'Invalid folder names provided.' };

@@ -68,6 +68,7 @@ SAFE_MPV_FLAGS_ALLOWLIST = {
     '--force-window',
     '--cursor-autohide',
     '--terminal',
+    '--input-terminal',
 }
 
 
@@ -401,6 +402,11 @@ class MpvCommandBuilder:
             self.is_forced_terminal = True
         return self
 
+    def with_input_terminal(self, val):
+        if val:
+            self.mpv_args.append(f'--input-terminal={val}')
+        return self
+
     def with_headers(self, headers):
         effective_headers = self.headers_from_bypass if self.headers_from_bypass else headers
         if effective_headers:
@@ -673,6 +679,7 @@ def construct_mpv_command(
     is_youtube_override=False,
     idle=False,
     force_terminal=False,
+    input_terminal=None,
     settings=None,
     flag_dir=None
 ):
@@ -688,6 +695,7 @@ def construct_mpv_command(
         .with_url(url) \
         .with_idle(idle) \
         .with_force_terminal(force_terminal) \
+        .with_input_terminal(input_terminal) \
         .with_completion_script(script_dir if load_on_completion_script else None, flag_dir=flag_dir) \
         .with_adaptive_headers_script(script_dir) \
         .with_fix_thumbnailer_script(script_dir) \

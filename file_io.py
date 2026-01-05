@@ -16,10 +16,13 @@ def get_user_data_dir():
     app_name = "MPVPlaylistOrganizer"
     system = platform.system()
     if system == "Windows":
-        return os.path.join(os.environ['APPDATA'], app_name)
+        return os.path.join(os.environ.get('APPDATA', os.path.expanduser('~\\AppData\\Roaming')), app_name)
     elif system == "Darwin": # macOS
         return os.path.join(os.path.expanduser('~/Library/Application Support'), app_name)
     else: # Linux and other Unix-like systems
+        xdg_data_home = os.getenv('XDG_DATA_HOME')
+        if xdg_data_home:
+            return os.path.join(xdg_data_home, app_name)
         return os.path.join(os.path.expanduser('~/.local/share'), app_name)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
@@ -28,6 +31,70 @@ FOLDERS_FILE = os.path.join(DATA_DIR, "folders.json")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 EXPORT_DIR = os.path.join(DATA_DIR, "exported")
 
+# --- Atomic Write & Safe Load Helpers ---
+
+def _atomic_json_dump(data, filepath):
+    """Writes JSON data to a file atomically using a .tmp file and os.replace."""
+    tmp_file = f"{filepath}.tmp"
+    bak_file = f"{filepath}.bak"
+    
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        # 1. Write to temporary file
+        with open(tmp_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno()) # Force write to disk
+            
+        # 2. Create backup of existing file if it exists
+        if os.path.exists(filepath):
+            shutil.copy2(filepath, bak_file)
+            
+        # 3. Atomic swap
+        os.replace(tmp_file, filepath)
+        return True
+    except Exception as e:
+        logging.error(f"[PY][IO] Atomic write failed for {filepath}: {e}")
+        if os.path.exists(tmp_file):
+            try: os.remove(tmp_file)
+            except: pass
+        return False
+
+def _safe_json_load(filepath, default_factory=dict):
+    """Loads JSON data with a fallback to .bak if the primary file is corrupted."""
+    bak_file = f"{filepath}.bak"
+    
+    def try_load(path):
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                if not content.strip():
+                    return None
+                return json.loads(content)
+        except (json.JSONDecodeError, IOError) as e:
+            logging.error(f"[PY][IO] Failed to load JSON from {path}: {e}")
+            return None
+
+    # Try primary
+    data = try_load(filepath)
+    if data is not None:
+        return data
+
+    # Try backup
+    logging.warning(f"[PY][IO] Primary file {filepath} corrupted or missing. Attempting backup restore...")
+    data = try_load(bak_file)
+    if data is not None:
+        logging.info(f"[PY][IO] Successfully restored data from {bak_file}")
+        # Optionally restore the primary file immediately
+        _atomic_json_dump(data, filepath)
+        return data
+
+    logging.error(f"[PY][IO] Both primary and backup for {filepath} are invalid. Returning default.")
+    return default_factory()
+
 # --- File I/O Functions ---
 
 def get_mpv_executable():
@@ -35,18 +102,10 @@ def get_mpv_executable():
     current_platform = platform.system()
     mpv_default_name = "mpv.exe" if current_platform == "Windows" else "mpv"
 
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            configured_mpv_path = config.get("mpv_path")
-            if configured_mpv_path:
-                if os.path.isabs(configured_mpv_path) and os.path.exists(configured_mpv_path):
-                    return configured_mpv_path
-                else:
-                    return configured_mpv_path
-        except (IOError, json.JSONDecodeError) as e:
-            logging.warning(f"Could not read or parse config.json for mpv path: {e}. Falling back to default.")
+    config = _safe_json_load(CONFIG_FILE)
+    configured_mpv_path = config.get("mpv_path")
+    if configured_mpv_path:
+        return configured_mpv_path
     
     return mpv_default_name
 
@@ -75,6 +134,22 @@ def sanitize_string(s, is_filename=False):
 def sanitize_folder_name(name):
     """Specific strict sanitization for folder names used in filesystem paths."""
     return sanitize_string(name, is_filename=True)
+
+def is_youtube_url(url):
+    """Returns True if the URL is a recognized YouTube video or playlist URL."""
+    if not url or not isinstance(url, str): return False
+    return "youtube.com/" in url or "youtu.be/" in url
+
+def get_youtube_id(url):
+    """Extracts the video or playlist ID from a YouTube URL."""
+    if not url: return None
+    # Video ID
+    video_match = re.search(r"(?:v=|\/v\/|embed\/|youtu\.be\/|\/shorts\/)([a-zA-Z0-9_-]{11})", url)
+    if video_match: return video_match.group(1)
+    # Playlist ID
+    list_match = re.search(r"list=([a-zA-Z0-9_-]+)", url)
+    if list_match: return list_match.group(1)
+    return None
 
 def sanitize_ytdlp_options(options_str):
     """
@@ -200,32 +275,25 @@ def get_all_folders_from_file():
         source_folders_file = os.path.join(SCRIPT_DIR, "data", "folders.json")
         if os.path.exists(source_folders_file):
             try:
-                logging.info(f"No folders file found in {DATA_DIR}. Copying default from {source_folders_file}.")
+                logging.info(f"[PY][IO] No folders file found in {DATA_DIR}. Copying default from {source_folders_file}.")
                 shutil.copy2(source_folders_file, FOLDERS_FILE)
             except Exception as e:
-                logging.error(f"Failed to copy default folders.json: {e}")
+                logging.error(f"[PY][IO] Failed to copy default folders.json: {e}")
                 return {}
         else:
             return {}
 
-    try:
-        with open(FOLDERS_FILE, 'r', encoding='utf-8') as f:
-            content = f.read()
-            if not content:
-                return {}
-            raw_folders = json.loads(content)
-        
-        converted_folders, needs_resave = _migrate_legacy_data(raw_folders)
-        
-        if needs_resave:
-            logging.info("Resaving folders file after converting old data formats.")
-            with open(FOLDERS_FILE, 'w') as f:
-                json.dump(converted_folders, f, indent=4)
-
-        return converted_folders
-    except Exception as e:
-        logging.error(f"Failed to read or process folders from file: {e}")
+    raw_folders = _safe_json_load(FOLDERS_FILE)
+    if not raw_folders:
         return {}
+    
+    converted_folders, needs_resave = _migrate_legacy_data(raw_folders)
+    
+    if needs_resave:
+        logging.info("[PY][IO] Resaving folders file after converting old data formats.")
+        _atomic_json_dump(converted_folders, FOLDERS_FILE)
+
+    return converted_folders
 
 def write_export_file(filename, data):
     """Helper to write data to a file in the export directory."""
@@ -240,25 +308,23 @@ def write_export_file(filename, data):
 
         filepath = os.path.join(EXPORT_DIR, final_filename)
 
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4)
-
-        logging.info(f"Data exported to {filepath}")
-        return {"success": True, "message": f"Data exported to '{final_filename}' in the 'exported' folder."}
+        if _atomic_json_dump(data, filepath):
+            logging.info(f"[PY][IO] Data exported to {filepath}")
+            return {"success": True, "message": f"Data exported to '{final_filename}' in the 'exported' folder."}
+        else:
+            return {"success": False, "error": "Atomic write failed during export."}
     except Exception as e:
-        error_msg = f"Failed to export data: {e}"
+        error_msg = f"[PY][IO] Failed to export data: {e}"
         logging.error(error_msg)
         return {"success": False, "error": error_msg}
 
 def write_folders_file(data):
     """Writes the provided data to the main folders.json file."""
-    try:
-        with open(FOLDERS_FILE, 'w') as f:
-            json.dump(data, f, indent=4)
-        logging.info(f"Data synced to {FOLDERS_FILE}")
+    if _atomic_json_dump(data, FOLDERS_FILE):
+        logging.info(f"[PY][IO] Data synced to {FOLDERS_FILE}")
         return {"success": True, "message": "Data successfully synced to file."}
-    except Exception as e:
-        error_msg = f"Failed to write to {FOLDERS_FILE}: {e}"
+    else:
+        error_msg = f"[PY][IO] Failed to write to {FOLDERS_FILE}"
         logging.error(error_msg)
         return {"success": False, "error": error_msg}
 
@@ -271,7 +337,7 @@ def list_import_files():
             files = sorted([f for f in os.listdir(EXPORT_DIR) if f.endswith('.json')], reverse=True)
             return {"success": True, "files": files}
     except Exception as e:
-        error_msg = f"Failed to list import files: {e}"
+        error_msg = f"[PY][IO] Failed to list import files: {e}"
         logging.error(error_msg)
         return {"success": False, "error": error_msg}
 
@@ -308,34 +374,20 @@ def get_settings():
         ]
     }
 
-    current_settings = {}
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                content = f.read()
-                if content:
-                    current_settings = json.loads(content)
-        except (IOError, json.JSONDecodeError) as e:
-            logging.error(f"Failed to read or parse config.json: {e}")
-            # If config is corrupted, start fresh with defaults
-            return default_settings
+    current_settings = _safe_json_load(CONFIG_FILE)
     
     # Merge current settings with defaults, prioritizing current_settings
     settings = {**default_settings, **current_settings}
 
     # --- NEW: Auto-sync Automatic MPV Flags ---
-    # This ensures new flags added to the code show up in the UI automatically
-    # without overriding the user's existing enabled/disabled choices.
     if "automatic_mpv_flags" in current_settings:
         current_flags = {f["flag"]: f for f in current_settings["automatic_mpv_flags"]}
         updated_flags = []
         
         for default_f in default_settings["automatic_mpv_flags"]:
             if default_f["flag"] in current_flags:
-                # Keep the user's existing choice (enabled/disabled)
                 updated_flags.append(current_flags[default_f["flag"]])
             else:
-                # Add the new flag from the default list
                 updated_flags.append(default_f)
         
         settings["automatic_mpv_flags"] = updated_flags
@@ -349,25 +401,22 @@ def get_settings():
 def set_settings(settings_dict):
     """Writes the provided settings to config.json, merging with existing settings."""
     try:
-        # Load existing settings to avoid overwriting unrelated keys
         current_settings = get_settings()
 
-        # --- Sanitization & Validation ---
         if 'ytdl_quality' in settings_dict:
             valid_qualities = ['best', '2160', '1440', '1080', '720', '480']
             if str(settings_dict['ytdl_quality']) not in valid_qualities:
-                logging.warning(f"Security: Invalid ytdl_quality '{settings_dict['ytdl_quality']}' ignored.")
+                logging.warning(f"[PY][SEC] Invalid ytdl_quality '{settings_dict['ytdl_quality']}' ignored.")
                 del settings_dict['ytdl_quality']
 
-        # Merge new settings, prioritizing the provided settings_dict
         merged_settings = {**current_settings, **settings_dict}
 
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(merged_settings, f, indent=4)
-        logging.info(f"Settings successfully written to {CONFIG_FILE}.")
-        return {"success": True, "message": "Settings saved."}
+        if _atomic_json_dump(merged_settings, CONFIG_FILE):
+            logging.info(f"[PY][IO] Settings successfully written to {CONFIG_FILE}.")
+            return {"success": True, "message": "Settings saved."}
+        else:
+            return {"success": False, "error": "Atomic write for settings failed."}
     except Exception as e:
-        error_msg = f"Failed to write settings to {CONFIG_FILE}: {e}"
+        error_msg = f"[PY][IO] Failed to write settings to {CONFIG_FILE}: {e}"
         logging.error(error_msg)
         return {"success": False, "error": error_msg}

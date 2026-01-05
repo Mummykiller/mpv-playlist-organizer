@@ -1,86 +1,55 @@
 /**
  * @class Resizable
- * A utility class to make an HTML element resizable via a handle.
  */
-class Resizable {
-    /**
-     * @param {HTMLElement} element - The element to be resized.
-     * @param {HTMLElement} handle - The handle element that triggers the resize.
-     * @param {object} [options={}] - Configuration options.
-     * @param {number} [options.minWidth=200] - The minimum width the element can be resized to.
-     * @param {number} [options.minHeight=150] - The minimum height the element can be resized to.
-     * @param {Function} [options.onResizeEnd] - A callback function to execute when resizing is finished.
-     */
-    constructor(element, handle, options = {}) {
-        if (!element || !handle) {
-            console.error("Resizable: Both an element and a handle must be provided.");
-            return;
-        }
+window.MPV = window.MPV || {};
 
+window.MPV.Resizable = class Resizable {
+    constructor(element, handle, options = {}) {
         this.element = element;
         this.handle = handle;
-        this.minWidth = options.minWidth || 200;
-        this.minHeight = options.minHeight || 150;
-        this.onResizeEnd = options.onResizeEnd || (() => {});
-
+        this.options = { minWidth: 100, minHeight: 100, onResizeStart: () => {}, onResizeMove: () => {}, onResizeEnd: () => {}, ...options };
         this.isResizing = false;
         this.startX = 0;
         this.startY = 0;
         this.startWidth = 0;
         this.startHeight = 0;
-
-        this._onMouseDown = this._onMouseDown.bind(this);
-        this._onMouseMove = this._onMouseMove.bind(this);
-        this._onMouseUp = this._onMouseUp.bind(this);
-
-        this.handle.addEventListener('mousedown', this._onMouseDown);
+        this.onMouseDown = this.onMouseDown.bind(this);
+        this.onMouseMove = this.onMouseMove.bind(this);
+        this.onMouseUp = this.onMouseUp.bind(this);
+        this.attach();
     }
 
-    _onMouseDown(e) {
+    onMouseDown(e) {
+        if (e.button !== 0) return;
         e.preventDefault();
         this.isResizing = true;
-        document.body.classList.add('mpv-resizing-active');
-
-        // Ensure the element's position is calculated in pixels before resizing starts.
-        // This prevents issues if the position was previously set in percentages.
-        const rect = this.element.getBoundingClientRect();
-        this.element.style.left = `${rect.left}px`;
-        this.element.style.top = `${rect.top}px`;
+        document.body.classList.add('mpv-anilist-resizing');
         this.startX = e.clientX;
         this.startY = e.clientY;
-        this.startWidth = this.element.offsetWidth;
-        this.startHeight = this.element.offsetHeight;
-
-        this.element.style.transition = 'none';
-
-        document.addEventListener('mousemove', this._onMouseMove);
-        document.addEventListener('mouseup', this._onMouseUp);
+        this.startWidth = parseInt(document.defaultView.getComputedStyle(this.element).width, 10);
+        this.startHeight = parseInt(document.defaultView.getComputedStyle(this.element).height, 10);
+        document.addEventListener('mousemove', this.onMouseMove);
+        document.addEventListener('mouseup', this.onMouseUp);
+        this.options.onResizeStart(e);
     }
 
-    _onMouseMove(e) {
+    onMouseMove(e) {
         if (!this.isResizing) return;
-
-        const rect = this.element.getBoundingClientRect();
-        // Use document.documentElement.clientWidth to get viewport width excluding scrollbar
-        const maxAllowedWidth = document.documentElement.clientWidth - rect.left;
-        const maxAllowedHeight = window.innerHeight - rect.top;
-
-        const newWidth = Math.min(maxAllowedWidth, Math.max(this.minWidth, this.startWidth + (e.clientX - this.startX)));
-        const newHeight = Math.min(maxAllowedHeight, Math.max(this.minHeight, this.startHeight + (e.clientY - this.startY)));
-
+        const newWidth = Math.max(this.options.minWidth, this.startWidth + (e.clientX - this.startX));
+        const newHeight = Math.max(this.options.minHeight, this.startHeight + (e.clientY - this.startY));
         this.element.style.width = `${newWidth}px`;
         this.element.style.height = `${newHeight}px`;
+        this.options.onResizeMove(e, { width: newWidth, height: newHeight });
     }
 
-    _onMouseUp() {
+    onMouseUp(e) {
         if (!this.isResizing) return;
         this.isResizing = false;
-        document.body.classList.remove('mpv-resizing-active');
-        this.element.style.transition = '';
-
-        document.removeEventListener('mousemove', this._onMouseMove);
-        document.removeEventListener('mouseup', this._onMouseUp);
-
-        this.onResizeEnd({ width: this.element.style.width, height: this.element.style.height });
+        document.body.classList.remove('mpv-anilist-resizing');
+        document.removeEventListener('mousemove', this.onMouseMove);
+        document.removeEventListener('mouseup', this.onMouseUp);
+        this.options.onResizeEnd({ width: this.element.style.width, height: this.element.style.height });
     }
-}
+
+    attach() { this.handle.addEventListener('mousedown', this.onMouseDown); }
+};

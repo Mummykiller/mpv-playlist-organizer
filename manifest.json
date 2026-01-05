@@ -22,13 +22,17 @@
       "matches": ["<all_urls>"],
       "js": [
         "utils/commUtils.js",
+        "utils/MessageBridge.js",
+        "utils/ContentState.js",
+        "utils/NavigationObserver.js",
+        "utils/UIManager.js",
+        "utils/PlaylistUI.js",
         "utils/anilist_renderer.js",
+        "utils/AniListUI.js",
+        "utils/PageScraper.js",
         "utils/Draggable.js",
         "utils/Resizable.js",
-        "utils/PageScraper.js",
-        "utils/UIManager.js",
-        "utils/AniListUI.js",
-        "utils/PlaylistUI.js",
+        "utils/MpvController.js",
         "content.js"
       ],
       "all_frames": false
@@ -36,7 +40,9 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["content.css"],
+      "resources": [
+        "content.css"
+      ],
       "matches": ["<all_urls>"]
     }
   ],

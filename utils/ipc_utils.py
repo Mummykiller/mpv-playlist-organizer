@@ -18,6 +18,11 @@ ipc_logger = logging.getLogger("ipc_events")
 
 def is_pid_running(pid):
     """Checks if a process ID is currently running on the system using native APIs."""
+    if pid is None: return False
+    try:
+        pid = int(pid)
+    except (ValueError, TypeError):
+        return False
     if pid <= 0: return False
     system = platform.system()
     

@@ -48,13 +48,17 @@ class CommandLineApp:
 
     def _get_logic_strategy(self):
         system = platform.system()
+        def ask_dir_cli(title):
+            print(f"\n[ACTION REQUIRED] {title}")
+            return input("Path: ").strip()
+        
         if system == "Windows":
-            return WindowsLogic(print)
+            return WindowsLogic(print, ask_dir_func=ask_dir_cli)
         elif system == "Linux":
-            return LinuxLogic(print)
+            return LinuxLogic(print, ask_dir_func=ask_dir_cli)
         elif system == "Darwin":
-            return MacOSLogic(print)
-        return UnixLogic(print)
+            return MacOSLogic(print, ask_dir_func=ask_dir_cli)
+        return UnixLogic(print, ask_dir_func=ask_dir_cli)
 
     def run(self):
         print("\n" + "="*50)
@@ -165,9 +169,11 @@ def _generate_user_agent(browser_name, os_name):
 
 class InstallerLogic:
     """Abstract base class for platform-specific installer logic."""
-    def __init__(self, logger_func, ask_file_func=None):
+    def __init__(self, logger_func, ask_file_func=None, ask_dir_func=None):
         self.log = logger_func
         self.ask_file = ask_file_func
+        self.ask_dir = ask_dir_func
+        self.manual_user_data_paths = {}
 
     def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
         raise NotImplementedError
@@ -205,9 +211,21 @@ class InstallerLogic:
 
     def find_extension_id(self, browser_name):
         """Attempts to find the extension ID by scanning browser preferences."""
-        user_data_root = self.get_browser_user_data_dir(browser_name)
+        user_data_root = self.manual_user_data_paths.get(browser_name.lower())
+        
+        if not user_data_root:
+            user_data_root = self.get_browser_user_data_dir(browser_name)
+            
         if not user_data_root or not os.path.exists(user_data_root):
             self.log(f"User Data directory not found for {browser_name}: {user_data_root}")
+            if self.ask_dir:
+                self.log("Prompting for manual selection...")
+                user_data_root = self.ask_dir(f"Select User Data directory for {browser_name}")
+                if user_data_root:
+                    self.manual_user_data_paths[browser_name.lower()] = user_data_root
+            
+        if not user_data_root or not os.path.exists(user_data_root):
+            self.log(f"❌ User Data directory NOT found/selected for {browser_name}")
             return None
 
         self.log(f"Scanning profiles in {user_data_root} for Extension ID...")
@@ -740,21 +758,30 @@ class HostManagerApp:
 
     def _get_logic_strategy(self):
         system = platform.system()
-        ask_func = self._ask_file_path_sync
+        ask_file_func = self._ask_file_path_sync
+        ask_dir_func = self._ask_directory_sync
         if system == "Windows":
-            return WindowsLogic(self.log, ask_func)
+            return WindowsLogic(self.log, ask_file_func, ask_dir_func)
         elif system == "Linux":
-            return LinuxLogic(self.log, ask_func)
+            return LinuxLogic(self.log, ask_file_func, ask_dir_func)
         elif system == "Darwin":
-            return MacOSLogic(self.log, ask_func)
+            return MacOSLogic(self.log, ask_file_func, ask_dir_func)
         else:
             self.log(f"Unsupported platform: {system}")
-            return UnixLogic(self.log, ask_func) # Fallback
+            return UnixLogic(self.log, ask_file_func, ask_dir_func) # Fallback
 
     def _ask_file_path_sync(self, title, filetypes):
         q = queue.Queue()
         def _ask():
             path = filedialog.askopenfilename(title=title, filetypes=filetypes, parent=self.root)
+            q.put(path)
+        self.root.after(0, _ask)
+        return q.get()
+
+    def _ask_directory_sync(self, title):
+        q = queue.Queue()
+        def _ask():
+            path = filedialog.askdirectory(title=title, parent=self.root)
             q.put(path)
         self.root.after(0, _ask)
         return q.get()

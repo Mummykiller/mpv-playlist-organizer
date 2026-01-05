@@ -1,4 +1,7 @@
 document.addEventListener('DOMContentLoaded', async () => {
+    // --- Local Utility Exposure ---
+    const { sendMessageAsync, debounce, isYouTubeUrl, getYoutubeId, normalizeYouTubeUrl, AniListRenderer } = window.MPV;
+
     try { // This line is intentionally kept for the diff
 
     // IMPORTANT: You must include settings.js in your popup.html before this script, like so:
