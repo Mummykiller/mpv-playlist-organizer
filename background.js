@@ -77,7 +77,7 @@ const _syncToNativeHostFile = async () => {
         });
     } catch (e) {
         const errorMessage = `Failed to sync data to native host file: ${e.message}`;
-        console.error(errorMessage);
+        console.error(`[BG] ${errorMessage}`);
         broadcastLog({ text: `[Background]: ${errorMessage}`, type: 'error' });
     }
 };
@@ -275,7 +275,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     sendResponse(response);
                 }
             } catch (e) {
-                console.error(`Error handling action '${request.action}':`, e);
+                console.error(`[BG] Error handling action '${request.action}':`, e);
                 sendResponse({ success: false, error: e.message });
             }
         })();
@@ -296,7 +296,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
     await updateContextMenus(storage);
 
-    console.log("MPV Handler extension installed and initialized.");
+    console.log("[BG] MPV Handler extension installed and initialized.");
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -335,7 +335,7 @@ async function reinjectContentScripts() {
 
     try {
         const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
-        console.log(`[Background]: Checking ${tabs.length} tabs for MPV UI re-injection...`);
+        console.log(`[BG] Checking ${tabs.length} tabs for MPV UI re-injection...`);
 
         for (const tab of tabs) {
             // Skip restricted tabs (like chrome:// or extension pages)

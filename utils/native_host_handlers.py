@@ -31,6 +31,15 @@ class HandlerManager:
         self.playlist_server_process = None
         self.playlist_server_port = None
         self.temp_m3u_file_for_server = None
+        
+        # Check if we are restoring a session that already has a token
+        restored_data = self.mpv_session.restore()
+        if restored_data and restored_data.get("token"):
+            self.server_token = restored_data["token"]
+            logging.info(f"[PY] Restored existing session token.")
+        else:
+            self.server_token = uuid.uuid4().hex # New random session token
+            logging.debug(f"[PY] Generated new session token.")
 
     def _process_url_item(self, url_item, folder_id, bypass_scripts_config, all_folders):
         """
@@ -469,6 +478,7 @@ class HandlerManager:
         logging.info("Launching local M3U server process...")
         server_env = os.environ.copy()
         server_env["PYTHONDONTWRITEBYTECODE"] = "1"
+        server_env["MPV_PLAYLIST_TOKEN"] = self.server_token # Inject secret
         
         try:
             self.playlist_server_process = subprocess.Popen(
@@ -495,7 +505,7 @@ class HandlerManager:
             if self.playlist_server_port is None:
                 raise RuntimeError("Could not determine playlist server port.")
 
-            fetch_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u"
+            fetch_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u?token={self.server_token}"
             # Readiness check
             for _ in range(30):
                 try:
@@ -622,10 +632,10 @@ class HandlerManager:
                     with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
                         f.write(enriched_m3u_content)
                 
-                # Force unpause since this is a 'play' action
+                # Toggle pause state since this folder is already active
                 if self.mpv_session.ipc_manager:
-                    logging.info("Linked Playlist: Forcing unpause.")
-                    self.mpv_session.ipc_manager.send({"command": ["set_property", "pause", False]})
+                    logging.info("Linked Playlist: Toggling pause state.")
+                    self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
 
                 if new_items:
                     logging.info(f"Linked Playlist: Appending {len(new_items)} new items to active session.")
@@ -633,7 +643,7 @@ class HandlerManager:
                     # to preserve titles and settings natively.
                     return self.mpv_session.append_batch(new_items)
                 else:
-                    return {"success": True, "message": "Playlist is already up-to-date. Playback resumed."}
+                    return {"success": True, "message": "Playlist is already active. Toggled play/pause."}
 
             # --- ALWAYS write the M3U file for debugging/logging as requested ---
             if not self.temp_m3u_file_for_server:

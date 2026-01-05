@@ -40,7 +40,7 @@ class PlaylistTracker:
         self.tracking_thread = threading.Thread(target=self._track)
         self.tracking_thread.daemon = True
         self.tracking_thread.start()
-        logging.info(f"Playlist tracker started for folder '{self.folder_id}' with '{self.clear_behavior}' behavior.")
+        logging.info(f"[PY][Tracker] Playlist tracker started for folder '{self.folder_id}' with '{self.clear_behavior}' behavior.")
 
     def stop_tracking(self, mpv_return_code=None):
         """
@@ -50,7 +50,7 @@ class PlaylistTracker:
             return
 
         self.is_tracking = False
-        logging.info(f"Playlist tracker stopped for folder '{self.folder_id}'. Played item IDs: {self.played_item_ids}")
+        logging.info(f"[PY][Tracker] Playlist tracker stopped for folder '{self.folder_id}'. Played item IDs: {self.played_item_ids}")
         if self.tracking_thread:
             self.tracking_thread.join()
 
@@ -61,19 +61,19 @@ class PlaylistTracker:
         # It is assumed the item already has an 'id' assigned by resolve_or_assign_item_id.
         with self.lock:
             self.playlist.append(item)
-            logging.debug(f"Added item to tracker's internal playlist: {item.get('title') or item['url']} (ID: {item.get('id')})")
+            logging.debug(f"[PY][Tracker] Added item to tracker's internal playlist: {item.get('title') or item['url']} (ID: {item.get('id')})")
 
     def remove_item_internal(self, item_id):
         """Removes an item from the tracker's internal playlist (used when removed from UI)."""
         with self.lock:
             self.playlist = [item for item in self.playlist if item.get('id') != item_id]
-            logging.debug(f"Removed item ID {item_id} from tracker's internal playlist.")
+            logging.debug(f"[PY][Tracker] Removed item ID {item_id} from tracker's internal playlist.")
 
     def update_playlist_order(self, new_playlist):
         """Updates the internal playlist order to match the live session."""
         with self.lock:
             self.playlist = new_playlist
-            logging.debug("Tracker: Internal playlist order updated.")
+            logging.debug("[PY][Tracker] Internal playlist order updated.")
 
     def _track(self):
         """
@@ -90,7 +90,7 @@ class PlaylistTracker:
             time.sleep(0.2)
 
         if not connected:
-            logging.error(f"Tracker failed to connect to IPC at {self.ipc_path} after multiple attempts.")
+            logging.error(f"[PY][Tracker] Tracker failed to connect to IPC at {self.ipc_path} after multiple attempts.")
             return
 
         # Observe 'user-data/id' to detect when the active file changes.
@@ -104,16 +104,16 @@ class PlaylistTracker:
         if response and 'data' in response:
             current_id = response['data']
             if current_id:
-                logging.info(f"Tracker: Initial current_id detected: {current_id}")
+                logging.info(f"[PY][Tracker] Initial current_id detected: {current_id}")
                 self._update_last_played(current_id)
         
-        logging.info(f"Tracker: Starting event loop. Initial current_id: {current_id}")
+        logging.info(f"[PY][Tracker] Starting event loop. Initial current_id: {current_id}")
 
         while self.is_tracking:
             if not self.ipc_manager.is_connected():
-                logging.warning("Tracker IPC disconnected. Attempting to reconnect...")
+                logging.warning("[PY][Tracker] Tracker IPC disconnected. Attempting to reconnect...")
                 if self.ipc_manager.connect(self.ipc_path):
-                    logging.info("Tracker reconnected. Re-observing properties.")
+                    logging.info("[PY][Tracker] Tracker reconnected. Re-observing properties.")
                     self.ipc_manager.send({"command": ["observe_property", 1, "user-data/id"]})
                     self.ipc_manager.send({"command": ["observe_property", 2, "time-pos"]})
                 else:
@@ -132,7 +132,7 @@ class PlaylistTracker:
 
                     if prop_name == 'user-data/id':
                         new_id = data
-                        logging.debug(f"Tracker: property-change 'user-data/id' detected. Old: {current_id}, New: {new_id}")
+                        logging.debug(f"[PY][Tracker] property-change 'user-data/id' detected. Old: {current_id}, New: {new_id}")
 
                         if new_id and new_id != current_id:
                             # Reset watch timer flag for the new item if needed
@@ -141,7 +141,7 @@ class PlaylistTracker:
 
                             # 1. If we were playing something else, do a FINAL save for it
                             if current_id and current_time > 2:
-                                logging.info(f"Tracker: Saving final position for old item {current_id}: {int(current_time)}s")
+                                logging.info(f"[PY][Tracker] Saving final position for old item {current_id}: {int(current_time)}s")
                                 self._update_resume_time(current_id, current_time)
                                 self.played_item_ids.add(current_id)
 
@@ -152,7 +152,7 @@ class PlaylistTracker:
                             self._remote_log(f"AdaptiveHeaders: Watch history tracking started (Python) for ID: {current_id}")
 
                             # 4. Immediately notify the extension to update the UI highlight
-                            logging.info(f"Tracker: Active episode changed to ID {current_id}. Notifying UI.")
+                            logging.info(f"[PY][Tracker] Active episode changed to ID {current_id}. Notifying UI.")
                             self._update_last_played(current_id)
                     
                     elif prop_name == 'time-pos':
@@ -169,7 +169,7 @@ class PlaylistTracker:
 
                 elif event.get('event') == 'end-file':
                     reason = event.get('reason')
-                    logging.debug(f"Tracker: end-file event detected. Reason: {reason}, ID: {current_id}")
+                    logging.debug(f"[PY][Tracker] end-file event detected. Reason: {reason}, ID: {current_id}")
                     
                     if current_id:
                         if reason == 'eof':
@@ -182,15 +182,15 @@ class PlaylistTracker:
                                 self._update_resume_time(current_id, current_time)
 
             except Exception as e:
-                logging.error(f"Error in playlist tracker: {e}")
+                logging.error(f"[PY][Tracker] Error in playlist tracker: {e}")
 
             except Exception as e: # Catch all for connection errors now handled by ipc_manager
                 # IPCSocketManager handles FileNotFoundError, ConnectionRefusedError internally now.
                 # If its send/receive methods return None, it means the connection might be dead.
                 # If we get an exception here, it's something unexpected.
-                logging.error(f"Error in playlist tracker: {e}")
+                logging.error(f"[PY][Tracker] Error in playlist tracker: {e}")
                 if not self.ipc_manager._sock: # If socket is explicitly closed by manager
-                    logging.info("MPV IPC socket closed. Stopping tracker.")
+                    logging.info("[PY][Tracker] MPV IPC socket closed. Stopping tracker.")
                     self.is_alive = False
                 time.sleep(1) # Original sleep
 
@@ -209,7 +209,7 @@ class PlaylistTracker:
             if self.folder_id in all_folders:
                 all_folders[self.folder_id]["last_played_id"] = item_id
                 self.file_io.write_folders_file(all_folders)
-                logging.debug(f"Tracker: Updated last_played_id to '{item_id}' for folder '{self.folder_id}'.")
+                logging.debug(f"[PY][Tracker] Updated last_played_id to '{item_id}' for folder '{self.folder_id}'.")
             
             # 2. Notify the extension so it can update its internal storage
             self.send_message({
@@ -218,7 +218,7 @@ class PlaylistTracker:
                 "itemId": item_id
             })
         except Exception as e:
-            logging.error(f"Tracker: Failed to update last_played_id: {e}")
+            logging.error(f"[PY][Tracker] Failed to update last_played_id: {e}")
 
     def _update_resume_time(self, item_id, resume_time):
         """Saves the current playback time for a specific item to the folder's playlist metadata."""
@@ -237,7 +237,7 @@ class PlaylistTracker:
                         if abs(resume_time - old_time) > 2 or resume_time == 0:
                             item["resume_time"] = int(resume_time)
                             self.file_io.write_folders_file(all_folders)
-                            logging.debug(f"Tracker: Updated resume_time for item '{item_id}' to {int(resume_time)}s.")
+                            logging.debug(f"[PY][Tracker] Updated resume_time for item '{item_id}' to {int(resume_time)}s.")
                             
                             # 2. Notify the extension
                             self.send_message({
@@ -248,7 +248,7 @@ class PlaylistTracker:
                             })
                         break
         except Exception as e:
-            logging.error(f"Tracker: Failed to update resume_time: {e}")
+            logging.error(f"[PY][Tracker] Failed to update resume_time: {e}")
 
     def _check_mark_watched(self, item_id):
         """Checks if the item should be marked as watched on YouTube and triggers the call if so."""
@@ -294,8 +294,8 @@ class PlaylistTracker:
                     
                     cmd.append(watch_url)
                     
-                    logging.info(f"Tracker: Marking as watched: {watch_url}")
-                    logging.debug(f"Tracker: Executing command: {' '.join(cmd)}")
+                    logging.info(f"[PY][Tracker] Marking as watched: {watch_url}")
+                    logging.debug(f"[PY][Tracker] Executing command: {' '.join(cmd)}")
                     self._remote_log(f"AdaptiveHeaders: Threshold met. Marking {watch_url} as watched via background process.")
                     
                     # Use subprocess.run with a timeout
@@ -307,7 +307,7 @@ class PlaylistTracker:
                         self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {watch_url}")
                         
                 except Exception as e:
-                    logging.error(f"Tracker: Failed to mark {watch_url} as watched: {e}")
+                    logging.error(f"[PY][Tracker] Failed to mark {watch_url} as watched: {e}")
 
             threading.Thread(target=mark, daemon=True).start()
 

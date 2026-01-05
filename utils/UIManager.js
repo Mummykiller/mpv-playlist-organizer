@@ -1,9 +1,9 @@
 /**
  * Manages the lifecycle of all UI elements injected onto the page.
- * This includes creation, injection, and teardown of the main controller,
- * the minimized stub, and the AniList panel.
  */
-class UIManager {
+window.MPV = window.MPV || {};
+
+window.MPV.UIManager = class UIManager {
     constructor() {
         this.controllerHost = null;
         this.shadowRoot = null;
@@ -12,10 +12,6 @@ class UIManager {
         this.anilistShadowRoot = null;
     }
 
-    /**
-     * Gets the hostname of the current page.
-     * @returns {string|null} The domain, or null if it can't be determined.
-     */
     getDomain() {
         if (!chrome.runtime?.id) return null;
         try {
@@ -25,20 +21,12 @@ class UIManager {
         }
     }
 
-    /**
-     * Creates the controller container and injects the UI's HTML into the DOM.
-     */
     createAndInjectUi() {
-        // Safety check: if the extension context is invalidated, abort.
-        if (!chrome.runtime?.id) {
-            console.warn("MPV UIManager: Extension context invalidated. Aborting UI creation.");
-            return;
-        }
+        if (!chrome.runtime?.id) return;
 
-        // Create the host element that will live in the main DOM.
         this.controllerHost = document.createElement('div');
         this.controllerHost.id = 'm3u8-controller-host';
-        this.controllerHost.style.display = 'none'; // Start hidden
+        this.controllerHost.style.display = 'none';
 
         const uiWrapper = document.createElement('div');
         uiWrapper.id = 'm3u8-controller';
@@ -60,15 +48,13 @@ class UIManager {
                     <button id="btn-toggle-ui-mode" title="Switch to Compact UI"><svg class="icon-full-ui" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg><svg class="icon-compact-ui" style="display: none;" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/></svg></button>
                 </div>
             </div>
-            <div id="full-ui-container"><div id="controls-container"><div id="top-controls"><select id="folder-select"></select></div><div id="playback-controls"><button id="btn-play"><span class="emoji">▶️</span> Play</button><button id="btn-play-new" title="Launch a new, separate MPV instance."><span class="emoji">➕</span> Play New</button><button id="btn-close-mpv" title="Close MPV Instance"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div><div id="list-controls"><button id="btn-add"><span class="emoji">📥</span> Add</button><button id="btn-clear"><span class="emoji">🗑️</span> Clear</button></div></div><div id="playlist-container"><p id="playlist-placeholder">Playlist is empty.</p></div><div id="log-section"><div id="log-header"><span id="log-title">Communication Log</span><div id="log-buttons"><button id="btn-filter-info" class="log-filter-btn active" title="Toggle Info Logs">Info</button><button id="btn-filter-error" class="log-filter-btn active" title="Toggle Error Logs">Error</button><button id="btn-clear-log" title="Clear Log"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trash-2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg></button><button id="btn-toggle-log" title="Hide Log"><svg class="log-toggle-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div><div id="log-container"><p id="log-placeholder">Logs will appear here...</p></div></div></div>
+            <div id="full-ui-container"><div id="controls-container"><div id="top-controls"><select id="folder-select"></select></div><div id="playback-controls"><button id="btn-play"><span class="emoji">▶️</span> Play</button><button id="btn-play-new" title="Launch a new, separate MPV instance."><span class="emoji">➕</span> Play New</button><button id="btn-close-mpv" title="Close MPV Instance"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div><div id="list-controls"><button id="btn-add"><span class="emoji">📥</span> Add</button><button id="btn-clear"><span class="emoji">🗑️</span> Clear</button></div></div><div id="playlist-container"><p id="playlist-placeholder">Playlist is empty.</p></div><div id="log-section"><div id="log-header"><span id="log-title">Communication Log</span><div id="log-buttons"><button id="btn-filter-info" class="log-filter-btn active" title="Toggle Info Logs">Info</button><button id="btn-filter-error" class="log-filter-btn active" title="Toggle Error Logs">Error</button><button id="btn-clear-log" title="Clear Log"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trash-2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg></button><button id="btn-toggle-log" title="Hide Log"><svg class="log-toggle-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div><div id="log-container" class="log-hidden"><p id="log-placeholder">Log is empty.</p></div></div></div>
             <div id="compact-ui-container" style="display: none;"><div id="compact-controls"><select id="compact-folder-select"></select><div id="compact-item-count-container" title="Items in playlist"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg><span id="compact-item-count">0</span></div><button id="btn-compact-add" title="Add Current URL"><span class="emoji">📥</span></button><button id="btn-compact-play" title="Play List"><span class="emoji">▶️</span></button><button id="btn-compact-clear" title="Clear List"><span class="emoji">🗑️</span></button><button id="btn-compact-close-mpv" title="Close MPV Instance"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div></div>
-            <div id="confirmation-modal" style="display: none;"><div class="modal-content"><p id="modal-message"></p><div class="modal-actions"><button id="modal-confirm-btn">Confirm</button><button id="modal-cancel-btn">Cancel</button></div></div></div>
         `;
         this.shadowRoot = this.controllerHost.attachShadow({ mode: 'open' });
         this.shadowRoot.appendChild(uiWrapper);
         document.body.appendChild(this.controllerHost);
 
-        // --- Create Minimized Stub ---
         this.minimizedHost = document.createElement('div');
         this.minimizedHost.id = 'm3u8-minimized-host';
         this.minimizedHost.style.display = 'none';
@@ -79,7 +65,6 @@ class UIManager {
         `;
         document.body.appendChild(this.minimizedHost);
 
-        // --- Create AniList Panel ---
         this.anilistPanelHost = document.createElement('div');
         this.anilistPanelHost.id = 'anilist-panel-host';
         this.anilistPanelHost.style.display = 'none';
@@ -95,12 +80,10 @@ class UIManager {
         this.anilistShadowRoot.appendChild(anilistPanelWrapper);
         document.body.appendChild(this.anilistPanelHost);
 
-        // Inject styles for the host elements into the main document's head.
         this.hostStyle = document.createElement('style');
         this.hostStyle.id = 'mpv-organizer-host-styles';
         this.hostStyle.textContent = `
-
-            #m3u8-controller-host, #m3u8-minimized-host { position: fixed; z-index: 2147483647; } /* Default position is top-left (0,0) until JS moves it */
+            #m3u8-controller-host, #m3u8-minimized-host { position: fixed; z-index: 2147483647; }
             #m3u8-minimized-host.top-left { top: 15px; left: 15px; right: auto; bottom: auto; }
             #m3u8-minimized-host.top-right { top: 15px; right: 15px; left: auto; bottom: auto; }
             #anilist-panel-host { position: fixed; width: 400px; height: 600px; z-index: 2147483646; }
@@ -111,21 +94,11 @@ class UIManager {
         document.head.appendChild(this.hostStyle);
     }
 
-    /**
-     * Removes all UI elements and their associated styles from the DOM.
-     */
     teardown() {
         this.controllerHost?.remove();
         this.minimizedHost?.remove();
         this.anilistPanelHost?.remove();
         this.hostStyle?.remove();
-
-        // Reset properties
-        this.controllerHost = null;
-        this.shadowRoot = null;
-        this.minimizedHost = null;
-        this.anilistPanelHost = null;
-        this.anilistShadowRoot = null;
-        this.hostStyle = null;
+        this.controllerHost = this.shadowRoot = this.minimizedHost = this.anilistPanelHost = this.anilistShadowRoot = this.hostStyle = null;
     }
-}
+};

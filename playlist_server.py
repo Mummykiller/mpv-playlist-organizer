@@ -21,7 +21,18 @@ class PlaylistHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(request, client_address, server)
 
     def do_GET(self):
-        if self.path == '/playlist.m3u':
+        # --- Token Security Check ---
+        from urllib.parse import urlparse, parse_qs
+        query = parse_qs(urlparse(self.path).query)
+        provided_token = query.get('token', [None])[0]
+        secret_token = os.environ.get('MPV_PLAYLIST_TOKEN')
+
+        if secret_token and provided_token != secret_token:
+            self.send_error(403, "Access denied: Invalid or missing token.")
+            logging.warning(f"[PY][SEC] Blocked unauthorized request from {self.client_address[0]}")
+            return
+
+        if self.path.startswith('/playlist.m3u'):
             m3u_file_path = self.m3u_serve_file # Use the dynamically set file path
             if os.path.exists(m3u_file_path):
                 try:

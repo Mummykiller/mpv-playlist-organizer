@@ -325,15 +325,15 @@ const _sendMessageAsync = (payload) => new Promise((resolve) => {
 });
 
 export async function handlePlay(request) {
-    const { url_item, folderId, custom_mpv_flags, geometry, custom_width, custom_height, start_paused } = request;
+    const { url_item, folderId, custom_mpv_flags, geometry, custom_width, custom_height, start_paused, play_new_instance } = request;
 
     if (url_item) {
         // Single item play logic remains similar but uses the session manager
-        if (folderId && !await checkAndConfirmFolderSwitch(folderId)) {
+        if (!play_new_instance && folderId && !await checkAndConfirmFolderSwitch(folderId)) {
             return { success: true, message: "Folder switch cancelled by user." };
         }
         
-        _broadcastLog({ text: `[Background]: Received 'play' request for single item: ${url_item.title || url_item.url}`, type: 'info' });
+        _broadcastLog({ text: `[Background]: Received 'play' request for single item: ${url_item.title || url_item.url}${play_new_instance ? ' (New Instance)' : ''}`, type: 'info' });
         
         const data = await _storage.get();
         const globalPrefs = data.settings.ui_preferences.global;
@@ -344,8 +344,9 @@ export async function handlePlay(request) {
         url_item.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
         url_item.settings.other_sites_use_cookies = globalPrefs.other_sites_use_cookies ?? true;
 
-        const response = await _callNativeHost({
-            action: 'play',
+        const nativeAction = play_new_instance ? 'play_new_instance' : 'play';
+        const nativePayload = {
+            action: nativeAction,
             url_item: url_item,
             folderId: folderId,
             geometry: geometry || (globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry),
@@ -370,9 +371,15 @@ export async function handlePlay(request) {
             enable_reconnect: globalPrefs.enable_reconnect ?? true,
             reconnect_delay: globalPrefs.reconnect_delay || 4,
             mpv_decoder: globalPrefs.mpv_decoder || 'auto'
-        });
+        };
 
-        if (response.success) {
+        if (play_new_instance) {
+            nativePayload.playlist = [url_item.url];
+        }
+
+        const response = await _callNativeHost(nativePayload);
+
+        if (response.success && !play_new_instance) {
             const session = playbackManager.getSession(folderId);
             session.isPlaying = true;
             session.currentPlayingItem = { urlItem: url_item, folderId: folderId, isLastInFolder: true };
@@ -385,8 +392,6 @@ export async function handlePlay(request) {
             return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
         }
 
-        _broadcastLog({ text: `[Background]: Preparing playback for playlist '${folderId}' (${folder.playlist.length} items).`, type: 'info' });
-        
         // Ensure all items in the batch have the latest granular preferences
         const globalPrefs = data.settings.ui_preferences.global;
         const updatedPlaylist = folder.playlist.map(item => {
@@ -414,7 +419,8 @@ export async function handlePlay(request) {
             custom_width: custom_width,
             custom_height: custom_height,
             start_paused: start_paused,
-            clear_on_completion: request.clear_on_completion
+            clear_on_completion: request.clear_on_completion,
+            play_new_instance: play_new_instance
         });
     } else {
         return { success: false, error: 'No URL item or Folder ID provided to play.' };
@@ -422,26 +428,27 @@ export async function handlePlay(request) {
 }
 
 export async function handlePlayM3U(request) {
-    const { m3u_data, folderId, custom_mpv_flags, geometry, custom_width, custom_height, start_paused, clear_on_completion } = request;
+    const { m3u_data, folderId, custom_mpv_flags, geometry, custom_width, custom_height, start_paused, clear_on_completion, play_new_instance } = request;
 
-    if (folderId && !await checkAndConfirmFolderSwitch(folderId)) {
+    if (!play_new_instance && folderId && !await checkAndConfirmFolderSwitch(folderId)) {
         return { success: true, message: "Folder switch cancelled by user." };
     }
 
-    // Reset queue and playback state for a new 'play' request for THIS folder
-    const session = playbackManager.getSession(folderId);
-    session.queue = [];
-    session.isPlaying = false;
-    session.isProcessingQueue = false;
-    session.currentPlayingItem = null;
+    // Managed sessions only: reset queue and playback state
+    if (!play_new_instance) {
+        const session = playbackManager.getSession(folderId);
+        session.queue = [];
+        session.isPlaying = false;
+        session.isProcessingQueue = false;
+        session.currentPlayingItem = null;
+    }
 
     const data = await _storage.get();
     const globalPrefs = data.settings.ui_preferences.global;
 
-    _broadcastLog({ text: `[Background]: Sending 'play_m3u' command to native host for folder '${folderId}'.`, type: 'info' });
-
-    const response = await _callNativeHost({
-        action: 'play_m3u',
+    const nativeAction = play_new_instance ? 'play_new_instance' : 'play_m3u';
+    const nativePayload = {
+        action: nativeAction,
         m3u_data: m3u_data, // Can be type 'content', 'url', or 'path'
         folderId: folderId,
         geometry: geometry || (globalPrefs.launch_geometry === 'custom' ? null : globalPrefs.launch_geometry),
@@ -466,9 +473,16 @@ export async function handlePlayM3U(request) {
         enable_reconnect: globalPrefs.enable_reconnect ?? true,
         reconnect_delay: globalPrefs.reconnect_delay || 4,
         mpv_decoder: globalPrefs.mpv_decoder || 'auto'
-    });
+    };
 
-    if (response.success) {
+    if (play_new_instance && m3u_data.type === 'items') {
+        nativePayload.playlist = m3u_data.value.map(item => item.url);
+    }
+
+    const response = await _callNativeHost(nativePayload);
+
+    if (response.success && !play_new_instance) {
+        const session = playbackManager.getSession(folderId);
         session.isPlaying = true;
         session.currentPlayingItem = { folderId: folderId, isLastInFolder: true }; // Mark as playing this folder
 

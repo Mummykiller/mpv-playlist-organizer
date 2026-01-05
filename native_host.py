@@ -13,34 +13,27 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
 
 # --- Standalone Function for Failsafe Path ---
-# This is intentionally self-contained to avoid import errors if dependencies are missing.
-def _get_failsafe_data_dir():
-    """A simple, dependency-free function to get the user data directory path."""
+# This is used ONLY for the very early crash handler before file_io is imported.
+def _get_emergency_log_path():
+    """A minimal, dependency-free function to find a place to log fatal startup errors."""
     app_name = "MPVPlaylistOrganizer"
-    system = sys.platform
-    if system.startswith("win"):
-        return os.path.join(os.environ.get('APPDATA', ''), app_name)
-    elif system.startswith("darwin"):
-        return os.path.join(os.path.expanduser('~/Library/Application Support'), app_name)
-    else: # Linux and other Unix-like systems
-        xdg_data_home = os.getenv('XDG_DATA_HOME')
-        if xdg_data_home:
-            return os.path.join(xdg_data_home, app_name)
-        else:
-            return os.path.join(os.path.expanduser('~/.local/share'), app_name)
+    home = os.path.expanduser('~')
+    if sys.platform.startswith("win"):
+        base = os.environ.get('APPDATA', home)
+    elif sys.platform.startswith("darwin"):
+        base = os.path.join(home, 'Library/Application Support')
+    else:
+        base = os.path.join(home, '.local/share')
+    
+    path = os.path.join(base, app_name)
+    try:
+        os.makedirs(path, exist_ok=True)
+        return os.path.join(path, "native_host_crash.log")
+    except:
+        return "native_host_crash.log" # Current directory fallback
 
 # --- Failsafe Crash Handler ---
-# This block is added to catch any startup errors and log them to a file.
-FAILSAFE_LOG_PATH = None
-try:
-    data_dir_path = _get_failsafe_data_dir()
-    os.makedirs(data_dir_path, exist_ok=True)
-    FAILSAFE_LOG_PATH = os.path.join(data_dir_path, "native_host_crash.log")
-except Exception:
-    # If creating the data directory fails, fall back to the script's directory.
-    FAILSAFE_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "native_host_crash.log")
-    # As a last resort, try to use the main log file name in the same fallback directory.
-    LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "native_host.log")
+FAILSAFE_LOG_PATH = _get_emergency_log_path()
 
 try:
     # --- Windows pythonw.exe Guard ---
@@ -153,10 +146,10 @@ try:
             # Filter out the noisy and irrelevant 'uname' warning on Windows.
             # Also filter out ffmpeg hls keepalive spam and thumbnail script errors.
             if "'uname' is not recognized" not in clean_line and "keepalive request failed" not in clean_line and "[mpv_thumbnail_script" not in clean_line:
-                log_level(f"[MPV Process]: {decoded_line}")
+                log_level(f"[PY][MPV]: {decoded_line}")
                 if not ytdlp_failure_detected and any(keyword in clean_line for keyword in YTDLP_FAILURE_KEYWORDS):
                     ytdlp_failure_detected = True # Prevent multiple triggers
-                    logging.warning("Detected a potential yt-dlp failure. Notifying extension.")
+                    logging.warning("[PY][MPV] Detected a potential yt-dlp failure. Notifying extension.")
                     # Send a message to the extension to check if auto-update is enabled
                     send_message({
                         "action": "ytdlp_update_check", 
@@ -214,7 +207,7 @@ try:
         """Remove the IPC socket file on exit, if it exists (non-Windows)."""
         # Check if the MPV process is still running. If so, preserve the socket for reconnection.
         if session_manager.pid and ipc_utils.is_pid_running(session_manager.pid):
-             logging.info(f"Preserving IPC socket {session_manager.ipc_path} because MPV (PID {session_manager.pid}) is still running.")
+             logging.info(f"[PY] Preserving IPC socket {session_manager.ipc_path} because MPV (PID {session_manager.pid}) is still running.")
              return
 
         if session_manager.ipc_path and platform.system() != "Windows":
@@ -222,15 +215,31 @@ try:
             if os.path.exists(session_manager.ipc_path):
                 try:
                     os.remove(session_manager.ipc_path)
-                    logging.info(f"Cleaned up IPC socket: {session_manager.ipc_path}")
+                    logging.info(f"[PY] Cleaned up IPC socket: {session_manager.ipc_path}")
                 except OSError as e:
-                    logging.warning(f"Error removing IPC socket file {session_manager.ipc_path}: {e}")
+                    logging.warning(f"[PY] Error removing IPC socket file {session_manager.ipc_path}: {e}")
             if os.path.exists(ipc_dir) and not os.listdir(ipc_dir):
                 try:
                     os.rmdir(ipc_dir)
-                    logging.info(f"Cleaned up empty IPC directory: {ipc_dir}")
+                    logging.info(f"[PY] Cleaned up empty IPC directory: {ipc_dir}")
                 except OSError as e:
-                        logging.warning(f"Error removing IPC directory {ipc_dir}: {e}")
+                        logging.warning(f"[PY] Error removing IPC directory {ipc_dir}: {e}")
+
+    def signal_handler(sig, frame):
+        """Handles termination signals from the browser."""
+        sig_name = "SIGTERM" if sig == signal.SIGTERM else "SIGHUP"
+        logging.info(f"[PY] Received {sig_name}. Shutting down active sessions...")
+        try:
+            # Tell MPV to quit gracefully via IPC
+            mpv_session.close()
+        except:
+            pass
+        sys.exit(0)
+
+    # Register signal handlers for graceful shutdown (Unix only)
+    if platform.system() != "Windows":
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGHUP, signal_handler)
 
     # Register a cleanup function to run when the script exits.
     atexit.register(cleanup_ipc_socket, mpv_session)
@@ -240,7 +249,7 @@ try:
         """Main message loop for native messaging from the browser."""
         # Ensure stdin/stdout are available (critical for native messaging)
         if sys.stdin is None or sys.stdout is None:
-            logging.error("Standard input/output is missing. If on Windows, ensure the registry key points to 'python.exe' and not 'pythonw.exe'.")
+            logging.error("[PY][MAIN] Standard input/output is missing. If on Windows, ensure the registry key points to 'python.exe' and not 'pythonw.exe'.")
             sys.exit(1)
 
         def handle_restore_session(message):
@@ -290,7 +299,7 @@ try:
             try:
                 message = get_message()  # This will block or sys.exit() on disconnect
                 command = message.get('action')
-                logging.info(f"Received message (ID: {message.get('request_id')}): {json.dumps(message)}")
+                logging.info(f"[PY][RECV] (ID: {message.get('request_id')}): {command}")
                 
                 handler = COMMAND_HANDLERS.get(command)
                 if handler:
@@ -305,7 +314,7 @@ try:
                 send_message(response)
 
             except Exception as e:
-                logging.error(f"Error in main loop: {e}", exc_info=True)
+                logging.error(f"[PY][MAIN] Error in main loop: {e}", exc_info=True)
                 try:
                     error_response = {"success": False, "error": f"An unexpected error occurred in the native host: {str(e)}"}
                     # Check if 'message' was successfully assigned before the error
@@ -313,10 +322,10 @@ try:
                         error_response['request_id'] = message.get('request_id')
                     send_message(error_response)
                 except Exception as send_e:
-                    logging.error(f"Could not send error message back to extension: {send_e}")
+                    logging.error(f"[PY][MAIN] Could not send error message back to extension: {send_e}")
 
     if __name__ == '__main__':
-        logging.info(f"Startup Args: {sys.argv}, TTY: {sys.stdin.isatty() if sys.stdin else 'None'}")
+        logging.info(f"[PY][START] Args: {sys.argv}, TTY: {sys.stdin.isatty() if sys.stdin else 'None'}")
 
         # Robust Browser Detection
         is_browser = False

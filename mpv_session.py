@@ -127,10 +127,10 @@ class MpvSessionManager:
             return {"was_stale": False, "folderId": self.owner_folder_id, "lastPlayedId": getattr(self, 'last_played_id_cache', None)}
 
         if not os.path.exists(self.session_file):
-            logging.debug("Restore: No session file found.")
+            logging.debug("[PY][Session] Restore: No session file found.")
             return None
 
-        logging.info(f"Found session file: {self.session_file}. Checking for live process.")
+        logging.info(f"[PY][Session] Found session file: {self.session_file}. Checking for live process.")
         try:
             with open(self.session_file, 'r', encoding='utf-8') as f:
                 session_data = json.load(f)
@@ -138,6 +138,7 @@ class MpvSessionManager:
             pid = session_data.get("pid")
             ipc_path = session_data.get("ipc_path")
             owner_folder_id = session_data.get("owner_folder_id")
+            token = session_data.get("token")
 
             if not all([pid, ipc_path, owner_folder_id]):
                 raise ValueError("Session file is malformed.")
@@ -152,13 +153,14 @@ class MpvSessionManager:
                 self.ipc_path = ipc_path
                 self.playlist = folder_data.get("playlist", [])
                 self.owner_folder_id = owner_folder_id
+                self.current_token = token
                 self.is_alive = True # Mark as alive so other methods can use it
                 
                 # Initialize the IPC manager for the restored session
                 self.ipc_manager = ipc_utils.IPCSocketManager()
-                logging.info(f"Restore: Attempting to connect to existing IPC at {self.ipc_path}...")
+                logging.info(f"[PY][Session] Restore: Attempting to connect to existing IPC at {self.ipc_path}...")
                 if not self.ipc_manager.connect(self.ipc_path):
-                    logging.warning(f"Restored session found, but failed to connect to IPC at {self.ipc_path}.")
+                    logging.warning(f"[PY][Session] Restored session found, but failed to connect to IPC at {self.ipc_path}.")
                     # Don't fail the whole restore, but we won't have IPC until it reconnects
                 
                 # Try to identify current playing item for UI sync
@@ -204,17 +206,17 @@ class MpvSessionManager:
                 # --- CRITICAL: Start a watcher thread for the restored orphaned process ---
                 self._start_restored_process_watcher(pid, ipc_path, owner_folder_id)
 
-                logging.info(f"Successfully restored session and tracker for MPV process (PID: {pid}) owned by folder '{owner_folder_id}'.")
-                return {"was_stale": False, "folderId": owner_folder_id, "lastPlayedId": last_played_id}
+                logging.info(f"[PY][Session] Successfully restored session and tracker for MPV process (PID: {pid}) owned by folder '{owner_folder_id}'.")
+                return {"was_stale": False, "folderId": owner_folder_id, "lastPlayedId": last_played_id, "token": token}
             else:
-                logging.warning(f"Stale session for PID {pid} found. Cleaning up.")
+                logging.warning(f"[PY][Session] Stale session for PID {pid} found. Cleaning up.")
                 try:
                     os.remove(self.session_file)
                 except OSError: pass
                 return {"was_stale": True, "folderId": owner_folder_id, "returnCode": -1}
 
         except Exception as e:
-            logging.warning(f"Could not restore session due to an error: {e}. Cleaning up.")
+            logging.warning(f"[PY][Session] Could not restore session due to an error: {e}. Cleaning up.")
             try: os.remove(self.session_file)
             except OSError: pass
             return None
@@ -447,7 +449,7 @@ class MpvSessionManager:
 
     def _launch(self, url_item, folder_id, settings, file_io, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, start_paused, headers=None, disable_http_persistent=False, ytdl_raw_options=None, use_ytdl_mpv=False, is_youtube=False, full_playlist=None, force_terminal=False, playlist_start_index=0):
         """Launches a new instance of MPV with a single URL and prepares for playlist construction via IPC."""
-        logging.info(f"Starting a new MPV instance for URL: {url_item.get('url')}")
+        logging.info(f"[PY][Session] Starting a new MPV instance for URL: {url_item.get('url')}")
         mpv_exe = self.get_mpv_executable()
         ipc_path = ipc_utils.get_ipc_path()
 
@@ -473,6 +475,7 @@ class MpvSessionManager:
                 is_youtube_override=use_ytdl_mpv,
                 idle="yes", # Use 'yes' so we have full control over the exit via Lua
                 force_terminal=force_terminal,
+                input_terminal="no" if not force_terminal else "yes", # Only disable if no terminal requested
                 settings=settings,
                 flag_dir=self.FLAG_DIR
             )
@@ -551,13 +554,14 @@ class MpvSessionManager:
                 session_data = {
                     "pid": self.pid,
                     "ipc_path": self.ipc_path,
-                    "owner_folder_id": self.owner_folder_id
+                    "owner_folder_id": self.owner_folder_id,
+                    "token": getattr(self, 'current_token', None) # Include the token
                 }
                 with open(self.session_file, 'w', encoding='utf-8') as f:
                     json.dump(session_data, f)
-                logging.info(f"Saved session data to {self.session_file}")
+                logging.info(f"[PY][Session] Saved session data to {self.session_file}")
             except Exception as e:
-                logging.warning(f"Failed to write session file: {e}")
+                logging.warning(f"[PY][Session] Failed to write session file: {e}")
             
             # We pass the full intended playlist to the tracker, even though only one item is loaded initially
             self.playlist_tracker = PlaylistTracker(folder_id, self.playlist, file_io, settings, self.ipc_path, self.send_message)
@@ -829,6 +833,15 @@ class MpvSessionManager:
 
         threading.Thread(target=task, daemon=True).start()
 
+    def _generate_m3u_content(self, items):
+        """Generates M3U content from a list of items."""
+        m3u_lines = ["#EXTM3U"]
+        for item in items:
+            safe_title = sanitize_url(item.get('title', item['url']))
+            m3u_lines.append(f"#EXTINF:-1,{safe_title}")
+            m3u_lines.append(sanitize_url(item['url']))
+        return "\n".join(m3u_lines)
+
     def start(self, url_items_or_m3u, folder_id, settings, file_io, **kwargs):
         """Starts a new mpv process with a playlist of URLs or an M3U."""
         _url_items_list, input_was_raw = self._resolve_input_items(url_items_or_m3u, kwargs.get('enriched_items_list'), kwargs.get('headers'))
@@ -844,7 +857,12 @@ class MpvSessionManager:
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     results = list(executor.map(lambda x: self.enrich_single_item(x, folder_id), _url_items_list))
                 _url_items_list = [i for r in results for i in r]
-                return {"success": True, "enriched_url_items": _url_items_list, "message": "Enriched content generated."}
+                return {
+                    "success": True, 
+                    "enriched_url_items": _url_items_list, 
+                    "enriched_m3u_content": self._generate_m3u_content(_url_items_list),
+                    "message": "Enriched content generated."
+                }
             else:
                 first_enriched = self.enrich_single_item(_url_items_list[0], folder_id)
                 _url_items_list = first_enriched + _url_items_list[1:]
@@ -862,7 +880,13 @@ class MpvSessionManager:
         
         if self.pid:
             if not ipc_utils.is_process_alive(self.pid, self.ipc_path): self.clear()
-            elif folder_id == self.owner_folder_id: return {"success": True, "already_active": True}
+            elif folder_id == self.owner_folder_id: 
+                return {
+                    "success": True, 
+                    "already_active": True, 
+                    "enriched_url_items": _url_items_list,
+                    "enriched_m3u_content": self._generate_m3u_content(_url_items_list)
+                }
             else: self.close()
 
         launch_result = self._launch(
@@ -884,90 +908,50 @@ class MpvSessionManager:
         if launch_result.get("success") and input_was_raw:
             launch_result["handled_directly"] = True
             launch_result["enriched_url_items"] = _url_items_list
+            launch_result["enriched_m3u_content"] = self._generate_m3u_content(_url_items_list)
 
         return launch_result
 
     def close(self):
-        """Closes the currently running mpv process, if any."""
-        if self.playlist_tracker:
-            self.playlist_tracker.stop_tracking()
-            
-        pid_to_close, ipc_path_to_use, process_object = None, None, None
+        """Closes the current mpv session gracefully via IPC, then forcefully if needed."""
+        if not self.pid:
+            return {"success": True, "message": "No active session to close."}
 
-        if self.process and self.process.poll() is None:
-            pid_to_close, ipc_path_to_use, process_object = self.pid, self.ipc_path, self.process
-        elif self.pid and ipc_utils.is_process_alive(self.pid, self.ipc_path):
-             pid_to_close, ipc_path_to_use = self.pid, self.ipc_path
-
-        if not pid_to_close:
-            logging.info("Received 'close_mpv' command, but no active MPV process was found.")
-            self.clear()
-            return {"success": True, "message": "No running MPV instance was found."}
-
-        # Mark that we are intentionally closing MPV
+        logging.info(f"[PY][Session] Closing MPV session (PID {self.pid}) for folder '{self.owner_folder_id}'")
         self.manual_quit = True
+        
+        # 1. Try Graceful Quit via IPC
+        if self.ipc_manager and self.is_alive:
+            try:
+                logging.debug("[PY][Session] Sending 'quit' command via IPC.")
+                # Inform Lua this is manual to prevent completion flags
+                self.ipc_manager.send({"command": ["script-message", "manual_quit_initiated"]}, expect_response=False)
+                self.ipc_manager.send({"command": ["quit", 0]}, expect_response=False)
+                
+                # Wait briefly for process to die
+                for _ in range(10): # 0.5 seconds max
+                    if not ipc_utils.is_pid_running(self.pid):
+                        logging.info("[PY][Session] MPV exited gracefully via IPC.")
+                        self.clear()
+                        return {"success": True, "message": "MPV closed gracefully via IPC."}
+                    time.sleep(0.05)
+            except Exception as e:
+                logging.debug(f"[PY][Session] IPC quit failed: {e}")
 
-        try:
-            if ipc_path_to_use:
-                try:
-                    logging.info(f"Attempting to close MPV (PID: {pid_to_close}) via IPC: {ipc_path_to_use}")
-                    # Use the manager's send method for consistency.
-                    if self.ipc_manager:
-                        # Inform our Lua scripts that this is a manual quit to prevent natural completion flags
-                        self.ipc_manager.send({"command": ["script-message", "manual_quit_initiated"]}, expect_response=False)
-                        self.ipc_manager.send({"command": ["quit"]}, expect_response=False)
-                    else:
-                        logging.warning("IPC manager not available during close, attempting fallback quit command.")
-                        # Fallback to direct socket communication if ipc_manager is unexpectedly None.
-                        # This should ideally not be reached if the session was active.
-                        try:
-                            command_str = json.dumps({"command": ["quit"]}) + '\n'
-                            if platform.system() == "Windows":
-                                with open(ipc_path_to_use, 'w', encoding='utf-8') as pipe:
-                                    pipe.write(command_str)
-                            else:
-                                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                                    sock.settimeout(1.0) # Short timeout
-                                    sock.connect(ipc_path_to_use)
-                                    sock.sendall(command_str.encode('utf-8'))
-                        except Exception as e:
-                            logging.warning(f"Fallback IPC quit command failed: {e}")
-                            
-                    if process_object: process_object.wait(timeout=3)
-                    else: time.sleep(1)
-                    
-                    if not ipc_utils.is_process_alive(pid_to_close, ipc_path_to_use):
-                        logging.info(f"MPV process (PID: {pid_to_close}) closed gracefully via IPC.")
-                        return {"success": True, "message": "MPV instance has been closed."}
-                except Exception as e:
-                    logging.warning(f"IPC command to close MPV failed: {e}. Falling back to signal method.")
-
-            logging.info(f"Attempting to close MPV process (PID: {pid_to_close}) via signal fallback.")
-            if process_object:
-                if platform.system() == "Windows": process_object.send_signal(signal.CTRL_C_EVENT)
-                else: process_object.terminate()
-                process_object.wait(timeout=5)
-            else:
+        # 2. Fallback to Termination
+        if ipc_utils.is_pid_running(self.pid):
+            logging.warning(f"[PY][Session] MPV did not exit gracefully. Terminating process {self.pid}...")
+            try:
                 if platform.system() == "Windows":
-                    os.kill(pid_to_close, signal.SIGTERM)
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(self.pid)], capture_output=True)
                 else:
-                    os.kill(pid_to_close, signal.SIGTERM)
-                time.sleep(2)
-
-            if not ipc_utils.is_process_alive(pid_to_close, ipc_path_to_use):
-                logging.info(f"MPV process (PID: {pid_to_close}) terminated successfully via signal.")
-                return {"success": True, "message": "MPV instance has been closed."}
-            else:
-                raise subprocess.TimeoutExpired(None, timeout=0)
-
-        except subprocess.TimeoutExpired:
-            logging.warning(f"MPV process (PID: {pid_to_close}) did not terminate in time, forcing kill.")
-            if process_object: process_object.kill()
-            else: os.kill(pid_to_close, signal.SIGKILL)
-            return {"success": True, "message": "MPV instance was forcefully closed."}
-        except Exception as e:
-            error_msg = f"An error occurred while closing MPV process (PID: {pid_to_close}): {e}"
-            logging.error(error_msg)
-            return {"success": False, "error": error_msg}
-        finally:
-            self.clear()
+                    os.kill(self.pid, 15) # SIGTERM
+                    time.sleep(0.2)
+                    if ipc_utils.is_pid_running(self.pid):
+                        os.kill(self.pid, 9) # SIGKILL
+            except Exception as e:
+                logging.error(f"[PY][Session] Failed to kill MPV process: {e}")
+        
+        self.clear()
+        logging.info("[PY][Session] MPV process closed.")
+        return {"success": True, "message": "MPV session closed."}

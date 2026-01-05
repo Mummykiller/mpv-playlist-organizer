@@ -950,6 +950,46 @@ select:focus-visible {
     color: var(--accent-success);
 }
 
+/* --- Loading State for Buttons --- */
+@keyframes button-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+button.btn-loading {
+    position: relative;
+    color: transparent !important;
+    pointer-events: none;
+}
+
+button.btn-loading::after {
+    content: "";
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    top: 50%;
+    left: 50%;
+    margin-left: -8px;
+    margin-top: -8px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: white;
+    animation: button-spin 0.6s linear infinite;
+}
+
+/* Specific adjustment for minimized play button loading state */
+#m3u8-minimized-play-btn.btn-loading svg,
+#m3u8-minimized-play-btn.btn-loading .play-button-count {
+    visibility: hidden;
+}
+
+/* State for when MPV is actually active (playing) */
+button.btn-playing {
+    background-color: var(--accent-success) !important;
+    border-color: var(--accent-success) !important;
+    box-shadow: 0 0 8px 0px var(--accent-success) !important;
+}
+
 /* --- Minimized Stub --- */
 /* New wrapper to contain the two sibling buttons */
 #m3u8-minimized-wrapper {
