@@ -68,3 +68,22 @@ export function normalizeYouTubeUrl(ytUrl) {
     }
     return ytUrl;
 }
+
+/**
+ * Standardized Logger for unified output format.
+ */
+export class Logger {
+    constructor(tag = 'BG') {
+        this.tag = tag;
+    }
+
+    _format(msg) {
+        const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return `[${time}] [${this.tag}]: ${msg}`;
+    }
+
+    info(msg) { console.log(this._format(msg)); }
+    warn(msg) { console.warn(this._format(msg)); }
+    error(msg) { console.error(this._format(msg)); }
+    debug(msg) { console.debug(this._format(msg)); }
+}

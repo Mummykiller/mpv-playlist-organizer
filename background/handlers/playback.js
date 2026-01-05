@@ -69,36 +69,36 @@ class PlaybackSession {
             const globalPrefs = data.settings.ui_preferences.global;
 
             while (this.queue.length > 0) {
-                // Peek at the next item
-                const nextItem = this.queue[0];
-                const { urlItem } = nextItem;
-
                 if (this.isPlaying) {
-                    // Try to append to the running session
-                    _broadcastLog({ text: `[Background]: Appending to active session (${this.folderId}): ${urlItem.title || urlItem.url}`, type: 'info' });
+                    // --- BATCH APPEND OPTIMIZATION ---
+                    // Take ALL currently queued items and send them in one single native host call.
+                    const batch = [...this.queue];
+                    const batchItems = batch.map(q => q.urlItem);
+                    
+                    _broadcastLog({ text: `[Background]: Appending batch of ${batch.length} items to active session (${this.folderId})...`, type: 'info' });
+                    
                     try {
-                        // Ensure the item has the latest granular preferences
-                        if (!urlItem.settings) urlItem.settings = {};
-                        urlItem.settings.yt_use_cookies = globalPrefs.yt_use_cookies ?? true;
-                        urlItem.settings.yt_mark_watched = globalPrefs.yt_mark_watched ?? true;
-                        urlItem.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
-                        urlItem.settings.other_sites_use_cookies = globalPrefs.other_sites_use_cookies ?? true;
+                        // Ensure all items have the latest granular preferences
+                        batchItems.forEach(item => {
+                            if (!item.settings) item.settings = {};
+                            item.settings.yt_use_cookies = globalPrefs.yt_use_cookies ?? true;
+                            item.settings.yt_mark_watched = globalPrefs.yt_mark_watched ?? true;
+                            item.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
+                            item.settings.other_sites_use_cookies = globalPrefs.other_sites_use_cookies ?? true;
+                        });
 
                         const response = await _callNativeHost({
                             action: 'append',
-                            url_item: urlItem,
+                            url_items: batchItems, // Use plural 'url_items'
                             folderId: this.folderId,
                             bypassScripts: globalPrefs.bypassScripts || {}
                         });
 
                         if (response.success) {
-                            this.queue.shift(); // Successfully appended, remove from queue
-                            this.currentPlayingItem = nextItem; // Update current item tracking
-                            // Add a small delay to prevent flooding the IPC pipe (reduced to 200ms)
-                            if (!response.skipped) {
-                                await new Promise(resolve => setTimeout(resolve, 200));
-                            }
-                            continue; // Process next item immediately
+                            // Successfully appended the entire batch
+                            this.queue.splice(0, batch.length); 
+                            this.currentPlayingItem = batch[batch.length - 1]; // Track last item
+                            continue; // Queue might have grown while we were awaiting, so continue loop
                         } else {
                             // Append failed (likely MPV closed), fall through to start new session
                             this.isPlaying = false;
@@ -108,7 +108,12 @@ class PlaybackSession {
                     }
                 }
 
-                // Start a new session
+                if (this.queue.length === 0) break;
+
+                // Start a new session with the first item in the queue
+                const nextItem = this.queue[0];
+                const { urlItem } = nextItem;
+
                 _broadcastLog({ text: `[Background]: Starting playback (${this.folderId}): ${urlItem.title || urlItem.url}`, type: 'info' });
                 try {
                     const response = await this._playSingleUrlItem(urlItem, globalPrefs);
@@ -116,10 +121,7 @@ class PlaybackSession {
                         throw new Error(response.error || "Failed to start playback session.");
                     }
                     this.isPlaying = true;
-                    // Give MPV a moment to initialize IPC (reduced to 200ms)
-                    if (!response.skipped) {
-                        await new Promise(resolve => setTimeout(resolve, 200));
-                    }
+                    // No artificial delay needed here, as the next iteration will use the batch append logic
                     this.queue.shift(); // Successfully started, remove from queue
                     this.currentPlayingItem = nextItem;
                 } catch (error) {
@@ -185,8 +187,26 @@ export async function handleMpvExited(data) {
     const { folderId, returnCode, reason } = data;
     if (!folderId) return;
     
-    const displayReason = reason ? ` (Reason: ${reason})` : '';
-    _broadcastLog({ text: `[Background]: MPV session for folder '${folderId}' has ended with exit code ${returnCode}${displayReason}.`, type: 'info' });
+    // Mapping of common exit codes to human-readable explanations.
+    const exitCodeExplanations = {
+        0: "Success (Manually closed or finished naturally without custom script)",
+        99: "Natural completion (Playlist finished, clearing as per settings)",
+        1: "Error (Generic or playback failure)",
+        2: "Initialization error",
+        3: "Invalid command line arguments",
+        4: "No input file provided",
+        5: "Halted by user (Keyboard shortcut or quit command)",
+        6: "Resource mapping error",
+        11: "Signal 11 (Segmentation Fault - likely a crash)"
+    };
+
+    const explanation = exitCodeExplanations[returnCode] || "Unknown or unexpected exit status";
+    const displayReason = reason ? ` (Host Reason: ${reason})` : '';
+    
+    _broadcastLog({ 
+        text: `[Background]: MPV session for '${folderId}' ended. Code: ${returnCode} - ${explanation}${displayReason}`, 
+        type: 'info' 
+    });
 
     const session = playbackManager.findSessionByFolderId(folderId);
     if (session) {

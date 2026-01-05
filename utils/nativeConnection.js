@@ -71,12 +71,19 @@ function connectToNativeHost() {
                 requestPromises[id].reject(new Error(friendlyError));
             }
 
+            // Explicitly reject the main connection promise if it exists and is still pending
+            if (connectionPromise && connectionStatus === ConnectionStatus.CONNECTING) {
+                // We can't directly reject the promise from outside, 
+                // but the current structure of connectToNativeHost 
+                // uses the reject function passed into the Promise constructor.
+                // Since onDisconnect is defined INSIDE that constructor, it has access to 'reject'.
+                reject(new Error(friendlyError));
+            }
 
             nativePort = null;
             connectionStatus = ConnectionStatus.DISCONNECTED;
             requestPromises = {};
             connectionPromise = null;
-            reject(new Error(friendlyError));
         };
 
         nativePort.onDisconnect.addListener(onDisconnect);
