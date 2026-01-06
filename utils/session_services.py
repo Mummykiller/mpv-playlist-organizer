@@ -22,7 +22,7 @@ class EnrichmentService:
     def __init__(self, send_message_func):
         self.send_message = send_message_func
 
-    def enrich_single_item(self, item, folder_id=None, session_cookies_ref=None, sync_lock=None):
+    def enrich_single_item(self, item, folder_id=None, session_cookies_ref=None, sync_lock=None, settings=None):
         if item.get('enriched'):
             return [item]
 
@@ -43,8 +43,9 @@ class EnrichmentService:
             entries,
             disable_http_persistent_flag,
             cookies_file,
-            mark_watched_flag
-        ) = apply_bypass_script(url_dict_for_analysis, self.send_message)
+            mark_watched_flag,
+            ytdl_format_from_script
+        ) = apply_bypass_script(url_dict_for_analysis, self.send_message, settings=settings)
         
         if entries:
             processed_entries = []
@@ -58,6 +59,7 @@ class EnrichmentService:
             return processed_entries
 
         item['url'] = processed_url
+        item['ytdl_format'] = ytdl_format_from_script # Save format preference
         
         if headers_for_mpv:
             if not item.get('headers'):
@@ -69,19 +71,7 @@ class EnrichmentService:
 
         if ytdl_raw_options_for_mpv:
             import file_io
-            if not item.get('ytdl_raw_options'):
-                item['ytdl_raw_options'] = ytdl_raw_options_for_mpv
-            else:
-                existing = item['ytdl_raw_options'].split(',')
-                new_opts = ytdl_raw_options_for_mpv.split(',')
-                merged_map = {}
-                for o in new_opts + existing:
-                    if '=' in o:
-                        k, v = o.split('=', 1)
-                        merged_map[k.strip()] = v.strip()
-                    else:
-                        merged_map[o.strip()] = ""
-                item['ytdl_raw_options'] = ','.join([f"{k}={v}" if v is not None and v != "" else f"{k}=" for k, v in merged_map.items()])
+            item['ytdl_raw_options'] = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), ytdl_raw_options_for_mpv)
 
         item['use_ytdl_mpv'] = use_ytdl_mpv_flag
         item['is_youtube'] = is_youtube_flag_from_script
@@ -111,7 +101,8 @@ class EnrichmentService:
                 
                 if is_youtube_playlist:
                     logging.info(f"Expanding YouTube playlist: {url_items_or_m3u}")
-                    _, _, _, _, _, entries, _, _, _ = apply_bypass_script({'url': url_items_or_m3u}, self.send_message)
+                    # Unpack all 10 values to avoid ValueError
+                    _, _, _, _, _, entries, _, _, _, _ = apply_bypass_script({'url': url_items_or_m3u}, self.send_message)
                     if entries:
                         _url_items_list = entries
                         input_was_raw = True
@@ -185,16 +176,25 @@ class EnrichmentService:
             for idx, item in enumerate(url_items):
                 if idx == start_index or not session.is_alive: continue
                 
-                enriched = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock)[0]
+                enriched = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings)[0]
                 target_url = sanitize_url(enriched['url'])
                 if enriched.get('is_youtube') and enriched.get('original_url'):
                     target_url = sanitize_url(enriched['original_url'])
 
+                # --- Centralized Flag Collection for Background Enrichment ---
+                local_essential_flags = "ignore-config="
+                if settings and settings.get('ffmpeg_path'):
+                    local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
+                
+                final_item_raw_opts = file_io.merge_ytdlp_options(enriched.get('ytdl_raw_options'), local_essential_flags)
+
                 lua_options = {
                     "id": enriched.get('id'), "title": enriched.get('title'),
                     "headers": enriched.get('headers'),
-                    "ytdl_raw_options": file_io.sanitize_ytdlp_options(enriched.get('ytdl_raw_options')),
+                    "ytdl_raw_options": final_item_raw_opts,
                     "use_ytdl_mpv": enriched.get('use_ytdl_mpv', False),
+                    "ytdl_format": enriched.get('ytdl_format'),
+                    "ffmpeg_path": settings.get('ffmpeg_path'),
                     "original_url": sanitize_url(enriched.get('original_url') or enriched.get('url')),
                     "disable_http_persistent": enriched.get('disable_http_persistent', False),
                     "cookies_file": enriched.get('cookies_file'),
@@ -255,26 +255,35 @@ class LauncherService:
         force_terminal = kwargs.get('force_terminal', False)
         playlist_start_index = kwargs.get('playlist_start_index', 0)
 
+        # Prioritize item-specific flags if they were enriched just before this call
+        is_youtube = kwargs.get('is_youtube', url_item.get('is_youtube', False))
+        use_ytdl_mpv = kwargs.get('use_ytdl_mpv', url_item.get('use_ytdl_mpv', False))
+        ytdl_raw_options = kwargs.get('ytdl_raw_options', url_item.get('ytdl_raw_options'))
+        headers = kwargs.get('headers', url_item.get('headers'))
+        disable_http_persistent = kwargs.get('disable_http_persistent', url_item.get('disable_http_persistent', False))
+
+        launch_url = sanitize_url(url_item.get('url'))
+
         try:
             full_command, has_terminal_flag = services.construct_mpv_command(
                 mpv_exe=mpv_exe,
                 ipc_path=ipc_path,
-                url=None, 
-                is_youtube=kwargs.get('is_youtube', False),
-                ytdl_raw_options=kwargs.get('ytdl_raw_options'),
+                url=launch_url, # Pass URL directly along with options
+                is_youtube=is_youtube,
+                ytdl_raw_options=ytdl_raw_options,
                 geometry=kwargs.get('geometry'),
                 custom_width=kwargs.get('custom_width'),
                 custom_height=kwargs.get('custom_height'),
                 custom_mpv_flags=kwargs.get('custom_mpv_flags'),
                 automatic_mpv_flags=kwargs.get('automatic_mpv_flags'),
-                headers=kwargs.get('headers'),
-                disable_http_persistent=kwargs.get('disable_http_persistent', False),
+                headers=headers,
+                disable_http_persistent=disable_http_persistent,
                 start_paused=kwargs.get('start_paused', False),
                 script_dir=self.session.SCRIPT_DIR,
                 load_on_completion_script=True,
                 title=url_item.get('title'),
-                use_ytdl_mpv=kwargs.get('use_ytdl_mpv', False),
-                is_youtube_override=kwargs.get('use_ytdl_mpv', False),
+                use_ytdl_mpv=use_ytdl_mpv,
+                is_youtube_override=use_ytdl_mpv,
                 idle="yes", 
                 force_terminal=force_terminal,
                 input_terminal="no" if not force_terminal else "yes",
@@ -284,6 +293,12 @@ class LauncherService:
 
             if playlist_start_index > 0:
                 full_command.insert(1, f"--playlist-start={playlist_start_index}")
+
+            # Add precise resume if needed for initial launch
+            if settings.get('enable_precise_resume') and url_item.get('resume_time'):
+                resume_time = url_item.get('resume_time')
+                if resume_time > 0:
+                    full_command.insert(1, f"--start={resume_time}")
 
             popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
             env = os.environ.copy()
@@ -307,12 +322,22 @@ class LauncherService:
             if self.session.playlist:
                 for item in self.session.playlist:
                     item_url = sanitize_url(item['url'])
+                    
+                    # --- Centralized Flag Collection for Launch ---
+                    local_essential_flags = "ignore-config="
+                    if settings and settings.get('ffmpeg_path'):
+                        local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
+                    
+                    final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), local_essential_flags)
+
                     lua_options = {
                         "id": item.get('id'),
                         "title": item.get('title'),
                         "headers": item.get('headers'),
-                        "ytdl_raw_options": file_io.sanitize_ytdlp_options(item.get('ytdl_raw_options')),
+                        "ytdl_raw_options": final_item_raw_opts,
                         "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
+                        "ytdl_format": item.get('ytdl_format'),
+                        "ffmpeg_path": settings.get('ffmpeg_path'),
                         "original_url": sanitize_url(item.get('original_url') or item.get('url')),
                         "disable_http_persistent": item.get('disable_http_persistent', False) or kwargs.get('disable_http_persistent', False),
                         "cookies_file": item.get('cookies_file'),
@@ -323,17 +348,7 @@ class LauncherService:
                     }
                     self.session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
 
-            loadfile_opts = {}
-            sanitized_launch_url = sanitize_url(url_item['url'])
-            if settings.get('enable_precise_resume') and url_item.get('resume_time'):
-                resume_time = url_item.get('resume_time')
-                if resume_time > 0:
-                    loadfile_opts["start"] = f"{resume_time}"
-
-            if loadfile_opts:
-                self.session.ipc_manager.send({"command": ["loadfile", sanitized_launch_url, "replace", loadfile_opts]})
-            else:
-                self.session.ipc_manager.send({"command": ["loadfile", sanitized_launch_url, "replace"]})
+            self.session.ipc_manager.send({"command": ["set_property", "user-data/original-url", url_item.get('original_url', launch_url)]})
 
             self.session.pid = process.pid
             self.session.owner_folder_id = folder_id

@@ -20,7 +20,10 @@ window.MPV.AniListUI = class AniListUI {
     updateDynamicStyles() {
         if (!this.shadowRoot) return;
         const dragHandle = this.shadowRoot.querySelector('.anilist-panel-header');
-        if (dragHandle) dragHandle.style.cursor = this.isLocked ? 'default' : 'grab';
+        if (dragHandle) {
+            dragHandle.style.cursor = this.isLocked ? 'default' : 'grab';
+            dragHandle.title = this.isLocked ? 'Locked' : 'Click and hold to drag';
+        }
     }
 
     bindEvents() {
@@ -40,6 +43,7 @@ window.MPV.AniListUI = class AniListUI {
         const resizeHandle = this.shadowRoot.getElementById('anilist-resize-handle');
         if (this.panelHost && dragHandle) {
             new window.MPV.Draggable(this.panelHost, dragHandle, {
+                dragButton: 0,
                 onDragStart: () => !this.isLocked && !this.forceAttached,
                 onDragEnd: (e, pos) => {
                     this.isManuallyPositioned = true;

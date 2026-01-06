@@ -209,6 +209,7 @@ const actionHandlers = {
     // Import/Export
     'export_all_playlists_separately': import_export_handlers.handleExportAllPlaylistsSeparately,
     'export_folder_playlist': import_export_handlers.handleExportFolderPlaylist,
+    'export_settings': import_export_handlers.handleExportSettings,
     'import_from_file': import_export_handlers.handleImportFromFile,
     'list_import_files': import_export_handlers.handleListImportFiles,
     'open_export_folder': import_export_handlers.handleOpenExportFolder,

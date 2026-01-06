@@ -75,6 +75,32 @@ try:
     # --- Configuration ---
     import file_io
     DATA_DIR = file_io.DATA_DIR
+    
+    # Ensure standard Linux binary paths are in the environment PATH
+    # This helps sub-processes like yt-dlp find ffmpeg and JS runtimes (node/deno)
+    current_path_list = os.environ.get("PATH", "").split(os.pathsep)
+    
+    if platform.system() == "Linux":
+        extra_paths = [
+            "/usr/bin", "/usr/local/bin", "/bin", "/usr/sbin", "/sbin",
+            os.path.expanduser("~/.local/bin"),
+            os.path.expanduser("~/bin")
+        ]
+        for p in extra_paths:
+            if p not in current_path_list:
+                current_path_list.insert(0, p) # Prepend for priority
+    
+    # Inject configured paths for ffmpeg and node if they are set
+    config = file_io.get_settings()
+    for key in ["ffmpeg_path", "node_path"]:
+        val = config.get(key)
+        if val and os.path.exists(val):
+            dir_path = os.path.dirname(val)
+            if dir_path not in current_path_list:
+                current_path_list.insert(0, dir_path)
+                
+    os.environ["PATH"] = os.pathsep.join(current_path_list)
+
     LOG_FILE = os.path.join(DATA_DIR, "native_host.log")
     MAX_LOG_BYTES = 1024 * 1024 * 5 # 5 MB
     BACKUP_COUNT = 1

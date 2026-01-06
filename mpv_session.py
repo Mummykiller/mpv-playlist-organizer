@@ -213,12 +213,22 @@ class MpvSessionManager:
         
         for item in items:
             item_url = sanitize_url(item['url'])
+            
+            # --- Centralized Flag Collection for Appending ---
+            local_essential_flags = "ignore-config="
+            if settings and settings.get('ffmpeg_path'):
+                local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
+            
+            final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), local_essential_flags)
+
             lua_options = {
                 "id": item.get('id'), 
                 "title": item.get('title'),
                 "headers": item.get('headers'),
-                "ytdl_raw_options": file_io.sanitize_ytdlp_options(item.get('ytdl_raw_options')),
+                "ytdl_raw_options": final_item_raw_opts,
                 "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
+                "ytdl_format": item.get('ytdl_format'),
+                "ffmpeg_path": settings.get('ffmpeg_path'),
                 "original_url": sanitize_url(item.get('original_url') or item.get('url')),
                 "disable_http_persistent": item.get('disable_http_persistent', False),
                 "cookies_file": item.get('cookies_file'),
@@ -335,7 +345,7 @@ class MpvSessionManager:
                 from concurrent.futures import ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     # Pass context for cookie management
-                    results = list(executor.map(lambda x: self.enricher.enrich_single_item(x, folder_id, self.session_cookies, self.sync_lock), _url_items_list))
+                    results = list(executor.map(lambda x: self.enricher.enrich_single_item(x, folder_id, self.session_cookies, self.sync_lock, settings=settings), _url_items_list))
                 _url_items_list = [i for r in results for i in r]
                 return {
                     "success": True, 
@@ -344,7 +354,7 @@ class MpvSessionManager:
                     "message": "Enriched content generated."
                 }
             else:
-                first_enriched = self.enricher.enrich_single_item(_url_items_list[0], folder_id, self.session_cookies, self.sync_lock)
+                first_enriched = self.enricher.enrich_single_item(_url_items_list[0], folder_id, self.session_cookies, self.sync_lock, settings=settings)
                 _url_items_list = first_enriched + _url_items_list[1:]
 
         # Smart Resume

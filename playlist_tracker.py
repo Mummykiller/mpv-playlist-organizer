@@ -132,15 +132,17 @@ class PlaylistTracker:
 
                     if prop_name == 'user-data/id':
                         new_id = data
+                        
+                        # IGNORE invalid/error IDs from MPV
+                        if new_id is None or new_id == -1 or new_id == "-1" or new_id == "":
+                            logging.debug(f"[PY][Tracker] Ignoring invalid ID from MPV: {new_id}")
+                            continue
+
                         logging.debug(f"[PY][Tracker] property-change 'user-data/id' detected. Old: {current_id}, New: {new_id}")
 
-                        if new_id and new_id != current_id:
-                            # Reset watch timer flag for the new item if needed
-                            # (The set already handles deduplication per session)
-                            pass
-
+                        if new_id != current_id:
                             # 1. If we were playing something else, do a FINAL save for it
-                            if current_id and current_time > 2:
+                            if current_id and current_id != -1 and current_id != "-1" and current_time > 2:
                                 logging.info(f"[PY][Tracker] Saving final position for old item {current_id}: {int(current_time)}s")
                                 self._update_resume_time(current_id, current_time)
                                 self.played_item_ids.add(current_id)
@@ -156,7 +158,10 @@ class PlaylistTracker:
                             self._update_last_played(current_id)
                     
                     elif prop_name == 'time-pos':
-                        if current_id and data is not None:
+                        if current_id and current_id != -1 and current_id != "-1" and data is not None:
+                            # Ignore negative or invalid timestamps
+                            if data < 0: continue
+                            
                             current_time = data
                             
                             # 1. Check for mark-as-watched threshold (30s)
@@ -200,7 +205,7 @@ class PlaylistTracker:
 
     def _update_last_played(self, item_id):
         """Saves the last played item ID to the folder's metadata and notifies the extension."""
-        if not self.folder_id or not item_id:
+        if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
             return
         
         try:
@@ -222,7 +227,7 @@ class PlaylistTracker:
 
     def _update_resume_time(self, item_id, resume_time):
         """Saves the current playback time for a specific item to the folder's playlist metadata."""
-        if not self.folder_id or not item_id:
+        if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
             return
         
         try:

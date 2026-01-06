@@ -182,9 +182,11 @@ window.MPV.MpvController = class MpvController {
         if (state.minimized) {
             this.ui.controllerHost.style.display = 'none';
             this.ui.minimizedHost.style.display = state.settings.show_minimized_stub ? 'block' : 'none';
+            this.validateAndRepositionMinimizedStub();
         } else {
             this.ui.minimizedHost.style.display = 'none';
             this.ui.controllerHost.style.display = 'block';
+            this.validateAndRepositionController();
         }
 
         this.updateAddButtonState();
@@ -205,6 +207,7 @@ window.MPV.MpvController = class MpvController {
             this.ui.controllerHost.classList.toggle('pinned', state.pinned);
             pinBtn.classList.toggle('active-toggle', state.pinned);
             dragHandle.style.cursor = state.pinned ? 'default' : 'grab';
+            dragHandle.title = state.pinned ? 'Pinned' : 'Click and hold to drag';
         }
 
         // 4. AniList State (Visibility & Scaling)
@@ -871,6 +874,7 @@ window.MPV.MpvController = class MpvController {
         const banner = root.getElementById('status-banner');
         if (banner) {
             new window.MPV.Draggable(this.ui.controllerHost, banner, {
+                dragButton: 0,
                 onDragStart: () => !this.state.state.pinned,
                 onDragMove: () => this.updateAdaptiveElements(),
                 onDragEnd: (e, pos) => {
@@ -882,7 +886,12 @@ window.MPV.MpvController = class MpvController {
 
         const minStub = minRoot?.getElementById('m3u8-minimized-wrapper');
         if (minStub) {
+            const minHandle = minRoot.getElementById('m3u8-minimized-stub');
+            // This title will be overridden by updateAddButtonState, but it's good for initial load
+            if (minHandle) minHandle.title = 'Left-click: Open Controller\nRight-click: Drag to move';
+
             new window.MPV.Draggable(this.ui.minimizedHost, minStub, {
+                dragButton: 2,
                 onDragEnd: (e, pos) => {
                     this.ui.minimizedHost.classList.remove('top-left', 'top-right');
                     this.savePreference({ minimizedStubPosition: pos });
@@ -917,7 +926,9 @@ window.MPV.MpvController = class MpvController {
 
         if (!url) {
             this.updateStatusBanner('No stream/playlist detected', false);
-            if (minimizedStub) minimizedStub.title = 'Show MPV Controller';
+            if (minimizedStub) {
+                minimizedStub.title = 'Left-click: Open Controller\nRight-click: Drag to move';
+            }
             [addBtn, compactAddBtn].forEach(btn => {
                 if (btn) {
                     btn.disabled = true;
@@ -933,12 +944,24 @@ window.MPV.MpvController = class MpvController {
             if (isUrlInPlaylist) {
                 [addBtn, compactAddBtn, minimizedStub].forEach(btn => {
                     btn?.classList.add('url-in-playlist');
-                    if (btn) btn.title = 'URL is already in this playlist';
+                    if (btn) {
+                        if (btn === minimizedStub) {
+                            btn.title = 'URL is already in playlist\nLeft-click: Open Controller\nRight-click: Drag to move';
+                        } else {
+                            btn.title = 'URL is already in this playlist';
+                        }
+                    }
                 });
             } else {
                 [addBtn, compactAddBtn, minimizedStub].forEach(btn => {
                     btn?.classList.add('stream-present');
-                    if (btn) btn.title = 'Click to add URL to playlist';
+                    if (btn) {
+                        if (btn === minimizedStub) {
+                            btn.title = 'Stream Detected!\nLeft-click: Add to Playlist\nRight-click: Drag to move';
+                        } else {
+                            btn.title = 'Click to add URL to playlist';
+                        }
+                    }
                 });
             }
             
@@ -1011,33 +1034,54 @@ window.MPV.MpvController = class MpvController {
         const host = this.ui.controllerHost;
         if (!host || host.style.display === 'none') return;
 
-        setTimeout(() => {
-            const maxX = window.innerWidth - host.offsetWidth;
-            const maxY = window.innerHeight - host.offsetHeight;
-            const newLeft = Math.min(maxX, Math.max(0, host.offsetLeft));
-            const newTop = Math.min(maxY, Math.max(0, host.offsetTop));
+        requestAnimationFrame(() => {
+            const rect = host.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
 
-            if (newLeft !== host.offsetLeft || newTop !== host.offsetTop) {
-                Object.assign(host.style, { left: `${newLeft}px`, top: `${newTop}px`, right: 'auto', bottom: 'auto' });
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            let newLeft = rect.left;
+            let newTop = rect.top;
+            let changed = false;
+
+            if (rect.right > vw) { newLeft = Math.max(0, vw - rect.width); changed = true; }
+            if (rect.bottom > vh) { newTop = Math.max(0, vh - rect.height); changed = true; }
+            if (rect.left < 0) { newLeft = 0; changed = true; }
+            if (rect.top < 0) { newTop = 0; changed = true; }
+
+            if (changed) {
+                const pos = { left: `${newLeft}px`, top: `${newTop}px`, right: 'auto', bottom: 'auto' };
+                Object.assign(host.style, pos);
+                this.savePreference({ position: pos });
             }
-        }, 50);
+        });
     }
 
     validateAndRepositionMinimizedStub() {
         const stub = this.ui.minimizedHost;
         if (!stub || stub.style.display === 'none') return;
 
-        setTimeout(() => {
-            const maxX = window.innerWidth - stub.offsetWidth;
-            const maxY = window.innerHeight - stub.offsetHeight;
-            const newLeft = Math.min(maxX, Math.max(0, stub.offsetLeft));
-            const newTop = Math.min(maxY, Math.max(0, stub.offsetTop));
+        requestAnimationFrame(() => {
+            const rect = stub.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
 
-            if (newLeft !== stub.offsetLeft || newTop !== stub.offsetTop) {
-                Object.assign(stub.style, { left: `${newLeft}px`, top: `${newTop}px`, right: 'auto', bottom: 'auto' });
-                this.savePreference({ minimizedStubPosition: { left: stub.style.left, top: stub.style.top } });
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            let newLeft = rect.left;
+            let newTop = rect.top;
+            let changed = false;
+
+            if (rect.right > vw) { newLeft = Math.max(0, vw - rect.width); changed = true; }
+            if (rect.bottom > vh) { newTop = Math.max(0, vh - rect.height); changed = true; }
+            if (rect.left < 0) { newLeft = 0; changed = true; }
+            if (rect.top < 0) { newTop = 0; changed = true; }
+
+            if (changed) {
+                const pos = { left: `${newLeft}px`, top: `${newTop}px`, right: 'auto', bottom: 'auto' };
+                Object.assign(stub.style, pos);
+                this.savePreference({ minimizedStubPosition: pos });
             }
-        }, 50);
+        });
     }
 
     handleGlobalKeydown(e) {

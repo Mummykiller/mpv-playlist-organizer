@@ -967,10 +967,11 @@ button.btn-loading::after {
     position: absolute;
     width: 16px;
     height: 16px;
-    top: 50%;
-    left: 50%;
-    margin-left: -8px;
-    margin-top: -8px;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: auto;
     border: 2px solid rgba(255, 255, 255, 0.3);
     border-radius: 50%;
     border-top-color: white;
@@ -978,6 +979,10 @@ button.btn-loading::after {
 }
 
 /* Specific adjustment for minimized play button loading state */
+#m3u8-minimized-play-btn.btn-loading {
+    position: absolute; /* Force it to stay absolute so it doesn't move to the middle */
+}
+
 #m3u8-minimized-play-btn.btn-loading svg,
 #m3u8-minimized-play-btn.btn-loading .play-button-count {
     visibility: hidden;
@@ -1056,14 +1061,13 @@ button.btn-playing {
 /* This is the base style for the small circular play button when the playlist is empty. */
 .play-button {
     position: absolute; /* Positions the button relative to the main minimized circle. */
-    position: relative; /* Make this the positioning context for its children. */
     bottom: -4px;      /* How much it sticks out from the bottom. */
     right: -4px;       /* How much it sticks out from the right. */
     width: 28px;
     height: 28px;
     border-radius: 50%;
     background-color: var(--accent-primary);    
-    border: 2px solid rgb(0, 0, 0); /* A static white border for high contrast */
+    border: 2px solid rgb(0, 0, 0); /* A static black border for high contrast */
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1071,7 +1075,6 @@ button.btn-playing {
     box-shadow: 0 2px 5px rgba(0,0,0,0.4);
     transition: all 0.2s ease;
     cursor: pointer;
-    z-index: 1; /* Ensure it's visually on top of the main stub */
 }
 
 /* This is the style for when you hover your mouse over the play button. */
@@ -1082,14 +1085,15 @@ button.btn-playing {
 }
 
 #m3u8-minimized-play-btn svg {
-    width: 16px; /* The size of the play triangle icon. */
+    width: 14px; /* The size of the play triangle icon. */
+    height: 14px;
     color: white;
-    height: 16px;
-    /* New: Absolute positioning to place it on its own layer. */
+    /* Absolute positioning to place it on its own layer. */
     position: absolute;
-    top: 50%;
+    top: 52%;
     left: 80%;
-    transform: translate(-50%, -50%); /* Perfect centering */
+    transform: translate(-50%, -50%); /* Perfect centering by default */
+    z-index: 1;
 }
 
 /* --- New: Styles for Counter inside Play Button --- */
@@ -1097,32 +1101,24 @@ button.btn-playing {
 .play-button.with-counter {
     width: 32px;   /* The width of the bigger circle. */
     height: 32px;  /* The height of the bigger circle. */
-    padding: 0 0 0 0px; /* Adjusts the horizontal position of the content inside. */
-    right: -20px;   /* Adjusts the position because the circle is bigger. */
-    bottom: -20px;  /* Adjusts the position because the circle is bigger. */
-    gap: 0px;
+    right: -6px;   /* Adjusts the position because the circle is bigger. */
+    bottom: -6px;  /* Adjusts the position because the circle is bigger. */
 }
+
+
 
 /* This is the style for the playlist item number (the counter). */
 .play-button-count {
-    font-size: 15px;   /* The size of the number's font. */
-    font-weight: 500;  /* How bold the number is. */
+    font-size: 13px;   /* The size of the number's font. */
+    font-weight: 800;  /* Very bold number */
     color: white;
     line-height: 1;
-    text-shadow: 0 1px 1px rgba(0, 0, 0, 0);
-    /* New: Absolute positioning to place it on its own layer. */
+    /* Absolute positioning to place it on its own layer. */
     position: absolute;
-    top: 64%; /* Move it up slightly */
-    left: 30%; /* Move it left slightly */
-    transform: translate(-50%, -50%); /* Perfect centering */
-    z-index: 2; /* Ensure the number is on top of the triangle */
-    background-color: rgba(255, 255, 255, 0); /* Subtle dark background for readability */
-    border-radius: 50%;
-    width: 1.5em; /* Give it a fixed circular area */
-    height: 1.5em;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    top: 50%; 
+    left: 35%;
+    transform: translate(-50%, -50%); /* Center the number on the left side */
+    z-index: 2; /* Ensure the number is on top of any overlapping parts */
 }
 /*
  * AI-EDIT-PROTECTED-BLOCK: END

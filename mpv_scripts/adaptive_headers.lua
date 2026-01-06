@@ -25,11 +25,62 @@ mp.register_script_message("set_url_options", function(url, options_json)
     end
 end)
 
-local function to_hex(s)
-    if not s then return "nil" end
-    return (s:gsub('.', function (c)
-        return string.format('%02X ', string.byte(c))
-    end))
+-- Helper to split strings (needed for merging options)
+local function split(s, sep)
+    local res = {}
+    for part in s:gmatch("([^" .. sep .. "]+)") do
+        table.insert(res, part)
+    end
+    return res
+end
+
+-- Function to merge two ytdl-raw-options strings
+local function merge_raw_options(old, new)
+    if old == "" then return new end
+    if new == "" then return old end
+    
+    local merged_map = {}
+    
+    local function parse_into_map(s)
+        -- Improved split: find commas NOT preceded by a backslash
+        local last_pos = 1
+        while true do
+            local comma_pos = s:find("[^\\],", last_pos)
+            local part
+            if not comma_pos then
+                part = s:sub(last_pos)
+            else
+                part = s:sub(last_pos, comma_pos)
+            end
+            
+            if part and part ~= "" then
+                part = part:gsub("^%s*(.-)%s*$", "%1") -- trim
+                local key, val = part:match("([^=]+)=(.*)")
+                if key then
+                    merged_map[key:lower()] = val
+                else
+                    -- Boolean flag with no =
+                    merged_map[part:lower()] = ""
+                end
+            end
+            
+            if not comma_pos then break end
+            last_pos = comma_pos + 2
+        end
+    end
+    
+    parse_into_map(old)
+    parse_into_map(new)
+    
+    local final_parts = {}
+    for k, v in pairs(merged_map) do
+        if v == "" then
+            table.insert(final_parts, k .. "=")
+        else
+            table.insert(final_parts, k .. "=" .. v)
+        end
+    end
+    return table.concat(final_parts, ",")
 end
 
 -- Apply headers and YTDL Options just-in-time when a file starts loading
@@ -38,11 +89,7 @@ mp.add_hook("on_load", 1, function()
     local path = mp.get_property("path")
     if not path then return end
 
-    debug_log("AdaptiveHeaders: on_load for " .. path .. " (len: " .. #path .. ")")
-    
-    -- Check current properties BEFORE applying
-    local current_headers = mp.get_property("http-header-fields")
-    local current_ytdl_opts = mp.get_property("ytdl-raw-options")
+    debug_log("AdaptiveHeaders: on_load for " .. path)
     
     -- TRY 1: Direct path match
     local opts = url_options[path]
@@ -56,11 +103,9 @@ mp.add_hook("on_load", 1, function()
         end
     end
     
-    -- TRY 3: Fuzzy match (handle cases where one might have a trailing slash or different protocol)
+    -- TRY 3: Fuzzy match
     if not opts then
         for k, v in pairs(url_options) do
-            -- Simple check: does the path contain the registered URL or vice-versa?
-            -- (Useful for YouTube where the path is a long blob but contains the original ID)
             if path:find(k, 1, true) or k:find(path, 1, true) then
                 debug_log("AdaptiveHeaders: Fuzzy match found for '" .. k .. "'")
                 opts = v
@@ -69,84 +114,83 @@ mp.add_hook("on_load", 1, function()
         end
     end
 
-    if opts then
-        debug_log("AdaptiveHeaders: Found registered options for " .. path)
-    else
-        -- Item has no registered options. 
-        debug_log("AdaptiveHeaders: No options found for " .. path)
-        
-        -- DIAGNOSTIC: Count and list registered URLs
-        local count = 0
-        for _ in pairs(url_options) do count = count + 1 end
-        debug_log("AdaptiveHeaders: Total registered URLs: " .. count)
-    end
-    
-    -- DEFAULT STATE: Assume we handle resolution externally unless told otherwise
+    -- DEFAULT STATE
     local use_ytdl = "no"
-    local raw_options = ""
+    local local_raw_options = ""
+    local ytdl_format = ""
+
+    -- SAFETY: If the path is a YouTube URL, we MUST use ytdl
+    if path:find("youtube%.com") or path:find("youtu%.be") then
+        use_ytdl = "yes"
+    end
 
     if opts then
-                        -- Apply HTTP Headers
-                        if opts.headers then
-                            local header_list = {}
-                            local has_any_custom_headers = false
-                            
-                            -- Set UA and Referer using specific properties to preserve commas/special chars
-                            if opts.headers["User-Agent"] and mp.get_property("user-agent") ~= opts.headers["User-Agent"] then 
-                                debug_log("AdaptiveHeaders: Setting user-agent: " .. opts.headers["User-Agent"])
-                                mp.set_property("user-agent", opts.headers["User-Agent"]) 
-                            end
-                            if opts.headers["Referer"] and mp.get_property("referrer") ~= opts.headers["Referer"] then 
-                                debug_log("AdaptiveHeaders: Setting referrer: " .. opts.headers["Referer"])
-                                mp.set_property("referrer", opts.headers["Referer"]) 
-                            end
-                
-                            -- Only add OTHER headers to http-header-fields
-                            for k, v in pairs(opts.headers) do
-                                if k ~= "User-Agent" and k ~= "Referer" then
-                                    -- Sanitize value (remove commas for other headers if needed, 
-                                    -- though usually Origin/X-Requested-With don't have them)
-                                    local clean_v = tostring(v):gsub(",", "")
-                                    table.insert(header_list, k .. ": " .. clean_v)
-                                    has_any_custom_headers = true
-                                end
-                            end
-                
-                            -- Apply global http-header-fields if we have custom headers.
-                            if has_any_custom_headers then
-                                local headers_str = table.concat(header_list, ",")
-                                if mp.get_property("http-header-fields") ~= headers_str then
-                                    debug_log("AdaptiveHeaders: Applying custom headers: " .. headers_str)
-                                    mp.set_property("http-header-fields", headers_str)
-                                end
-                            else
-                                if mp.get_property("http-header-fields") ~= "" then
-                                    debug_log("AdaptiveHeaders: Clearing custom headers.")
-                                    mp.set_property("http-header-fields", "")
-                                end
-                            end
-                        else
-                            debug_log("AdaptiveHeaders: No per-URL headers, keeping current.")
-                        end
-                
-                        -- Determine YTDL state from options
-                        if opts.ytdl_raw_options then
-                            raw_options = opts.ytdl_raw_options
-                        end
-                        if opts.use_ytdl_mpv == true then
-                            use_ytdl = "yes"
-                        end
-                
-        -- Reconnect and HTTP Persistent settings
-        -- We add reconnect options for direct streams to handle transient errors
-        -- Skip if user has requested to use MPV's native defaults
+        debug_log("AdaptiveHeaders: Found registered options.")
+        
+        -- Apply HTTP Headers
+        if opts.headers then
+            local header_list = {}
+            for k, v in pairs(opts.headers) do
+                -- Sanitize: remove commas and newlines
+                local clean_v = v:gsub(",", ""):gsub("[\r\n]", "")
+                table.insert(header_list, k .. ": " .. clean_v)
+            end
+            local header_str = table.concat(header_list, ",")
+            debug_log("AdaptiveHeaders: Setting http-header-fields: " .. header_str)
+            mp.set_property("http-header-fields", header_str)
+            
+            if opts.headers["User-Agent"] then
+                mp.set_property("user-agent", opts.headers["User-Agent"])
+            end
+            if opts.headers["Referer"] then
+                mp.set_property("referrer", opts.headers["Referer"])
+            end
+        end
+
+        -- Determine YTDL state from options
+        if opts.ytdl_raw_options then
+            local_raw_options = opts.ytdl_raw_options
+        end
+
+        -- Always ignore local yt-dlp config for consistency
+        if not local_raw_options:find("ignore%-config") then
+            if local_raw_options == "" then local_raw_options = "ignore-config=" 
+            else local_raw_options = local_raw_options .. ",ignore-config=" end
+        end
+
+        -- Inject FFmpeg location if provided
+        if opts.ffmpeg_path and opts.ffmpeg_path ~= "" then
+            if not local_raw_options:find("ffmpeg%-location") then
+                local_raw_options = local_raw_options .. ",ffmpeg-location=" .. opts.ffmpeg_path
+            end
+        end
+
+        if opts.use_ytdl_mpv == true then
+            use_ytdl = "yes"
+        end
+        if opts.ytdl_format then
+            ytdl_format = opts.ytdl_format
+        end
+
+        -- Networking & Reconnect
         if not opts.disable_network_overrides then
             local network_threads = tostring(opts.ytdlp_concurrent_fragments or 4)
+            
+            local persistence_val = "1"
+            if opts.http_persistence == "off" then
+                persistence_val = "0"
+            elseif opts.http_persistence == "on" then
+                persistence_val = "1"
+            else
+                -- 'auto': follow the site-specific recommendation (e.g. False for YouTube)
+                persistence_val = opts.disable_http_persistent and "0" or "1"
+            end
+
             local lavf_dict = {
-                hls_segment_parallel_downloads = network_threads -- Sync with user's Network Threads setting
+                hls_segment_parallel_downloads = network_threads,
+                http_persistent = persistence_val
             }
 
-            -- Only add reconnect options if enabled in settings
             if opts.enable_reconnect ~= false then
                 lavf_dict.reconnect = "1"
                 lavf_dict.reconnect_at_eof = "1"
@@ -154,66 +198,36 @@ mp.add_hook("on_load", 1, function()
                 lavf_dict.reconnect_delay_max = tostring(opts.reconnect_delay or 4)
             end
             
-            local force_persist = opts.http_persistence or "auto"
-            if force_persist == "on" then
-                lavf_dict.http_persistent = "1"
-            elseif force_persist == "off" then
-                lavf_dict.http_persistent = "0"
-            else
-                -- auto
-                if opts.disable_http_persistent then
-                    lavf_dict.http_persistent = "0"
-                else
-                    lavf_dict.http_persistent = "1"
-                end
-            end
-            
             local lavf_pairs = {}
-            for k, v in pairs(lavf_dict) do
-                table.insert(lavf_pairs, k .. "=" .. v)
-            end
-            local lavf_opts = table.concat(lavf_pairs, ",")
-            
-            if mp.get_property("demuxer-lavf-o") ~= lavf_opts then
-                debug_log("AdaptiveHeaders: Setting demuxer-lavf-o: " .. lavf_opts)
-                mp.set_property("demuxer-lavf-o", lavf_opts)
-            end
-        else
-            debug_log("AdaptiveHeaders: Network overrides disabled by user. Skipping demuxer-lavf-o.")
-        end
-                
-
-        -- Apply cookies file if provided
-        local cookies_file = opts.cookies_file or ""
-        if mp.get_property("cookies-file") ~= cookies_file then
-            debug_log("AdaptiveHeaders: Applying cookies-file: " .. cookies_file)
-            mp.set_property("cookies-file", cookies_file)
+            for k, v in pairs(lavf_dict) do table.insert(lavf_pairs, k .. "=" .. v) end
+            mp.set_property("demuxer-lavf-o", table.concat(lavf_pairs, ","))
         end
 
-        -- Store original URL and ID for other scripts and deduplication
-        if opts.original_url then
-            mp.set_property("user-data/original-url", opts.original_url)
+        -- Apply cookies file
+        if opts.cookies_file and opts.cookies_file ~= "" then
+            mp.set_property("cookies-file", opts.cookies_file)
         end
-        if opts.id then
-            mp.set_property("user-data/id", opts.id)
-        end
-        
-        last_applied_url = path
+
+        -- Store metadata
+        if opts.original_url then mp.set_property("user-data/original-url", opts.original_url) end
+        if opts.id then mp.set_property("user-data/id", opts.id) end
     end
 
-    -- ALWAYS set these properties to ensure we don't leak state between files
-    -- and to ensure resolved URLs don't trigger edl://
+    -- Apply YTDL changes
     if mp.get_property("ytdl") ~= use_ytdl then
-        debug_log("AdaptiveHeaders: Setting ytdl=" .. use_ytdl)
         mp.set_property("ytdl", use_ytdl)
     end
-    if mp.get_property("ytdl-raw-options") ~= raw_options then
-        debug_log("AdaptiveHeaders: Setting ytdl-raw-options=" .. raw_options)
-        mp.set_property("ytdl-raw-options", raw_options)
-    end
+
+    -- Final merge with global command-line options
+    local current_global_raw = mp.get_property("ytdl-raw-options") or ""
+    local final_raw = merge_raw_options(current_global_raw, local_raw_options)
     
-    -- Check current properties AFTER applying
-    local final_headers = mp.get_property("http-header-fields")
-    local final_ytdl_opts = mp.get_property("ytdl-raw-options")
-    debug_log("AdaptiveHeaders: Final properties AFTER apply: Headers=" .. tostring(final_headers) .. ", YTDL-Opts=" .. tostring(final_ytdl_opts))
+    if final_raw ~= "" and mp.get_property("ytdl-raw-options") ~= final_raw then
+        debug_log("AdaptiveHeaders: Applying merged ytdl-raw-options=" .. final_raw)
+        mp.set_property("ytdl-raw-options", final_raw)
+    end
+
+    if ytdl_format ~= "" and mp.get_property("ytdl-format") ~= ytdl_format then
+        mp.set_property("ytdl-format", ytdl_format)
+    end
 end)

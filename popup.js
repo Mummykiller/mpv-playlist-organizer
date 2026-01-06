@@ -206,6 +206,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const miniExportAllDataBtn = document.getElementById('btn-mini-export-all');
     const miniImportDataBtn = document.getElementById('btn-mini-import-data');
     const miniOpenExportFolderBtn = document.getElementById('btn-mini-open-export-folder');
+    const exportSettingsBtn = document.getElementById('btn-export-settings');
+    const importSettingsBtn = document.getElementById('btn-import-settings');
+    const openExportFolderBtnAlt = document.getElementById('btn-open-export-folder-alt');
     const importSelectionModal = document.getElementById('import-selection-modal');
     const importFileSelect = document.getElementById('import-file-select');
     const importConfirmBtn = document.getElementById('import-confirm-btn');
@@ -831,11 +834,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             return showStatus('Please select a folder to export.', true);
         }
 
+        const options = {
+            preserveTitle: document.getElementById('export-opt-title').checked,
+            preserveLastPlayed: document.getElementById('export-opt-lastplayed').checked
+        };
+
         try {
             const response = await sendMessageAsync({
                 action: 'export_folder_playlist',
                 filename: filename,
-                folderId: folderId
+                folderId: folderId,
+                options: options
             });
             if (response?.success) {
                 showStatus(response.message);
@@ -873,22 +882,79 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    function handleExportAll() {
-        showPopupConfirmation('This will export each playlist into a separate JSON file in the "exported" directory. Continue?')
-            .then(confirmed => {
-                if (confirmed) {
-                    showStatus('Exporting all playlists...');
-                    chrome.runtime.sendMessage({ action: 'export_all_playlists_separately' }, (response) => {
-                        if (response?.success) {
-                            showStatus(response.message);
-                        } else {
-                            showStatus(response?.error || 'Export all failed.', true);
-                        }
-                    });
-                }
-            }).catch(e => {
-                showStatus("Export all failed: " + e.message, true);
+    async function handleExportAll() {
+        const modal = document.getElementById('export-all-modal');
+        const confirmBtn = document.getElementById('export-all-confirm-btn');
+        const cancelBtn = document.getElementById('export-all-cancel-btn');
+        const folderListContainer = document.getElementById('export-all-folder-list');
+
+        // Reset container and show modal
+        folderListContainer.innerHTML = '<p style="margin: 0 0 4px 0; font-size: 14px; color: var(--text-secondary); font-weight: 500;">Custom Filenames (Optional):</p>';
+        modal.style.display = 'flex';
+
+        try {
+            const response = await sendMessageAsync({ action: 'get_all_folder_ids' });
+            if (response.success && response.folderIds) {
+                response.folderIds.forEach(id => {
+                    const row = document.createElement('div');
+                    row.style.display = 'flex';
+                    row.style.alignItems = 'center';
+                    row.style.gap = '8px';
+                    
+                    const label = document.createElement('span');
+                    label.textContent = id + ':';
+                    label.style.fontSize = '16px';
+                    label.style.fontWeight = '500';
+                    label.style.flexShrink = '0';
+                    label.style.width = '120px';
+                    label.style.overflow = 'hidden';
+                    label.style.textOverflow = 'ellipsis';
+                    label.title = id;
+                    
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.className = 'export-all-name-input';
+                    input.placeholder = id;
+                    input.dataset.folderId = id;
+                    input.style.padding = '4px 8px';
+                    input.style.fontSize = '16px';
+                    input.style.flexGrow = '1';
+                    
+                    row.append(label, input);
+                    folderListContainer.appendChild(row);
+                });
+            }
+        } catch (e) {
+            console.error("Failed to load folders for Export All:", e);
+        }
+
+        confirmBtn.onclick = () => {
+            const customNames = {};
+            folderListContainer.querySelectorAll('.export-all-name-input').forEach(input => {
+                const val = input.value.trim();
+                if (val) customNames[input.dataset.folderId] = val;
             });
+
+            const options = {
+                preserveTitle: document.getElementById('export-all-opt-title').checked,
+                preserveLastPlayed: document.getElementById('export-all-opt-lastplayed').checked,
+                customNames: customNames
+            };
+
+            showStatus('Exporting all playlists...');
+            chrome.runtime.sendMessage({ action: 'export_all_playlists_separately', options }, (response) => {
+                if (response?.success) {
+                    showStatus(response.message);
+                } else {
+                    showStatus(response?.error || 'Export all failed.', true);
+                }
+            });
+            modal.style.display = 'none';
+        };
+
+        cancelBtn.onclick = () => {
+            modal.style.display = 'none';
+        };
     }
 
     function handleOpenExportFolder() {
@@ -904,11 +970,34 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
+    async function handleExportSettings() {
+        const date = new Date();
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const suggestedFilename = `mpv_settings_backup_${year}${month}${day}`;
+
+        try {
+            const response = await sendMessageAsync({
+                action: 'export_settings',
+                filename: suggestedFilename
+            });
+            if (response?.success) {
+                showStatus(response.message);
+            } else {
+                showStatus(response?.error || 'Export failed.', true);
+            }
+        } catch (e) {
+            showStatus("Export failed: " + e.message, true);
+        }
+    }
+
     // Consolidate event listeners for similar actions
     [exportDataBtn, miniExportDataBtn].forEach(btn => btn.addEventListener('click', handleExport));
     [exportAllDataBtn, miniExportAllDataBtn].forEach(btn => btn.addEventListener('click', handleExportAll));
-    [openExportFolderBtn, miniOpenExportFolderBtn].forEach(btn => btn.addEventListener('click', handleOpenExportFolder));
-    [importDataBtn, miniImportDataBtn].forEach(btn => btn.addEventListener('click', handleImport));
+    [openExportFolderBtn, miniOpenExportFolderBtn, openExportFolderBtnAlt].forEach(btn => btn.addEventListener('click', handleOpenExportFolder));
+    [importDataBtn, miniImportDataBtn, importSettingsBtn].forEach(btn => btn.addEventListener('click', handleImport));
+    if (exportSettingsBtn) exportSettingsBtn.addEventListener('click', handleExportSettings);
 
     // Modal specific listeners
     exportSaveBtn.addEventListener('click', handleSaveExport);

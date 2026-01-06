@@ -154,43 +154,32 @@ def get_youtube_id(url):
 def sanitize_ytdlp_options(options_str):
     """
     Sanitizes a comma-separated string of yt-dlp options (key=value).
-    Removes dangerous flags that could lead to RCE or arbitrary file writes.
+    Removes dangerous flags and ensures boolean flags have a trailing '='.
+    Handles escaped commas correctly.
     """
     if not options_str or not isinstance(options_str, str):
         return ""
 
-    # Dangerous keys that should never be passed to MPV -> yt-dlp
-    # Normalized to lowercase for comparison.
     BLOCKED_KEYS = {
         'exec', 'exec-before-download', 'exec_before_download',
-        'output', 'o',
-        'paths', 'P',
-        'batch-file', 'batch_file', 'a',
-        'config-location', 'config_location',
-        'load-info-json', 'load_info_json',
-        'write-description', 'write_description',
-        'write-info-json', 'write_info_json',
-        'write-annotations', 'write_annotations',
-        'write-thumbnail', 'write_thumbnail',
-        'write-subs', 'write_subs',
-        'write-auto-subs', 'write_auto_subs',
-        'external-downloader', 'downloader',
-        'external-downloader-args', 'downloader-args',
-        'ffmpeg-location', 'python-interpreter',
-        'plugin-dirs', 'netrc-location', 'netrc'
+        'output', 'o', 'paths', 'P', 'batch-file', 'batch_file', 'a',
+        'config-location', 'config_location', 'load-info-json', 'load_info_json',
+        'write-description', 'write_description', 'write-info-json', 'write_info_json',
+        'write-annotations', 'write_annotations', 'write-thumbnail', 'write_thumbnail',
+        'write-subs', 'write_subs', 'write-auto-subs', 'write_auto_subs',
+        'external-downloader', 'downloader', 'external-downloader-args', 'downloader-args',
+        'python-interpreter', 'plugin-dirs', 'netrc-location', 'netrc'
     }
 
+    import re
     safe_options = []
-    
-    # Split by comma, respecting that values might contain commas (though mpv format makes this hard)
-    # MPV simplistic parser splits by comma. We will do the same.
-    parts = options_str.split(',')
+    # Split by comma NOT preceded by backslash
+    parts = re.split(r'(?<!\\),', options_str)
     
     for part in parts:
         part = part.strip()
         if not part: continue
         
-        # Split key=value
         if '=' in part:
             key, value = part.split('=', 1)
         else:
@@ -198,15 +187,42 @@ def sanitize_ytdlp_options(options_str):
             value = ""
             
         clean_key = key.strip().lower()
-        
-        # Check against blocklist
         if clean_key in BLOCKED_KEYS:
-            logging.warning(f"Security: Removed dangerous yt-dlp option '{key}' from command.")
+            logging.warning(f"Security: Removed dangerous yt-dlp option '{key}'")
             continue
             
-        safe_options.append(part) # Keep original case/format
+        # Ensure boolean flags or empty values have exactly one trailing '='
+        if value == "":
+            safe_options.append(f"{clean_key}=")
+        else:
+            safe_options.append(f"{clean_key}={value}")
         
     return ",".join(safe_options)
+
+def merge_ytdlp_options(*args):
+    """Merges multiple ytdl-raw-options strings into one, deduplicating keys. Handles escaped commas."""
+    import re
+    merged_map = {}
+    for options_str in args:
+        if not options_str: continue
+        # Split by comma NOT preceded by backslash
+        parts = re.split(r'(?<!\\),', options_str)
+        for part in parts:
+            part = part.strip()
+            if not part: continue
+            if '=' in part:
+                key, value = part.split('=', 1)
+                merged_map[key.strip().lower()] = value
+            else:
+                merged_map[part.strip().lower()] = ""
+    
+    final_parts = []
+    for k, v in merged_map.items():
+        if v == "":
+            final_parts.append(f"{k}=")
+        else:
+            final_parts.append(f"{k}={v}")
+    return ",".join(final_parts)
 
 def _migrate_legacy_data(raw_folders):
     """
@@ -295,22 +311,35 @@ def get_all_folders_from_file():
 
     return converted_folders
 
-def write_export_file(filename, data):
-    """Helper to write data to a file in the export directory."""
+def write_export_file(filename, data, subfolder=None):
+    """Helper to write data to a file in the export directory, optionally in a subfolder."""
     try:
-        os.makedirs(EXPORT_DIR, exist_ok=True)
-        safe_basename = os.path.basename(filename)
+        target_dir = EXPORT_DIR
+        if subfolder:
+            target_dir = os.path.join(EXPORT_DIR, subfolder)
+            
+        os.makedirs(target_dir, exist_ok=True)
+        
+        # Remove .json extension if user provided it, we'll add it back
+        base = filename
+        if base.lower().endswith('.json'):
+            base = base[:-5]
+            
+        safe_basename = os.path.basename(base)
+        final_filename = f"{safe_basename}.json"
+        filepath = os.path.join(target_dir, final_filename)
 
-        if not safe_basename.lower().endswith('.json'):
-            final_filename = f"{safe_basename}.json"
-        else:
-            final_filename = safe_basename
-
-        filepath = os.path.join(EXPORT_DIR, final_filename)
+        # Automatic suffixing if file exists
+        counter = 1
+        while os.path.exists(filepath):
+            final_filename = f"{safe_basename} ({counter}).json"
+            filepath = os.path.join(target_dir, final_filename)
+            counter += 1
 
         if _atomic_json_dump(data, filepath):
             logging.info(f"[PY][IO] Data exported to {filepath}")
-            return {"success": True, "message": f"Data exported to '{final_filename}' in the 'exported' folder."}
+            display_name = os.path.join(subfolder, final_filename) if subfolder else final_filename
+            return {"success": True, "message": f"Data exported to '{display_name}' in the 'exported' folder."}
         else:
             return {"success": False, "error": "Atomic write failed during export."}
     except Exception as e:
@@ -329,13 +358,21 @@ def write_folders_file(data):
         return {"success": False, "error": error_msg}
 
 def list_import_files():
-    """Lists all .json files in the export directory."""
+    """Lists all .json files in the export directory and its subdirectories."""
     try:
         if not os.path.isdir(EXPORT_DIR):
             return {"success": True, "files": []}
-        else:
-            files = sorted([f for f in os.listdir(EXPORT_DIR) if f.endswith('.json')], reverse=True)
-            return {"success": True, "files": files}
+        
+        json_files = []
+        for root, dirs, files in os.walk(EXPORT_DIR):
+            for file in files:
+                if file.endswith('.json'):
+                    # Get path relative to EXPORT_DIR
+                    rel_path = os.path.relpath(os.path.join(root, file), EXPORT_DIR)
+                    # Normalize to forward slashes for the browser UI
+                    json_files.append(rel_path.replace(os.sep, '/'))
+        
+        return {"success": True, "files": sorted(json_files, reverse=True)}
     except Exception as e:
         error_msg = f"[PY][IO] Failed to list import files: {e}"
         logging.error(error_msg)
@@ -345,6 +382,8 @@ def get_settings():
     """Reads settings from config.json, providing default values for new keys."""
     default_settings = {
         "mpv_path": None, # Will be filled by installer or found in PATH
+        "ffmpeg_path": None,
+        "node_path": None,
         "enable_url_analysis": False,
         "browser_for_url_analysis": "chrome", # Default browser for UA/cookies
         "enable_youtube_analysis": False,
