@@ -68,6 +68,8 @@ def get_cookies_file(browser, url, ignore_config=True):
             '--cookies', temp_path,
             '--simulate',
             '--quiet',
+            '--remote-components', 'ejs:github',
+            '--js-runtimes', 'node',
             url
         ]
         
@@ -114,11 +116,14 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     is_other_cookies_enabled = str(other_sites_use_cookies).lower() == "true"
 
     # Determine format for external resolution with strict sanitization
-    ytdl_format = 'best'
+    ytdl_format = 'bestvideo+bestaudio/best'
     if ytdl_quality and ytdl_quality != 'best':
         q = str(ytdl_quality)
         if q in ['2160', '1440', '1080', '720', '480']:
-            ytdl_format = f"bestvideo[height<={q}]+bestaudio/best[height<={q}]"
+            if int(q) > 1080:
+                ytdl_format = f"bv*[height<=?{q}][vcodec~='^vp0?9|^av01']+ba/bv*[height<=?{q}]+ba/best"
+            else:
+                ytdl_format = f"bv*[height<=?{q}]+ba/best"
         else:
             logging.warning(f"URL Analyzer Sanitization: Ignored invalid quality '{q}'")
 
@@ -165,7 +170,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                     '--flat-playlist',
                     '--print', '%(title)s|%(webpage_url)s'
                 ]
-                
+
                 if is_yt_ignore_config_enabled:
                     cmd.insert(1, '--ignore-config')
 
@@ -202,7 +207,8 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                             "headers": {"User-Agent": effective_user_agent},
                             "ytdl_raw_options": ",".join(ytdl_opts) if ytdl_opts else None,
                             "cookies_file": cookies_file,
-                            "mark_watched": is_mark_watched_enabled and is_yt_cookies_enabled
+                            "mark_watched": is_mark_watched_enabled and is_yt_cookies_enabled,
+                            "ytdl_format": ytdl_format
                         })
                 
                 if entries:
@@ -251,7 +257,8 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 "disable_http_persistent": True,
                 "cookies_file": cookies_file,
                 "original_url": url,
-                "mark_watched": is_mark_watched_enabled and is_yt_cookies_enabled
+                "mark_watched": is_mark_watched_enabled and is_yt_cookies_enabled,
+                "ytdl_format": ytdl_format
             }
         except Exception as e:
             logging.warning(f"YouTube cookie extraction failed: {e}. Falling back to original URL.")
@@ -260,7 +267,8 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 "url": url,
                 "headers": {"User-Agent": effective_user_agent},
                 "use_ytdl_mpv": True,
-                "is_youtube": True
+                "is_youtube": True,
+                "disable_http_persistent": True
             }
 
     # --- Case 3: Other URLs (External resolution as fallback) ---

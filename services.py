@@ -48,6 +48,19 @@ SAFE_MPV_FLAGS_ALLOWLIST = {
     '--fps',
     '--deinterlace',
     '--hwdec',
+    '--scale',
+    '--cscale',
+    '--dscale',
+    '--dither-depth',
+    '--deband',
+    '--deband-iterations',
+    '--deband-threshold',
+    '--deband-range',
+    '--fbo-format',
+    '--profile',
+    '--video-sync',
+    '--interpolation',
+    '--tscale',
 
     # Audio
     '--volume',
@@ -130,6 +143,33 @@ def _get_ytdlp_version(path_to_exe, send_message_func):
         error_msg = f"Could not get yt-dlp version: {e}"
         logging.error(error_msg)
         send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
+        return None
+
+def _get_ffmpeg_version(path_to_exe, send_message_func):
+    """Runs 'ffmpeg -version' and returns the first line of output."""
+    try:
+        result = subprocess.run(
+            [path_to_exe, '-version'],
+            capture_output=True, text=True, check=True, timeout=10,
+            encoding='utf-8', errors='ignore'
+        )
+        first_line = result.stdout.splitlines()[0] if result.stdout else "Unknown version"
+        return first_line
+    except Exception as e:
+        logging.error(f"Could not get FFmpeg version: {e}")
+        return None
+
+def _get_node_version(path_to_exe):
+    """Runs 'node -v' and returns the output."""
+    try:
+        result = subprocess.run(
+            [path_to_exe, '-v'],
+            capture_output=True, text=True, check=True, timeout=10,
+            encoding='utf-8', errors='ignore'
+        )
+        return result.stdout.strip()
+    except Exception as e:
+        logging.error(f"Could not get Node.js version: {e}")
         return None
 
 def _get_linux_sudo_command_prefix(ytdlp_path, send_message_func):
@@ -228,7 +268,7 @@ _DEPENDENCY_STATUS_CACHE = {
 CACHE_EXPIRY_SECONDS = 300 # 5 minutes
 
 def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force_refresh=False):
-    """Checks for the presence and version of mpv and yt-dlp executables. Results are cached."""
+    """Checks for the presence and version of mpv, yt-dlp, and ffmpeg executables. Results are cached."""
     global _DEPENDENCY_STATUS_CACHE
     
     now = time.time()
@@ -238,8 +278,11 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
 
     mpv_status = {"found": False, "path": None, "error": None}
     ytdlp_status = {"found": False, "path": None, "version": None, "error": None}
+    ffmpeg_status = {"found": False, "path": None, "version": None, "error": None}
+    node_status = {"found": False, "path": None, "version": None, "error": None}
     system = platform.system()
 
+    # MPV Check
     mpv_exe_name = "mpv.exe" if system == "Windows" else "mpv"
     mpv_path = get_mpv_executable_func()
     
@@ -253,9 +296,8 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
             mpv_status["path"] = found_mpv_in_path
         else:
             mpv_status["error"] = f"'{mpv_exe_name}' not found in system PATH."
-            if system == "Windows" and mpv_path != mpv_exe_name:
-                mpv_status["error"] += f" Also not found at configured path: '{mpv_path}'."
 
+    # yt-dlp Check
     ytdlp_exe_name = "yt-dlp.exe" if system == "Windows" else "yt-dlp"
     ytdlp_path = shutil.which(ytdlp_exe_name)
 
@@ -270,9 +312,77 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
     else:
         ytdlp_status["error"] = f"'{ytdlp_exe_name}' not found in system PATH."
 
-    logging.info(f"Dependency check: MPV={mpv_status['found']}, YTDLP={ytdlp_status['found']}")
+    # ffmpeg Check (Critical for >1080p)
+    ffmpeg_exe_name = "ffmpeg.exe" if system == "Windows" else "ffmpeg"
     
-    result = {"success": True, "mpv": mpv_status, "ytdlp": ytdlp_status}
+    # 1. Try Configured Path
+    config = file_io._safe_json_load(file_io.CONFIG_FILE)
+    ffmpeg_path = config.get("ffmpeg_path")
+    
+    if ffmpeg_path and not (os.path.exists(ffmpeg_path) and os.access(ffmpeg_path, os.X_OK)):
+        ffmpeg_path = None # Invalid, reset to trigger search
+
+    # 2. Aggressive Search Fallback
+    if not ffmpeg_path:
+        ffmpeg_path = shutil.which(ffmpeg_exe_name)
+        
+        if not ffmpeg_path:
+            search_dirs = []
+            if system == "Linux":
+                search_dirs.extend([
+                    "/usr/bin", "/usr/local/bin", "/usr/bin/ffmpeg-static",
+                    os.path.expanduser("~/.local/bin"),
+                    os.path.expanduser("~/bin")
+                ])
+            
+            if mpv_status["found"] and os.path.isabs(mpv_status["path"]):
+                search_dirs.append(os.path.dirname(mpv_status["path"]))
+
+            for d in search_dirs:
+                p = os.path.join(d, ffmpeg_exe_name)
+                if os.path.exists(p) and os.access(p, os.X_OK):
+                    ffmpeg_path = p
+                    break
+        
+        # 3. Shell Fallback
+        if not ffmpeg_path and system == "Linux":
+            for cmd in [["which", "ffmpeg"], ["sh", "-c", "command -v ffmpeg"]]:
+                try:
+                    res = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+                    if res and os.path.exists(res):
+                        ffmpeg_path = res
+                        break
+                except: pass
+
+    if ffmpeg_path:
+        ffmpeg_status["found"] = True
+        ffmpeg_status["path"] = ffmpeg_path
+        # Auto-update config if this is a new discovery
+        if ffmpeg_path != config.get("ffmpeg_path"):
+            file_io.set_settings({"ffmpeg_path": ffmpeg_path})
+            logging.info(f"Self-Healing: Updated FFmpeg path to {ffmpeg_path}")
+            
+        ffmpeg_ver = _get_ffmpeg_version(ffmpeg_path, send_message_func)
+        if ffmpeg_ver:
+            ffmpeg_status["version"] = ffmpeg_ver
+    else:
+        ffmpeg_status["error"] = "Not found. Required for 1440p/4K resolution."
+
+    # Node.js Check (Critical for YouTube n-challenge/1440p+)
+    node_exe_name = "node.exe" if system == "Windows" else "node"
+    node_path = shutil.which(node_exe_name)
+    if node_path:
+        node_status["found"] = True
+        node_status["path"] = node_path
+        node_ver = _get_node_version(node_path)
+        if node_ver:
+            node_status["version"] = node_ver
+    else:
+        node_status["error"] = "Not found. Highly recommended for 1440p+ YouTube playback."
+
+    logging.info(f"Dependency check: MPV={mpv_status['found']}, YTDLP={ytdlp_status['found']}, FFMPEG={ffmpeg_status['found']}, NODE={node_status['found']}")
+    
+    result = {"success": True, "mpv": mpv_status, "ytdlp": ytdlp_status, "ffmpeg": ffmpeg_status, "node": node_status}
     
     # Update cache
     _DEPENDENCY_STATUS_CACHE["data"] = result
@@ -313,6 +423,50 @@ class MpvCommandBuilder:
             decoder = settings.get('mpv_decoder', 'auto')
             if decoder:
                 self.mpv_args.append(f"--hwdec={decoder}")
+
+            # Apply Performance Profile
+            profile = settings.get('performance_profile', 'default')
+            if profile == 'low':
+                self.mpv_args.append("--profile=fast")
+            elif profile == 'medium':
+                # Balanced quality: Spline36 is a good middle ground scaler
+                self.mpv_args.append("--scale=spline36")
+                self.mpv_args.append("--cscale=spline36")
+                self.mpv_args.append("--vo=gpu")
+            elif profile == 'high':
+                self.mpv_args.append("--profile=gpu-hq")
+            elif profile == 'ultra':
+                # Enthusiast settings: Max quality scaling + Smooth Motion + High Precision
+                self.mpv_args.append("--profile=gpu-hq")
+                
+                # Granular toggles for Ultra features (default to True)
+                if settings.get('ultra_scalers', True):
+                    self.mpv_args.append("--scale=ewa_lanczossharp")
+                    self.mpv_args.append("--cscale=ewa_lanczossharp")
+                
+                if settings.get('ultra_video_sync', True):
+                    self.mpv_args.append("--video-sync=display-resample")
+
+                # Handle Interpolation Mode (String or Boolean legacy)
+                interp_mode = settings.get('ultra_interpolation', 'oversample')
+                
+                # Backwards compatibility: convert booleans to defaults
+                if interp_mode is True: interp_mode = 'oversample'
+                if interp_mode is False: interp_mode = 'off'
+
+                if interp_mode and interp_mode != 'off':
+                    self.mpv_args.append("--interpolation=yes")
+                    self.mpv_args.append(f"--tscale={interp_mode}")
+                
+                if settings.get('ultra_deband', True):
+                    self.mpv_args.append("--deband=yes")
+                    self.mpv_args.append("--deband-iterations=4")
+                    self.mpv_args.append("--deband-threshold=48")
+                    self.mpv_args.append("--deband-range=24")
+                
+                if settings.get('ultra_fbo', True):
+                    self.mpv_args.append("--fbo-format=rgba16f") # High bit-depth processing
+            # 'default' sends no flags, letting mpv.conf take over
             
         self.has_terminal_flag = False
         self.is_forced_terminal = False
@@ -361,6 +515,14 @@ class MpvCommandBuilder:
             if os.path.exists(lua_script_path):
                 self.mpv_args.append(f'--script={lua_script_path}')
                 logging.info(f"MPV will load thumbnailer fix script: {lua_script_path}")
+        return self
+
+    def with_reanimator_script(self, script_dir):
+        if script_dir:
+            lua_script_path = os.path.join(script_dir, "mpv_scripts", "stream_reanimator.lua")
+            if os.path.exists(lua_script_path):
+                self.mpv_args.append(f'--script={lua_script_path}')
+                logging.info(f"MPV will load stream reanimator script: {lua_script_path}")
         return self
 
     def with_title(self, title):
@@ -516,53 +678,84 @@ class MpvCommandBuilder:
         return self
     
     def with_youtube_options(self, original_is_youtube, ytdl_raw_options):
-        # The use_ytdl_mpv and is_youtube_override flags are now set directly in the constructor
-        # from the result of url_analyzer, so we use those directly.
-        # ONLY enable ytdl if we actually want MPV to do the resolution.
+        # Determine format for both flows
+        ytdl_format = None
+        q = None
+        if self.settings and self.settings.get('ytdl_quality'):
+            q = str(self.settings['ytdl_quality'])
+            
+        logging.info(f"MpvCommandBuilder: Determined ytdl_quality is '{q}'")
+
+        # Global stability and responsiveness for all streaming content
+        self.mpv_args.append("--force-seekable=yes")
+        self.mpv_args.append("--demuxer-thread=yes")
+        self.mpv_args.append("--cache-pause-initial=no")
+
+        if q and q != 'best':
+            if q in ['2160', '1440', '1080', '720', '480']:
+                # For resolutions > 1080p, we MUST prefer VP9/AV1 as H264 stops at 1080p.
+                if int(q) > 1080:
+                    ytdl_format = f"bv*[height<=?{q}][vcodec~='^vp0?9|^av01']+ba/bv*[height<=?{q}]+ba/best"
+                else:
+                    ytdl_format = f"bv*[height<=?{q}]+ba/best"
+        else:
+            # Absolute best merged stream
+            ytdl_format = "bv*+ba/best"
+        
+        logging.info(f"MpvCommandBuilder: Final ytdl_format string: '{ytdl_format}'")
+
+        # --- Centralized Flag Collection ---
+        essential_flags = "ignore-config=,remote-components=ejs:github,js-runtimes=node"
+        config = file_io._safe_json_load(file_io.CONFIG_FILE)
+        
+        ffmpeg_path = config.get("ffmpeg_path")
+        if ffmpeg_path and os.path.exists(ffmpeg_path):
+            essential_flags = f"{essential_flags},ffmpeg-location={ffmpeg_path}"
+            
+        node_path = config.get("node_path")
+        if node_path and os.path.exists(node_path):
+            # yt-dlp uses --javascript-delay but for the runtime path it looks at PATH
+            # or we can sometimes specify it. 
+            # Actually, yt-dlp doesn't have a direct 'node-location' flag in ytdl-raw-options 
+            # that is standard, but some versions/forks might.
+            # The most reliable way is to ensure it's in PATH, which native_host.py does.
+            # HOWEVER, we can also try to pass it if we use a specific yt-dlp wrapper.
+            # For now, let's stick to the PATH injection in native_host.py but 
+            # let's also ensure we don't have any conflicting 'no-check-certificate' or similar
+            # that might be causing issues.
+            pass
+
         if self.use_ytdl_mpv:
             self.mpv_args.append('--ytdl=yes')
-
-            # Apply quality/resolution limit if configured
-            if self.settings and self.settings.get('ytdl_quality') and self.settings['ytdl_quality'] != 'best':
-                q = str(self.settings['ytdl_quality'])
-                # Strict whitelist validation before command construction
-                if q in ['2160', '1440', '1080', '720', '480']:
-                    # Standard yt-dlp format string for limiting height
-                    ytdl_format = f"bestvideo[height<={q}]+bestaudio/best[height<={q}]"
-                    self.mpv_args.append(f"--ytdl-format={ytdl_format}")
-                else:
-                    logging.warning(f"Sanitization: Blocked invalid quality setting: {q}")
+            if ytdl_format:
+                self.mpv_args.append(f"--ytdl-format={ytdl_format}")
 
             raw_opts = ytdl_raw_options or self.ytdl_raw_options_from_bypass or ""
             
-            # Sanitize user/script provided options
-            raw_opts = file_io.sanitize_ytdlp_options(raw_opts)
-            
-            # Add concurrent fragments if specified in settings
             if self.settings and self.settings.get('ytdlp_concurrent_fragments', 1) > 1:
                 frag_opt = f"concurrent-fragments={self.settings['ytdlp_concurrent_fragments']}"
-                if raw_opts:
-                    raw_opts = f"{raw_opts} {frag_opt}"
-                else:
-                    raw_opts = frag_opt
+                raw_opts = f"{raw_opts},{frag_opt}" if raw_opts else frag_opt
             
-            if raw_opts:
-                self.mpv_args.append(f'--ytdl-raw-options={raw_opts}')
-        # Original is_youtube flag is only used if not overridden by url_analyzer result
+            # Merge with essential flags
+            final_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
+            if final_raw_opts:
+                self.mpv_args.append(f'--ytdl-raw-options={final_raw_opts}')
+
         elif original_is_youtube and not self.is_youtube_override:
-            # This is for the case where analyzer didn't run or didn't override
             self.mpv_args.append('--ytdl=yes')
+            if ytdl_format:
+                self.mpv_args.append(f"--ytdl-format={ytdl_format}")
             
             raw_opts = ytdl_raw_options or ""
+
             if self.settings and self.settings.get('ytdlp_concurrent_fragments', 1) > 1:
                 frag_opt = f"concurrent-fragments={self.settings['ytdlp_concurrent_fragments']}"
-                if raw_opts:
-                    raw_opts = f"{raw_opts} {frag_opt}"
-                else:
-                    raw_opts = frag_opt
+                raw_opts = f"{raw_opts},{frag_opt}" if raw_opts else frag_opt
 
-            if raw_opts:
-                self.mpv_args.append(f'--ytdl-raw-options={raw_opts}')
+            # Merge with essential flags
+            final_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
+            if final_raw_opts:
+                self.mpv_args.append(f'--ytdl-raw-options={final_raw_opts}')
         return self
 
     def build(self):
@@ -728,7 +921,7 @@ def get_mpv_popen_kwargs(has_terminal_flag):
 
 # --- Bypass Script Logic ---
 
-def apply_bypass_script(url_item, send_message_func):
+def apply_bypass_script(url_item, send_message_func, settings=None):
     """
     Applies URL analysis logic if enabled in settings.
     Returns a tuple of (processed_url, headers_dict, ytdl_raw_options, use_ytdl_mpv_flag, is_youtube_flag).
@@ -738,8 +931,10 @@ def apply_bypass_script(url_item, send_message_func):
 
     original_url = sanitize_url(url_item['url'])
     
-    # Load URL analysis settings from config
-    settings = file_io.get_settings()
+    # Use provided settings or load from config
+    if settings is None:
+        settings = file_io.get_settings()
+    
     enable_url_analysis = settings.get("enable_url_analysis", False)
     browser_for_analysis = settings.get("browser_for_url_analysis", "chrome")
     enable_youtube_analysis = settings.get("enable_youtube_analysis", False)
@@ -748,7 +943,7 @@ def apply_bypass_script(url_item, send_message_func):
 
     # The default fallback return values
     is_youtube = "youtube.com/" in original_url or "youtu.be/" in original_url
-    default_return_tuple = (original_url, None, None, False, is_youtube, None, False, None, False)
+    default_return_tuple = (original_url, None, None, False, is_youtube, None, False, None, False, None)
 
     if not enable_url_analysis:
         return default_return_tuple
@@ -797,13 +992,14 @@ def apply_bypass_script(url_item, send_message_func):
         disable_http_persistent = result.get("disable_http_persistent", False)
         cookies_file = result.get("cookies_file")
         mark_watched = result.get("mark_watched", False)
+        ytdl_format_result = result.get("ytdl_format")
 
-        return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script, entries, disable_http_persistent, cookies_file, mark_watched)
+        return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script, entries, disable_http_persistent, cookies_file, mark_watched, ytdl_format_result)
 
     except Exception as e:
         logging.error(f"Error during URL analysis: {e}")
         send_message_func({"action": "log_from_native_host", "log": {"text": f"URL analysis failed with exception: {e}. Playing original URL.", "type": "error"}})
-        return (original_url, None, None, False, is_youtube, None, False, None, False) # Return 9-tuple here too
+        return (original_url, None, None, False, is_youtube, None, False, None, False, None) # Return 10-tuple here too
 # --- AniList Service ---
 
 # Global variable to track the last time a "cache is fresh" message was sent to the UI

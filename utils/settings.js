@@ -67,8 +67,16 @@ class OptionsManager {
             { key: 'ytdlp_concurrent_fragments', elementId: 'ytdlp-concurrent-fragments-input', type: 'input', transform: Number },
             { key: 'enable_reconnect', elementId: 'enable-reconnect-checkbox', type: 'checkbox' },
             { key: 'reconnect_delay', elementId: 'reconnect-delay-input', type: 'input', transform: Number },
+            { key: 'performance_profile', elementId: 'performance-profile-select', type: 'select' },
+            { key: 'ffmpeg_path', elementId: 'ffmpeg-path-input', type: 'input' },
+            { key: 'node_path', elementId: 'node-path-input', type: 'input' },
             { key: 'popup_width', elementId: 'popup-width-slider', type: 'slider', transform: Number },
-            { key: 'popup_width_locked', elementId: 'btn-lock-popup-width', type: 'custom' }
+            { key: 'popup_width_locked', elementId: 'btn-lock-popup-width', type: 'custom' },
+            { key: 'ultra_scalers', elementId: 'ultra-scalers-checkbox', type: 'checkbox' },
+            { key: 'ultra_video_sync', elementId: 'ultra-video-sync-checkbox', type: 'checkbox' },
+            { key: 'ultra_interpolation', elementId: 'ultra-interpolation-select', type: 'select' },
+            { key: 'ultra_deband', elementId: 'ultra-deband-checkbox', type: 'checkbox' },
+            { key: 'ultra_fbo', elementId: 'ultra-fbo-checkbox', type: 'checkbox' }
         ];
 
         this.debouncedSaveAllPreferences = this._debounce(this.saveAllPreferences.bind(this), 400);
@@ -88,6 +96,18 @@ class OptionsManager {
 
     updateAllPreferencesUI(prefs) {
         const isCustom = prefs.launch_geometry === 'custom';
+        const isUltra = prefs.performance_profile === 'ultra';
+        document.getElementById('ultra-options-container').style.display = isUltra ? 'block' : 'none';
+
+        // --- Update Ultra Interp dependency state ---
+        const videoSyncCheckbox = document.getElementById('ultra-video-sync-checkbox');
+        const interpSelect = document.getElementById('ultra-interpolation-select');
+        if (videoSyncCheckbox && interpSelect) {
+            // We rely on the checked state which was just set by the loop above
+            const isSyncEnabled = videoSyncCheckbox.checked; 
+            interpSelect.disabled = !isSyncEnabled;
+            interpSelect.parentElement.style.opacity = isSyncEnabled ? '1' : '0.5';
+        }
 
         this.preferenceMappings.forEach(mapping => {
             const el = document.getElementById(mapping.elementId);
@@ -156,6 +176,8 @@ class OptionsManager {
 
         const mpvEl = document.querySelector('#diag-mpv-status .dependency-value');
         const ytdlpEl = document.querySelector('#diag-ytdlp-status .dependency-value');
+        const ffmpegEl = document.querySelector('#diag-ffmpeg-status .dependency-value');
+        const nodeEl = document.querySelector('#diag-node-status .dependency-value');
 
         if (mpvEl) {
             if (status.mpv?.found) {
@@ -174,6 +196,26 @@ class OptionsManager {
             } else {
                 ytdlpEl.textContent = status.ytdlp?.error || 'Not Found';
                 ytdlpEl.style.color = 'var(--text-error)';
+            }
+        }
+
+        if (ffmpegEl) {
+            if (status.ffmpeg?.found) {
+                ffmpegEl.textContent = `${status.ffmpeg.version || 'Found'} at ${status.ffmpeg.path}`;
+                ffmpegEl.style.color = 'var(--accent-primary)';
+            } else {
+                ffmpegEl.textContent = status.ffmpeg?.error || 'Not Found';
+                ffmpegEl.style.color = 'var(--text-error)';
+            }
+        }
+
+        if (nodeEl) {
+            if (status.node?.found) {
+                nodeEl.textContent = `${status.node.version || 'Found'} at ${status.node.path}`;
+                nodeEl.style.color = 'var(--accent-primary)';
+            } else {
+                nodeEl.textContent = status.node?.error || 'Not Found';
+                nodeEl.style.color = 'var(--text-secondary)'; // Use secondary color for non-critical dependency
             }
         }
     }
@@ -447,10 +489,32 @@ class OptionsManager {
                         }
                     });
                 }
+
+                // Extra logic for Ultra Interpolation dependency
+                if (mapping.elementId === 'ultra-video-sync-checkbox') {
+                    control.addEventListener('change', () => {
+                        const interpSelect = document.getElementById('ultra-interpolation-select');
+                        if (interpSelect) {
+                            interpSelect.disabled = !control.checked;
+                            interpSelect.parentElement.style.opacity = control.checked ? '1' : '0.5';
+                        }
+                    });
+                }
             }
         });
 
         // --- Special-cased Listeners ---
+        const performanceProfileSelect = document.getElementById('performance-profile-select');
+        if (performanceProfileSelect) {
+            performanceProfileSelect.addEventListener('change', () => {
+                document.getElementById('ultra-options-container').style.display = 
+                    performanceProfileSelect.value === 'ultra' ? 'block' : 'none';
+                // Trigger save because this specific listener doesn't use the generic loop above (or relies on it)
+                // Actually, the generic loop adds a 'change' listener to EVERYTHING in mappings.
+                // But since we want immediate UI feedback before the debounce save, we add this.
+            });
+        }
+
         const geometrySelect = document.getElementById('geometry-select');
         if (geometrySelect) {
             geometrySelect.addEventListener('change', () => {

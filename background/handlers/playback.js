@@ -53,7 +53,8 @@ class PlaybackSession {
             ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
             enable_reconnect: globalPrefs.enable_reconnect ?? true,
             reconnect_delay: globalPrefs.reconnect_delay || 4,
-            mpv_decoder: globalPrefs.mpv_decoder || 'auto'
+            mpv_decoder: globalPrefs.mpv_decoder || 'auto',
+            ytdl_quality: globalPrefs.ytdl_quality || 'best'
         });
     }
 
@@ -390,7 +391,8 @@ export async function handlePlay(request) {
             ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
             enable_reconnect: globalPrefs.enable_reconnect ?? true,
             reconnect_delay: globalPrefs.reconnect_delay || 4,
-            mpv_decoder: globalPrefs.mpv_decoder || 'auto'
+            mpv_decoder: globalPrefs.mpv_decoder || 'auto',
+            ytdl_quality: globalPrefs.ytdl_quality || 'best'
         };
 
         if (play_new_instance) {
@@ -490,12 +492,12 @@ export async function handlePlayM3U(request) {
         demuxer_readahead_secs: globalPrefs.demuxer_readahead_secs || 500,
         stream_buffer_size: globalPrefs.stream_buffer_size || '10M',
         ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
-        enable_reconnect: globalPrefs.enable_reconnect ?? true,
-        reconnect_delay: globalPrefs.reconnect_delay || 4,
-        mpv_decoder: globalPrefs.mpv_decoder || 'auto'
-    };
-
-    if (play_new_instance && m3u_data.type === 'items') {
+                    enable_reconnect: globalPrefs.enable_reconnect ?? true,
+                    reconnect_delay: globalPrefs.reconnect_delay || 4,
+                    mpv_decoder: globalPrefs.mpv_decoder || 'auto',
+                    ytdl_quality: globalPrefs.ytdl_quality || 'best'
+                };
+            if (play_new_instance && m3u_data.type === 'items') {
         nativePayload.playlist = m3u_data.value.map(item => item.url);
     }
 
@@ -532,7 +534,7 @@ export async function handlePlayM3U(request) {
  */
 export async function handleUpdateLastPlayed(data) {
     const { folderId, itemId } = data;
-    if (!folderId || !itemId) return;
+    if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
     _broadcastLog({ text: `[Background]: Tracker reported last_played_id update for folder '${folderId}': ${itemId}`, type: 'info' });
     
@@ -557,7 +559,7 @@ export async function handleUpdateLastPlayed(data) {
  */
 export async function handleUpdateItemResumeTime(data) {
     const { folderId, itemId, resumeTime } = data;
-    if (!folderId || !itemId) return;
+    if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
     const storageData = await _storage.get();
     if (storageData.folders[folderId]) {

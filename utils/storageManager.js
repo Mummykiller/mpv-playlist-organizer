@@ -123,6 +123,9 @@ export class StorageManager {
                         ytdlp_concurrent_fragments: 4,
                         enable_reconnect: true,
                         reconnect_delay: 4,
+                        performance_profile: 'default',
+                        ffmpeg_path: '',
+                        node_path: '',
                         // Keybindings
                         kb_add_playlist: 'Shift+A',
                         kb_play_playlist: 'Shift+P',
@@ -131,7 +134,9 @@ export class StorageManager {
                         kb_open_popup: 'Alt+P',
                         dependencyStatus: {
                             mpv: { found: null, path: null, error: null },
-                            ytdlp: { found: null, path: null, version: null, error: null }
+                            ytdlp: { found: null, path: null, version: null, error: null },
+                            ffmpeg: { found: null, path: null, version: null, error: null },
+                            node: { found: null, path: null, version: null, error: null }
                         },
                         // Define default bypass scripts. The native host will handle execution.
                         // These scripts will be used automatically if detected and matched.
@@ -220,9 +225,26 @@ export class StorageManager {
             const defaultGlobalPrefs = this._getDefaultData().settings.ui_preferences.global;
             storedValue.settings.ui_preferences.global = { ...defaultGlobalPrefs, ...globalPrefs };
 
+            // Ensure dependencyStatus has all required keys
             if (!storedValue.settings.ui_preferences.global.dependencyStatus) {
-                storedValue.settings.ui_preferences.global.dependencyStatus = this._getDefaultData().settings.ui_preferences.global.dependencyStatus;
+                storedValue.settings.ui_preferences.global.dependencyStatus = defaultGlobalPrefs.dependencyStatus;
                 needsUpdate = true;
+            } else {
+                const currentStatus = storedValue.settings.ui_preferences.global.dependencyStatus;
+                const defaultStatus = defaultGlobalPrefs.dependencyStatus;
+                let statusModified = false;
+                
+                for (const key in defaultStatus) {
+                    if (!currentStatus[key]) {
+                        currentStatus[key] = defaultStatus[key];
+                        statusModified = true;
+                    }
+                }
+                
+                if (statusModified) {
+                    storedValue.settings.ui_preferences.global.dependencyStatus = currentStatus;
+                    needsUpdate = true;
+                }
             }
 
             // Migration: Ensure all playlist items have a 'settings' object and a unique 'id'.

@@ -614,6 +614,7 @@ button:disabled {
 /* --- Generic Modals (Export, Import, Rename) --- */
 #export-filename-modal,
 #import-selection-modal,
+#export-all-modal,
 #rename-folder-modal {
     position: fixed; /* Cover the entire popup viewport */
     top: 0;
@@ -631,6 +632,7 @@ button:disabled {
 
 #export-filename-modal .modal-content,
 #import-selection-modal .modal-content,
+#export-all-modal .modal-content,
 #rename-folder-modal .modal-content {
     background-color: var(--bg-secondary);
     padding: 20px;
@@ -646,6 +648,7 @@ button:disabled {
 
 #export-filename-modal .modal-content p,
 #import-selection-modal .modal-content p,
+#export-all-modal .modal-content p,
 #rename-folder-modal .modal-content p {
     margin: 0;
     font-size: 14px;
@@ -655,6 +658,7 @@ button:disabled {
 
 #export-filename-modal .modal-actions,
 #import-selection-modal .modal-actions,
+#export-all-modal .modal-actions,
 #rename-folder-modal .modal-actions {
     display: flex;
     justify-content: center;
@@ -663,21 +667,25 @@ button:disabled {
 
 #export-filename-modal #export-save-btn,
 #import-selection-modal #import-confirm-btn,
+#export-all-modal #export-all-confirm-btn,
 #rename-folder-modal #rename-save-btn {
     background-color: var(--accent-primary);
 }
 #export-filename-modal #export-save-btn:hover,
 #import-selection-modal #import-confirm-btn:hover,
+#export-all-modal #export-all-confirm-btn:hover,
 #rename-folder-modal #rename-save-btn:hover {
     background-color: var(--accent-primary-hover);
 }
 #export-filename-modal #export-cancel-btn,
 #import-selection-modal #import-cancel-btn,
+#export-all-modal #export-all-cancel-btn,
 #rename-folder-modal #rename-cancel-btn {
     background-color: var(--bg-tertiary);
 }
 #export-filename-modal #export-cancel-btn:hover,
 #import-selection-modal #import-cancel-btn:hover,
+#export-all-modal #export-all-cancel-btn:hover,
 #rename-folder-modal #rename-cancel-btn:hover {
     background-color: #44484e; /* Slightly darker tertiary */
 }
@@ -1359,4 +1367,47 @@ button:disabled {
 .playlist-container .list-item .btn-remove-item:hover {
     color: var(--text-primary);
     background-color: var(--accent-danger);
+}
+
+.import-options-container {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-top: 1px solid var(--border-color);
+    padding-top: 10px;
+    width: 100%;
+}
+
+.import-options-container .settings-label {
+    margin: 0 !important;
+    padding: 4px 0 !important;
+    font-size: 14px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important; /* CENTER THE TEXT */
+    font-weight: 500;
+    cursor: pointer;
+    width: 100% !important;
+    position: relative !important; /* ALLOW ABSOLUTE CHECKBOX */
+    flex: none !important;
+    color: var(--text-primary) !important;
+}
+
+.import-options-container input[type="checkbox"] {
+    position: absolute !important;
+    left: 20% !important; /* CHECKBOX AT 35% */
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 15px !important;
+    height: 15px !important;
+    flex-grow: 0 !important;
+    cursor: pointer;
+}
+
+.import-options-container p {
+    margin: 0 0 4px 0 !important;
+    font-size: 0.85em;
+    color: var(--text-secondary);
+    text-align: center !important; /* CENTER THE HEADER */
 }

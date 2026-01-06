@@ -33,9 +33,47 @@
         <div class="modal-content">
             <p>Enter a name for the export file (.json):</p>
             <input type="text" id="export-filename-input" placeholder="e.g., my_backup">
-            <div class="modal-actions">
+            
+            <div class="import-options-container">
+                <p>Include in Export:</p>
+                <label class="settings-label">
+                    <input type="checkbox" id="export-opt-title" checked> Custom Titles
+                </label>
+                <label class="settings-label">
+                    <input type="checkbox" id="export-opt-lastplayed" checked> Last Played Position
+                </label>
+            </div>
+
+            <div class="modal-actions" style="margin-top: 20px;">
                 <button id="export-save-btn">Save</button>
                 <button id="export-cancel-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Export All Options Modal -->
+    <div id="export-all-modal" style="display: none;">
+        <div class="modal-content" style="max-height: 90vh; overflow-y: auto;">
+            <p>Export all folders to separate files?</p>
+            
+            <div id="export-all-folder-list" style="margin-top: 12px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border-color); padding-top: 10px; text-align: left;">
+                <p style="margin: 0 0 4px 0; font-size: 0.9em; color: var(--text-secondary);">Custom Filenames (Optional):</p>
+                <!-- Folder items will be injected here by popup.js -->
+            </div>
+
+            <div class="import-options-container">
+                <p>Include in Exports:</p>
+                <label class="settings-label">
+                    <input type="checkbox" id="export-all-opt-title" checked> Custom Titles
+                </label>
+                <label class="settings-label">
+                    <input type="checkbox" id="export-all-opt-lastplayed" checked> Last Played Position
+                </label>
+            </div>
+
+            <div class="modal-actions" style="margin-top: 20px;">
+                <button id="export-all-confirm-btn">Export All</button>
+                <button id="export-all-cancel-btn">Cancel</button>
             </div>
         </div>
     </div>
@@ -45,7 +83,8 @@
         <div class="modal-content">
             <p>Select a backup file to import:</p>
             <select id="import-file-select"></select>
-            <div class="modal-actions">
+            
+            <div class="modal-actions" style="margin-top: 20px;">
                 <button id="import-confirm-btn">Import</button>
                 <button id="import-cancel-btn">Cancel</button>
             </div>
@@ -108,8 +147,8 @@
                 <button id="btn-mini-remove-folder">Remove</button>
             </div>
             <div class="control-group" style="margin-top: 8px;">
-                <button id="btn-mini-export-data" class="secondary-action btn-export" title="Export the currently selected playlist">Export Selected</button>
-                <button id="btn-mini-export-all" title="Export all playlists to separate files" class="secondary-action btn-export">Export All</button>
+                <button id="btn-mini-export-data" class="secondary-action btn-export" title="Export the currently selected playlist">Export Selected Playlist</button>
+                <button id="btn-mini-export-all" title="Export all playlists to separate files" class="secondary-action btn-export">Export All Playlists</button>
                 <button id="btn-mini-import-data" class="secondary-action btn-import">Import</button>
             </div>
             <div class="control-group" style="margin-top: 8px;">
@@ -146,8 +185,8 @@
             <hr>
         </div>
         <div class="control-group" style="margin-top: 12px;">
-            <button id="btn-export-data" class="secondary-action btn-export" title="Export the currently selected playlist">Export Selected</button>
-            <button id="btn-export-all" title="Export all playlists to separate files" class="secondary-action btn-export">Export All</button>
+            <button id="btn-export-data" class="secondary-action btn-export" title="Export the currently selected playlist">Export Selected Playlist</button>
+            <button id="btn-export-all" title="Export all playlists to separate files" class="secondary-action btn-export">Export All Playlists</button>
             <button id="btn-import-data" class="secondary-action btn-import">Import</button>
         </div>
         <div class="control-group" style="margin-top: 8px;">
@@ -271,9 +310,9 @@
                     </div>
 
                     <div class="control-group stacked-control" data-setting-name="mpv hardware decoder hwdec">
-                        <label for="mpv-decoder-select" class="settings-label">Hardware Decoder <span class="help-icon" title="Select the hardware video decoder. 'Auto' is usually safe.">?</span>:</label>
+                        <label for="mpv-decoder-select" class="settings-label">Hardware Decoder <span class="help-icon" title="Select the hardware video decoder. 'Auto' is recommended and typically uses Vulkan on recent MPV versions.">?</span>:</label>
                         <select id="mpv-decoder-select">
-                            <option value="auto">Auto</option>
+                            <option value="auto">Auto (Recent MPV uses Vulkan)</option>
                             <option value="no">Disabled (Software Only)</option>
                             <optgroup label="Linux">
                                 <option value="vaapi">VA-API (Intel/AMD)</option>
@@ -537,6 +576,53 @@
                         <label for="disable-network-overrides-checkbox" class="settings-label" style="font-weight: bold; color: var(--accent-primary);">Use MPV Defaults <span class="help-icon" title="If checked, the extension will NOT apply any of the performance tweaks below, letting MPV handle buffering its own way.">?</span>:</label>
                         <input type="checkbox" id="disable-network-overrides-checkbox" class="settings-checkbox">
                     </div>
+                    <div class="control-group stacked-control" data-setting-name="performance usage quality profile">
+                        <label for="performance-profile-select" class="settings-label">Performance Profile <span class="help-icon" title="Choose a preset that matches your system power. 'High' improves quality but uses more GPU. 'Low' saves battery. 'Default' uses your own mpv.conf.">?</span>:</label>
+                        <select id="performance-profile-select">
+                            <option value="default">System Default (Use mpv.conf)</option>
+                            <option value="low">Low (Fast / Battery Saver)</option>
+                            <option value="medium">Medium (Balanced Quality)</option>
+                            <option value="high">High (Maximum Quality)</option>
+                            <option value="ultra">Ultra (Extreme Quality / GPU Heavy)</option>
+                        </select>
+                    </div>
+                    <div id="ultra-options-container" class="settings-section-content" style="border-top: none; padding-top: 0; padding-bottom: 0; display: none;">
+                        <hr class="settings-compact-separator">
+                        <div class="control-group" data-setting-name="ultra scalers lanczos">
+                            <label for="ultra-scalers-checkbox" class="settings-label">High-End Scalers <span class="help-icon" title="Use ewa_lanczossharp (Jinc) for sharper upscaling. Requires good GPU.">?</span>:</label>
+                            <input type="checkbox" id="ultra-scalers-checkbox" class="settings-checkbox">
+                        </div>
+                        <hr class="settings-compact-separator">
+                        <div class="control-group" data-setting-name="ultra video sync display">
+                            <label for="ultra-video-sync-checkbox" class="settings-label">Display Sync <span class="help-icon" title="Syncs video to display refresh rate (video-sync=display-resample). Fixes judder without altering frame rate.">?</span>:</label>
+                            <input type="checkbox" id="ultra-video-sync-checkbox" class="settings-checkbox">
+                        </div>
+                        <div class="control-group" data-setting-name="ultra motion interpolation">
+                            <label for="ultra-interpolation-select" class="settings-label">Frame Generation <span class="help-icon" title="Matches video frames to your refresh rate (e.g. 24fps -> 144Hz):
+• Oversample: Natural timing fix (No Soap Opera Effect).
+• Linear: Simple cross-fade. Fast but creates trails.
+• Mitchell: High-quality sharp blending (Smooth/Clear).
+• Gaussian: Maximum smoothness but soft/blurry motion.">?</span>:</label>
+                            <select id="ultra-interpolation-select" class="settings-select" style="width: 140px;">
+                                <option value="off">Off</option>
+                                <option value="oversample">Oversample (Standard Blend)</option>
+                                <option value="linear">Linear (Fast/Basic)</option>
+                                <option value="mitchell">Mitchell (Sharper/Clear)</option>
+                                <option value="gaussian">Gaussian (Soft/Smooth)</option>
+                            </select>
+                        </div>
+                        <hr class="settings-compact-separator">
+                        <div class="control-group" data-setting-name="ultra deband aggressive">
+                            <label for="ultra-deband-checkbox" class="settings-label">Aggressive Deband <span class="help-icon" title="Strongly removes color banding artifacts. Good for anime, but might lose some detail.">?</span>:</label>
+                            <input type="checkbox" id="ultra-deband-checkbox" class="settings-checkbox">
+                        </div>
+                        <hr class="settings-compact-separator">
+                        <div class="control-group" data-setting-name="ultra fbo high precision">
+                            <label for="ultra-fbo-checkbox" class="settings-label">16-bit Processing <span class="help-icon" title="Uses 16-bit floating point precision (rgba16f) for all video processing. Reduces rounding errors.">?</span>:</label>
+                            <input type="checkbox" id="ultra-fbo-checkbox" class="settings-checkbox">
+                        </div>
+                    </div>
+                    <hr class="settings-compact-separator">
                     <div class="control-group" data-setting-name="enable cache networking disk ram">
                         <label for="enable-cache-checkbox" class="settings-label">Enable Buffering <span class="help-icon" title="Recommended for slow connections. Enables MPV's disk/RAM cache to prevent stuttering.">?</span>:</label>
                         <input type="checkbox" id="enable-cache-checkbox" class="settings-checkbox">
@@ -704,7 +790,29 @@
                             <span class="dependency-label">yt-dlp:</span>
                             <span class="dependency-value">Checking...</span>
                         </div>
+                        <div class="dependency-item" id="diag-ffmpeg-status">
+                            <span class="dependency-label">FFmpeg:</span>
+                            <span class="dependency-value">Checking...</span>
+                        </div>
+                        <div class="dependency-item" id="diag-node-status">
+                            <span class="dependency-label">Node.js:</span>
+                            <span class="dependency-value">Checking...</span>
+                        </div>
                     </div>
+                    <div style="margin-top: 8px; font-size: 0.85em; color: var(--text-secondary); line-height: 1.4;">
+                        Note: Node.js and FFmpeg are highly recommended for stable 1440p+ YouTube playback.
+                    </div>
+                    
+                    <div class="control-group stacked-control setting-item" style="margin-top: 12px;" data-setting-name="custom ffmpeg path">
+                        <label for="ffmpeg-path-input" class="settings-label">Manual FFmpeg Path <span class="help-icon" title="Optional: If FFmpeg is marked as 'Not Found' above, paste its absolute path here (e.g. /usr/bin/ffmpeg).">?</span>:</label>
+                        <input type="text" id="ffmpeg-path-input" class="settings-input" placeholder="e.g. /usr/bin/ffmpeg">
+                    </div>
+
+                    <div class="control-group stacked-control setting-item" style="margin-top: 12px;" data-setting-name="custom node path">
+                        <label for="node-path-input" class="settings-label">Manual Node.js Path <span class="help-icon" title="Optional: If Node.js is marked as 'Not Found' above, paste its absolute path here (e.g. /usr/bin/node).">?</span>:</label>
+                        <input type="text" id="node-path-input" class="settings-input" placeholder="e.g. /usr/bin/node">
+                    </div>
+
                     <div class="control-group" style="margin-top: 12px;">
                         <button id="btn-force-refresh-dependencies" class="secondary-action" style="flex-grow: 1;">
                             Force Refresh Dependencies
@@ -712,6 +820,31 @@
                     </div>
                     <small style="color: var(--text-secondary); margin-top: 4px;">
                         Clears the 5-minute system cache and re-scans for executables.
+                    </small>
+                </div>
+            </details>
+
+            <!-- 8. Backup & Restore -->
+            <details class="settings-section" data-section-name="backup restore settings export import save load">
+                <summary class="settings-section-header">
+                    <span>Backup & Restore</span>
+                </summary>
+                <div class="settings-section-content">
+                    <div class="control-group">
+                        <button id="btn-export-settings" class="secondary-action btn-export" style="flex-grow: 1;">
+                            Export All Settings
+                        </button>
+                        <button id="btn-import-settings" class="secondary-action btn-import" style="flex-grow: 1;">
+                            Import Settings
+                        </button>
+                    </div>
+                    <div class="control-group" style="margin-top: 8px;">
+                        <button id="btn-open-export-folder-alt" class="secondary-action btn-open-folder" style="flex-grow: 1;" title="Open the 'exported' folder on your computer">
+                            Open Export Folder
+                        </button>
+                    </div>
+                    <small style="color: var(--text-secondary); margin-top: 4px;">
+                        Save or restore your preferences, keybinds, and custom MPV flags.
                     </small>
                 </div>
             </details>

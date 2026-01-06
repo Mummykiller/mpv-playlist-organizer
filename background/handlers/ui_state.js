@@ -188,23 +188,33 @@ export async function handleGetUiPreferences(request, sender) {
     const data = await _storage.get();
     let globalPrefs = { ...data.settings.ui_preferences.global };
 
-    // --- OPTIMIZED: Sync Hardware Decoder from Native Host with Caching ---
-    if (globalPrefs.mpv_decoder === 'auto' || !globalPrefs.mpv_decoder) {
-        const now = Date.now();
-        if (_nativeInfoCache.decoder && (now - _nativeInfoCache.timestamp < CACHE_TTL_MS)) {
-            globalPrefs.mpv_decoder = _nativeInfoCache.decoder;
-        } else {
-            try {
-                // Consolidation: Get everything we need in one call
-                const nativeSettings = await _callNativeHost({ action: 'get_ui_preferences' });
-                if (nativeSettings?.success && nativeSettings.preferences?.mpv_decoder) {
-                    globalPrefs.mpv_decoder = nativeSettings.preferences.mpv_decoder;
-                    _nativeInfoCache.decoder = nativeSettings.preferences.mpv_decoder;
-                    _nativeInfoCache.timestamp = now;
+    // --- OPTIMIZED: Sync Critical Paths from Native Host ---
+    const now = Date.now();
+    if (_nativeInfoCache.timestamp && (now - _nativeInfoCache.timestamp < CACHE_TTL_MS)) {
+        if (_nativeInfoCache.decoder) globalPrefs.mpv_decoder = _nativeInfoCache.decoder;
+        if (_nativeInfoCache.ffmpeg_path && !globalPrefs.ffmpeg_path) globalPrefs.ffmpeg_path = _nativeInfoCache.ffmpeg_path;
+        if (_nativeInfoCache.node_path && !globalPrefs.node_path) globalPrefs.node_path = _nativeInfoCache.node_path;
+    } else {
+        try {
+            const nativeSettings = await _callNativeHost({ action: 'get_ui_preferences' });
+            if (nativeSettings?.success && nativeSettings.preferences) {
+                const np = nativeSettings.preferences;
+                if (np.mpv_decoder) {
+                    globalPrefs.mpv_decoder = np.mpv_decoder;
+                    _nativeInfoCache.decoder = np.mpv_decoder;
                 }
-            } catch (e) {
-                console.warn("Could not sync native decoder settings:", e);
+                if (np.ffmpeg_path) {
+                    if (!globalPrefs.ffmpeg_path) globalPrefs.ffmpeg_path = np.ffmpeg_path;
+                    _nativeInfoCache.ffmpeg_path = np.ffmpeg_path;
+                }
+                if (np.node_path) {
+                    if (!globalPrefs.node_path) globalPrefs.node_path = np.node_path;
+                    _nativeInfoCache.node_path = np.node_path;
+                }
+                _nativeInfoCache.timestamp = now;
             }
+        } catch (e) {
+            console.warn("Could not sync native settings:", e);
         }
     }
 
@@ -244,6 +254,10 @@ export async function handleSetUiPreferences(request, sender) {
 
     // --- NEW: Sync Global Preferences to Native Host config.json ---
     if (!domain) {
+        // Clear the cache so that subsequent 'get' calls fetch fresh data from the newly saved state
+        _nativeInfoCache.decoder = null;
+        _nativeInfoCache.timestamp = 0;
+
         try {
             // Only sync keys that the native host actually cares about to avoid bloat
             const nativeSyncKeys = [
@@ -253,7 +267,7 @@ export async function handleSetUiPreferences(request, sender) {
                 'http_persistence', 'demuxer_max_bytes', 'demuxer_max_back_bytes',
                 'cache_secs', 'demuxer_readahead_secs', 'stream_buffer_size', 
                 'ytdlp_concurrent_fragments', 'enable_reconnect', 'reconnect_delay', 
-                'automatic_mpv_flags'
+                'performance_profile', 'ffmpeg_path', 'node_path', 'automatic_mpv_flags'
             ];
             
             const syncPrefs = {};
@@ -331,7 +345,9 @@ export async function handleForceRefreshDependencies() {
         const data = await _storage.get();
         data.settings.ui_preferences.global.dependencyStatus = {
             mpv: response.mpv,
-            ytdlp: response.ytdlp
+            ytdlp: response.ytdlp,
+            ffmpeg: response.ffmpeg,
+            node: response.node
         };
         await _storage.set(data);
         

@@ -83,7 +83,10 @@ function on_end_file(event)
     local pos = mp.get_property_number("playlist-pos")
     local count = mp.get_property_number("playlist-count", 0)
     
-    log("File ended. Reason: " .. tostring(event.reason) .. ", pos: " .. tostring(pos) .. ", count: " .. tostring(count))
+    local pos_str = (pos and pos >= 0) and tostring(pos) or "unknown"
+    local count_str = (count and count >= 0) and tostring(count) or "unknown"
+    
+    log("File ended. Reason: " .. tostring(event.reason) .. ", pos: " .. pos_str .. ", count: " .. count_str)
 
     if event.reason == 'eof' or event.reason == 'idle' then
         -- We use a tiny timeout to check if MPV is ACTUALLY idle or just switching

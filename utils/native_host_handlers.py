@@ -56,8 +56,8 @@ class HandlerManager:
         # Call the refactored _resolve_or_assign_item_id
         url_item, all_folders = self._resolve_or_assign_item_id(url_item, folder_id, all_folders)
         
-        # New return signature from apply_bypass_script (9 values)
-        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, entries, disable_http_persistent_flag, cookies_file, mark_watched_flag = self.services.apply_bypass_script(
+        # New return signature from apply_bypass_script (10 values)
+        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, entries, disable_http_persistent_flag, cookies_file, mark_watched_flag, ytdl_format_from_script = self.services.apply_bypass_script(
             url_item, self.send_message
         )
 
@@ -91,6 +91,7 @@ class HandlerManager:
         url_item['is_youtube'] = is_youtube_flag
         url_item['cookies_file'] = cookies_file # Store cookie path
         url_item['mark_watched'] = mark_watched_flag # Store mark watched flag
+        url_item['ytdl_format'] = ytdl_format_from_script # Store quality preference
         
         # Respect the flag from url_analyzer or fallback to header-based logic
         url_item['disable_http_persistent'] = disable_http_persistent_flag
@@ -150,7 +151,7 @@ class HandlerManager:
         for key in ['disable_network_overrides', 'enable_cache', 'http_persistence', 
                     'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs', 
                     'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments', 
-                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder']:
+                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality']:
             if key in message:
                 settings[key] = message[key]
 
@@ -216,7 +217,7 @@ class HandlerManager:
         for key in ['disable_network_overrides', 'enable_cache', 'http_persistence', 
                     'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs', 
                     'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments', 
-                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder']:
+                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality']:
             if key in message:
                 settings[key] = message[key]
 
@@ -390,17 +391,23 @@ class HandlerManager:
     def handle_export_playlists(self, message):
         data = message.get('data')
         filename = message.get('filename')
+        subfolder = message.get('subfolder')
         if not data or not filename: return {"success": False, "error": "Missing data or filename."}
-        return self.file_io.write_export_file(filename, data)
+        return self.file_io.write_export_file(filename, data, subfolder=subfolder)
 
     def handle_export_all_separately(self, message):
         folders = message.get('data')
+        custom_names = message.get('customNames', {})
         if not folders: return {"success": False, "error": "No folder data provided."}
         count = 0
         for f_id, f_data in folders.items():
             if 'playlist' in f_data:
-                safe_name = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in f_id).rstrip()
-                if self.file_io.write_export_file(safe_name, f_data['playlist'])["success"]: count += 1
+                # Use custom name if provided, else use original ID
+                target_filename = custom_names.get(f_id, f_id)
+                # Ensure the filename is safe for the filesystem
+                safe_name = "".join(c if c.isalnum() or c in ('-', '_', ' ') else '_' for c in target_filename).rstrip()
+                # Export the full folder object (f_data) to preserve metadata
+                if self.file_io.write_export_file(safe_name, f_data)["success"]: count += 1
         return {"success": True, "message": f"Successfully exported {count} playlists."}
 
     def handle_list_import_files(self, message):
@@ -410,9 +417,15 @@ class HandlerManager:
         filename = message.get('filename')
         if not filename: return {"success": False, "error": "No filename provided."}
         try:
-            filepath = os.path.abspath(os.path.join(self.file_io.EXPORT_DIR, filename))
-            if not filepath.startswith(os.path.abspath(self.file_io.EXPORT_DIR)):
-                return {"success": False, "error": "Access denied."}
+            # Join and then normalize to handle relative paths like 'settings/file.json'
+            target_path = os.path.join(self.file_io.EXPORT_DIR, filename)
+            filepath = os.path.abspath(target_path)
+            
+            # Security: Ensure the resolved path is still within EXPORT_DIR
+            export_dir_abs = os.path.abspath(self.file_io.EXPORT_DIR)
+            if not filepath.startswith(export_dir_abs):
+                return {"success": False, "error": "Access denied: Path outside export directory."}
+                
             with open(filepath, 'r', encoding='utf-8') as f:
                 return {"success": True, "data": f.read()}
         except Exception as e:
@@ -590,7 +603,7 @@ class HandlerManager:
         for key in ['disable_network_overrides', 'enable_cache', 'http_persistence', 
                     'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs', 
                     'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments', 
-                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder']:
+                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality']:
             if key in message:
                 settings[key] = message[key]
         

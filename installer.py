@@ -105,7 +105,16 @@ class CommandLineApp:
             use_youtube = input("Choice [n]: ").lower().startswith('y')
 
         print("\n" + "-"*30)
-        print("Starting Installation...")
+        print("Checking Dependencies...")
+        warnings = self.logic.check_dependencies()
+        if warnings:
+            print("\nWarnings:")
+            for w in warnings:
+                print(f"  - {w}")
+        else:
+            print("All core dependencies found.")
+
+        print("\nStarting Installation...")
         try:
             self.logic.install(ext_id, use_bypass, selected_browser, use_youtube)
             print("\n✅ SUCCESS: Native host installed.")
@@ -203,6 +212,11 @@ class InstallerLogic:
         else:
             self.log("mpv found in PATH.")
 
+        if not status['node']['found']:
+            warnings.append(f"'{status['node']['error']}'\nYouTube 1440p+ playback may fail without Node.js.")
+        else:
+            self.log("Node.js found in PATH.")
+
         return warnings
 
     def get_browser_user_data_dir(self, browser_name):
@@ -292,13 +306,23 @@ class InstallerLogic:
             has_critical_error = True
 
         # 3. Check ffmpeg
-        ffmpeg_exe = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
-        if shutil.which(ffmpeg_exe):
-            results.append(f"✅ ffmpeg found")
+        if status['ffmpeg']['found']:
+            ver = status['ffmpeg'].get('version', 'Found')
+            results.append(f"✅ FFmpeg: {ver} at {status['ffmpeg']['path']}")
         else:
-            results.append(f"⚠️ ffmpeg not found (recommended)")
+            results.append(f"❌ FFmpeg NOT found")
+            results.append(f"   (Required for 1440p/4K YouTube)")
+            has_critical_error = True
 
-        # 4. Check Cookies
+        # 4. Check Node.js
+        if status['node']['found']:
+            ver = status['node'].get('version', 'Found')
+            results.append(f"✅ Node.js: {ver} at {status['node']['path']}")
+        else:
+            results.append(f"⚠️ Node.js NOT found")
+            results.append(f"   (Recommended for 1440p+ YouTube)")
+
+        # 5. Check Cookies
         if status['ytdlp']['found'] and browser:
             try:
                 # Use manual path if available for this browser
@@ -404,11 +428,23 @@ class WindowsLogic(InstallerLogic):
         gpu_vendor = services.get_gpu_vendor()
         # On Windows, NVIDIA users should use nvdec, others d3d11va
         best_decoder = "nvdec" if gpu_vendor == "nvidia" else "d3d11va"
-        self.log(f"Detected GPU vendor: {gpu_vendor.upper()}. Automatically picking decoder: {best_decoder}")
+        # Detect FFmpeg path for config
+        status = services.check_mpv_and_ytdlp_status(lambda: mpv_path, lambda msg: None, force_refresh=True)
+        ffmpeg_path = status['ffmpeg'].get('path')
+        if ffmpeg_path:
+            self.log(f"Found FFmpeg at: {ffmpeg_path}")
+        else:
+            self.log("⚠️ FFmpeg not found. High resolution YouTube streams may fail.")
+
+        node_path = status['node'].get('path')
+        if node_path:
+            self.log(f"Found Node.js at: {node_path}")
 
         config_to_save = {
             "mpv_path": mpv_path,
             "mpv_decoder": best_decoder,
+            "ffmpeg_path": ffmpeg_path,
+            "node_path": node_path,
             "enable_url_analysis": create_bypass, # Renamed from create_bypass
             "browser_for_url_analysis": browser_for_bypass,
             "enable_youtube_analysis": enable_youtube_bypass,
@@ -549,9 +585,23 @@ class UnixLogic(InstallerLogic):
 
         self.log(f"Detected GPU vendor: {gpu_vendor.upper()}. Automatically picking decoder: {unix_decoder}")
 
+        # Detect FFmpeg path for config
+        status = services.check_mpv_and_ytdlp_status(lambda: mpv_path, lambda msg: None, force_refresh=True)
+        ffmpeg_path = status['ffmpeg'].get('path')
+        if ffmpeg_path:
+            self.log(f"Found FFmpeg at: {ffmpeg_path}")
+        else:
+            self.log("⚠️ FFmpeg not found. High resolution YouTube streams may fail.")
+
+        node_path = status['node'].get('path')
+        if node_path:
+            self.log(f"Found Node.js at: {node_path}")
+
         config_to_save = {
             "mpv_path": mpv_path,
             "mpv_decoder": unix_decoder,
+            "ffmpeg_path": ffmpeg_path,
+            "node_path": node_path,
             "enable_url_analysis": create_bypass, # Renamed from create_bypass
             "browser_for_url_analysis": browser_for_bypass,
             "enable_youtube_analysis": enable_youtube_bypass,
