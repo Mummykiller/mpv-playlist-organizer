@@ -875,7 +875,8 @@ def construct_mpv_command(
     force_terminal=False,
     input_terminal=None,
     settings=None,
-    flag_dir=None
+    flag_dir=None,
+    playlist_start_index=None
 ):
     """Constructs the MPV command line arguments using MpvCommandBuilder."""
     builder = MpvCommandBuilder(
@@ -900,6 +901,7 @@ def construct_mpv_command(
         .with_start_paused(start_paused) \
         .with_custom_flags(custom_mpv_flags) \
         .with_geometry(geometry, custom_width, custom_height) \
+        .with_playlist_start(playlist_start_index) \
         .with_youtube_options(is_youtube, ytdl_raw_options)
         
     return builder.build()

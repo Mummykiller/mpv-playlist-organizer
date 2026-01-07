@@ -140,8 +140,7 @@ window.MPV.MpvController = class MpvController {
     handleMessage(request, sender, sendResponse) {
         if (this.isTearingDown) return;
         const action = request.action || (request.foldersChanged ? 'foldersChanged' : null);
-        const handler = this.actionMap[action] || 
-                        (request.m3u8 ? () => this._handleStreamDetected(request.m3u8) : null);
+        const handler = this.actionMap[action];
         if (handler) return handler(request, sendResponse);
     }
 
@@ -391,7 +390,6 @@ window.MPV.MpvController = class MpvController {
         this.state.update({ detectedUrl: null });
         this.checkForYouTubeURL();
         this.updateFolderDropdowns();
-        this.bridge.send('report_detected_url', null, { url: this.state.state.detectedUrl });
         this.updateAddButtonState();
     }
 
@@ -405,13 +403,6 @@ window.MPV.MpvController = class MpvController {
             this.checkForYouTubeURL();
             this.updateAddButtonState();
         }
-    }
-
-    _handleStreamDetected(url) {
-        const sanitized = window.MPV.sanitizeString(url);
-        this.state.update({ detectedUrl: sanitized });
-        this.bridge.send('report_detected_url', null, { url: sanitized });
-        this.updateAddButtonState();
     }
 
     _syncFolderChange(req) {

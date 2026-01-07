@@ -17,28 +17,40 @@ import threading
 class FileLock:
     """
     A simple cross-process file locking mechanism using a .lock file.
-    Also includes a thread-level lock for safety within the same process.
+    Also includes a thread-level RLock for safety and reentrancy within the same process.
     """
-    _thread_lock = threading.Lock()
+    _thread_lock = threading.RLock()
+    _held_locks = threading.local()
 
     def __init__(self, filepath, timeout=5.0, delay=0.05):
-        self.filepath = filepath
-        self.lockfile = f"{filepath}.lock"
+        self.filepath = os.path.abspath(filepath)
+        self.lockfile = f"{self.filepath}.lock"
         self.timeout = timeout
         self.delay = delay
-        self.is_locked = False
+        self.is_file_locked = False
 
     def __enter__(self):
-        # 1. Acquire thread-level lock first
+        # 1. Acquire thread-level RLock first (reentrant)
         FileLock._thread_lock.acquire()
         
+        # Initialize thread-local storage if needed
+        if not hasattr(FileLock._held_locks, 'paths'):
+            FileLock._held_locks.paths = {}
+
+        # 2. Check if this thread already holds the file lock
+        if self.filepath in FileLock._held_locks.paths:
+            FileLock._held_locks.paths[self.filepath] += 1
+            return self
+        
+        # 3. Acquire cross-process file lock
         start_time = time.time()
         while time.time() - start_time < self.timeout:
             try:
                 # O_EXCL + O_CREAT is atomic at the OS level
                 fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
                 os.close(fd)
-                self.is_locked = True
+                self.is_file_locked = True
+                FileLock._held_locks.paths[self.filepath] = 1
                 return self
             except OSError:
                 # File already exists (locked by another process)
@@ -49,12 +61,20 @@ class FileLock:
         raise RuntimeError(f"Could not acquire lock for {self.filepath} after {self.timeout}s")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.is_locked:
-            try:
-                os.remove(self.lockfile)
-            except:
-                pass
-            self.is_locked = False
+        try:
+            if self.filepath in FileLock._held_locks.paths:
+                FileLock._held_locks.paths[self.filepath] -= 1
+                
+                if FileLock._held_locks.paths[self.filepath] == 0:
+                    del FileLock._held_locks.paths[self.filepath]
+                    if self.is_file_locked:
+                        try:
+                            if os.path.exists(self.lockfile):
+                                os.remove(self.lockfile)
+                        except:
+                            pass
+                        self.is_file_locked = False
+        finally:
             FileLock._thread_lock.release()
 
 # --- Path Definitions ---

@@ -288,11 +288,9 @@ class LauncherService:
                 force_terminal=force_terminal,
                 input_terminal="no" if not force_terminal else "yes",
                 settings=settings,
-                flag_dir=self.session.FLAG_DIR
+                flag_dir=self.session.FLAG_DIR,
+                playlist_start_index=playlist_start_index
             )
-
-            if playlist_start_index > 0:
-                full_command.insert(1, f"--playlist-start={playlist_start_index}")
 
             # Add precise resume if needed for initial launch
             if settings.get('enable_precise_resume') and url_item.get('resume_time'):
