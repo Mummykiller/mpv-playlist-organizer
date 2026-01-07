@@ -64,6 +64,7 @@ class IPCSocketManager:
         self._system = platform.system()
         self._event_buffer = collections.deque()
         self._buffer_lock = threading.Condition() # Changed from Lock to Condition
+        self._send_lock = threading.Lock() # NEW: Lock for sending commands
         self._event_reader_thread = None # Added for background reader thread
         self._event_reader_running = False # Flag to control reader thread
         self._request_id_counter = 0
@@ -191,57 +192,62 @@ class IPCSocketManager:
             logging.warning(f"Attempted to send command '{command_dict.get('command')}' but IPC socket is not connected.")
             return None
         
-        # Assign a unique request_id to ensure we match the correct response
-        if "request_id" not in command_dict:
-            self._request_id_counter = (self._request_id_counter + 1) % 100000
-            req_id = self._request_id_counter
-            command_dict["request_id"] = req_id
-        else:
-            req_id = command_dict["request_id"]
+        with self._send_lock:
+            # Assign a unique request_id to ensure we match the correct response
+            if "request_id" not in command_dict:
+                self._request_id_counter = (self._request_id_counter + 1) % 100000
+                req_id = self._request_id_counter
+                command_dict["request_id"] = req_id
+            else:
+                req_id = command_dict["request_id"]
 
-        ipc_logger.info(f"IPC SEND: {json.dumps(command_dict)}")
-        command_str = json.dumps(command_dict) + '\n'
+            ipc_logger.info(f"IPC SEND: {json.dumps(command_dict)}")
+            command_str = json.dumps(command_dict) + '\n'
 
-        try:
-            encoded = command_str.encode('utf-8')
-            if self._system == "Windows":
-                # For Windows named pipes, writing and flushing is the way to send.
-                self._sock.write(encoded)
-                self._sock.flush()
-            else: # Linux/macOS
-                self._sock.sendall(encoded)
+            try:
+                encoded = command_str.encode('utf-8')
+                if self._system == "Windows":
+                    # For Windows named pipes, writing and flushing is the way to send.
+                    self._sock.write(encoded)
+                    self._sock.flush()
+                else: # Linux/macOS
+                    self._sock.sendall(encoded)
 
-            if not expect_response:
-                return {"error": "success"} # Command sent, no response expected
+                if not expect_response:
+                    return {"error": "success"} # Command sent, no response expected
 
-            start_read_time = time.time()
-            with self._buffer_lock:
-                while True:
-                    # Check internal buffer for a command response (matching request_id)
-                    for i in range(len(self._event_buffer)):
-                        item = self._event_buffer[i]
-                        if item.get("request_id") == req_id or ("event" not in item and "request_id" not in item):
-                            del self._event_buffer[i] 
-                            response = item
-                            ipc_logger.info(f"IPC RECV (from buffer): {json.dumps(response)}")
-                            return response
-                    
-                    elapsed = time.time() - start_read_time
-                    if elapsed >= timeout:
-                        logging.warning(f"Timed out waiting for command response for id {req_id} after {timeout} seconds.")
-                        return None
-                    
-                    # Wait for notify from reader thread
-                    self._buffer_lock.wait(timeout - elapsed)
-                    
-        except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError) as e:
-            logging.debug(f"IPC send error (connection likely lost): {e}")
-            self.close() 
-            return None
-        except Exception as e:
-            logging.error(f"Unexpected error during IPC send command: {e}")
-            self.close()
-            return None
+                start_read_time = time.time()
+                with self._buffer_lock:
+                    while True:
+                        # Check internal buffer for a command response (matching request_id)
+                        for i in range(len(self._event_buffer)):
+                            item = self._event_buffer[i]
+                            if item.get("request_id") == req_id or ("event" not in item and "request_id" not in item):
+                                del self._event_buffer[i] 
+                                response = item
+                                ipc_logger.info(f"IPC RECV (from buffer): {json.dumps(response)}")
+                                return response
+                        
+                        elapsed = time.time() - start_read_time
+                        if elapsed >= timeout:
+                            logging.warning(f"Timed out waiting for command response for id {req_id} after {timeout} seconds.")
+                            return None
+                        
+                        # Wait for notify from reader thread
+                        if not self._buffer_lock.wait(timeout - elapsed):
+                             # wait() returns False on timeout (Python 3.2+)
+                             if time.time() - start_read_time >= timeout:
+                                 logging.warning(f"Timed out (wait) for command response for id {req_id}")
+                                 return None
+                        
+            except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError) as e:
+                logging.debug(f"IPC send error (connection likely lost): {e}")
+                self.close() 
+                return None
+            except Exception as e:
+                logging.error(f"Unexpected error during IPC send command: {e}")
+                self.close()
+                return None
 
     def receive_event(self, timeout=None):
         """

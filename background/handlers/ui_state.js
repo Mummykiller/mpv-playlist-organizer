@@ -93,13 +93,6 @@ export async function handleGetUiStateForTab(request) {
     };
 }
 
-export async function handleReportDetectedUrl(request, sender) {
-    const tabId = sender.tab?.id;
-    if (tabId) {
-        broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: request.url });
-    }
-}
-
 export async function handleSetLastFolderId(request) {
     if (request.folderId) {
         const data = await storage.get();

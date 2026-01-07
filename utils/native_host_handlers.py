@@ -29,6 +29,7 @@ class HandlerManager:
         self.temp_playlists_dir = temp_playlists_dir
         self.log_stream = log_stream_func # Passed from native_host for unmanaged MPV logging
         self.all_folders_lock = threading.Lock() # Lock for thread-safe storage updates
+        self.server_lock = threading.Lock() # NEW: Lock for M3U server lifecycle
 
         self.playlist_server_process = None
         self.playlist_server_port = None
@@ -321,251 +322,258 @@ class HandlerManager:
         if not final_processed_items:
             return {"success": True, "message": "No new items to append."}
 
-        # Use batch append logic to preserve titles and settings natively.
-        return self.mpv_session.append_batch(final_processed_items)
-
-    def _launch_unmanaged_mpv(self, playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags):
-        """Helper to launch unmanaged MPV, moved from native_host.py."""
-        logging.info("Launching a new, unmanaged MPV instance.")
-        mpv_exe = self.file_io.get_mpv_executable()
-        settings = self.file_io.get_settings()
+                # Use batch append logic to preserve titles and settings natively.
+                return self.mpv_session.append_batch(final_processed_items)
         
-        try:
-            full_command, has_terminal_flag = self.services.construct_mpv_command(
-                mpv_exe=mpv_exe,
-                url=playlist,
-                geometry=geometry,
-                custom_width=custom_width,
-                custom_height=custom_height,
-                custom_mpv_flags=custom_mpv_flags,
-                automatic_mpv_flags=automatic_mpv_flags,
-                settings=settings
-            )
-
-            popen_kwargs = self.services.get_mpv_popen_kwargs(has_terminal_flag)
-
-            process = subprocess.Popen(full_command, **popen_kwargs)
-            
-            # log_stream is a global function in native_host.py, needs to be passed
-            stderr_thread = threading.Thread(target=self.log_stream, args=(process.stderr, logging.warning, None))
-            stderr_thread.daemon = True
-            stderr_thread.start()
-    
-            logging.info(f"Unmanaged MPV process launched (PID: {process.pid}) with {len(playlist)} items.")
-            return {"success": True, "message": "New MPV instance launched."}
-        except Exception as e:
-            logging.error(f"An error occurred while trying to launch unmanaged mpv: {e}")
-            return {"success": False, "error": f"Error launching new mpv instance: {e}"}
-
-    def handle_play_new_instance(self, message):
-        return self._launch_unmanaged_mpv(
-            message.get('playlist', []), 
-            message.get('geometry'), 
-            message.get('custom_width'), 
-            message.get('custom_height'), 
-            message.get('custom_mpv_flags'), 
-            message.get('automatic_mpv_flags')
-        )
-
-    def handle_close_mpv(self, message):
-        response = self.mpv_session.close()
-        self._stop_local_m3u_server() # Also stop the M3U server when MPV is closed
-        return response
-
-    def handle_is_mpv_running(self, message):
-        is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
-        if not is_running and self.mpv_session.pid:
-            self.mpv_session.clear()
-        logging.info(f"MPV running status check: {is_running} (Path: {self.mpv_session.ipc_path})")
-        return {
-            "success": True, 
-            "is_running": is_running,
-            "folderId": self.mpv_session.owner_folder_id if is_running else None
-        }
-
-    def handle_export_data(self, message):
-        data = message.get('data')
-        is_incremental = message.get('is_incremental', False)
-        
-        if data is None:
-            return {"success": False, "error": "No data provided."}
-            
-        if is_incremental:
-            # Incremental update: merge incoming folder(s) with existing ones
-            existing_folders = self.file_io.get_all_folders_from_file()
-            existing_folders.update(data)
-            return self.file_io.write_folders_file(existing_folders)
-        else:
-            # Full override
-            return self.file_io.write_folders_file(data)
-
-    def handle_export_playlists(self, message):
-        data = message.get('data')
-        filename = message.get('filename')
-        subfolder = message.get('subfolder')
-        if not data or not filename: return {"success": False, "error": "Missing data or filename."}
-        return self.file_io.write_export_file(filename, data, subfolder=subfolder)
-
-    def handle_export_all_separately(self, message):
-        folders = message.get('data')
-        custom_names = message.get('customNames', {})
-        if not folders: return {"success": False, "error": "No folder data provided."}
-        count = 0
-        for f_id, f_data in folders.items():
-            if 'playlist' in f_data:
-                # Use custom name if provided, else use original ID
-                target_filename = custom_names.get(f_id, f_id)
-                # Ensure the filename is safe for the filesystem
-                safe_name = "".join(c if c.isalnum() or c in ('-', '_', ' ') else '_' for c in target_filename).rstrip()
-                # Export the full folder object (f_data) to preserve metadata
-                if self.file_io.write_export_file(safe_name, f_data)["success"]: count += 1
-        return {"success": True, "message": f"Successfully exported {count} playlists."}
-
-    def handle_list_import_files(self, message):
-        return self.file_io.list_import_files()
-
-    def handle_import_from_file(self, message):
-        filename = message.get('filename')
-        if not filename: return {"success": False, "error": "No filename provided."}
-        try:
-            # Join and then normalize to handle relative paths like 'settings/file.json'
-            target_path = os.path.join(self.file_io.EXPORT_DIR, filename)
-            filepath = os.path.abspath(target_path)
-            
-            # Security: Ensure the resolved path is still within EXPORT_DIR
-            export_dir_abs = os.path.abspath(self.file_io.EXPORT_DIR)
-            if not filepath.startswith(export_dir_abs):
-                return {"success": False, "error": "Access denied: Path outside export directory."}
+            def _launch_unmanaged_mpv(self, playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags):
+                """Helper to launch unmanaged MPV, moved from native_host.py."""
+                logging.info("Launching a new, unmanaged MPV instance.")
+                mpv_exe = self.file_io.get_mpv_executable()
+                settings = self.file_io.get_settings()
                 
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return {"success": True, "data": f.read()}
-        except Exception as e:
-            return {"success": False, "error": f"Failed to read file: {e}"}
-
-    def handle_open_export_folder(self, message):
-        try:
-            os.makedirs(self.file_io.EXPORT_DIR, exist_ok=True)
-            path = os.path.abspath(self.file_io.EXPORT_DIR)
-            if platform.system() == "Windows": subprocess.Popen(['explorer', os.path.normpath(path)])
-            elif platform.system() == "Darwin": subprocess.run(['open', path], check=True)
-            else: subprocess.run(['xdg-open', path], check=True)
-            return {"success": True, "message": "Opening export folder."}
-        except Exception as e:
-            return {"success": False, "error": f"Failed to open folder: {e}"}
-            
-    def handle_get_anilist_releases(self, message):
-        return self.services.get_anilist_releases_with_cache(
-            message.get('force', False), message.get('delete_cache', False), message.get('is_cache_disabled', False), 
-            self.anilist_cache_file, self.script_dir, self.send_message
-        )
-
-    def handle_run_ytdlp_update(self, message):
-        return self.services.update_ytdlp(self.send_message)
-
-    def handle_check_dependencies(self, message):
-        return self.services.check_mpv_and_ytdlp_status(
-            self.file_io.get_mpv_executable, 
-            self.send_message, 
-            force_refresh=message.get('force_refresh', False)
-        )
-
-    def handle_get_all_folders(self, message):
-        return {"success": True, "folders": self.file_io.get_all_folders_from_file()}
-
-    def handle_get_ui_preferences(self, message):
-        return {"success": True, "preferences": self.file_io.get_settings()}
-
-    def handle_set_ui_preferences(self, message):
-        preferences = message.get('preferences')
-        if preferences is None:
-            return {"success": False, "error": "No preferences provided."}
-        return self.file_io.set_settings(preferences)
-
-    def handle_get_default_automatic_flags(self, message):
-        return {"success": True, "flags": [
-            {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
-            {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
-            {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True},
-            {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
-            {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
-            {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
-        ]}
-
-    def _start_local_m3u_server(self, m3u_content):
-        """
-        Starts or reuses playlist_server.py to serve dynamic M3U content.
-        Returns the URL of the served M3U.
-        """
-        # Use a deterministic path for the server to serve within this instance
-        if not self.temp_m3u_file_for_server:
-            pid = os.getpid()
-            self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, f"{SERVER_PREFIX}{pid}{SERVER_EXT}")
-
-        # Update the file content on disk. The running server reads this on every request.
-        logging.info(f"Updating M3U content for server at {self.temp_m3u_file_for_server}")
-        with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
-            f.write(m3u_content)
-
-        # Check if we can reuse the existing server process
-        if self.playlist_server_process and self.playlist_server_process.poll() is None:
-            logging.info(f"Reusing existing playlist server on port {self.playlist_server_port}.")
-            return f"http://localhost:{self.playlist_server_port}/playlist.m3u"
-
-        # If not running (e.g. first launch or crashed), start it
-        server_path = os.path.join(self.script_dir, "playlist_server.py")
-        if not os.path.exists(server_path):
-            logging.error(f"playlist_server.py not found at {server_path}")
-            return None
-
-        logging.info("Launching local M3U server process...")
-        server_env = os.environ.copy()
-        server_env["PYTHONDONTWRITEBYTECODE"] = "1"
-        server_env["MPV_PLAYLIST_TOKEN"] = self.server_token # Inject secret
-        
-        try:
-            self.playlist_server_process = subprocess.Popen(
-                [sys.executable, server_path, '--port', '8000', '--file', self.temp_m3u_file_for_server],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                env=server_env
-            )
-
-            # ... (read actual port from stderr) ...
-            port_found_timeout = 5
-            start_time = time.time()
-            while time.time() - start_time < port_found_timeout:
-                line = self.playlist_server_process.stderr.readline()
-                if not line: break
-                logging.info(f"Server process stderr output: {line.strip()}")
-                match = re.search(r"Serving M3U playlist on port (\d+)", line)
-                if match:
-                    self.playlist_server_port = int(match.group(1))
-                    break
-            
-            if self.playlist_server_port is None:
-                raise RuntimeError("Could not determine playlist server port.")
-
-            fetch_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u?token={self.server_token}"
-            # Readiness check
-            for _ in range(30):
                 try:
-                    with urlopen(fetch_url, timeout=0.2) as r:
-                        if r.getcode() == 200: return fetch_url
-                except: pass
-                time.sleep(0.2)
+                    full_command, has_terminal_flag = self.services.construct_mpv_command(
+                        mpv_exe=mpv_exe,
+                        url=playlist,
+                        geometry=geometry,
+                        custom_width=custom_width,
+                        custom_height=custom_height,
+                        custom_mpv_flags=custom_mpv_flags,
+                        automatic_mpv_flags=automatic_mpv_flags,
+                        settings=settings,
+                        playlist_start_index=0 # Unmanaged always starts at 0
+                    )
+        
+                    popen_kwargs = self.services.get_mpv_popen_kwargs(has_terminal_flag)
+        
+                    process = subprocess.Popen(full_command, **popen_kwargs)
+                    
+                    # log_stream is a global function in native_host.py, needs to be passed
+                    stderr_thread = threading.Thread(target=self.log_stream, args=(process.stderr, logging.warning, None))
+                    stderr_thread.daemon = True
+                    stderr_thread.start()
             
-            raise RuntimeError("Playlist server timed out.")
-
-        except Exception as e:
-            logging.error(f"Failed to start local M3U server: {e}", exc_info=True)
-            self._stop_local_m3u_server()
-            return None
-
-
+                    logging.info(f"Unmanaged MPV process launched (PID: {process.pid}) with {len(playlist)} items.")
+                    return {"success": True, "message": "New MPV instance launched."}
+                except Exception as e:
+                    logging.error(f"An error occurred while trying to launch unmanaged mpv: {e}")
+                    return {"success": False, "error": f"Error launching new mpv instance: {e}"}
+        
+            def handle_play_new_instance(self, message):
+                return self._launch_unmanaged_mpv(
+                    message.get('playlist', []), 
+                    message.get('geometry'), 
+                    message.get('custom_width'), 
+                    message.get('custom_height'), 
+                    message.get('custom_mpv_flags'), 
+                    message.get('automatic_mpv_flags')
+                )
+        
+            def handle_close_mpv(self, message):
+                response = self.mpv_session.close()
+                self._stop_local_m3u_server() # Also stop the M3U server when MPV is closed
+                return response
+        
+            def handle_is_mpv_running(self, message):
+                is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
+                if not is_running and self.mpv_session.pid:
+                    self.mpv_session.clear()
+                logging.info(f"MPV running status check: {is_running} (Path: {self.mpv_session.ipc_path})")
+                return {
+                    "success": True, 
+                    "is_running": is_running,
+                    "folderId": self.mpv_session.owner_folder_id if is_running else None
+                }
+        
+            def handle_export_data(self, message):
+                data = message.get('data')
+                is_incremental = message.get('is_incremental', False)
+                
+                if data is None:
+                    return {"success": False, "error": "No data provided."}
+                    
+                if is_incremental:
+                    # Incremental update: merge incoming folder(s) with existing ones
+                    existing_folders = self.file_io.get_all_folders_from_file()
+                    existing_folders.update(data)
+                    return self.file_io.write_folders_file(existing_folders)
+                else:
+                    # Full override
+                    return self.file_io.write_folders_file(data)
+        
+            def handle_export_playlists(self, message):
+                data = message.get('data')
+                filename = message.get('filename')
+                subfolder = message.get('subfolder')
+                if not data or not filename: return {"success": False, "error": "Missing data or filename."}
+                return self.file_io.write_export_file(filename, data, subfolder=subfolder)
+        
+            def handle_export_all_separately(self, message):
+                folders = message.get('data')
+                custom_names = message.get('customNames', {})
+                if not folders: return {"success": False, "error": "No folder data provided."}
+                count = 0
+                for f_id, f_data in folders.items():
+                    if 'playlist' in f_data:
+                        # Use custom name if provided, else use original ID
+                        target_filename = custom_names.get(f_id, f_id)
+                        # Ensure the filename is safe for the filesystem
+                        safe_name = "".join(c if c.isalnum() or c in ('-', '_', ' ') else '_' for c in target_filename).rstrip()
+                        # Export the full folder object (f_data) to preserve metadata
+                        if self.file_io.write_export_file(safe_name, f_data)["success"]: count += 1
+                return {"success": True, "message": f"Successfully exported {count} playlists."}
+        
+            def handle_list_import_files(self, message):
+                return self.file_io.list_import_files()
+        
+            def handle_import_from_file(self, message):
+                filename = message.get('filename')
+                if not filename: return {"success": False, "error": "No filename provided."}
+                try:
+                    # Join and then normalize to handle relative paths like 'settings/file.json'
+                    target_path = os.path.join(self.file_io.EXPORT_DIR, filename)
+                    filepath = os.path.abspath(target_path)
+                    
+                    # Security: Ensure the resolved path is still within EXPORT_DIR
+                    export_dir_abs = os.path.abspath(self.file_io.EXPORT_DIR)
+                    if not filepath.startswith(export_dir_abs):
+                        return {"success": False, "error": "Access denied: Path outside export directory."}
+                        
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        return {"success": True, "data": f.read()}
+                except Exception as e:
+                    return {"success": False, "error": f"Failed to read file: {e}"}
+        
+            def handle_open_export_folder(self, message):
+                try:
+                    os.makedirs(self.file_io.EXPORT_DIR, exist_ok=True)
+                    path = os.path.abspath(self.file_io.EXPORT_DIR)
+                    if platform.system() == "Windows": subprocess.Popen(['explorer', os.path.normpath(path)])
+                    elif platform.system() == "Darwin": subprocess.run(['open', path], check=True)
+                    else: subprocess.run(['xdg-open', path], check=True)
+                    return {"success": True, "message": "Opening export folder."}
+                except Exception as e:
+                    return {"success": False, "error": f"Failed to open folder: {e}"}
+                    
+            def handle_get_anilist_releases(self, message):
+                return self.services.get_anilist_releases_with_cache(
+                    message.get('force', False), message.get('delete_cache', False), message.get('is_cache_disabled', False), 
+                    self.anilist_cache_file, self.script_dir, self.send_message
+                )
+        
+            def handle_run_ytdlp_update(self, message):
+                return self.services.update_ytdlp(self.send_message)
+        
+            def handle_check_dependencies(self, message):
+                return self.services.check_mpv_and_ytdlp_status(
+                    self.file_io.get_mpv_executable, 
+                    self.send_message, 
+                    force_refresh=message.get('force_refresh', False)
+                )
+        
+            def handle_get_all_folders(self, message):
+                return {"success": True, "folders": self.file_io.get_all_folders_from_file()}
+        
+            def handle_get_ui_preferences(self, message):
+                return {"success": True, "preferences": self.file_io.get_settings()}
+        
+            def handle_set_ui_preferences(self, message):
+                preferences = message.get('preferences')
+                if preferences is None:
+                    return {"success": False, "error": "No preferences provided."}
+                return self.file_io.set_settings(preferences)
+        
+            def handle_get_default_automatic_flags(self, message):
+                return {"success": True, "flags": [
+                    {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
+                    {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
+                    {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True},
+                    {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
+                    {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
+                    {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
+                ]}
+        
+            def _start_local_m3u_server(self, m3u_content):            """
+            Starts or reuses playlist_server.py to serve dynamic M3U content.
+            Returns the URL of the served M3U.
+            """
+            with self.server_lock:
+                # Use a deterministic path for the server to serve within this instance
+                if not self.temp_m3u_file_for_server:
+                    pid = os.getpid()
+                    self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, f"{SERVER_PREFIX}{pid}{SERVER_EXT}")
+    
+                # Update the file content on disk. The running server reads this on every request.
+                logging.info(f"Updating M3U content for server at {self.temp_m3u_file_for_server}")
+                with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
+                    f.write(m3u_content)
+    
+                # Check if we can reuse the existing server process
+                if self.playlist_server_process and self.playlist_server_process.poll() is None:
+                    logging.info(f"Reusing existing playlist server on port {self.playlist_server_port}.")
+                    # Return with token if available
+                    base_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u"
+                    return f"{base_url}?token={self.server_token}" if self.server_token else base_url
+    
+                # If not running (e.g. first launch or crashed), start it
+                server_path = os.path.join(self.script_dir, "playlist_server.py")
+                if not os.path.exists(server_path):
+                    logging.error(f"playlist_server.py not found at {server_path}")
+                    return None
+    
+                logging.info("Launching local M3U server process...")
+                server_env = os.environ.copy()
+                server_env["PYTHONDONTWRITEBYTECODE"] = "1"
+                server_env["MPV_PLAYLIST_TOKEN"] = self.server_token # Inject secret
+                
+                try:
+                    self.playlist_server_process = subprocess.Popen(
+                        [sys.executable, server_path, '--port', '8000', '--file', self.temp_m3u_file_for_server],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        bufsize=1,
+                        env=server_env
+                    )
+    
+                    # ... (read actual port from stderr) ...
+                    port_found_timeout = 5
+                    start_time = time.time()
+                    while time.time() - start_time < port_found_timeout:
+                        line = self.playlist_server_process.stderr.readline()
+                        if not line: break
+                        logging.info(f"Server process stderr output: {line.strip()}")
+                        match = re.search(r"Serving M3U playlist on port (\d+)", line)
+                        if match:
+                            self.playlist_server_port = int(match.group(1))
+                            break
+                    
+                    if self.playlist_server_port is None:
+                        raise RuntimeError("Could not determine playlist server port.")
+    
+                    fetch_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u?token={self.server_token}"
+                    # Readiness check
+                    for _ in range(30):
+                        try:
+                            with urlopen(fetch_url, timeout=0.2) as r:
+                                if r.getcode() == 200: return fetch_url
+                        except: pass
+                        time.sleep(0.2)
+                    
+                    raise RuntimeError("Playlist server timed out.")
+    
+                except Exception as e:
+                    logging.error(f"Failed to start local M3U server: {e}", exc_info=True)
+                    # We need a recursive-safe way to call stop or just do it inline
+                    self._stop_unlocked()
+                    return None
     def _stop_local_m3u_server(self):
         """Stops the local M3U server subprocess and cleans up temp files."""
+        with self.server_lock:
+            self._stop_unlocked()
+
+    def _stop_unlocked(self):
+        """Internal helper to stop the server without acquiring the lock again."""
         if self.playlist_server_process:
             logging.info(f"Terminating local M3U server process (PID: {self.playlist_server_process.pid}).")
             try:

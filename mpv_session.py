@@ -213,38 +213,38 @@ class MpvSessionManager:
         import file_io
         settings = file_io.get_settings()
         
-        # We perform heavy work (enrichment/IPC) outside the primary state lock where possible,
-        # but the final playlist update MUST be locked.
-        for item in items:
-            item_url = sanitize_url(item['url'])
-            
-            # --- Centralized Flag Collection for Appending ---
-            local_essential_flags = "ignore-config="
-            if settings and settings.get('ffmpeg_path'):
-                local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
-            
-            final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), local_essential_flags)
+        with self.sync_lock:
+            if not self.is_alive or not self.ipc_manager:
+                return {"success": False, "error": "No active session for append."}
 
-            lua_options = {
-                "id": item.get('id'), 
-                "title": item.get('title'),
-                "headers": item.get('headers'),
-                "ytdl_raw_options": final_item_raw_opts,
-                "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
-                "ytdl_format": item.get('ytdl_format'),
-                "ffmpeg_path": settings.get('ffmpeg_path'),
-                "original_url": sanitize_url(item.get('original_url') or item.get('url')),
-                "disable_http_persistent": item.get('disable_http_persistent', False),
-                "cookies_file": item.get('cookies_file'),
-                "disable_network_overrides": settings.get('disable_network_overrides', False),
-                "http_persistence": settings.get('http_persistence', 'auto'),
-                "enable_reconnect": settings.get('enable_reconnect', True),
-                "reconnect_delay": settings.get('reconnect_delay', 4)
-            }
-            
-            with self.sync_lock:
-                if self.ipc_manager:
-                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
+            for item in items:
+                item_url = sanitize_url(item['url'])
+                
+                # --- Centralized Flag Collection for Appending ---
+                local_essential_flags = "ignore-config="
+                if settings and settings.get('ffmpeg_path'):
+                    local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
+                
+                final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), local_essential_flags)
+
+                lua_options = {
+                    "id": item.get('id'), 
+                    "title": item.get('title'),
+                    "headers": item.get('headers'),
+                    "ytdl_raw_options": final_item_raw_opts,
+                    "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
+                    "ytdl_format": item.get('ytdl_format'),
+                    "ffmpeg_path": settings.get('ffmpeg_path'),
+                    "original_url": sanitize_url(item.get('original_url') or item.get('url')),
+                    "disable_http_persistent": item.get('disable_http_persistent', False),
+                    "cookies_file": item.get('cookies_file'),
+                    "disable_network_overrides": settings.get('disable_network_overrides', False),
+                    "http_persistence": settings.get('http_persistence', 'auto'),
+                    "enable_reconnect": settings.get('enable_reconnect', True),
+                    "reconnect_delay": settings.get('reconnect_delay', 4)
+                }
+                
+                self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
                 
                 if self.playlist is None: self.playlist = []
                 
@@ -256,50 +256,44 @@ class MpvSessionManager:
                     self.playlist.append(item)
                     if self.playlist_tracker: self.playlist_tracker.add_item(item)
 
-        m3u_content = self._generate_m3u_content(items)
-        
-        try:
-            os.makedirs(self.TEMP_PLAYLISTS_DIR, exist_ok=True)
+            m3u_content = self._generate_m3u_content(items)
             
-            pid = os.getpid()
-            unique_id = uuid.uuid4().hex[:8]
-            temp_filename = f"{DELTA_PREFIX}{pid}_{unique_id}{DELTA_EXT}"
-            temp_path = os.path.join(self.TEMP_PLAYLISTS_DIR, temp_filename)
-            
-            with open(temp_path, 'w', encoding='utf-8') as tf:
-                tf.write(m3u_content)
-            
-            with self.sync_lock:
-                if not self.ipc_manager: return {"success": False, "error": "IPC disconnected during append."}
-                res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True)
-            
-            if res and res.get("error") == "success":
-                with self.sync_lock:
-                    if self.ipc_manager:
-                        idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]})
-                        if idle_resp and idle_resp.get("data") == True:
-                            logging.info("MPV is idle. Forcing playback to start after append.")
-                            self.ipc_manager.send({"command": ["set_property", "pause", False]})
-                            self.ipc_manager.send({"command": ["playlist-next", "weak"]})
-                        
-                        msg = f"Appended {len(items)} new item{'s' if len(items) > 1 else ''}"
-                        self.ipc_manager.send({"command": ["show-text", msg, 3000]})
-                
-                return {"success": True, "message": f"Appended {len(items)} items to active session."}
-            else:
-                raise RuntimeError(f"MPV rejected loadlist command: {res}")
-
-        except Exception as e:
-            logging.error(f"Failed to append batch via delta M3U: {e}")
-            return {"success": False, "error": str(e)}
-        finally:
-            # This block runs even if an error occurs above
+            temp_path = None
             try:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-                    logging.debug(f"Successfully cleaned up temp M3U: {temp_path}")
-            except Exception as cleanup_e:
-                logging.warning(f"Failed to cleanup delta M3U {temp_path}: {cleanup_e}")
+                os.makedirs(self.TEMP_PLAYLISTS_DIR, exist_ok=True)
+                
+                pid = os.getpid()
+                unique_id = uuid.uuid4().hex[:8]
+                temp_filename = f"{DELTA_PREFIX}{pid}_{unique_id}{DELTA_EXT}"
+                temp_path = os.path.join(self.TEMP_PLAYLISTS_DIR, temp_filename)
+                
+                with open(temp_path, 'w', encoding='utf-8') as tf:
+                    tf.write(m3u_content)
+                
+                res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True)
+                
+                if res and res.get("error") == "success":
+                    idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]})
+                    if idle_resp and idle_resp.get("data") == True:
+                        logging.info("MPV is idle. Forcing playback to start after append.")
+                        self.ipc_manager.send({"command": ["set_property", "pause", False]})
+                        self.ipc_manager.send({"command": ["playlist-next", "weak"]})
+                    
+                    msg = f"Appended {len(items)} new item{'s' if len(items) > 1 else ''}"
+                    self.ipc_manager.send({"command": ["show-text", msg, 3000]})
+                    
+                    return {"success": True, "message": f"Appended {len(items)} items to active session."}
+                else:
+                    raise RuntimeError(f"MPV rejected loadlist command: {res}")
+
+            except Exception as e:
+                logging.error(f"Failed to append batch via delta M3U: {e}")
+                return {"success": False, "error": str(e)}
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except: pass
 
     def remove(self, item_id, folder_id):
         """Removes an item from the active MPV playlist by ID."""
@@ -396,12 +390,12 @@ class MpvSessionManager:
                 else:
                     self.close()
 
-        launch_result = self.launcher.launch(
-            launch_item, folder_id, settings, file_io,
-            full_playlist=_url_items_list if len(_url_items_list) == 1 else [_url_items_list[playlist_start_index]],
-            playlist_start_index=playlist_start_index,
-            **kwargs
-        )
+            launch_result = self.launcher.launch(
+                launch_item, folder_id, settings, file_io,
+                full_playlist=_url_items_list if len(_url_items_list) == 1 else [_url_items_list[playlist_start_index]],
+                playlist_start_index=playlist_start_index,
+                **kwargs
+            )
 
         if launch_result.get("success") and len(_url_items_list) > 1:
             self.enricher.handle_standard_flow_launch(self, _url_items_list, playlist_start_index, folder_id, settings, file_io)

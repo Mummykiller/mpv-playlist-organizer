@@ -41,8 +41,6 @@ function setupListeners() {
                 promiseInfo.resolve(detectedUrl);
                 return;
             }
-
-            chrome.tabs.sendMessage(details.tabId, { m3u8: detectedUrl }).catch(() => {}); 
         },
         {
             urls: ["<all_urls>"],
