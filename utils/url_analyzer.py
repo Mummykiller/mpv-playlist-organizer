@@ -18,9 +18,10 @@ sys.dont_write_bytecode = True
 # Regular Expressions for URL detection
 YOUTUBE_RE = re.compile(r"(youtube\.com|youtu\.be)")
 # Flexible regex for Animepahe/owocdn vault links (allows query params)
-VAULT_RE = re.compile(r"vault-\d+\.owocdn\.top/stream/.*uwu\.m3u8")
+VAULT_RE = re.compile(r"(vault-\d+|na-\d+|cdn-\d+)\.owocdn\.top/stream/.*uwu\.m3u8")
 # Common direct stream extensions
 DIRECT_STREAM_RE = re.compile(r"\.(m3u8|mp4|mkv|webm|avi|mov)(\?.*)?$", re.IGNORECASE)
+KWIK_RE = re.compile(r"kwik\.cx/(f|e)/[a-zA-Z0-9]+")
 
 # Global cache for the cookies file to avoid re-extracting for every item in a playlist
 _COOKIES_CACHE = {
@@ -128,21 +129,32 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
             logging.warning(f"URL Analyzer Sanitization: Ignored invalid quality '{q}'")
 
     # --- Case 1: Animepahe-like URLs (VAULT_RE) ---
-    if VAULT_RE.search(url):
+    if VAULT_RE.search(url) or KWIK_RE.search(url):
         # Based on stuff.py, these should NOT use yt-dlp, but require specific headers.
+        # Kwik/AnimePahe are extremely sensitive to Referer and User-Agent.
+        cookies_file = None
+        if is_other_cookies_enabled and browser and browser != "None":
+            # Attempt to get cookies for both AnimePahe and Kwik to cover all bases
+            cookies_file = get_cookies_file(browser, url, ignore_config=is_yt_ignore_config_enabled)
+
         return {
             "success": True,
             "url": url, # MPV will play the original URL directly
             "headers": {
                 "User-Agent": effective_user_agent,
                 "Referer": "https://kwik.cx/",
-                "Origin": "https://kwik.cx/",
-                "X-Requested-With": "XMLHttpRequest"
+                "Origin": "https://kwik.cx",
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "cross-site",
             },
             "ytdl_raw_options": None,
             "use_ytdl_mpv": False,
             "is_youtube": False,
-            "disable_http_persistent": True
+            "disable_http_persistent": True,
+            "cookies_file": cookies_file
         }
 
     # --- Case 1b: Generic Direct Stream Detection ---

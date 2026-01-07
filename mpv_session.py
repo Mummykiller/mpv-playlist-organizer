@@ -264,12 +264,6 @@ class MpvSessionManager:
             
             res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True)
             
-            try:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-            except Exception as e:
-                logging.warning(f"Failed to cleanup delta M3U: {e}")
-
             if res and res.get("error") == "success":
                 idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]})
                 if idle_resp and idle_resp.get("data") == True:
@@ -287,6 +281,14 @@ class MpvSessionManager:
         except Exception as e:
             logging.error(f"Failed to append batch via delta M3U: {e}")
             return {"success": False, "error": str(e)}
+        finally:
+            # This block runs even if an error occurs above
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                    logging.debug(f"Successfully cleaned up temp M3U: {temp_path}")
+            except Exception as cleanup_e:
+                logging.warning(f"Failed to cleanup delta M3U {temp_path}: {cleanup_e}")
 
     def remove(self, item_id, folder_id):
         """Removes an item from the active MPV playlist by ID."""

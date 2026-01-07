@@ -2,6 +2,10 @@ local utils = require 'mp.utils'
 local url_options = {}
 local last_applied_url = nil
 
+-- Store initial global states to restore them between files
+local initial_ytdl_raw = mp.get_property("ytdl-raw-options") or ""
+local initial_ytdl_format = mp.get_property("ytdl-format") or ""
+
 -- Dedicated debug log for AdaptiveHeaders
 local function debug_log(msg)
     mp.msg.info(msg)
@@ -117,7 +121,15 @@ mp.add_hook("on_load", 1, function()
     -- DEFAULT STATE
     local use_ytdl = "no"
     local local_raw_options = ""
-    local ytdl_format = ""
+    local ytdl_format = initial_ytdl_format
+
+    -- Reset dynamic properties for every file load to prevent leakage
+    mp.set_property("http-header-fields", "")
+    mp.set_property("user-agent", "")
+    mp.set_property("referrer", "")
+    mp.set_property("cookies-file", "")
+    mp.set_property("ytdl-raw-options", initial_ytdl_raw)
+    mp.set_property("ytdl-format", initial_ytdl_format)
 
     -- SAFETY: If the path is a YouTube URL, we MUST use ytdl
     if path:find("youtube%.com") or path:find("youtu%.be") then

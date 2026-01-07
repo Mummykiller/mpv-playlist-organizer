@@ -68,6 +68,21 @@ try:
     import re
     import uuid # Added for UUID generation
     from logging.handlers import RotatingFileHandler
+    import ctypes
+
+    def set_process_name():
+        """Attempts to set a recognizable name for the process in Task Managers."""
+        try:
+            if sys.platform.startswith('linux'):
+                # Linux: PR_SET_NAME = 15. Max 16 bytes including null terminator.
+                libc = ctypes.CDLL('libc.so.6')
+                # "mpv-pl-organize" is 15 chars
+                libc.prctl(15, b'mpv-pl-organize', 0, 0, 0)
+            elif sys.platform == 'win32':
+                # Windows: Sets the title shown in the Processes tab
+                ctypes.windll.kernel32.SetConsoleTitleW("mpv playlist organizer")
+        except Exception:
+            pass # Fails silently if restricted or libc missing
 
     # --- Path Correction for CLI Usage ---
     SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
@@ -271,12 +286,48 @@ try:
     atexit.register(cleanup_ipc_socket, mpv_session)
     atexit.register(handler_manager._stop_local_m3u_server)
 
+    from concurrent.futures import ThreadPoolExecutor
+
     def main():
         """Main message loop for native messaging from the browser."""
+        set_process_name()
+
+        # The delegation system: One receptionist (main loop), many workers (threads)
+        executor = ThreadPoolExecutor(max_workers=10)
+
+        # --- IPC Event Listener (Background) ---
+        def ipc_event_listener():
+            """Continuously listens for events from the active MPV session."""
+            logging.info("[PY] IPC event listener thread started.")
+            while True:
+                if mpv_session.ipc_manager and mpv_session.ipc_manager.is_connected():
+                    event = mpv_session.ipc_manager.receive_event(timeout=1.0)
+                    if event and event.get('event') == 'client-message':
+                        args = event.get('args', [])
+                        # Look for our custom ytdl failure signal
+                        if len(args) >= 1 and args[0] == "ytdl_error_detected":
+                            error_msg = args[1] if len(args) > 1 else "Unknown ytdl error"
+                            logging.warning(f"[PY][IPC] YTDL Failure signaled from Lua: {error_msg}")
+                            send_message({
+                                "action": "ytdlp_update_check", 
+                                "folderId": mpv_session.owner_folder_id,
+                                "log": {
+                                    "text": f"[Native Host]: YTDL Failure detected ({error_msg}). Checking for updates...",
+                                    "type": "error"
+                                }
+                            })
+                else:
+                    time.sleep(1.0)
+
+        threading.Thread(target=ipc_event_listener, daemon=True).start()
+
         # Ensure stdin/stdout are available (critical for native messaging)
         if sys.stdin is None or sys.stdout is None:
             logging.error("[PY][MAIN] Standard input/output is missing. If on Windows, ensure the registry key points to 'python.exe' and not 'pythonw.exe'.")
             sys.exit(1)
+
+        # The delegation system: One receptionist (main loop), many workers (threads)
+        executor = ThreadPoolExecutor(max_workers=10)
 
         def handle_restore_session(message):
             """Manual trigger for session restoration from the extension."""
@@ -321,13 +372,12 @@ try:
             'get_default_automatic_flags': handler_manager.handle_get_default_automatic_flags
         }
 
-        while True:
+        def task_wrapper(message):
+            """Worker thread task to execute handler and send response."""
             try:
-                message = get_message()  # This will block or sys.exit() on disconnect
                 command = message.get('action')
-                logging.info(f"[PY][RECV] (ID: {message.get('request_id')}): {command}")
-                
                 handler = COMMAND_HANDLERS.get(command)
+                
                 if handler:
                     response = handler(message)
                 else:
@@ -340,15 +390,25 @@ try:
                 send_message(response)
 
             except Exception as e:
-                logging.error(f"[PY][MAIN] Error in main loop: {e}", exc_info=True)
+                logging.error(f"[PY][TASK] Error processing {message.get('action')}: {e}", exc_info=True)
                 try:
-                    error_response = {"success": False, "error": f"An unexpected error occurred in the native host: {str(e)}"}
-                    # Check if 'message' was successfully assigned before the error
-                    if 'message' in locals() and isinstance(message, dict) and message.get('request_id'):
-                        error_response['request_id'] = message.get('request_id')
-                    send_message(error_response)
-                except Exception as send_e:
-                    logging.error(f"[PY][MAIN] Could not send error message back to extension: {send_e}")
+                    error_resp = {"success": False, "error": f"Task error: {str(e)}"}
+                    if message.get('request_id'): error_resp['request_id'] = message.get('request_id')
+                    send_message(error_resp)
+                except: pass
+
+        while True:
+            try:
+                message = get_message()  # Blocks here waiting for browser input
+                logging.info(f"[PY][RECV] (ID: {message.get('request_id')}): {message.get('action')}")
+                
+                # DELEGATION: hand off heavy work to the thread pool
+                executor.submit(task_wrapper, message)
+
+            except Exception as e:
+                logging.error(f"[PY][MAIN] Error in main loop: {e}", exc_info=True)
+                # If get_message fails critically, the loop might need to break
+                if not sys.stdin or sys.stdin.closed: break
 
     if __name__ == '__main__':
         logging.info(f"[PY][START] Args: {sys.argv}, TTY: {sys.stdin.isatty() if sys.stdin else 'None'}")

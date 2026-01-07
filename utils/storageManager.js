@@ -1,26 +1,31 @@
 /**
  * Manages all data persistence and migration logic for the extension.
- * It uses a single unified object in chrome.storage.local.
+ * Uses a granular 'Bucket' system to improve performance and memory usage.
+ * Storage Keys:
+ * - 'mpv_storage_version': Integer version
+ * - 'mpv_settings': Global preferences object
+ * - 'mpv_folder_index': Array of folder names in order
+ * - 'mpv_folder_data_[ID]': Individual playlist data for each folder
  */
 export class StorageManager {
     constructor(storageKey, broadcastLog) {
-        this.STORAGE_KEY = storageKey;
+        this.STORAGE_KEY = storageKey; // Legacy key for migration
         this.initPromise = null;
-        this.broadcastLog = broadcastLog; // Dependency for logging during migrations
-        this.writeQueue = Promise.resolve(); // Queue for serializing write operations
+        this.broadcastLog = broadcastLog;
+        this.writeQueue = Promise.resolve();
     }
 
-    /**
-     * Initializes the storage manager, running all necessary data migrations.
-     * This must be called once at startup before other methods are used.
-     * @returns {Promise<void>}
-     */
-    initialize() {
-        if (this.initPromise) {
-            return this.initPromise;
-        }
+    async initialize() {
+        if (this.initPromise) return this.initPromise;
+        
         this.initPromise = (async () => {
-            await this._migrateStorageToOneObject();
+            const versionData = await chrome.storage.local.get('mpv_storage_version');
+            const version = versionData.mpv_storage_version || 1;
+
+            if (version < 2) {
+                await this._migrateToGranularStorage();
+            }
+
             await this._runDataMigrations();
             await this.runJanitorTasks();
         })();
@@ -28,8 +33,100 @@ export class StorageManager {
     }
 
     /**
-     * Performs maintenance tasks like pruning orphaned data.
+     * Migrates from the monolithic 'mpv_organizer_data' key to granular keys.
      */
+    async _migrateToGranularStorage() {
+        console.log("[Storage] Migrating to Granular Storage (v2)...");
+        const legacyData = await chrome.storage.local.get(this.STORAGE_KEY);
+        const data = legacyData[this.STORAGE_KEY];
+
+        if (!data) {
+            // New installation, just set the version
+            await chrome.storage.local.set({ 'mpv_storage_version': 2 });
+            return;
+        }
+
+        const newStorage = {
+            'mpv_storage_version': 2,
+            'mpv_settings': data.settings,
+            'mpv_folder_index': data.folderOrder || Object.keys(data.folders)
+        };
+
+        // Split folders into individual keys
+        for (const [folderId, folderData] of Object.entries(data.folders)) {
+            newStorage[`mpv_folder_data_${folderId}`] = folderData;
+        }
+
+        await chrome.storage.local.set(newStorage);
+        // We keep the legacy key for one session just in case, but usually we'd remove it.
+        // await chrome.storage.local.remove(this.STORAGE_KEY); 
+        console.log("[Storage] Migration to Granular Storage complete.");
+    }
+
+    /**
+     * Gets the full aggregate data object. 
+     * Note: This is kept for backward compatibility with existing handlers.
+     */
+    async get() {
+        try {
+            const keys = await chrome.storage.local.get(['mpv_settings', 'mpv_folder_index']);
+            
+            // If new system isn't initialized, fall back to legacy or defaults
+            if (!keys.mpv_settings) {
+                const legacy = await chrome.storage.local.get(this.STORAGE_KEY);
+                return legacy[this.STORAGE_KEY] || this._getDefaultData();
+            }
+
+            const settings = keys.mpv_settings;
+            const folderOrder = keys.mpv_folder_index;
+            
+            // Aggressively fetch all folder data keys
+            const folderKeys = folderOrder.map(id => `mpv_folder_data_${id}`);
+            const foldersData = await chrome.storage.local.get(folderKeys);
+
+            const folders = {};
+            folderOrder.forEach(id => {
+                folders[id] = foldersData[`mpv_folder_data_${id}`] || { playlist: [] };
+            });
+
+            return {
+                settings,
+                folderOrder,
+                folders
+            };
+        } catch (e) {
+            console.error("Storage get failed:", e);
+            return this._getDefaultData();
+        }
+    }
+
+    /**
+     * Sets the data by splitting it back into granular keys.
+     */
+    async set(data) {
+        this.writeQueue = this.writeQueue.then(async () => {
+            try {
+                const update = {
+                    'mpv_settings': data.settings,
+                    'mpv_folder_index': data.folderOrder || Object.keys(data.folders)
+                };
+
+                // Add each folder to the update batch
+                for (const [folderId, folderData] of Object.entries(data.folders)) {
+                    update[`mpv_folder_data_${folderId}`] = folderData;
+                }
+
+                await chrome.storage.local.set(update);
+            } catch (e) {
+                console.error("Storage set failed:", e);
+                if (this.broadcastLog) {
+                    this.broadcastLog({ text: `[Background]: Storage write failed: ${e.message}`, type: 'error' });
+                }
+            }
+        });
+        return this.writeQueue;
+    }
+
     async runJanitorTasks() {
         const data = await this.get();
         let modified = false;
@@ -63,6 +160,17 @@ export class StorageManager {
             }
         }
 
+        // 3. NEW: Physical cleanup of deleted folder keys in storage
+        const allStorage = await chrome.storage.local.get(null);
+        const physicalFolderKeys = Object.keys(allStorage).filter(k => k.startsWith('mpv_folder_data_'));
+        const activeFolderKeys = folderIds.map(id => `mpv_folder_data_${id}`);
+        
+        const keysToRemove = physicalFolderKeys.filter(k => !activeFolderKeys.includes(k));
+        if (keysToRemove.length > 0) {
+            await chrome.storage.local.remove(keysToRemove);
+            console.log(`[Storage Janitor] Removed ${keysToRemove.length} orphaned folder keys from storage.`);
+        }
+
         if (modified) {
             await this.set(data);
             console.log("Storage Janitor: Cleaned up orphaned/inconsistent metadata.");
@@ -90,7 +198,7 @@ export class StorageManager {
                         auto_append_on_add: true,
                         live_removal: true,
                         stream_scanner_timeout: 60, confirm_remove_folder: true, confirm_clear_playlist: true,
-                        confirm_close_mpv: true, confirm_play_new: true, confirm_folder_switch: true, clear_on_completion: false,
+                        confirm_close_mpv: true, confirm_play_new: true, confirm_folder_switch: true, clear_on_completion: 'no',
                         autofocus_new_folder: false,
                         anilistPanelVisible: false,
                         enable_dblclick_copy: false,
@@ -126,6 +234,7 @@ export class StorageManager {
                         performance_profile: 'default',
                         ffmpeg_path: '',
                         node_path: '',
+                        restricted_domains: [],
                         // Keybindings
                         kb_add_playlist: 'Shift+A',
                         kb_play_playlist: 'Shift+P',
@@ -220,6 +329,11 @@ export class StorageManager {
                 globalPrefs.confirm_clear_playlist = globalPrefs.confirm_clear_playlist ?? oldVal;
                 globalPrefs.confirm_close_mpv = globalPrefs.confirm_close_mpv ?? oldVal;
                 delete globalPrefs.confirm_destructive_actions;
+            }
+
+            if (typeof globalPrefs.clear_on_completion === 'boolean') {
+                needsUpdate = true;
+                globalPrefs.clear_on_completion = globalPrefs.clear_on_completion ? 'yes' : 'no';
             }
 
             const defaultGlobalPrefs = this._getDefaultData().settings.ui_preferences.global;

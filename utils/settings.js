@@ -30,7 +30,7 @@ class OptionsManager {
             { key: 'confirm_close_mpv', elementId: 'confirm-close-mpv-checkbox', type: 'checkbox' },
             { key: 'confirm_play_new', elementId: 'confirm-play-new-checkbox', type: 'checkbox' },
             { key: 'confirm_folder_switch', elementId: 'confirm-folder-switch-checkbox', type: 'checkbox' },
-            { key: 'clear_on_completion', elementId: 'clear-on-completion-checkbox', type: 'checkbox' },
+            { key: 'clear_on_completion', elementId: 'clear-on-completion-select', type: 'select' },
             { key: 'yt_use_cookies', elementId: 'yt-use-cookies-checkbox', type: 'checkbox' },
             { key: 'yt_mark_watched', elementId: 'yt-mark-watched-checkbox', type: 'checkbox' },
             { key: 'yt_ignore_config', elementId: 'yt-ignore-config-checkbox', type: 'checkbox' },
@@ -167,8 +167,72 @@ class OptionsManager {
         this._updatePopupWidthLock(prefs.popup_width_locked || false);
 
         this._renderScraperFilterList(prefs.scraper_filter_words || []);
+        this._renderRestrictedDomainsList(prefs.restricted_domains || []);
         this._renderBuiltInFilterList();
         this._renderDependencyStatus(prefs.dependencyStatus);
+    }
+
+    _renderRestrictedDomainsList(domains = []) {
+        const container = document.getElementById('restricted-domains-list-container');
+        if (!container) return;
+        container.innerHTML = '';
+        domains.forEach(domain => {
+            const pill = document.createElement('div');
+            pill.className = 'filter-pill';
+            pill.textContent = domain;
+            pill.dataset.domain = domain;
+            pill.title = 'Click to remove';
+            container.appendChild(pill);
+        });
+    }
+
+    async _addRestrictedDomain() {
+        const input = document.getElementById('restricted-domain-input');
+        if (!input) return;
+        let newDomain = input.value.trim().toLowerCase();
+        if (!newDomain) return;
+
+        // Smart cleanup: Remove http/https, trailing slashes, and paths
+        try {
+            // If it's a full URL, parse it to get just the hostname
+            if (newDomain.includes('://')) {
+                newDomain = new URL(newDomain).hostname;
+            } else {
+                // Remove trailing slash and path if user typed "domain.com/path"
+                newDomain = newDomain.split('/')[0];
+            }
+        } catch (e) {
+            // Fallback to original string if URL parsing fails
+        }
+
+        // Basic domain validation - Relaxed to allow modern long TLDs
+        if (!/^[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,13}$/.test(newDomain)) {
+            this.showStatus('Invalid format. Use "domain.com"', true);
+            return;
+        }
+
+        const response = await this.sendMessageAsync({ action: 'get_ui_preferences' });
+        const currentDomains = response?.preferences?.restricted_domains || [];
+
+        if (!currentDomains.includes(newDomain)) {
+            const newDomains = [...currentDomains, newDomain];
+            // Update UI immediately for responsiveness
+            this._renderRestrictedDomainsList(newDomains);
+            // Save to storage
+            await this.sendMessageAsync({ action: 'set_ui_preferences', preferences: { restricted_domains: newDomains } });
+            this.showStatus(`Domain "${newDomain}" restricted.`);
+        } else {
+            this.showStatus('Domain already in list.', true);
+        }
+        input.value = '';
+    }
+
+    async _removeRestrictedDomain(domainToRemove) {
+        const response = await this.sendMessageAsync({ action: 'get_ui_preferences' });
+        const currentDomains = response?.preferences?.restricted_domains || [];
+        const newDomains = currentDomains.filter(d => d !== domainToRemove);
+        await this.sendMessageAsync({ action: 'set_ui_preferences', preferences: { restricted_domains: newDomains } });
+        this._renderRestrictedDomainsList(newDomains);
     }
 
     _renderDependencyStatus(status) {
@@ -592,6 +656,26 @@ class OptionsManager {
             scraperList.addEventListener('click', (e) => {
                 if (e.target.classList.contains('filter-pill')) {
                     this._removeScraperFilterWord(e.target.dataset.word);
+                }
+            });
+        }
+
+        // --- Restricted Domains Listeners ---
+        const restrictedInput = document.getElementById('restricted-domain-input');
+        if (restrictedInput) {
+            restrictedInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this._addRestrictedDomain();
+                }
+            });
+        }
+
+        const restrictedList = document.getElementById('restricted-domains-list-container');
+        if (restrictedList) {
+            restrictedList.addEventListener('click', (e) => {
+                if (e.target.classList.contains('filter-pill')) {
+                    this._removeRestrictedDomain(e.target.dataset.domain);
                 }
             });
         }

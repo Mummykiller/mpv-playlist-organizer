@@ -35,13 +35,15 @@ function broadcastToTabs(message) {
     // Send to other extension contexts (like the popup).
     chrome.runtime.sendMessage(message).catch(() => {});
 
-    chrome.tabs.query({}, (tabs) => {
+    // Optimized: Only query tabs that we can actually script (http/https)
+    // to reduce console noise and IPC overhead for restricted pages.
+    chrome.tabs.query({ url: ["http://*/*", "https://*/*"] }, (tabs) => {
         for (const tab of tabs) {
             try {
                 // Attempt to send the message, but ignore errors if the content script isn't injected.
                 chrome.tabs.sendMessage(tab.id, message).catch(() => {});
             } catch (e) {
-                // This can happen if the tab is on a restricted page (e.g., chrome://)
+                // Silently ignore failures for inactive or restricted tabs.
             }
         }
     });
@@ -65,9 +67,6 @@ const storage = new StorageManager('mpv_organizer_data', broadcastLog);
  * native host to be written to the folders.json file. This keeps the
  * CLI and the extension in sync.
  */
-// Debounce the sync function to avoid rapid-fire writes to the native host.
-// A 1-second delay is reasonable. If multiple changes happen in quick succession,
-// it will only sync once after the user is done.
 const _syncToNativeHostFile = async () => {
     const data = await storage.get();
     try {
@@ -82,13 +81,15 @@ const _syncToNativeHostFile = async () => {
     }
 };
 
-const _debouncedSyncInner = debounce(_syncToNativeHostFile, 1000);
-
+// Debounce the sync function to avoid rapid-fire writes to the native host.
+// In MV3, we use chrome.alarms to ensure the sync happens even if the worker unloads.
 const debouncedSyncToNativeHostFile = (immediate = false) => {
     if (immediate) {
         _syncToNativeHostFile();
+        chrome.alarms.clear('sync-to-native-host');
     } else {
-        _debouncedSyncInner();
+        // Create/Reset an alarm to fire in 1 minute (minimum alarm granularity is 1 minute)
+        chrome.alarms.create('sync-to-native-host', { delayInMinutes: 1 });
     }
 };
 
@@ -200,6 +201,7 @@ const actionHandlers = {
     'play': playback_handlers.handlePlay, // This now delegates to handlePlayM3U internally
     'play_m3u': playback_handlers.handlePlayM3U, // New action for direct M3U playback
     'append': playback_handlers.handleAppend,
+    'confirm_clear_playlist': playback_handlers.handleClearPlaylistConfirmation,
     'close_mpv': playback_handlers.handleCloseMpv,
     'add': playlistManager.handleAdd,
     'get_playlist': playlistManager.handleGetPlaylist,
@@ -225,35 +227,37 @@ actionHandlers['session_restored'] = playback_handlers.handleSessionRestored;
 /**
  * Periodically pings the native host to verify it's still alive and responding.
  */
-function startNativeHostHeartbeat() {
-    const HEARTBEAT_INTERVAL_MS = 300000; // 5 minutes
-
-    const performCheck = async () => {
-        try {
-            const response = await callNativeHost({ action: 'ping' });
-            if (response?.success) {
-                nativeHostStatus = {
-                    status: 'online',
-                    lastCheck: Date.now(),
-                    info: {
-                        python: response.python_version,
-                        platform: response.platform
-                    }
-                };
-            } else {
-                nativeHostStatus.status = 'error';
-                nativeHostStatus.lastCheck = Date.now();
-            }
-        } catch (e) {
-            nativeHostStatus.status = 'offline';
+async function performNativeHostHeartbeat() {
+    try {
+        const response = await callNativeHost({ action: 'ping' });
+        if (response?.success) {
+            nativeHostStatus = {
+                status: 'online',
+                lastCheck: Date.now(),
+                info: {
+                    python: response.python_version,
+                    platform: response.platform
+                }
+            };
+        } else {
+            nativeHostStatus.status = 'error';
             nativeHostStatus.lastCheck = Date.now();
         }
-    };
+    } catch (e) {
+        nativeHostStatus.status = 'offline';
+        nativeHostStatus.lastCheck = Date.now();
+    }
+}
 
+function startNativeHostHeartbeat() {
     // Initial check
-    performCheck();
-    // Regular interval
-    setInterval(performCheck, HEARTBEAT_INTERVAL_MS);
+    performNativeHostHeartbeat();
+    
+    // Create an alarm for persistent checking (30 mins is standard for heartbeats in MV3)
+    // We use a shorter interval (5 mins) as per the original intention
+    chrome.alarms.create('native-host-heartbeat', {
+        periodInMinutes: 5 
+    });
 }
 
 startNativeHostHeartbeat();
@@ -309,6 +313,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === 'periodic-storage-janitor') {
         console.log("[BG] Running periodic storage janitor tasks...");
         storage.runJanitorTasks().catch(e => console.error("Janitor alarm failed:", e));
+    } else if (alarm.name === 'native-host-heartbeat') {
+        performNativeHostHeartbeat();
+    } else if (alarm.name === 'sync-to-native-host') {
+        _syncToNativeHostFile();
     }
 });
 
@@ -347,85 +355,63 @@ async function reinjectContentScripts() {
     let reinjectedCount = 0;
 
     try {
+        const data = await storage.get();
+        const restrictedDomains = data.settings.ui_preferences.global.restricted_domains || [];
         const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
-        console.log(`[BG] Checking ${tabs.length} tabs for MPV UI re-injection...`);
-
+        
         for (const tab of tabs) {
             // Skip restricted tabs (like chrome:// or extension pages)
-            if (tab.url.startsWith("chrome://") || tab.url.startsWith("about:")) continue;
+            if (tab.url.startsWith("chrome://") || tab.url.startsWith("about:") || tab.url.includes("chrome.google.com/webstore")) continue;
+
+            // --- NEW: User-defined restricted domains check ---
+            try {
+                const url = new URL(tab.url);
+                const isRestricted = restrictedDomains.some(domain => 
+                    url.hostname === domain || url.hostname.endsWith('.' + domain)
+                );
+                if (isRestricted) continue;
+            } catch (e) { /* invalid url */ }
 
             try {
-                // Check if the content script is alive and responding
+                // Check if the content script is already alive
                 const isAlive = await chrome.tabs.sendMessage(tab.id, { action: 'ping' })
                     .then(res => res && res.success)
                     .catch(() => false);
 
                 if (isAlive) continue;
 
-                // Define the core injection logic for potential retry
-                const performInjection = async () => {
-                    // Clean up any existing (dead) UI elements first
-                    await chrome.scripting.executeScript({
-                        target: { tabId: tab.id },
-                        func: () => {
-                            const ids = [
-                                'm3u8-controller-host', 
-                                'm3u8-minimized-host', 
-                                'anilist-panel-host',
-                                'mpv-organizer-host-styles'
-                            ];
-                            ids.forEach(id => document.getElementById(id)?.remove());
-                            window.mpvControllerInitialized = false;
-                            window.mpvMessageListenerAttached = false;
-                        }
-                    }).catch(() => {});
-
-                    // Inject JS files
-                    await chrome.scripting.executeScript({
-                        target: { tabId: tab.id },
-                        files: jsFiles
-                    });
-                    
-                    // After re-injection, trigger a UI sync
-                    chrome.tabs.sendMessage(tab.id, { foldersChanged: true }).catch(() => {});
-                };
-
-                try {
-                    await performInjection();
-                    reinjectedCount++;
-                } catch (firstErr) {
-                    // Ignore expected errors immediately (restricted browser pages, webstore, etc.)
-                    const isRestricted = firstErr.message.includes("cannot be scripted") || 
-                                        firstErr.message.includes("Access denied") ||
-                                        firstErr.message.includes("restricted") ||
-                                        firstErr.message.includes("not allowed") ||
-                                        firstErr.message.includes("Cannot access contents");
-                    
-                    if (isRestricted) continue;
-
-
-                    // If it was an unexpected error, try one more time after a short delay
-                    // This handles transient "error then works" situations.
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    try {
-                        await performInjection();
-                        reinjectedCount++;
-                    } catch (secondErr) {
-                        console.error(`[Background]: Persistent re-injection failure for Tab ${tab.id} (tried 2 times):`, secondErr.message);
+                // Clean up any existing (dead) UI elements first
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    func: () => {
+                        const ids = [
+                            'm3u8-controller-host', 
+                            'm3u8-minimized-host', 
+                            'anilist-panel-host',
+                            'mpv-organizer-host-styles'
+                        ];
+                        ids.forEach(id => document.getElementById(id)?.remove());
+                        window.mpvControllerInitialized = false;
                     }
-                }
-            } catch (tabErr) {
-                // This catch handles errors in the outer loop logic (like sendMessage failing in an unusual way)
-                // but usually the inner try/catch handles the scripting errors.
-            }
+                }).catch(() => {});
 
+                // Inject JS files sequentially
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: jsFiles
+                });
+                
+                reinjectedCount++;
+            } catch (tabErr) {
+                // Ignore silent failures on restricted/unsupported pages
+            }
         }
+        
         if (reinjectedCount > 0) {
-            console.log(`[Background]: Auto-reinjection complete. Restored MPV UI in ${reinjectedCount} tabs.`);
+            console.log(`[Background]: Auto-reinjection complete for ${reinjectedCount} tabs.`);
         }
     } catch (err) {
-        console.error("[Background]: Error during auto-reinjection loop:", err);
-        broadcastLog({ text: `[Background]: Auto-reinjection failed. You may need to refresh your tabs manually.`, type: 'error' });
+        console.error("[Background]: Global error during auto-reinjection:", err);
     }
 }
 
