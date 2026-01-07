@@ -40,7 +40,6 @@ class PlaybackSession {
             force_terminal: globalPrefs.force_terminal ?? false,
             clear_on_completion: globalPrefs.clear_on_completion ?? false,
             start_paused: false, // Default to not paused when playing sequentially
-            bypassScripts: globalPrefs.bypassScripts || {}, // Pass bypass scripts config
             // Networking & Performance Sync
             disable_network_overrides: globalPrefs.disable_network_overrides ?? false,
             enable_cache: globalPrefs.enable_cache ?? true,
@@ -91,8 +90,7 @@ class PlaybackSession {
                         const response = await _callNativeHost({
                             action: 'append',
                             url_items: batchItems, // Use plural 'url_items'
-                            folderId: this.folderId,
-                            bypassScripts: globalPrefs.bypassScripts || {}
+                            folderId: this.folderId
                         });
 
                         if (response.success) {
@@ -409,7 +407,6 @@ export async function handlePlay(request) {
             force_terminal: globalPrefs.force_terminal ?? false,
             clear_on_completion: request.clear_on_completion ?? (globalPrefs.clear_on_completion ?? false),
             start_paused: start_paused ?? false,
-            bypassScripts: globalPrefs.bypassScripts || {},
             // Networking & Performance Sync
             disable_network_overrides: globalPrefs.disable_network_overrides ?? false,
             enable_cache: globalPrefs.enable_cache ?? true,
@@ -512,7 +509,6 @@ export async function handlePlayM3U(request) {
         force_terminal: globalPrefs.force_terminal ?? false,
         clear_on_completion: clear_on_completion ?? (globalPrefs.clear_on_completion ?? false),
         start_paused: start_paused ?? false,
-        bypassScripts: globalPrefs.bypassScripts || {},
         // Networking & Performance Sync
         disable_network_overrides: globalPrefs.disable_network_overrides ?? false,
         enable_cache: globalPrefs.enable_cache ?? true,
@@ -523,11 +519,11 @@ export async function handlePlayM3U(request) {
         demuxer_readahead_secs: globalPrefs.demuxer_readahead_secs || 500,
         stream_buffer_size: globalPrefs.stream_buffer_size || '10M',
         ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
-                    enable_reconnect: globalPrefs.enable_reconnect ?? true,
-                    reconnect_delay: globalPrefs.reconnect_delay || 4,
-                    mpv_decoder: globalPrefs.mpv_decoder || 'auto',
-                    ytdl_quality: globalPrefs.ytdl_quality || 'best'
-                };
+        enable_reconnect: globalPrefs.enable_reconnect ?? true,
+        reconnect_delay: globalPrefs.reconnect_delay || 4,
+        mpv_decoder: globalPrefs.mpv_decoder || 'auto',
+        ytdl_quality: globalPrefs.ytdl_quality || 'best'
+    };
             if (play_new_instance && m3u_data.type === 'items') {
         nativePayload.playlist = m3u_data.value.map(item => item.url);
     }

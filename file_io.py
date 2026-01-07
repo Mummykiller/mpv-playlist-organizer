@@ -463,7 +463,8 @@ def get_settings():
         ]
     }
 
-    current_settings = _safe_json_load(CONFIG_FILE)
+    with FileLock(CONFIG_FILE):
+        current_settings = _safe_json_load(CONFIG_FILE)
     
     # Merge current settings with defaults, prioritizing current_settings
     settings = {**default_settings, **current_settings}
@@ -490,21 +491,22 @@ def get_settings():
 def set_settings(settings_dict):
     """Writes the provided settings to config.json, merging with existing settings."""
     try:
-        current_settings = get_settings()
+        with FileLock(CONFIG_FILE):
+            current_settings = get_settings()
 
-        if 'ytdl_quality' in settings_dict:
-            valid_qualities = ['best', '2160', '1440', '1080', '720', '480']
-            if str(settings_dict['ytdl_quality']) not in valid_qualities:
-                logging.warning(f"[PY][SEC] Invalid ytdl_quality '{settings_dict['ytdl_quality']}' ignored.")
-                del settings_dict['ytdl_quality']
+            if 'ytdl_quality' in settings_dict:
+                valid_qualities = ['best', '2160', '1440', '1080', '720', '480']
+                if str(settings_dict['ytdl_quality']) not in valid_qualities:
+                    logging.warning(f"[PY][SEC] Invalid ytdl_quality '{settings_dict['ytdl_quality']}' ignored.")
+                    del settings_dict['ytdl_quality']
 
-        merged_settings = {**current_settings, **settings_dict}
+            merged_settings = {**current_settings, **settings_dict}
 
-        if _atomic_json_dump(merged_settings, CONFIG_FILE):
-            logging.info(f"[PY][IO] Settings successfully written to {CONFIG_FILE}.")
-            return {"success": True, "message": "Settings saved."}
-        else:
-            return {"success": False, "error": "Atomic write for settings failed."}
+            if _atomic_json_dump(merged_settings, CONFIG_FILE):
+                logging.info(f"[PY][IO] Settings successfully written to {CONFIG_FILE}.")
+                return {"success": True, "message": "Settings saved."}
+            else:
+                return {"success": False, "error": "Atomic write for settings failed."}
     except Exception as e:
         error_msg = f"[PY][IO] Failed to write settings to {CONFIG_FILE}: {e}"
         logging.error(error_msg)

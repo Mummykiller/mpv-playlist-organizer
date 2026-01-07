@@ -29,7 +29,7 @@ class MpvSessionManager:
         self.pid = None
         self.owner_folder_id = None
         self.session_file = session_file_path
-        self.sync_lock = threading.Lock()
+        self.sync_lock = threading.RLock() # Changed from Lock to RLock
         self.is_alive = False
         self.ipc_manager = None
         self.playlist_tracker = None
@@ -83,123 +83,125 @@ class MpvSessionManager:
 
     def clear(self, mpv_return_code=None):
         """Clears the session state and removes the session file."""
-        self.is_alive = False
-        pid_to_clear = self.pid
-        self.pid = None
+        with self.sync_lock:
+            self.is_alive = False
+            pid_to_clear = self.pid
+            self.pid = None
 
-        if pid_to_clear:
-            logging.info(f"Clearing session state for PID: {pid_to_clear}")
+            if pid_to_clear:
+                logging.info(f"Clearing session state for PID: {pid_to_clear}")
 
-        if self.playlist_tracker:
-            self.playlist_tracker.stop_tracking(mpv_return_code=mpv_return_code)
-        self.playlist_tracker = None
+            if self.playlist_tracker:
+                self.playlist_tracker.stop_tracking(mpv_return_code=mpv_return_code)
+            self.playlist_tracker = None
 
-        if self.ipc_manager:
-            self.ipc_manager.close()
-            self.ipc_manager = None
+            if self.ipc_manager:
+                self.ipc_manager.close()
+                self.ipc_manager = None
 
-        self.process = None
-        self.ipc_path = None
-        self.playlist = None
-        self.owner_folder_id = None
-        self.manual_quit = False
+            self.process = None
+            self.ipc_path = None
+            self.playlist = None
+            self.owner_folder_id = None
+            self.manual_quit = False
 
-        if self.session_cookies:
-            logging.info(f"Cleaning up {len(self.session_cookies)} session cookies.")
-            for cookie_path in list(self.session_cookies):
+            if self.session_cookies:
+                logging.info(f"Cleaning up {len(self.session_cookies)} session cookies.")
+                for cookie_path in list(self.session_cookies):
+                    try:
+                        if os.path.exists(cookie_path):
+                            os.remove(cookie_path)
+                    except Exception as e:
+                        logging.warning(f"Failed to remove session cookie {cookie_path}: {e}")
+                self.session_cookies.clear()
+
+            if os.path.exists(self.session_file):
                 try:
-                    if os.path.exists(cookie_path):
-                        os.remove(cookie_path)
-                except Exception as e:
-                    logging.warning(f"Failed to remove session cookie {cookie_path}: {e}")
-            self.session_cookies.clear()
-
-        if os.path.exists(self.session_file):
-            try:
-                os.remove(self.session_file)
-                logging.info(f"Cleaned up session file: {self.session_file}")
-            except OSError as e:
-                logging.warning(f"Failed to remove session file during cleanup: {e}")
+                    os.remove(self.session_file)
+                    logging.info(f"Cleaned up session file: {self.session_file}")
+                except OSError as e:
+                    logging.warning(f"Failed to remove session file during cleanup: {e}")
 
     def restore(self):
         """Checks for a persisted session file and restores state if the process is still alive."""
-        if self.is_alive and self.pid and ipc_utils.is_pid_running(self.pid):
-            return {"was_stale": False, "folderId": self.owner_folder_id, "lastPlayedId": getattr(self, 'last_played_id_cache', None)}
+        with self.sync_lock:
+            if self.is_alive and self.pid and ipc_utils.is_pid_running(self.pid):
+                return {"was_stale": False, "folderId": self.owner_folder_id, "lastPlayedId": getattr(self, 'last_played_id_cache', None)}
 
-        if not os.path.exists(self.session_file):
-            return None
+            if not os.path.exists(self.session_file):
+                return None
 
-        logging.info(f"[PY][Session] Found session file: {self.session_file}. Checking for live process.")
-        try:
-            with open(self.session_file, 'r', encoding='utf-8') as f:
-                session_data = json.load(f)
+            logging.info(f"[PY][Session] Found session file: {self.session_file}. Checking for live process.")
+            try:
+                with open(self.session_file, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
 
-            pid = session_data.get("pid")
-            ipc_path = session_data.get("ipc_path")
-            owner_folder_id = session_data.get("owner_folder_id")
-            token = session_data.get("token")
+                pid = session_data.get("pid")
+                ipc_path = session_data.get("ipc_path")
+                owner_folder_id = session_data.get("owner_folder_id")
+                token = session_data.get("token")
 
-            if not all([pid, ipc_path, owner_folder_id]):
-                raise ValueError("Session file is malformed.")
+                if not all([pid, ipc_path, owner_folder_id]):
+                    raise ValueError("Session file is malformed.")
 
-            if ipc_utils.is_process_alive(pid, ipc_path):
-                all_folders = self.get_all_folders_from_file()
-                folder_data = all_folders.get(owner_folder_id)
-                if not folder_data:
-                    raise RuntimeError(f"Could not find data for restored folder '{owner_folder_id}'.")
+                if ipc_utils.is_process_alive(pid, ipc_path):
+                    all_folders = self.get_all_folders_from_file()
+                    folder_data = all_folders.get(owner_folder_id)
+                    if not folder_data:
+                        raise RuntimeError(f"Could not find data for restored folder '{owner_folder_id}'.")
 
-                self.pid = pid
-                self.ipc_path = ipc_path
-                self.playlist = folder_data.get("playlist", [])
-                self.owner_folder_id = owner_folder_id
-                self.current_token = token
-                self.is_alive = True
-                
-                self.ipc_manager = ipc_utils.IPCSocketManager()
-                self.ipc_manager.connect(self.ipc_path)
-                
-                last_played_id = None
-                if self.ipc_manager.is_connected():
+                    self.pid = pid
+                    self.ipc_path = ipc_path
+                    self.playlist = folder_data.get("playlist", [])
+                    self.owner_folder_id = owner_folder_id
+                    self.current_token = token
+                    self.is_alive = True
+                    
+                    self.ipc_manager = ipc_utils.IPCSocketManager()
+                    self.ipc_manager.connect(self.ipc_path)
+                    
+                    last_played_id = None
+                    if self.ipc_manager.is_connected():
+                        try:
+                            path_resp = self.ipc_manager.send({"command": ["get_property", "path"]}, expect_response=True)
+                            title_resp = self.ipc_manager.send({"command": ["get_property", "media-title"]}, expect_response=True)
+                            
+                            current_path = path_resp.get("data") if path_resp and path_resp.get("error") == "success" else None
+                            current_title = title_resp.get("data") if title_resp and title_resp.get("error") == "success" else None
+
+                            if current_path or current_title:
+                                for item in self.playlist:
+                                    if current_path and (item.get('url') == current_path or item.get('original_url') == current_path):
+                                        last_played_id = item.get('id')
+                                        break
+                                    if current_title and item.get('title') == current_title:
+                                        last_played_id = item.get('id')
+                                        break
+                                self.last_played_id_cache = last_played_id
+                        except Exception as e:
+                            logging.warning(f"Failed to query active item during restore: {e}")
+                    
+                    import file_io
+                    from playlist_tracker import PlaylistTracker
+                    self.playlist_tracker = PlaylistTracker(owner_folder_id, self.playlist, file_io, file_io.get_settings(), self.ipc_path, self.send_message)
+                    self.playlist_tracker.start_tracking()
+
+                    self.launcher.start_restored_process_watcher(pid, ipc_path, owner_folder_id)
+
+                    logging.info(f"[PY][Session] Successfully restored session for folder '{owner_folder_id}'.")
+                    return {"was_stale": False, "folderId": owner_folder_id, "lastPlayedId": last_played_id, "token": token}
+                else:
+                    logging.warning(f"[PY][Session] Stale session for PID {pid} found. Cleaning up.")
                     try:
-                        path_resp = self.ipc_manager.send({"command": ["get_property", "path"]}, expect_response=True)
-                        title_resp = self.ipc_manager.send({"command": ["get_property", "media-title"]}, expect_response=True)
-                        
-                        current_path = path_resp.get("data") if path_resp and path_resp.get("error") == "success" else None
-                        current_title = title_resp.get("data") if title_resp and title_resp.get("error") == "success" else None
+                        os.remove(self.session_file)
+                    except OSError: pass
+                    return {"was_stale": True, "folderId": owner_folder_id, "returnCode": -1}
 
-                        if current_path or current_title:
-                            for item in self.playlist:
-                                if current_path and (item.get('url') == current_path or item.get('original_url') == current_path):
-                                    last_played_id = item.get('id')
-                                    break
-                                if current_title and item.get('title') == current_title:
-                                    last_played_id = item.get('id')
-                                    break
-                            self.last_played_id_cache = last_played_id
-                    except Exception as e:
-                        logging.warning(f"Failed to query active item during restore: {e}")
-                
-                import file_io
-                from playlist_tracker import PlaylistTracker
-                self.playlist_tracker = PlaylistTracker(owner_folder_id, self.playlist, file_io, file_io.get_settings(), self.ipc_path, self.send_message)
-                self.playlist_tracker.start_tracking()
-
-                self.launcher.start_restored_process_watcher(pid, ipc_path, owner_folder_id)
-
-                logging.info(f"[PY][Session] Successfully restored session for folder '{owner_folder_id}'.")
-                return {"was_stale": False, "folderId": owner_folder_id, "lastPlayedId": last_played_id, "token": token}
-            else:
-                logging.warning(f"[PY][Session] Stale session for PID {pid} found. Cleaning up.")
-                try:
-                    os.remove(self.session_file)
+            except Exception as e:
+                logging.warning(f"[PY][Session] Could not restore session: {e}. Cleaning up.")
+                try: os.remove(self.session_file)
                 except OSError: pass
-                return {"was_stale": True, "folderId": owner_folder_id, "returnCode": -1}
-
-        except Exception as e:
-            logging.warning(f"[PY][Session] Could not restore session: {e}. Cleaning up.")
-            try: os.remove(self.session_file)
-            except OSError: pass
-            return None
+                return None
 
     def append_batch(self, items, mode="append"):
         """Appends multiple items using a temporary M3U to preserve titles and options natively."""
@@ -211,6 +213,8 @@ class MpvSessionManager:
         import file_io
         settings = file_io.get_settings()
         
+        # We perform heavy work (enrichment/IPC) outside the primary state lock where possible,
+        # but the final playlist update MUST be locked.
         for item in items:
             item_url = sanitize_url(item['url'])
             
@@ -237,17 +241,20 @@ class MpvSessionManager:
                 "enable_reconnect": settings.get('enable_reconnect', True),
                 "reconnect_delay": settings.get('reconnect_delay', 4)
             }
-            self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
             
-            if self.playlist is None: self.playlist = []
-            
-            item_id = item.get('id')
-            is_duplicate = any(i.get('id') == item_id for i in self.playlist)
+            with self.sync_lock:
+                if self.ipc_manager:
+                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
+                
+                if self.playlist is None: self.playlist = []
+                
+                item_id = item.get('id')
+                is_duplicate = any(i.get('id') == item_id for i in self.playlist)
 
-            if not is_duplicate:
-                item['url'] = item_url 
-                self.playlist.append(item)
-                if self.playlist_tracker: self.playlist_tracker.add_item(item)
+                if not is_duplicate:
+                    item['url'] = item_url 
+                    self.playlist.append(item)
+                    if self.playlist_tracker: self.playlist_tracker.add_item(item)
 
         m3u_content = self._generate_m3u_content(items)
         
@@ -262,17 +269,21 @@ class MpvSessionManager:
             with open(temp_path, 'w', encoding='utf-8') as tf:
                 tf.write(m3u_content)
             
-            res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True)
+            with self.sync_lock:
+                if not self.ipc_manager: return {"success": False, "error": "IPC disconnected during append."}
+                res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True)
             
             if res and res.get("error") == "success":
-                idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]})
-                if idle_resp and idle_resp.get("data") == True:
-                    logging.info("MPV is idle. Forcing playback to start after append.")
-                    self.ipc_manager.send({"command": ["set_property", "pause", False]})
-                    self.ipc_manager.send({"command": ["playlist-next", "weak"]})
-                
-                msg = f"Appended {len(items)} new item{'s' if len(items) > 1 else ''}"
-                self.ipc_manager.send({"command": ["show-text", msg, 3000]})
+                with self.sync_lock:
+                    if self.ipc_manager:
+                        idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]})
+                        if idle_resp and idle_resp.get("data") == True:
+                            logging.info("MPV is idle. Forcing playback to start after append.")
+                            self.ipc_manager.send({"command": ["set_property", "pause", False]})
+                            self.ipc_manager.send({"command": ["playlist-next", "weak"]})
+                        
+                        msg = f"Appended {len(items)} new item{'s' if len(items) > 1 else ''}"
+                        self.ipc_manager.send({"command": ["show-text", msg, 3000]})
                 
                 return {"success": True, "message": f"Appended {len(items)} items to active session."}
             else:
@@ -322,7 +333,8 @@ class MpvSessionManager:
 
     def reorder(self, folder_id, new_order_items):
         """Delegates reordering to the IPC service."""
-        return self.ipc_service.reorder_live(folder_id, new_order_items)
+        with self.sync_lock:
+            return self.ipc_service.reorder_live(folder_id, new_order_items)
 
     def _generate_m3u_content(self, items):
         """Generates M3U content from a list of items."""
@@ -370,16 +382,19 @@ class MpvSessionManager:
 
         launch_item = _url_items_list[playlist_start_index]
         
-        if self.pid:
-            if not ipc_utils.is_process_alive(self.pid, self.ipc_path): self.clear() 
-            elif folder_id == self.owner_folder_id: 
-                return {
-                    "success": True, 
-                    "already_active": True, 
-                    "enriched_url_items": _url_items_list,
-                    "enriched_m3u_content": self._generate_m3u_content(_url_items_list)
-                }
-            else: self.close()
+        with self.sync_lock:
+            if self.pid:
+                if not ipc_utils.is_process_alive(self.pid, self.ipc_path):
+                    self.clear() 
+                elif folder_id == self.owner_folder_id: 
+                    return {
+                        "success": True, 
+                        "already_active": True, 
+                        "enriched_url_items": _url_items_list,
+                        "enriched_m3u_content": self._generate_m3u_content(_url_items_list)
+                    }
+                else:
+                    self.close()
 
         launch_result = self.launcher.launch(
             launch_item, folder_id, settings, file_io,
@@ -400,4 +415,5 @@ class MpvSessionManager:
 
     def close(self):
         """Closes the current mpv session gracefully via IPC, then forcefully if needed."""
-        return self.launcher.close()
+        with self.sync_lock:
+            return self.launcher.close()

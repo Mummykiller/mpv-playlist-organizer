@@ -43,7 +43,7 @@ class HandlerManager:
             self.server_token = uuid.uuid4().hex # New random session token
             logging.debug(f"[PY] Generated new session token.")
 
-    def _process_url_item(self, url_item, folder_id, bypass_scripts_config, all_folders):
+    def _process_url_item(self, url_item, folder_id, all_folders):
         """
         Helper to process a single URL item: resolves/assigns ID and applies bypass scripts.
         If the item is a playlist, it expands it and processes each entry.
@@ -300,7 +300,6 @@ class HandlerManager:
         
         # Fetch all_folders once
         all_folders = self.file_io.get_all_folders_from_file()
-        bypass_scripts_config = message.get('bypassScripts', {})
         
         # Normalize to a list of items to process
         items_to_process = url_items_list if url_items_list else [url_item]
@@ -312,7 +311,7 @@ class HandlerManager:
         with ThreadPoolExecutor(max_workers=5) as executor:
             # Create a wrapper function to pass all required arguments
             def process_wrapper(item):
-                processed, _ = self._process_url_item(item, folder_id, bypass_scripts_config, all_folders)
+                processed, _ = self._process_url_item(item, folder_id, all_folders)
                 return processed
             
             results = list(executor.map(process_wrapper, items_to_process))
@@ -386,7 +385,19 @@ class HandlerManager:
 
     def handle_export_data(self, message):
         data = message.get('data')
-        return self.file_io.write_folders_file(data) if data is not None else {"success": False, "error": "No data provided."}
+        is_incremental = message.get('is_incremental', False)
+        
+        if data is None:
+            return {"success": False, "error": "No data provided."}
+            
+        if is_incremental:
+            # Incremental update: merge incoming folder(s) with existing ones
+            existing_folders = self.file_io.get_all_folders_from_file()
+            existing_folders.update(data)
+            return self.file_io.write_folders_file(existing_folders)
+        else:
+            # Full override
+            return self.file_io.write_folders_file(data)
 
     def handle_export_playlists(self, message):
         data = message.get('data')

@@ -60,9 +60,10 @@ class PlaylistHandler(http.server.SimpleHTTPRequestHandler):
             # You might want to restrict this or serve other assets as needed.
             return http.server.SimpleHTTPRequestHandler.do_GET(self)
 
-def start_playlist_server(start_port=8000, max_port_attempts=10, m3u_file_to_serve='test_playlist.m3u'):
+def start_playlist_server(start_port=8000, max_port_attempts=5, m3u_file_to_serve='test_playlist.m3u'):
     """
     Starts a simple HTTP server in a separate thread, trying consecutive ports.
+    If consecutive attempts fail, it lets the OS pick an available port.
     """
     class CustomPlaylistHandler(PlaylistHandler):
         def __init__(self, *args, **kwargs):
@@ -75,31 +76,37 @@ def start_playlist_server(start_port=8000, max_port_attempts=10, m3u_file_to_ser
 
     socketserver.TCPServer.allow_reuse_address = True
 
-    for _ in range(50): # Increased from 10 to 50 attempts
+    # Try a few consecutive ports first
+    for _ in range(max_port_attempts):
         try:
             httpd = socketserver.TCPServer(("127.0.0.1", actual_port), Handler)
-            break # Successfully bound to a port
+            break
         except OSError as e:
             if "Address already in use" in str(e):
-                logging.warning(f"Port {actual_port} is in use, trying next port...")
+                logging.debug(f"Port {actual_port} is in use, trying next...")
                 actual_port += 1
             else:
-                logging.error(f"Failed to start playlist server: {e}")
-                return None, None, None # Indicate failure
+                logging.error(f"Failed to bind to port {actual_port}: {e}")
+                break
     
+    # Fallback: Let the OS choose an available port
     if httpd is None:
-        logging.error(f"Could not find an available port after {max_port_attempts} attempts starting from {start_port}.")
-        return None, None, None
+        try:
+            logging.info("Attempting fallback: Letting OS choose an available port.")
+            httpd = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+            actual_port = httpd.server_address[1]
+        except OSError as e:
+            logging.error(f"Fallback port allocation failed: {e}")
+            return None, None, None
 
     try:
         logging.info(f"Serving M3U playlist on port {actual_port}")
         server_thread = threading.Thread(target=httpd.serve_forever)
-        server_thread.daemon = True # Allow the main program to exit even if server is running
+        server_thread.daemon = True
         server_thread.start()
-        logging.info(f"Playlist server thread started on port {actual_port}.")
-        return httpd, server_thread, actual_port # Return httpd object and actual port
+        return httpd, server_thread, actual_port
     except Exception as e:
-        logging.error(f"An unexpected error occurred during playlist server startup: {e}")
+        logging.error(f"Unexpected error during server startup: {e}")
         if httpd: httpd.server_close()
         return None, None, None
 

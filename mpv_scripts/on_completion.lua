@@ -148,15 +148,6 @@ function on_end_file(event)
     if event.reason == 'error' then
         last_error = true
         log("File ended with error. Natural completion disabled for this file.")
-        
-        -- Detect specifically for yt-dlp related errors
-        -- MPV sets 'ytdl-error' property when the hook fails
-        local ytdl_err = mp.get_property("ytdl-error")
-        if ytdl_err and ytdl_err ~= "" then
-            log("YTDL Failure detected: " .. ytdl_err)
-            -- Signal Python via a script message (digital signal)
-            mp.commandv("script-message", "ytdl_error_detected", ytdl_err)
-        end
         return
     end
 

@@ -63,17 +63,29 @@ const storage = new StorageManager('mpv_organizer_data', broadcastLog);
 
 // --- Native Host Communication Helpers ---
 /**
- * Gathers all folder data from chrome.storage.local and sends it to the
+ * Gathers folder data from chrome.storage.local and sends it to the
  * native host to be written to the folders.json file. This keeps the
  * CLI and the extension in sync.
+ * @param {string} [folderId] - Optional: If provided, only sync this specific folder.
  */
-const _syncToNativeHostFile = async () => {
+const _syncToNativeHostFile = async (folderId = null) => {
     const data = await storage.get();
     try {
-        await callNativeHost({
+        const payload = {
             action: 'export_data',
-            data: data.folders // Only send the folders object
-        });
+        };
+
+        if (folderId && data.folders[folderId]) {
+            // Incremental sync: only send the changed folder
+            payload.data = { [folderId]: data.folders[folderId] };
+            payload.is_incremental = true;
+        } else {
+            // Full sync
+            payload.data = data.folders;
+            payload.is_incremental = false;
+        }
+
+        await callNativeHost(payload);
     } catch (e) {
         const errorMessage = `Failed to sync data to native host file: ${e.message}`;
         console.error(`[BG] ${errorMessage}`);
@@ -83,12 +95,13 @@ const _syncToNativeHostFile = async () => {
 
 // Debounce the sync function to avoid rapid-fire writes to the native host.
 // In MV3, we use chrome.alarms to ensure the sync happens even if the worker unloads.
-const debouncedSyncToNativeHostFile = (immediate = false) => {
+const debouncedSyncToNativeHostFile = (folderId = null, immediate = false) => {
     if (immediate) {
-        _syncToNativeHostFile();
+        _syncToNativeHostFile(folderId);
         chrome.alarms.clear('sync-to-native-host');
     } else {
-        // Create/Reset an alarm to fire in 1 minute (minimum alarm granularity is 1 minute)
+        // We still use a single alarm for simplicity, but we could 
+        // queue folderIds if needed. For now, a full sync on alarm is fine.
         chrome.alarms.create('sync-to-native-host', { delayInMinutes: 1 });
     }
 };

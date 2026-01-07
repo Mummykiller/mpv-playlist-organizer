@@ -243,3 +243,16 @@ mp.add_hook("on_load", 1, function()
         mp.set_property("ytdl-format", ytdl_format)
     end
 end)
+
+-- Monitor for stream errors related to yt-dlp
+mp.register_event("end-file", function(event)
+    if event.reason == 'error' then
+        -- MPV sets 'ytdl-error' property when the hook fails
+        local ytdl_err = mp.get_property("ytdl-error")
+        if ytdl_err and ytdl_err ~= "" then
+            debug_log("AdaptiveHeaders: YTDL Failure detected: " .. ytdl_err)
+            -- Signal Python via a script message (digital signal)
+            mp.commandv("script-message", "ytdl_error_detected", ytdl_err)
+        end
+    end
+end)
