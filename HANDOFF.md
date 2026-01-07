@@ -77,6 +77,11 @@ A major architectural update was performed to move the extension from a "Prototy
 *   **Automatic Cleanup**: The restriction settings include smart URL parsing, automatically converting full URLs (like `https://bank.com/`) into clean domain names for the blacklist.
 
 ## 🐛 Critical Bug Fixes
-*   **Error-Aware Completion**: Updated `on_completion.lua` to track playback errors. The player will no longer clear the playlist or exit with code 99 if a video fails to load (e.g., 403 Forbidden), allowing for easy retries.
+*   **Specialized MPV Modules**: Refactored Lua logic into two distinct "Specialists" for better maintainability and performance:
+    *   `adaptive_headers.lua` (Stream Specialist): Manages headers, resolution, and `yt-dlp` networking. Now handles digital signaling for stream failures via `ytdl-error` monitoring.
+    *   `on_completion.lua` (LifeCycle Specialist): Focused strictly on playlist completion, exit codes (99), and success flags.
+*   **Digital Error Signaling**: Replaced brittle log-parsing in the Native Host with a direct "Digital Signal" from Lua. The Python host now reacts to `script-message` events for `yt-dlp` failures, making error detection 100% accurate.
+*   **Temporary File Safety**: Implemented `try...finally` blocks in `mpv_session.py` to guarantee the deletion of temporary M3U playlists, even if a handoff error or crash occurs.
+*   **M3U Title Sanitization**: Enhanced the `sanitize_string` logic to strictly strip linebreaks and control characters from titles, preventing M3U corruption during batch operations.
 *   **Bypass Logic Hardening**: Improved the AnimePahe/Kwik bypass with modern browser headers (`Sec-Fetch-*`) and added browser cookie extraction support to survive Cloudflare challenges.
 *   **Property Leakage Fix**: `adaptive_headers.lua` now aggressively resets all HTTP and YTDL properties between playlist items, preventing YouTube headers from "leaking" into other streams and causing 403 errors.

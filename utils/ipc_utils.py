@@ -63,7 +63,7 @@ class IPCSocketManager:
         self._ipc_path = None
         self._system = platform.system()
         self._event_buffer = collections.deque()
-        self._buffer_lock = threading.Lock()
+        self._buffer_lock = threading.Condition() # Changed from Lock to Condition
         self._event_reader_thread = None # Added for background reader thread
         self._event_reader_running = False # Flag to control reader thread
         self._request_id_counter = 0
@@ -96,7 +96,8 @@ class IPCSocketManager:
                 
                 logging.info(f"Successfully connected to MPV IPC: {ipc_path}")
                 
-                self._event_reader_running = True
+                with self._buffer_lock: # Ensure we set running flag under lock
+                    self._event_reader_running = True
                 self._event_reader_thread = threading.Thread(target=self._event_reader_loop)
                 self._event_reader_thread.daemon = True # Allow program to exit even if thread is running
                 self._event_reader_thread.start()
@@ -122,10 +123,13 @@ class IPCSocketManager:
         Continuously reads events from the IPC socket and appends them to the internal buffer.
         Runs in a separate thread to prevent mpv's output buffer from filling up.
         """
-        while self._event_reader_running:
-            if not self._sock or not self._sock_file:
-                time.sleep(0.1)
-                continue
+        while True:
+            with self._buffer_lock:
+                if not self._event_reader_running:
+                    break
+                if not self._sock or not self._sock_file:
+                    self._buffer_lock.wait(0.1)
+                    continue
 
             try:
                 if self._system != "Windows":
@@ -153,18 +157,28 @@ class IPCSocketManager:
                     ipc_logger.info(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
                     with self._buffer_lock:
                         self._event_buffer.append(event)
+                        self._buffer_lock.notify_all() # Notify waiters that new data arrived
                 else:
                     # EOF detected, connection closed by MPV or remote end
                     ipc_logger.info("IPC event reader detected EOF. Signaling connection closure.")
-                    self._event_reader_running = False 
+                    with self._buffer_lock:
+                        self._event_reader_running = False 
+                        self._buffer_lock.notify_all()
+                    break
             except (ConnectionResetError, BrokenPipeError, OSError) as e:
                 logging.debug(f"IPC event reader thread connection error: {e}. Stopping.")
-                self._event_reader_running = False 
+                with self._buffer_lock:
+                    self._event_reader_running = False 
+                    self._buffer_lock.notify_all()
+                break
             except json.JSONDecodeError as e:
                 logging.error(f"IPC event reader thread failed to decode JSON. Error: {e}")
             except Exception as e:
                 logging.error(f"IPC event reader thread unexpected error: {e}. Stopping.")
-                self._event_reader_running = False
+                with self._buffer_lock:
+                    self._event_reader_running = False
+                    self._buffer_lock.notify_all()
+                break
         logging.debug("IPC event reader thread stopped.")
 
 
@@ -201,9 +215,9 @@ class IPCSocketManager:
                 return {"error": "success"} # Command sent, no response expected
 
             start_read_time = time.time()
-            while (time.time() - start_read_time) < timeout:
-                # Check internal buffer for a command response (matching request_id)
-                with self._buffer_lock:
+            with self._buffer_lock:
+                while True:
+                    # Check internal buffer for a command response (matching request_id)
                     for i in range(len(self._event_buffer)):
                         item = self._event_buffer[i]
                         if item.get("request_id") == req_id or ("event" not in item and "request_id" not in item):
@@ -211,11 +225,15 @@ class IPCSocketManager:
                             response = item
                             ipc_logger.info(f"IPC RECV (from buffer): {json.dumps(response)}")
                             return response
-                
-                time.sleep(0.01) # Small sleep
-            
-            logging.warning(f"Timed out waiting for command response for id {req_id} after {timeout} seconds.")
-            return None 
+                    
+                    elapsed = time.time() - start_read_time
+                    if elapsed >= timeout:
+                        logging.warning(f"Timed out waiting for command response for id {req_id} after {timeout} seconds.")
+                        return None
+                    
+                    # Wait for notify from reader thread
+                    self._buffer_lock.wait(timeout - elapsed)
+                    
         except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError) as e:
             logging.debug(f"IPC send error (connection likely lost): {e}")
             self.close() 
@@ -224,55 +242,43 @@ class IPCSocketManager:
             logging.error(f"Unexpected error during IPC send command: {e}")
             self.close()
             return None
-        except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError) as e:
-            logging.debug(f"IPC send/receive error (connection likely lost): {e}")
-            self.close() # Connection is broken, close it.
-            return None
-        except Exception as e:
-            logging.error(f"Unexpected error during IPC send command '{command_dict.get('command')}': {e}")
-            self.close()
-            return None
 
     def receive_event(self, timeout=None):
         """
         Retrieves a single event from the internal buffer.
         Returns the JSON event on success, or None if buffer is empty within timeout.
         """
-        # If the reader thread is not running and buffer is empty, it means no events are coming.
-        if not self._event_reader_running and not self._event_buffer:
-            if not self.is_connected(): # Check if main socket is also dead
-                return None # Truly disconnected
-
         start_time = time.time()
-        while True:
-            with self._buffer_lock:
+        with self._buffer_lock:
+            while True:
                 if self._event_buffer:
                     event = self._event_buffer.popleft()
                     ipc_logger.info(f"IPC EVENT (from buffer): {json.dumps(event)}")
                     return event
-            
-            if timeout is not None and (time.time() - start_time) > timeout:
-                return None # Timeout reached
-            
-            # Avoid busy-waiting, let other threads run
-            time.sleep(0.01) # Small sleep
-            
-            # If reader thread stopped and buffer is empty, then no more events will arrive
-            if not self._event_reader_running and not self._event_buffer:
-                logging.debug("Event reader thread stopped and buffer empty. No more events expected.")
-                return None
+                
+                if not self._event_reader_running:
+                    logging.debug("Event reader thread stopped and buffer empty. No more events expected.")
+                    return None
+                
+                if timeout is not None:
+                    elapsed = time.time() - start_time
+                    if elapsed >= timeout:
+                        return None
+                    self._buffer_lock.wait(timeout - elapsed)
+                else:
+                    # Blocking wait
+                    self._buffer_lock.wait()
+
 
     def close(self):
         """Closes the IPC socket handle and marks it as disconnected."""
         # Stop the reader thread first if it's running
-        if self._event_reader_running:
-            self._event_reader_running = False
-            if self._event_reader_thread and self._event_reader_thread.is_alive():
-                self._event_reader_thread.join(timeout=1.0) # Give thread a moment to shut down
-                if self._event_reader_thread.is_alive():
-                    logging.warning("IPC event reader thread did not terminate gracefully.")
-            self._event_reader_thread = None
+        with self._buffer_lock:
+            if self._event_reader_running:
+                self._event_reader_running = False
+                self._buffer_lock.notify_all()
 
+        # On Windows, we must close the handles to break the blocking readline()
         if self._sock:
             if self._sock_file:
                 try:
@@ -283,16 +289,22 @@ class IPCSocketManager:
                 if self._system == "Windows":
                     self._sock.close()
                 else:
-                    self._sock.shutdown(socket.SHUT_RDWR)
+                    try: self._sock.shutdown(socket.SHUT_RDWR)
+                    except: pass
                     self._sock.close()
-                    # Do NOT delete the socket file here. 
-                    # The socket file belongs to the MPV process and should only be deleted when MPV exits.
                 logging.info(f"Closed MPV IPC connection to {self._ipc_path}")
             except Exception as e:
                 logging.debug(f"Error closing IPC socket: {e}")
             finally:
                 self._sock = None
                 self._ipc_path = None
+
+        if self._event_reader_thread and self._event_reader_thread.is_alive():
+            # Join with timeout to avoid hanging if readline is still blocking
+            self._event_reader_thread.join(timeout=1.0) 
+            if self._event_reader_thread.is_alive():
+                logging.debug("IPC event reader thread did not terminate gracefully (likely blocked on I/O).")
+        self._event_reader_thread = None
         
         # Clear any buffered events that were not processed
         with self._buffer_lock:

@@ -246,16 +246,6 @@ export class StorageManager {
                             ytdlp: { found: null, path: null, version: null, error: null },
                             ffmpeg: { found: null, path: null, version: null, error: null },
                             node: { found: null, path: null, version: null, error: null }
-                        },
-                        // Define default bypass scripts. The native host will handle execution.
-                        // These scripts will be used automatically if detected and matched.
-                        bypassScripts: {
-                            "animepahe_bypass": {
-
-                                "match_patterns": ["*://animepahe.com/*"],
-                                "script_path": "play_with_bypass.sh", // Path relative to native_host.py
-                                "description": "Bypass security for AnimePahe.com streams."
-                            }
                         }
                     },
                     domains: {}
