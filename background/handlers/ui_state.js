@@ -74,22 +74,16 @@ export async function handleContentScriptInit(request, sender) {
         const folder = data.folders[folderId];
         lastPlayedId = folder?.last_played_id;
 
-        // Send a single message with the determined state.
+        // Send a single "Handshake" message with the full initial state.
+        // This eliminates redundant IPC calls and prevents UI flickering.
         await chrome.tabs.sendMessage(tabId, { 
             action: 'init_ui_state', 
             shouldBeMinimized: isMinimized,
             folderId: folderId,
             lastPlayedId: lastPlayedId,
-            isFolderActive: isFolderActive
-        }).catch(() => {});
-
-        // Proactively trigger a folder and playlist refresh.
-        chrome.tabs.sendMessage(tabId, { 
-            action: 'render_playlist', 
-            folderId: folderId, 
-            playlist: folder?.playlist || [],
-            last_played_id: lastPlayedId,
-            isFolderActive: isFolderActive
+            isFolderActive: isFolderActive,
+            // Combined: Include the playlist data in the first message
+            playlist: folder?.playlist || []
         }).catch(() => {});
     }
 }

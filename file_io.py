@@ -9,6 +9,54 @@ import sys
 sys.dont_write_bytecode = True
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
+import time
+import threading
+
+# --- Concurrency & Locking ---
+
+class FileLock:
+    """
+    A simple cross-process file locking mechanism using a .lock file.
+    Also includes a thread-level lock for safety within the same process.
+    """
+    _thread_lock = threading.Lock()
+
+    def __init__(self, filepath, timeout=5.0, delay=0.05):
+        self.filepath = filepath
+        self.lockfile = f"{filepath}.lock"
+        self.timeout = timeout
+        self.delay = delay
+        self.is_locked = False
+
+    def __enter__(self):
+        # 1. Acquire thread-level lock first
+        FileLock._thread_lock.acquire()
+        
+        start_time = time.time()
+        while time.time() - start_time < self.timeout:
+            try:
+                # O_EXCL + O_CREAT is atomic at the OS level
+                fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                os.close(fd)
+                self.is_locked = True
+                return self
+            except OSError:
+                # File already exists (locked by another process)
+                time.sleep(self.delay)
+        
+        # If we timed out, release the thread lock and raise error
+        FileLock._thread_lock.release()
+        raise RuntimeError(f"Could not acquire lock for {self.filepath} after {self.timeout}s")
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.is_locked:
+            try:
+                os.remove(self.lockfile)
+            except:
+                pass
+            self.is_locked = False
+            FileLock._thread_lock.release()
+
 # --- Path Definitions ---
 
 def get_user_data_dir():
@@ -287,29 +335,30 @@ def _migrate_legacy_data(raw_folders):
 
 def get_all_folders_from_file():
     """Reads all folders data from folders.json, ensuring new format."""
-    if not os.path.exists(FOLDERS_FILE):
-        source_folders_file = os.path.join(SCRIPT_DIR, "data", "folders.json")
-        if os.path.exists(source_folders_file):
-            try:
-                logging.info(f"[PY][IO] No folders file found in {DATA_DIR}. Copying default from {source_folders_file}.")
-                shutil.copy2(source_folders_file, FOLDERS_FILE)
-            except Exception as e:
-                logging.error(f"[PY][IO] Failed to copy default folders.json: {e}")
+    with FileLock(FOLDERS_FILE):
+        if not os.path.exists(FOLDERS_FILE):
+            source_folders_file = os.path.join(SCRIPT_DIR, "data", "folders.json")
+            if os.path.exists(source_folders_file):
+                try:
+                    logging.info(f"[PY][IO] No folders file found in {DATA_DIR}. Copying default from {source_folders_file}.")
+                    shutil.copy2(source_folders_file, FOLDERS_FILE)
+                except Exception as e:
+                    logging.error(f"[PY][IO] Failed to copy default folders.json: {e}")
+                    return {}
+            else:
                 return {}
-        else:
+
+        raw_folders = _safe_json_load(FOLDERS_FILE)
+        if not raw_folders:
             return {}
+        
+        converted_folders, needs_resave = _migrate_legacy_data(raw_folders)
+        
+        if needs_resave:
+            logging.info("[PY][IO] Resaving folders file after converting old data formats.")
+            _atomic_json_dump(converted_folders, FOLDERS_FILE)
 
-    raw_folders = _safe_json_load(FOLDERS_FILE)
-    if not raw_folders:
-        return {}
-    
-    converted_folders, needs_resave = _migrate_legacy_data(raw_folders)
-    
-    if needs_resave:
-        logging.info("[PY][IO] Resaving folders file after converting old data formats.")
-        _atomic_json_dump(converted_folders, FOLDERS_FILE)
-
-    return converted_folders
+        return converted_folders
 
 def write_export_file(filename, data, subfolder=None):
     """Helper to write data to a file in the export directory, optionally in a subfolder."""
@@ -349,13 +398,14 @@ def write_export_file(filename, data, subfolder=None):
 
 def write_folders_file(data):
     """Writes the provided data to the main folders.json file."""
-    if _atomic_json_dump(data, FOLDERS_FILE):
-        logging.info(f"[PY][IO] Data synced to {FOLDERS_FILE}")
-        return {"success": True, "message": "Data successfully synced to file."}
-    else:
-        error_msg = f"[PY][IO] Failed to write to {FOLDERS_FILE}"
-        logging.error(error_msg)
-        return {"success": False, "error": error_msg}
+    with FileLock(FOLDERS_FILE):
+        if _atomic_json_dump(data, FOLDERS_FILE):
+            logging.info(f"[PY][IO] Data synced to {FOLDERS_FILE}")
+            return {"success": True, "message": "Data successfully synced to file."}
+        else:
+            error_msg = f"[PY][IO] Failed to write to {FOLDERS_FILE}"
+            logging.error(error_msg)
+            return {"success": False, "error": error_msg}
 
 def list_import_files():
     """Lists all .json files in the export directory and its subdirectories."""

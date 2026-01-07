@@ -58,6 +58,10 @@ window.MPV.MpvController = class MpvController {
             'log': (req) => this.addLogEntry(req.log),
             'preferences_changed': () => this.applyInitialState(),
             'show_confirmation': (req, send) => this._handleAsyncConfirmation(req, send),
+            'show_clear_confirmation': async (req) => {
+                const confirmed = await this.showPageLevelConfirmation(`MPV finished naturally. Clear the playlist in "${req.folderId}"?`);
+                this.bridge.send('confirm_clear_playlist', null, { confirmed, folderId: req.folderId });
+            },
             'scrape_and_get_details': (req, send) => send(this.pageScraper.scrapePageDetails(window.location.href)),
             'set_minimized_state': (req, send) => { this.setMinimizedState(req.minimized); send({ success: true }); },
             'get_details_for_last_right_click': (req, send) => this._handleRightClickScrape(send),
@@ -76,6 +80,21 @@ window.MPV.MpvController = class MpvController {
      */
     async init() {
         if (window.mpvControllerInitialized) return;
+
+        // --- NEW: Restricted Domains Check ---
+        const initialPrefs = await this.bridge.send('get_ui_preferences');
+        const restrictedDomains = initialPrefs?.preferences?.restricted_domains || [];
+        const currentHostname = window.location.hostname;
+        
+        const isRestricted = restrictedDomains.some(domain => 
+            currentHostname === domain || currentHostname.endsWith('.' + domain)
+        );
+
+        if (isRestricted) {
+            console.log(`[MPV] Domain "${currentHostname}" is in the restricted list. Aborting initialization.`);
+            return;
+        }
+
         window.mpvControllerInitialized = true;
 
         // Setup message listener

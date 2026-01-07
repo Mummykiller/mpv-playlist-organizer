@@ -117,6 +117,8 @@ The extension uses a **secure three-tier architecture**:
 
 1. **Browser Extension (UI)**: Captures URLs and manages the user state.
 2. **Native Messaging Host (Python)**: A bridge that handles file I/O, `yt-dlp` resolution, and MPV process management.
+   - **Windows Process Name**: `mpv playlist organizer` (visible in Task Manager Processes tab).
+   - **Linux Process Name**: `mpv-pl-organize` (visible in `top`, `htop`, or System Monitor).
 3. **MPV Media Player**: The playback engine, controlled via a **JSON-IPC socket**.
 
 ```mermaid

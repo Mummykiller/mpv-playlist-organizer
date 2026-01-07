@@ -370,30 +370,44 @@ class LauncherService:
                 except: pass
 
             def process_waiter(proc, f_id):
+                initial_pid = proc.pid
                 return_code = proc.wait()
                 exit_reason = None
+                
+                # Check for completion flags. We check multiple PIDs because if a terminal wrapper
+                # was used, the actual MPV PID might be different from the process PID.
                 actual_pid = getattr(self.session, 'pid', None)
-                if actual_pid:
+                pids_to_check = list(set(filter(None, [initial_pid, actual_pid])))
+                
+                logging.debug(f"[PY][Session] Process {initial_pid} exited. Return code: {return_code}. Checking flags for PIDs: {pids_to_check}")
+
+                flag_found = False
+                for pid in pids_to_check:
                     flag_candidates = [
-                        os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{actual_pid}.flag'),
+                        os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{pid}.flag'),
+                        os.path.join("/tmp", f'mpv_natural_completion_{pid}.flag') # Fallback location used by Lua
                     ]
                     if self.session.ipc_path:
-                        flag_candidates.append(os.path.join(os.path.dirname(self.session.ipc_path), f'mpv_natural_completion_{actual_pid}.flag'))
+                        flag_candidates.append(os.path.join(os.path.dirname(self.session.ipc_path), f'mpv_natural_completion_{pid}.flag'))
 
                     for flag_file in flag_candidates:
                         if os.path.exists(flag_file):
                             if getattr(self.session, 'manual_quit', False):
-                                pass
+                                logging.info(f"[PY][Session] Natural completion flag found for PID {pid}, but manual_quit is TRUE. Ignoring flag.")
                             else:
                                 try:
                                     with open(flag_file, 'r', encoding='utf-8') as f:
                                         exit_reason = f.read().strip()
                                 except:
                                     exit_reason = "completed"
+                                logging.info(f"[PY][Session] Natural completion detected for PID {pid} (Reason: {exit_reason}). Overriding return code to 99.")
                                 return_code = 99
+                            
                             try: os.remove(flag_file)
                             except: pass
+                            flag_found = True
                             break
+                    if flag_found: break
 
                 self.session.send_message({"action": "mpv_exited", "folderId": f_id, "returnCode": return_code, "reason": exit_reason})
                 self.session.clear(mpv_return_code=return_code)

@@ -98,6 +98,12 @@ class PlaybackSession {
                         if (response.success) {
                             // Successfully appended the entire batch
                             this.queue.splice(0, batch.length); 
+                            
+                            // If the queue is now empty, the last item in this batch is the final one
+                            if (this.queue.length === 0) {
+                                batch[batch.length - 1].isLastInFolder = true;
+                            }
+                            
                             this.currentPlayingItem = batch[batch.length - 1]; // Track last item
                             continue; // Queue might have grown while we were awaiting, so continue loop
                         } else {
@@ -216,7 +222,7 @@ export async function handleMpvExited(data) {
 
     const storageData = await _storage.get();
     const globalPrefs = storageData.settings.ui_preferences.global;
-    const shouldClear = globalPrefs.clear_on_completion ?? false;
+    const clearMode = globalPrefs.clear_on_completion || 'no';
 
     // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion via custom script.
     const isNaturalCompletion = (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE);
@@ -227,25 +233,23 @@ export async function handleMpvExited(data) {
 
     // Only attempt to clear if the item that just finished was the last one in its folder/batch
     if (session && session.currentPlayingItem && session.currentPlayingItem.folderId === folderId && session.currentPlayingItem.isLastInFolder) {
-        if (shouldClear) {
-            if (isNaturalCompletion) {
+        if (isNaturalCompletion) {
+            if (clearMode === 'yes') {
                 _broadcastLog({ text: `[Background]: Auto-clearing playlist for '${folderId}' as per settings.`, type: 'info' });
-                
-                // Perform the clearing in the extension's storage (Source of Truth)
-                if (storageData.folders[folderId]) {
-                    storageData.folders[folderId].playlist = [];
-                    await _storage.set(storageData);
-                    _debouncedSyncToNativeHostFile(true); // Sync the empty playlist back to the disk
-                    _broadcastToTabs({ 
-                        action: 'render_playlist', 
-                        folderId: folderId, 
-                        playlist: [],
-                        isFolderActive: false
-                    });
+                await clearFolderPlaylist(folderId);
+            } else if (clearMode === 'confirm') {
+                _broadcastLog({ text: `[Background]: Requesting confirmation to clear playlist for '${folderId}'.`, type: 'info' });
+                // Send a message to the active tab to show a confirmation dialog
+                const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                if (activeTab) {
+                    chrome.tabs.sendMessage(activeTab.id, { 
+                        action: 'show_clear_confirmation', 
+                        folderId: folderId 
+                    }).catch(() => {});
                 }
-            } else {
-                _broadcastLog({ text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion code 99).`, type: 'info' });
             }
+        } else if (clearMode !== 'no') {
+            _broadcastLog({ text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion code 99).`, type: 'info' });
         }
     }
     
@@ -264,6 +268,33 @@ export async function handleMpvExited(data) {
         last_played_id: folder.last_played_id,
         isFolderActive: false 
     });
+}
+
+async function clearFolderPlaylist(folderId) {
+    const storageData = await _storage.get();
+    if (storageData.folders[folderId]) {
+        storageData.folders[folderId].playlist = [];
+        await _storage.set(storageData);
+        _debouncedSyncToNativeHostFile(true);
+        _broadcastToTabs({ 
+            action: 'render_playlist', 
+            folderId: folderId, 
+            playlist: [],
+            isFolderActive: false
+        });
+        return true;
+    }
+    return false;
+}
+
+export async function handleClearPlaylistConfirmation(request) {
+    if (request.confirmed && request.folderId) {
+        _broadcastLog({ text: `[Background]: User confirmed clearing playlist for '${request.folderId}'.`, type: 'info' });
+        await clearFolderPlaylist(request.folderId);
+        return { success: true };
+    }
+    _broadcastLog({ text: `[Background]: User declined clearing playlist for '${request.folderId}'.`, type: 'info' });
+    return { success: true };
 }
 
 export async function handleIsMpvRunning() {

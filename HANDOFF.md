@@ -47,3 +47,36 @@ We have standardized on three global flags for all streaming content to ensure m
 -   `--cache-pause-initial=no`: Forces playback to begin as soon as the first data arrives, preventing long "black screen" waits while large buffers fill.
 
 The combination of these flags and the **Node.js/EJS** solver provides the most stable 1440p+ experience currently possible in early 2026.
+
+## 🛡️ Reliability & Concurrency Overhaul (v2.6.0)
+A major architectural update was performed to move the extension from a "Prototype" to an "Industrial Strength" state, focusing on data integrity and process safety.
+
+### 1. Concurrency & Process Safety (Python)
+*   **The "Receptionist" Pattern**: Modified `native_host.py` to use a `ThreadPoolExecutor`. The main loop now acts as a non-blocking dispatcher, handing off heavy tasks (Play, Add, AniList sync) to background threads. This prevents the browser UI from "freezing" while Python is busy.
+*   **Cross-Process File Locking**: Implemented a custom `FileLock` class in `file_io.py`. It uses atomic OS-level file creation (`O_EXCL`) to ensure that `folders.json` is never written to by two processes at once (e.g., the Native Host and the Tracker). This eliminates the "Lost Update" race condition.
+*   **Named Processes**: The native host now identifies itself in system monitors using `ctypes` (`mpv-pl-organize` on Linux, `mpv playlist organizer` on Windows), making troubleshooting and resource monitoring much easier for users.
+
+### 2. Manifest V3 Lifecycle & Data Sync (JS)
+*   **Alarm-Based Scheduling**: Replaced all `setInterval` calls in `background.js` with the `chrome.alarms` API. This ensures that heartbeats and data syncing survive the Service Worker's ephemeral "sleep" cycles.
+*   **Persistent Sync Queue**: The data sync to the native host now uses a 1-minute alarm-based debounce rather than a memory-based one, ensuring that pending changes are flushed to disk even if the service worker unloads unexpectedly.
+
+### 3. Granular Storage (The "Bucket" System)
+*   **Storage Refactoring**: Moved away from a monolithic `mpv_organizer_data` key. Data is now split into logical buckets:
+    *   `mpv_settings`: Global preferences (tiny).
+    *   `mpv_folder_index`: Folder names and order (tiny).
+    *   `mpv_folder_data_[ID]`: Individual playlist data (one key per folder).
+*   **Memory Efficiency**: The extension now only loads the specific folder being viewed or played, drastically reducing the memory footprint for users with massive libraries.
+*   **Schema Versioning**: Introduced `mpv_storage_version` (v2) with a robust migration script to safely transition user data to the new bucket system.
+
+### 4. Messaging & Performance
+*   **Handshake Optimization**: Combined `init_ui_state` and `render_playlist` into a single "Handshake" message. This cuts IPC traffic in half during page loads and eliminates UI flickering.
+*   **Smart Broadcasting**: Updated `broadcastToTabs` to query only active `http/https` tabs, preventing redundant browser errors on restricted/internal system pages.
+
+## 🔒 Privacy & User Control
+*   **Restricted Domains**: Implemented a "Privacy & Restrictions" system. Users can now list domains (e.g., banks, email) where the extension is strictly forbidden from injecting its UI or listeners.
+*   **Automatic Cleanup**: The restriction settings include smart URL parsing, automatically converting full URLs (like `https://bank.com/`) into clean domain names for the blacklist.
+
+## 🐛 Critical Bug Fixes
+*   **Error-Aware Completion**: Updated `on_completion.lua` to track playback errors. The player will no longer clear the playlist or exit with code 99 if a video fails to load (e.g., 403 Forbidden), allowing for easy retries.
+*   **Bypass Logic Hardening**: Improved the AnimePahe/Kwik bypass with modern browser headers (`Sec-Fetch-*`) and added browser cookie extraction support to survive Cloudflare challenges.
+*   **Property Leakage Fix**: `adaptive_headers.lua` now aggressively resets all HTTP and YTDL properties between playlist items, preventing YouTube headers from "leaking" into other streams and causing 403 errors.
