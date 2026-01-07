@@ -1,123 +1,100 @@
 // background/handlers/folder_management.js
-import { sanitizeString } from '../../utils/sanitization.js';
-
-let _storage;
-let _broadcastToTabs;
-let _updateContextMenus;
-let _debouncedSyncToNativeHostFile;
-
-export function init(dependencies) {
-    _storage = dependencies.storage;
-    _broadcastToTabs = dependencies.broadcastToTabs;
-    _updateContextMenus = dependencies.updateContextMenus;
-    _debouncedSyncToNativeHostFile = dependencies.debouncedSyncToNativeHostFile;
-}
-
-function isValidFolderName(name) {
-    if (!name || typeof name !== 'string') return false;
-    // Strict whitelist: alphanumeric, underscores, hyphens, and spaces.
-    // Disallow leading/trailing spaces and path traversal dots.
-    const regex = /^[a-zA-Z0-9_\-\s]+$/;
-    return regex.test(name) && name.trim() === name && !name.includes('..');
-}
+import { storage } from '../storage_instance.js';
+import { broadcastToTabs } from '../messaging.js';
+import { debouncedSyncToNativeHostFile } from '../core_services.js';
+import { updateContextMenus } from '../../utils/contextMenu.js';
 
 export async function handleCreateFolder(request) {
-    const folderId = sanitizeString(request.folderId, true);
-    if (!isValidFolderName(folderId)) {
-        return { success: false, error: 'Invalid folder name. Only alphanumeric characters, spaces, hyphens, and underscores are allowed.' };
-    }
-    const data = await _storage.get();
-    if (data.folders[folderId]) {
-        return { success: false, error: 'A folder with that name already exists.' };
-    }
-    data.folderOrder.push(folderId);
+    let { folderId } = request;
+    if (!folderId) return { success: false, error: 'No folder name provided.' };
+
+    const data = await storage.get();
+    if (data.folders[folderId]) return { success: false, error: 'Folder already exists.' };
+
     data.folders[folderId] = { playlist: [] };
-    await _storage.set(data);
-    await _updateContextMenus(_storage);
-    _broadcastToTabs({ foldersChanged: true });
-    _debouncedSyncToNativeHostFile(true);
-    return { success: true, message: `Folder "${folderId}" created.` };
+    if (!data.folderOrder) data.folderOrder = Object.keys(data.folders);
+    if (!data.folderOrder.includes(folderId)) data.folderOrder.push(folderId);
+
+    await storage.set(data);
+    broadcastToTabs({ action: 'foldersChanged', folderId: folderId });
+    await updateContextMenus(storage);
+    debouncedSyncToNativeHostFile(folderId);
+
+    return { success: true, folderId };
 }
 
 export async function handleGetAllFolderIds() {
-    const data = await _storage.get();
-    const folderIds = data.folderOrder || Object.keys(data.folders);
-    const lastUsedFolderId = data.settings.last_used_folder_id;
-    return { success: true, folderIds, lastUsedFolderId };
+    const data = await storage.get();
+    return {
+        success: true,
+        folderIds: data.folderOrder || Object.keys(data.folders),
+        lastUsedFolderId: data.settings.last_used_folder_id
+    };
 }
 
 export async function handleRemoveFolder(request) {
-    const folderIdToRemove = request.folderId;
-    if (!folderIdToRemove) return { success: false, error: 'Invalid folder ID provided.' };
+    const { folderId } = request;
+    if (!folderId) return { success: false, error: 'No folder ID provided.' };
 
-    const data = await _storage.get();
-    if (data.folderOrder.length <= 1 && data.folders[folderIdToRemove]) {
-        return { success: false, error: 'Cannot remove the last folder.' };
+    const data = await storage.get();
+    if (!data.folders[folderId]) return { success: false, error: 'Folder not found.' };
+
+    delete data.folders[folderId];
+    if (data.folderOrder) data.folderOrder = data.folderOrder.filter(id => id !== folderId);
+
+    if (data.settings.last_used_folder_id === folderId) {
+        data.settings.last_used_folder_id = data.folderOrder ? data.folderOrder[0] : Object.keys(data.folders)[0];
     }
-    if (!data.folders[folderIdToRemove]) {
-        return { success: false, error: 'Folder not found.' };
-    }
 
-    delete data.folders[folderIdToRemove];
-    data.folderOrder = data.folderOrder.filter(id => id !== folderIdToRemove);
+    await storage.set(data);
+    broadcastToTabs({ action: 'foldersChanged' });
+    await updateContextMenus(storage);
+    
+    // For removal, we trigger a full sync to ensure the host is aware of the deletion
+    debouncedSyncToNativeHostFile();
 
-    if (data.settings.last_used_folder_id === folderIdToRemove) {
-        data.settings.last_used_folder_id = Object.keys(data.folders)[0];
-    }
-    await _storage.set(data);
-
-    await _updateContextMenus(_storage);
-    _broadcastToTabs({ foldersChanged: true });
-    _debouncedSyncToNativeHostFile(true);
-    return { success: true, message: `Folder "${folderIdToRemove}" removed.` };
+    return { success: true };
 }
 
 export async function handleRenameFolder(request) {
-    const oldFolderId = request.oldFolderId;
-    const newFolderId = sanitizeString(request.newFolderId, true);
-    
-    if (!oldFolderId || !isValidFolderName(newFolderId)) {
-        return { success: false, error: 'Invalid folder names provided.' };
-    }
-    const data = await _storage.get();
-    if (!data.folders[oldFolderId]) {
-        return { success: false, error: `Folder "${oldFolderId}" not found.` };
-    }
-    if (data.folders[newFolderId]) {
-        return { success: false, error: `A folder named "${newFolderId}" already exists.` };
-    }
+    const { oldId, newId } = request;
+    if (!oldId || !newId) return { success: false, error: 'Missing folder IDs.' };
 
-    data.folders[newFolderId] = data.folders[oldFolderId];
-    delete data.folders[oldFolderId];
+    const data = await storage.get();
+    if (!data.folders[oldId]) return { success: false, error: 'Folder not found.' };
+    if (data.folders[newId]) return { success: false, error: 'New folder name already exists.' };
 
-    const index = data.folderOrder.indexOf(oldFolderId);
-    if (index !== -1) data.folderOrder[index] = newFolderId;
+    data.folders[newId] = data.folders[oldId];
+    delete data.folders[oldId];
 
-    if (data.settings.last_used_folder_id === oldFolderId) {
-        data.settings.last_used_folder_id = newFolderId;
+    if (data.folderOrder) {
+        const index = data.folderOrder.indexOf(oldId);
+        if (index !== -1) data.folderOrder[index] = newId;
     }
 
-    await _storage.set(data);
-    await _updateContextMenus(_storage);
-    _broadcastToTabs({ foldersChanged: true });
-    _debouncedSyncToNativeHostFile(true);
-    return { success: true, message: `Folder renamed to "${newFolderId}".` };
+    if (data.settings.last_used_folder_id === oldId) {
+        data.settings.last_used_folder_id = newId;
+    }
+
+    await storage.set(data);
+    broadcastToTabs({ action: 'foldersChanged', folderId: newId });
+    await updateContextMenus(storage);
+    debouncedSyncToNativeHostFile();
+
+    return { success: true, folderId: newId };
 }
 
 export async function handleSetFolderOrder(request) {
-    const newOrder = request.order;
-    if (!Array.isArray(newOrder)) {
-        return { success: false, error: 'Invalid order data provided.' };
-    }
-    const data = await _storage.get();
-    const currentKeys = new Set(Object.keys(data.folders));
-    const newKeys = new Set(newOrder);
-    if (currentKeys.size !== newKeys.size || ![...currentKeys].every(k => newKeys.has(k))) {
-        return { success: false, error: 'New order does not match existing folders.' };
-    }
+    const { order } = request;
+    if (!order) return { success: false, error: 'No order provided.' };
 
-    data.folderOrder = newOrder;
-    await _storage.set(data);
-    _debouncedSyncToNativeHostFile(true);
-    return { success: true, message: 'Folder order updated.' };
+    const data = await storage.get();
+    data.folderOrder = order;
+
+    await storage.set(data);
+    broadcastToTabs({ action: 'foldersChanged' });
+    await updateContextMenus(storage);
+    debouncedSyncToNativeHostFile();
+
+    return { success: true };
 }

@@ -1,12 +1,15 @@
-// background/handlers/playback.js
-
-let _storage;
-let _broadcastLog;
-let _broadcastToTabs;
-let _callNativeHost;
-let _debouncedSyncToNativeHostFile;
+import { storage } from '../storage_instance.js';
+import { broadcastLog, broadcastToTabs } from '../messaging.js';
+import { debouncedSyncToNativeHostFile } from '../core_services.js';
+import { callNativeHost, addNativeListener } from '../../utils/nativeConnection.js';
 
 const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;
+
+// Register listeners for unsolicited native host events
+addNativeListener('mpv_exited', (data) => handleMpvExited(data));
+addNativeListener('update_last_played', (data) => handleUpdateLastPlayed(data));
+addNativeListener('update_item_resume_time', (data) => handleUpdateItemResumeTime(data));
+addNativeListener('session_restored', (data) => handleSessionRestored(data));
 
 class PlaybackSession {
     constructor(folderId) {
@@ -28,7 +31,7 @@ class PlaybackSession {
         url_item.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
         url_item.settings.other_sites_use_cookies = globalPrefs.other_sites_use_cookies ?? true;
 
-        return _callNativeHost({
+        return callNativeHost({
             action: 'play',
             url_item: url_item,
             folderId: this.folderId,
@@ -54,7 +57,7 @@ class PlaybackSession {
             reconnect_delay: globalPrefs.reconnect_delay || 4,
             mpv_decoder: globalPrefs.mpv_decoder || 'auto',
             ytdl_quality: globalPrefs.ytdl_quality || 'best'
-        });
+        }, true); // Pass shouldThrow = true
     }
 
     /**
@@ -65,7 +68,7 @@ class PlaybackSession {
         this.isProcessingQueue = true;
 
         try {
-            const data = await _storage.get();
+            const data = await storage.get();
             const globalPrefs = data.settings.ui_preferences.global;
 
             while (this.queue.length > 0) {
@@ -75,7 +78,7 @@ class PlaybackSession {
                     const batch = [...this.queue];
                     const batchItems = batch.map(q => q.urlItem);
                     
-                    _broadcastLog({ text: `[Background]: Appending batch of ${batch.length} items to active session (${this.folderId})...`, type: 'info' });
+                    broadcastLog({ text: `[Background]: Appending batch of ${batch.length} items to active session (${this.folderId})...`, type: 'info' });
                     
                     try {
                         // Ensure all items have the latest granular preferences
@@ -87,7 +90,7 @@ class PlaybackSession {
                             item.settings.other_sites_use_cookies = globalPrefs.other_sites_use_cookies ?? true;
                         });
 
-                        const response = await _callNativeHost({
+                        const response = await callNativeHost({
                             action: 'append',
                             url_items: batchItems, // Use plural 'url_items'
                             folderId: this.folderId
@@ -119,7 +122,7 @@ class PlaybackSession {
                 const nextItem = this.queue[0];
                 const { urlItem } = nextItem;
 
-                _broadcastLog({ text: `[Background]: Starting playback (${this.folderId}): ${urlItem.title || urlItem.url}`, type: 'info' });
+                broadcastLog({ text: `[Background]: Starting playback (${this.folderId}): ${urlItem.title || urlItem.url}`, type: 'info' });
                 try {
                     const response = await this._playSingleUrlItem(urlItem, globalPrefs);
                     if (!response.success) {
@@ -130,7 +133,7 @@ class PlaybackSession {
                     this.queue.shift(); // Successfully started, remove from queue
                     this.currentPlayingItem = nextItem;
                 } catch (error) {
-                    _broadcastLog({ text: `[Background]: Error playing item: ${error.message}`, type: 'error' });
+                    broadcastLog({ text: `[Background]: Error playing item: ${error.message}`, type: 'error' });
                     this.queue.shift(); // Remove failed item to prevent infinite loop
                     this.isPlaying = false;
                 }
@@ -138,7 +141,7 @@ class PlaybackSession {
             
             if (this.queue.length === 0 && !this.isPlaying) {
                 this.currentPlayingItem = null;
-                _broadcastLog({ text: `[Background]: Playback queue for '${this.folderId}' finished.`, type: 'info' });
+                broadcastLog({ text: `[Background]: Playback queue for '${this.folderId}' finished.`, type: 'info' });
             }
 
         } finally {
@@ -180,14 +183,6 @@ export function isFolderActive(folderId) {
     return !!(session && session.isPlaying);
 }
 
-export function init(dependencies) {
-    _storage = dependencies.storage;
-    _broadcastLog = dependencies.broadcastLog;
-    _broadcastToTabs = dependencies.broadcastToTabs;
-    _callNativeHost = dependencies.callNativeHost;
-    _debouncedSyncToNativeHostFile = dependencies.debouncedSyncToNativeHostFile;
-}
-
 export async function handleMpvExited(data) {
     const { folderId, returnCode, reason } = data;
     if (!folderId) return;
@@ -208,7 +203,7 @@ export async function handleMpvExited(data) {
     const explanation = exitCodeExplanations[returnCode] || "Unknown or unexpected exit status";
     const displayReason = reason ? ` (Host Reason: ${reason})` : '';
     
-    _broadcastLog({ 
+    broadcastLog({ 
         text: `[Background]: MPV session for '${folderId}' ended. Code: ${returnCode} - ${explanation}${displayReason}`, 
         type: 'info' 
     });
@@ -218,7 +213,7 @@ export async function handleMpvExited(data) {
         session.isPlaying = false;
     }
 
-    const storageData = await _storage.get();
+    const storageData = await storage.get();
     const globalPrefs = storageData.settings.ui_preferences.global;
     const clearMode = globalPrefs.clear_on_completion || 'no';
 
@@ -226,17 +221,17 @@ export async function handleMpvExited(data) {
     const isNaturalCompletion = (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE);
 
     if (isNaturalCompletion) {
-        _broadcastLog({ text: `[Background]: Playlist for folder '${folderId}' finished naturally.`, type: 'info' });
+        broadcastLog({ text: `[Background]: Playlist for folder '${folderId}' finished naturally.`, type: 'info' });
     }
 
     // Only attempt to clear if the item that just finished was the last one in its folder/batch
     if (session && session.currentPlayingItem && session.currentPlayingItem.folderId === folderId && session.currentPlayingItem.isLastInFolder) {
         if (isNaturalCompletion) {
             if (clearMode === 'yes') {
-                _broadcastLog({ text: `[Background]: Auto-clearing playlist for '${folderId}' as per settings.`, type: 'info' });
+                broadcastLog({ text: `[Background]: Auto-clearing playlist for '${folderId}' as per settings.`, type: 'info' });
                 await clearFolderPlaylist(folderId);
             } else if (clearMode === 'confirm') {
-                _broadcastLog({ text: `[Background]: Requesting confirmation to clear playlist for '${folderId}'.`, type: 'info' });
+                broadcastLog({ text: `[Background]: Requesting confirmation to clear playlist for '${folderId}'.`, type: 'info' });
                 // Send a message to the active tab to show a confirmation dialog
                 const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
                 if (activeTab) {
@@ -247,7 +242,7 @@ export async function handleMpvExited(data) {
                 }
             }
         } else if (clearMode !== 'no') {
-            _broadcastLog({ text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion code 99).`, type: 'info' });
+            broadcastLog({ text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion code 99).`, type: 'info' });
         }
     }
     
@@ -257,9 +252,9 @@ export async function handleMpvExited(data) {
     }
     
     // ALWAYS broadcast a refresh to all tabs after an exit to ensure UI state (like active highlight) is updated.
-    const finalData = await _storage.get();
+    const finalData = await storage.get();
     const folder = finalData.folders[folderId] || { playlist: [] };
-    _broadcastToTabs({ 
+    broadcastToTabs({ 
         action: 'render_playlist', 
         folderId: folderId, 
         playlist: folder.playlist,
@@ -269,12 +264,12 @@ export async function handleMpvExited(data) {
 }
 
 async function clearFolderPlaylist(folderId) {
-    const storageData = await _storage.get();
+    const storageData = await storage.get();
     if (storageData.folders[folderId]) {
         storageData.folders[folderId].playlist = [];
-        await _storage.set(storageData);
-        _debouncedSyncToNativeHostFile(true);
-        _broadcastToTabs({ 
+        await storage.set(storageData);
+        debouncedSyncToNativeHostFile(true);
+        broadcastToTabs({ 
             action: 'render_playlist', 
             folderId: folderId, 
             playlist: [],
@@ -287,16 +282,16 @@ async function clearFolderPlaylist(folderId) {
 
 export async function handleClearPlaylistConfirmation(request) {
     if (request.confirmed && request.folderId) {
-        _broadcastLog({ text: `[Background]: User confirmed clearing playlist for '${request.folderId}'.`, type: 'info' });
+        broadcastLog({ text: `[Background]: User confirmed clearing playlist for '${request.folderId}'.`, type: 'info' });
         await clearFolderPlaylist(request.folderId);
         return { success: true };
     }
-    _broadcastLog({ text: `[Background]: User declined clearing playlist for '${request.folderId}'.`, type: 'info' });
+    broadcastLog({ text: `[Background]: User declined clearing playlist for '${request.folderId}'.`, type: 'info' });
     return { success: true };
 }
 
 export async function handleIsMpvRunning() {
-    return _callNativeHost({ action: 'is_mpv_running' });
+    return callNativeHost({ action: 'is_mpv_running' });
 }
 
 /**
@@ -315,11 +310,11 @@ async function checkAndConfirmFolderSwitch(targetFolderId) {
         const currentFolderId = statusResponse.folderId;
         
         if (currentFolderId && currentFolderId !== targetFolderId) {
-            const data = await _storage.get();
+            const data = await storage.get();
             const shouldConfirm = data.settings.ui_preferences.global.confirm_folder_switch ?? true;
 
             if (shouldConfirm) {
-                _broadcastLog({ text: `[Background]: Prompting user for folder switch from "${currentFolderId}" to "${targetFolderId}".`, type: 'info' });
+                broadcastLog({ text: `[Background]: Prompting user for folder switch from "${currentFolderId}" to "${targetFolderId}".`, type: 'info' });
                 
                 const confirmationPayload = {
                     action: 'show_popup_confirmation',
@@ -331,7 +326,7 @@ async function checkAndConfirmFolderSwitch(targetFolderId) {
                 
                 // 2. Fallback to active tab if popup didn't respond
                 if (response === null) {
-                    _broadcastLog({ text: `[Background]: Popup not available for confirmation. Falling back to active tab.`, type: 'info' });
+                    broadcastLog({ text: `[Background]: Popup not available for confirmation. Falling back to active tab.`, type: 'info' });
                     const tabs = await new Promise(resolve => chrome.tabs.query({ active: true, currentWindow: true }, resolve));
                     const activeTab = tabs && tabs.length > 0 ? tabs[0] : null;
 
@@ -347,20 +342,20 @@ async function checkAndConfirmFolderSwitch(targetFolderId) {
                     } else {
                         // If we can't find an active tab to prompt, but we are on a restricted page,
                         // it's better to proceed than to be stuck.
-                        _broadcastLog({ text: `[Background]: Could not prompt for folder switch (restricted page). Proceeding with playback.`, type: 'warning' });
+                        broadcastLog({ text: `[Background]: Could not prompt for folder switch (restricted page). Proceeding with playback.`, type: 'warning' });
                         return true; 
                     }
                 }
                 
                 const confirmed = !!response?.confirmed;
                 if (!confirmed) {
-                    _broadcastLog({ text: `[Background]: Folder switch to "${targetFolderId}" cancelled by user or prompt failed.`, type: 'info' });
+                    broadcastLog({ text: `[Background]: Folder switch to "${targetFolderId}" cancelled by user or prompt failed.`, type: 'info' });
                 }
                 return confirmed;
             }
         }
     } catch (e) {
-        _broadcastLog({ text: `[Background]: Error during folder switch check: ${e.message}`, type: 'error' });
+        broadcastLog({ text: `[Background]: Error during folder switch check: ${e.message}`, type: 'error' });
         return false; // Fail safe: don't switch if we can't determine status or prompt
     }
     return true;
@@ -383,9 +378,9 @@ export async function handlePlay(request) {
             return { success: true, message: "Folder switch cancelled by user." };
         }
         
-        _broadcastLog({ text: `[Background]: Received 'play' request for single item: ${url_item.title || url_item.url}${play_new_instance ? ' (New Instance)' : ''}`, type: 'info' });
+        broadcastLog({ text: `[Background]: Received 'play' request for single item: ${url_item.title || url_item.url}${play_new_instance ? ' (New Instance)' : ''}`, type: 'info' });
         
-        const data = await _storage.get();
+        const data = await storage.get();
         const globalPrefs = data.settings.ui_preferences.global;
 
         if (!url_item.settings) url_item.settings = {};
@@ -427,7 +422,7 @@ export async function handlePlay(request) {
             nativePayload.playlist = [url_item.url];
         }
 
-        const response = await _callNativeHost(nativePayload);
+        const response = await callNativeHost(nativePayload);
 
         if (response.success && !play_new_instance) {
             const session = playbackManager.getSession(folderId);
@@ -436,7 +431,7 @@ export async function handlePlay(request) {
         }
         return response;
     } else if (folderId) {
-        const data = await _storage.get();
+        const data = await storage.get();
         const folder = data.folders[folderId];
         if (!folder || !folder.playlist || folder.playlist.length === 0) {
             return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
@@ -493,7 +488,7 @@ export async function handlePlayM3U(request) {
         session.currentPlayingItem = null;
     }
 
-    const data = await _storage.get();
+    const data = await storage.get();
     const globalPrefs = data.settings.ui_preferences.global;
 
     const nativeAction = play_new_instance ? 'play_new_instance' : 'play_m3u';
@@ -524,11 +519,12 @@ export async function handlePlayM3U(request) {
         mpv_decoder: globalPrefs.mpv_decoder || 'auto',
         ytdl_quality: globalPrefs.ytdl_quality || 'best'
     };
-            if (play_new_instance && m3u_data.type === 'items') {
+
+    if (play_new_instance && m3u_data.type === 'items') {
         nativePayload.playlist = m3u_data.value.map(item => item.url);
     }
 
-    const response = await _callNativeHost(nativePayload);
+    const response = await callNativeHost(nativePayload);
 
     if (response.success && !play_new_instance) {
         const session = playbackManager.getSession(folderId);
@@ -537,16 +533,16 @@ export async function handlePlayM3U(request) {
 
         // --- Smart Resume Sync ---
         if (response.playlist_items && folderId) {
-            _broadcastLog({ text: `[Background]: Syncing Smart Resume reordering for folder '${folderId}'.`, type: 'info' });
-            const storageData = await _storage.get();
+            broadcastLog({ text: `[Background]: Syncing Smart Resume reordering for folder '${folderId}'.`, type: 'info' });
+            const storageData = await storage.get();
             if (storageData.folders[folderId]) {
                 storageData.folders[folderId].playlist = response.playlist_items;
                 // We also update the last_played_id immediately if it was returned
                 if (response.playlist_items.length > 0) {
                     storageData.folders[folderId].last_played_id = response.playlist_items[0].id;
                 }
-                await _storage.set(storageData);
-                _broadcastToTabs({ action: 'render_playlist', folderId: folderId, playlist: response.playlist_items });
+                await storage.set(storageData);
+                broadcastToTabs({ action: 'render_playlist', folderId: folderId, playlist: response.playlist_items });
             }
         }
 
@@ -563,15 +559,15 @@ export async function handleUpdateLastPlayed(data) {
     const { folderId, itemId } = data;
     if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
-    _broadcastLog({ text: `[Background]: Tracker reported last_played_id update for folder '${folderId}': ${itemId}`, type: 'info' });
+    broadcastLog({ text: `[Background]: Tracker reported last_played_id update for folder '${folderId}': ${itemId}`, type: 'info' });
     
-    const storageData = await _storage.get();
+    const storageData = await storage.get();
     if (storageData.folders[folderId]) {
         storageData.folders[folderId].last_played_id = itemId;
-        await _storage.set(storageData);
+        await storage.set(storageData);
         
         // Broadcast the update so the UI highlights the new item immediately
-        _broadcastToTabs({ 
+        broadcastToTabs({ 
             action: 'render_playlist', 
             folderId: folderId, 
             playlist: storageData.folders[folderId].playlist,
@@ -588,13 +584,13 @@ export async function handleUpdateItemResumeTime(data) {
     const { folderId, itemId, resumeTime } = data;
     if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
-    const storageData = await _storage.get();
+    const storageData = await storage.get();
     if (storageData.folders[folderId]) {
         const folder = storageData.folders[folderId];
         for (let item of folder.playlist) {
             if (item.id === itemId) {
                 item.resume_time = resumeTime;
-                await _storage.set(storageData);
+                await storage.set(storageData);
                 break;
             }
         }
@@ -610,14 +606,14 @@ export async function handleAppend(request) {
     const session = playbackManager.getSession(folderId);
     session.queue.push({ urlItem: url_item, folderId: folderId, isLastInFolder: false });
 
-    _broadcastLog({ text: `[Background]: Received 'append' request for (${folderId}): ${url_item.title || url_item.url}`, type: 'info' });
+    broadcastLog({ text: `[Background]: Received 'append' request for (${folderId}): ${url_item.title || url_item.url}`, type: 'info' });
 
     session.processQueue(); // Process the queue to append the item
     return { success: true, message: `Appended ${url_item.title || url_item.url} to queue` };
 }
 
 export async function handleCloseMpv() {
-    return _callNativeHost({ action: 'close_mpv' });
+    return callNativeHost({ action: 'close_mpv' });
 }
 
 export function getMpvPlaylistCompletedExitCode() {
@@ -627,16 +623,16 @@ export function getMpvPlaylistCompletedExitCode() {
 export function handleSessionRestored(request) {
     const result = request.result;
     if (!result) {
-        _broadcastLog({ text: `[Background]: No active session found to restore.`, type: 'info' });
+        broadcastLog({ text: `[Background]: No active session found to restore.`, type: 'info' });
         return;
     }
 
     if (result.was_stale) {
-        _broadcastLog({ text: `[Background]: Detected stale MPV session for folder '${result.folderId}'.`, type: 'info' });
+        broadcastLog({ text: `[Background]: Detected stale MPV session for folder '${result.folderId}'.`, type: 'info' });
         // Trigger the same cleanup logic as when MPV exits.
         handleMpvExited(result);
     } else {
-        _broadcastLog({ text: `[Background]: Re-establishing connection to active MPV session for folder '${result.folderId}'...`, type: 'info' });
+        broadcastLog({ text: `[Background]: Re-establishing connection to active MPV session for folder '${result.folderId}'...`, type: 'info' });
         
         const session = playbackManager.getSession(result.folderId);
         session.queue = [];
@@ -645,21 +641,21 @@ export function handleSessionRestored(request) {
         session.currentPlayingItem = { folderId: result.folderId, isLastInFolder: true };
         
         // Notify UI to show active highlight and provide feedback
-        _storage.get().then(storageData => {
+        storage.get().then(storageData => {
             const folder = storageData.folders[result.folderId];
             if (folder) {
                 const folderName = folder.name || result.folderId;
-                _broadcastLog({ text: `Reconnected to mpv playlist (${folderName})`, type: 'info' });
+                broadcastLog({ text: `Reconnected to mpv playlist (${folderName})`, type: 'info' });
 
                 const lastPlayedId = result.lastPlayedId || folder.last_played_id;
                 
                 // If the native host identified a different item, sync our storage
                 if (result.lastPlayedId && result.lastPlayedId !== folder.last_played_id) {
                     folder.last_played_id = result.lastPlayedId;
-                    _storage.set(storageData); // Save async
+                    storage.set(storageData); // Save async
                 }
 
-                _broadcastToTabs({ 
+                broadcastToTabs({ 
                     action: 'render_playlist', 
                     folderId: result.folderId, 
                     playlist: folder.playlist,

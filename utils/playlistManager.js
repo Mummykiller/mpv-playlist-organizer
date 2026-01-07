@@ -2,37 +2,16 @@
  * Manages all playlist-related actions like adding, removing, clearing, and reordering.
  */
 import { sanitizeString } from './sanitization.js';
-import { normalizeYouTubeUrl } from './commUtils.module.js';
-
-// --- Injected Dependencies ---
-let storage;
-let broadcastToTabs;
-let broadcastLog;
-let debouncedSyncToNativeHostFile;
-let sendMessageAsync; // For asking confirmation from other contexts
-let findM3u8InUrl; // For the stream scanner
-let callNativeHost; // For oEmbed via native host
-let isFolderActive; // For checking live playback status
-let MPV_PLAYLIST_COMPLETED_EXIT_CODE; // For context-menu driven playlist updates
+import { normalizeYouTubeUrl, sendMessageAsync } from './commUtils.module.js';
+import { storage } from '../background/storage_instance.js';
+import { broadcastLog, broadcastToTabs } from '../background/messaging.js';
+import { debouncedSyncToNativeHostFile } from '../background/core_services.js';
+import { callNativeHost } from './nativeConnection.js';
+import { isFolderActive, getMpvPlaylistCompletedExitCode } from '../background/handlers/playback.js';
+import { findM3u8InUrl } from '../background/handlers/m3u8_scanner.js';
 
 // A lock to prevent multiple scraping processes for the same URL at the same time.
 const scrapingInProgress = new Set();
-
-/**
- * Injects dependencies from the main background script.
- * @param {object} deps - An object containing dependency functions and instances.
- */
-export function injectDependencies(deps) {
-    storage = deps.storage;
-    broadcastToTabs = deps.broadcastToTabs;
-    broadcastLog = deps.broadcastLog;
-    debouncedSyncToNativeHostFile = deps.debouncedSyncToNativeHostFile;
-    sendMessageAsync = deps.sendMessageAsync;
-    findM3u8InUrl = deps.findM3u8InUrl;
-    callNativeHost = deps.callNativeHost;
-    isFolderActive = deps.isFolderActive;
-    MPV_PLAYLIST_COMPLETED_EXIT_CODE = deps.MPV_PLAYLIST_COMPLETED_EXIT_CODE;
-}
 
 async function addUrlToFolder(folderId, url, title, originalTab = null, sender = null) {
     try {

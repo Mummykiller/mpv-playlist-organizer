@@ -1,48 +1,32 @@
 // background/handlers/m3u8_scanner.js
-
-let _storage;
-let _broadcastLog;
-let _broadcastToTabs;
+import { storage } from '../storage_instance.js';
+import { broadcastLog, broadcastToTabs } from '../messaging.js';
 
 // A simple in-memory cache to avoid sending the same URL repeatedly to a tab.
-// The key is the tabId, and the value is the last detected URL.
 const lastDetectedUrls = {};
-// A map to hold promises for M3U8 detection in temporary tabs.
-// The key is the tabId, and the value is { resolve, reject, timeoutId }.
 let m3u8DetectionPromises = {};
-
-// Keep track of detected URLs per tab for the UI.
-// This is separate from tabUiState in background.js to prevent circular dependency issues
-// and to centralize m3u8 detection state management within this module.
 let _detectedUrlsState = {};
 
-export function init(dependencies) {
-    _storage = dependencies.storage;
-    _broadcastLog = dependencies.broadcastLog;
-    _broadcastToTabs = dependencies.broadcastToTabs;
-
-    // Register webRequest listener
+// We use an auto-init pattern since this module needs to register listeners immediately
+function setupListeners() {
     chrome.webRequest.onBeforeRequest.addListener(
         (details) => {
-            // ... (Inactivity timeout logic) ...
             const promiseInfo = m3u8DetectionPromises[details.tabId];
             if (promiseInfo) {
                 const INACTIVITY_TIMEOUT_MS = 15000;
                 clearTimeout(promiseInfo.timeoutId);
                 promiseInfo.timeoutId = setTimeout(() => {
                     if (m3u8DetectionPromises[details.tabId]) {
-                        m3u8DetectionPromises[details.tabId].reject(new Error(`M3U8 detection timed out after ${INACTIVITY_TIMEOUT_MS / 1000} seconds of network inactivity.`));
+                        m3u8DetectionPromises[details.tabId].reject(new Error(`M3U8 detection timed out.`));
                     }
                 }, INACTIVITY_TIMEOUT_MS);
             }
 
-            // Extremely lenient M3U8 detection: look for .m3u8 anywhere in the URL.
             if (!details.url.toLowerCase().includes('.m3u8')) return;
 
             const detectedUrl = details.url;
-            _broadcastLog({ text: `[Scanner]: Detected stream: ${detectedUrl}`, type: 'info' });
+            broadcastLog({ text: `[Scanner]: Detected stream: ${detectedUrl}`, type: 'info' });
 
-            // Avoid sending the same URL repeatedly for the same tab in short succession.
             const now = Date.now();
             const lastData = lastDetectedUrls[details.tabId];
             if (lastData && lastData.url === detectedUrl && (now - lastData.timestamp < 2000)) {
@@ -50,19 +34,15 @@ export function init(dependencies) {
             }
             lastDetectedUrls[details.tabId] = { url: detectedUrl, timestamp: now };
 
-            // Update state immediately and notify popup
             _detectedUrlsState[details.tabId] = detectedUrl;
-            _broadcastToTabs({ action: 'detected_url_changed', tabId: details.tabId, url: detectedUrl });
+            broadcastToTabs({ action: 'detected_url_changed', tabId: details.tabId, url: detectedUrl });
 
-            // Check if a scanner window is waiting for this URL.
             if (promiseInfo) {
                 promiseInfo.resolve(detectedUrl);
                 return;
             }
 
-            // Send the detected URL to the content script.
-            chrome.tabs.sendMessage(details.tabId, { m3u8: detectedUrl })
-                .catch(() => {}); 
+            chrome.tabs.sendMessage(details.tabId, { m3u8: detectedUrl }).catch(() => {}); 
         },
         {
             urls: ["<all_urls>"],
@@ -70,33 +50,33 @@ export function init(dependencies) {
         }
     );
 
-    // Register tab lifecycle listeners
     chrome.tabs.onRemoved.addListener((tabId) => {
         delete _detectedUrlsState[tabId];
         delete lastDetectedUrls[tabId];
         if (m3u8DetectionPromises[tabId]) {
-            m3u8DetectionPromises[tabId].reject(new Error('Tab was closed before M3U8 detection completed.'));
+            m3u8DetectionPromises[tabId].reject(new Error('Tab closed.'));
         }
     });
 
     chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-        // Only clear detection state on actual URL changes.
         if (changeInfo.url) {
             delete lastDetectedUrls[tabId];
             delete _detectedUrlsState[tabId];
-            _broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: null });
+            broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: null });
         } else if (changeInfo.status === 'loading' && tab.url && !tab.url.startsWith('chrome')) {
-            // Check if we just detected something. If so, don't clear it yet.
             const now = Date.now();
             const lastData = lastDetectedUrls[tabId];
             if (!lastData || (now - lastData.timestamp > 5000)) { 
                 delete lastDetectedUrls[tabId];
                 delete _detectedUrlsState[tabId];
-                _broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: null });
+                broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: null });
             }
         }
     });
 }
+
+// Call setup immediately on load
+setupListeners();
 
 /**
  * Creates a new popup window for the user to interact with to trigger stream detection.
@@ -127,7 +107,7 @@ async function _createScannerWindow(url) {
         throw new Error("Failed to create scanner window.");
     }
 
-    _broadcastLog({
+    broadcastLog({
         text: `[Scanner]: A scanner window has been opened. Please manually start the video in that window to capture the stream.`,
         type: 'info'
     });
@@ -214,7 +194,7 @@ export async function findM3u8InUrl(url, originalTab) {
     let scannerTab; // The tab inside the new window
 
     try {
-        const data = await _storage.get();
+        const data = await storage.get();
         const timeoutInSeconds = data.settings.ui_preferences.global.stream_scanner_timeout || 60;
 
         scannerTab = await _createScannerWindow(url);
@@ -238,7 +218,7 @@ export async function findM3u8InUrl(url, originalTab) {
         try {
             [detectedStreamUrl, scrapedDetails] = await Promise.all([streamPromise, titlePromise]);
         } catch (error) {
-            _broadcastLog({ text: `[Scanner]: Stream detection failed or timed out: ${error.message}`, type: 'warning' });
+            broadcastLog({ text: `[Scanner]: Stream detection failed or timed out: ${error.message}`, type: 'warning' });
             // This block will be entered if the stream detection times out or the tab is closed.
             // We only need the title, so we'll still wait for that promise to resolve.
             scrapedDetails = await titlePromise;

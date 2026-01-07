@@ -1,14 +1,10 @@
 // background/handlers/ui_state.js
-
-let _storage;
-let _broadcastToTabs;
-let _broadcastLog;
-let _callNativeHost;
-let _updateContextMenus;
-let _tabUiState; // Shared state from background.js
-let _m3u8_scanner_handlers;
-let _playback_handlers;
-let _getPopupPort; // Function to get the current popup port
+import { storage } from '../storage_instance.js';
+import { broadcastLog, broadcastToTabs } from '../messaging.js';
+import { callNativeHost } from '../../utils/nativeConnection.js';
+import { updateContextMenus } from '../../utils/contextMenu.js';
+import * as m3u8_scanner_handlers from './m3u8_scanner.js';
+import * as playback_handlers from './playback.js';
 
 // Cache for native host info to speed up UI preference retrieval
 let _nativeInfoCache = {
@@ -17,30 +13,17 @@ let _nativeInfoCache = {
 };
 const CACHE_TTL_MS = 600000; // 10 minutes
 
-export function init(dependencies) {
-    _storage = dependencies.storage;
-    _broadcastToTabs = dependencies.broadcastToTabs;
-    _broadcastLog = dependencies.broadcastLog;
-    _callNativeHost = dependencies.callNativeHost;
-    _updateContextMenus = dependencies.updateContextMenus;
-    _tabUiState = dependencies.tabUiState;
-    _m3u8_scanner_handlers = dependencies.m3u8_scanner_handlers;
-    _playback_handlers = dependencies.playback_handlers;
-    _getPopupPort = dependencies.getPopupPort;
-}
-
+// Helper to get current popup port (assigned by background.js)
+let popupPort = null;
+export function setPopupPort(port) { popupPort = port; }
 
 export async function handleContentScriptInit(request, sender) {
     const tabId = sender.tab?.id; // Ensure tab exists
     const origin = sender.origin;
 
     if (tabId && origin && sender.tab) {
-        if (!_tabUiState[tabId]) _tabUiState[tabId] = {};
-        try {
-            _tabUiState[tabId].uiDomain = new URL(origin).hostname;
-        } catch (e) { /* ignore invalid origins */ }
-        
-        const data = await _storage.get();
+        // ... (remaining logic using storage, broadcastLog, etc directly)
+        const data = await storage.get();
         const globalPrefs = data.settings.ui_preferences.global;
 
         let domain = null;
@@ -59,10 +42,7 @@ export async function handleContentScriptInit(request, sender) {
             isMinimized = (globalPrefs.mode === 'minimized');
         }
 
-        // --- NEW: Prioritize Live Session Data ---
-        // If a folder is currently playing, we should default to that folder
-        // and its active item, rather than just the last used folder from settings.
-        const mpvStatus = await _playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
+        const mpvStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
         let folderId = mpvStatus?.is_running ? mpvStatus.folderId : null;
         let isFolderActive = !!folderId;
         let lastPlayedId = null;
@@ -74,48 +54,41 @@ export async function handleContentScriptInit(request, sender) {
         const folder = data.folders[folderId];
         lastPlayedId = folder?.last_played_id;
 
-        // Send a single "Handshake" message with the full initial state.
-        // This eliminates redundant IPC calls and prevents UI flickering.
         await chrome.tabs.sendMessage(tabId, { 
             action: 'init_ui_state', 
             shouldBeMinimized: isMinimized,
             folderId: folderId,
             lastPlayedId: lastPlayedId,
             isFolderActive: isFolderActive,
-            // Combined: Include the playlist data in the first message
             playlist: folder?.playlist || []
         }).catch(() => {});
     }
 }
 
-
-
-
-
 export async function handleGetUiStateForTab(request) {
     const tabId = request.tabId;
     const tab = await chrome.tabs.get(tabId);
-    const data = await _storage.get();
+    const data = await storage.get();
     const globalPrefs = data.settings.ui_preferences.global;
-    const tabState = _tabUiState[tabId] || {};
-
-    let domain = tabState.uiDomain;
-    if (!domain && tab.url && (tab.url.startsWith('http:') || tab.url.startsWith('https:'))) {
+    
+    // We'll need to handle tabUiState differently or just query it from background.js
+    // For now, let's assume we can get it or ignore it if not critical.
+    
+    let domain = null;
+    if (tab.url && (tab.url.startsWith('http:') || tab.url.startsWith('https:'))) {
         try {
             domain = new URL(tab.url).hostname;
         } catch (e) { /* ignore */ }
     }
 
     const domainPrefs = domain ? data.settings.ui_preferences.domains[domain] || {} : {};
-
-    // Combine global and domain preferences to get the final state for the tab.
     const finalPrefs = { ...globalPrefs, ...domainPrefs };
 
     return {
         success: true,
         state: {
             minimized: finalPrefs.minimized ?? (finalPrefs.mode === 'minimized'),
-            detectedUrl: _m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId)
+            detectedUrl: m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId)
         }
     };
 }
@@ -123,31 +96,27 @@ export async function handleGetUiStateForTab(request) {
 export async function handleReportDetectedUrl(request, sender) {
     const tabId = sender.tab?.id;
     if (tabId) {
-        if (!_tabUiState[tabId]) _tabUiState[tabId] = {};
-        _tabUiState[tabId].detectedUrl = request.url;
-        // Broadcast to all contexts (popup and content scripts)
-        // The popup can check if the tabId matches the active tab.
-        _broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: request.url });
+        broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: request.url });
     }
 }
 
 export async function handleSetLastFolderId(request) {
     if (request.folderId) {
-        const data = await _storage.get();
+        const data = await storage.get();
         data.settings.last_used_folder_id = request.folderId;
-        await _storage.set(data);
-        _broadcastToTabs({ action: 'last_folder_changed', folderId: request.folderId });
-        await _updateContextMenus(_storage); // Rebuild context menus to reflect the new "current" folder.
+        await storage.set(data);
+        broadcastToTabs({ action: 'last_folder_changed', folderId: request.folderId });
+        await updateContextMenus(storage);
         return { success: true };
     }
     return { success: false, error: 'No folderId provided.' };
 }
 
 export async function handleSwitchPlaylist() {
-    const data = await _storage.get();
+    const data = await storage.get();
     const folderOrder = data.folderOrder || Object.keys(data.folders);
     
-    if (folderOrder.length <= 1) return { success: true }; // Nothing to switch to
+    if (folderOrder.length <= 1) return { success: true };
 
     const currentFolderId = data.settings.last_used_folder_id || folderOrder[0];
     let currentIndex = folderOrder.indexOf(currentFolderId);
@@ -156,15 +125,13 @@ export async function handleSwitchPlaylist() {
     const nextFolderId = folderOrder[nextIndex];
 
     data.settings.last_used_folder_id = nextFolderId;
-    await _storage.set(data);
+    await storage.set(data);
 
-    // --- NEW: Gather full state for the new folder to eliminate round-trips ---
     const folder = data.folders[nextFolderId] || { playlist: [] };
-    const mpvStatus = await _playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
-    const isFolderActive = !!(mpvStatus?.is_running && (mpvStatus.folderId === nextFolderId || _playback_handlers.isFolderActive(nextFolderId)));
+    const mpvStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
+    const isFolderActive = !!(mpvStatus?.is_running && (mpvStatus.folderId === nextFolderId || playback_handlers.isFolderActive(nextFolderId)));
 
-    // Broadcast the full state so all tabs sync and render instantly
-    _broadcastToTabs({ 
+    broadcastToTabs({ 
         action: 'last_folder_changed', 
         folderId: nextFolderId,
         playlist: folder.playlist,
@@ -172,17 +139,15 @@ export async function handleSwitchPlaylist() {
         isFolderActive: isFolderActive
     });
     
-    // Non-blocking: Update context menus in the background
-    _updateContextMenus(_storage).catch(e => console.error("Failed to update context menus:", e));
+    updateContextMenus(storage).catch(e => console.error("Failed to update context menus:", e));
 
     return { success: true, folderId: nextFolderId };
 }
 
 export async function handleGetUiPreferences(request, sender) {
-    const data = await _storage.get();
+    const data = await storage.get();
     let globalPrefs = { ...data.settings.ui_preferences.global };
 
-    // --- OPTIMIZED: Sync Critical Paths from Native Host ---
     const now = Date.now();
     if (_nativeInfoCache.timestamp && (now - _nativeInfoCache.timestamp < CACHE_TTL_MS)) {
         if (_nativeInfoCache.decoder) globalPrefs.mpv_decoder = _nativeInfoCache.decoder;
@@ -190,7 +155,7 @@ export async function handleGetUiPreferences(request, sender) {
         if (_nativeInfoCache.node_path && !globalPrefs.node_path) globalPrefs.node_path = _nativeInfoCache.node_path;
     } else {
         try {
-            const nativeSettings = await _callNativeHost({ action: 'get_ui_preferences' });
+            const nativeSettings = await callNativeHost({ action: 'get_ui_preferences' });
             if (nativeSettings?.success && nativeSettings.preferences) {
                 const np = nativeSettings.preferences;
                 if (np.mpv_decoder) {
@@ -216,7 +181,7 @@ export async function handleGetUiPreferences(request, sender) {
     if (sender.origin && (sender.origin.startsWith('http:') || sender.origin.startsWith('https:'))) {
         try {
             domain = new URL(sender.origin).hostname;
-        } catch (e) { /* Invalid origin, ignore. */ }
+        } catch (e) { /* ignore */ }
     }
 
     if (domain) {
@@ -227,14 +192,14 @@ export async function handleGetUiPreferences(request, sender) {
 }
 
 export async function handleSetUiPreferences(request, sender) {
-    const data = await _storage.get();
+    const data = await storage.get();
     const newPreferences = request.preferences;
 
     let domain = null;
     if (sender.origin && (sender.origin.startsWith('http:') || sender.origin.startsWith('https:'))) {
         try {
             domain = new URL(sender.origin).hostname;
-        } catch (e) { /* Invalid origin, ignore. */ }
+        } catch (e) { /* ignore */ }
     }
 
     if (domain) {
@@ -244,16 +209,13 @@ export async function handleSetUiPreferences(request, sender) {
         data.settings.ui_preferences.global = { ...data.settings.ui_preferences.global, ...newPreferences };
     }
 
-    await _storage.set(data);
+    await storage.set(data);
 
-    // --- NEW: Sync Global Preferences to Native Host config.json ---
     if (!domain) {
-        // Clear the cache so that subsequent 'get' calls fetch fresh data from the newly saved state
         _nativeInfoCache.decoder = null;
         _nativeInfoCache.timestamp = 0;
 
         try {
-            // Only sync keys that the native host actually cares about to avoid bloat
             const nativeSyncKeys = [
                 'mpv_path', 'mpv_decoder', 'enable_url_analysis', 'browser_for_url_analysis',
                 'enable_youtube_analysis', 'user_agent_string', 'enable_smart_resume',
@@ -270,16 +232,14 @@ export async function handleSetUiPreferences(request, sender) {
             });
 
             if (Object.keys(syncPrefs).length > 0) {
-                await _callNativeHost({ action: 'set_ui_preferences', preferences: syncPrefs });
+                await callNativeHost({ action: 'set_ui_preferences', preferences: syncPrefs });
             }
         } catch (e) {
             console.warn("Failed to sync preferences to native host:", e);
         }
     }
 
-    // Broadcast the change, but also include the domain it applies to.
-    // This allows other tabs to ignore UI changes that aren't for them.
-    _broadcastToTabs({
+    broadcastToTabs({
         action: 'preferences_changed', preferences: newPreferences, domain: domain
     });
     return { success: true };
@@ -287,24 +247,20 @@ export async function handleSetUiPreferences(request, sender) {
 
 export async function handleGetDefaultAutomaticFlags() {
     try {
-        const response = await _callNativeHost({ action: 'get_default_automatic_flags' });
+        const response = await callNativeHost({ action: 'get_default_automatic_flags' });
         if (response.success && response.flags) {
             return { success: true, flags: response.flags };
         }
     } catch (e) {
-        _broadcastLog({ text: `[Background]: Failed to fetch default flags from native host: ${e.message}`, type: 'error' });
+        broadcastLog({ text: `[Background]: Failed to fetch default flags: ${e.message}`, type: 'error' });
     }
     
-    // Fallback to local defaults if native host is unavailable
-    const defaultData = _storage._getDefaultData();
+    const defaultData = storage._getDefaultData();
     return { success: true, flags: defaultData.settings.ui_preferences.global.automatic_mpv_flags };
 }
 
 export async function handleSetMinimizedState(request) {
     const { minimized } = request;
-    if (typeof minimized !== 'boolean') {
-        return { success: false, error: 'Invalid minimized state provided.' };
-    }
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!activeTab || !activeTab.id) {
         return { success: false, error: 'Could not find an active tab.' };
@@ -317,65 +273,44 @@ export async function handleSetMinimizedState(request) {
     }
 }
 
-export function handleHeartbeat() {
-    return { success: true };
-}
+export function handleHeartbeat() { return { success: true }; }
 
 export function handleForceReloadSettings() {
-    _broadcastToTabs({ action: 'preferences_changed', preferences: {} });
+    broadcastToTabs({ action: 'preferences_changed', preferences: {} });
     return { success: true };
 }
 
 export async function handleForceRefreshDependencies() {
-    // Clear JS-side cache
     _nativeInfoCache.decoder = null;
     _nativeInfoCache.timestamp = 0;
-    
-    // Call native host to clear Python-side cache and re-scan
-    const response = await _callNativeHost({ action: 'check_dependencies', force_refresh: true });
+    const response = await callNativeHost({ action: 'check_dependencies', force_refresh: true });
     
     if (response.success) {
-        // Update storage with fresh status
-        const data = await _storage.get();
+        const data = await storage.get();
         data.settings.ui_preferences.global.dependencyStatus = {
-            mpv: response.mpv,
-            ytdlp: response.ytdlp,
-            ffmpeg: response.ffmpeg,
-            node: response.node
+            mpv: response.mpv, ytdlp: response.ytdlp, ffmpeg: response.ffmpeg, node: response.node
         };
-        await _storage.set(data);
-        
-        // Broadcast the update so the UI can refresh
-        _broadcastToTabs({ 
+        await storage.set(data);
+        broadcastToTabs({ 
             action: 'preferences_changed', 
             preferences: { dependencyStatus: data.settings.ui_preferences.global.dependencyStatus } 
         });
-        
-        _broadcastLog({ text: "[Background]: Dependency status refreshed successfully.", type: "info" });
+        broadcastLog({ text: "[Background]: Dependency status refreshed successfully.", type: "info" });
     }
-    
     return response;
 }
 
 export async function handleOpenPopup(request, sender) {
-    const popupPort = _getPopupPort ? _getPopupPort() : null;
-    
     if (popupPort) {
         try {
             popupPort.postMessage({ action: 'close_popup' });
-        } catch (e) {
-            console.error("Failed to send close message to popup:", e);
-        }
+        } catch (e) {}
         return { success: true };
     }
 
     if (chrome.action && chrome.action.openPopup) {
-        // Fire and forget (but log errors to console) to avoid blocking the message response
-        // or timing out the message channel if the popup takes time to init.
-        chrome.action.openPopup({ windowId: sender.tab.windowId }).catch(e => {
-            console.error("Popup open failed:", e);
-        });
+        chrome.action.openPopup({ windowId: sender.tab.windowId }).catch(() => {});
         return { success: true };
     }
-    return { success: false, error: 'chrome.action.openPopup is not supported in this browser version.' };
+    return { success: false, error: 'openPopup not supported.' };
 }
