@@ -223,6 +223,18 @@ mp.add_hook("on_load", 1, function()
         -- Store metadata
         if opts.original_url then mp.set_property("user-data/original-url", opts.original_url) end
         if opts.id then mp.set_property("user-data/id", opts.id) end
+        
+        -- Apply Title if provided
+        if opts.title and opts.title ~= "" then
+            debug_log("AdaptiveHeaders: Applying title: " .. opts.title)
+            mp.set_property("force-media-title", opts.title)
+        else
+            -- Reset title if not provided to let MPV decide
+            mp.set_property("force-media-title", "")
+        end
+    else
+        -- Reset title if no options found
+        mp.set_property("force-media-title", "")
     end
 
     -- Apply YTDL changes

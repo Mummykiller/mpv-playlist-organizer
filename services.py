@@ -527,10 +527,11 @@ class MpvCommandBuilder:
 
     def with_title(self, title):
         if title:
-            # Set the initial title for the first file loaded
-            # Use file_io to remove newlines and other dangerous chars
+            # Use --title instead of --force-media-title.
+            # --title sets the window title, but doesn't override the per-file media title
+            # displayed in the seek bar/OSD like --force-media-title does.
             clean_title = file_io.sanitize_string(title)
-            self.mpv_args.append(f'--force-media-title={clean_title}')
+            self.mpv_args.append(f'--title={clean_title}')
         return self
 
     def with_automatic_flags(self, automatic_mpv_flags):
