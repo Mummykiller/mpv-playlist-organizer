@@ -1,6 +1,6 @@
 /**
  * Shared communication utilities for the MPV Playlist Organizer.
- * ES Module version for Background Service Worker.
+ * ES Module version for Background/Module contexts.
  */
 
 export function debounce(func, wait) {
@@ -8,7 +8,7 @@ export function debounce(func, wait) {
     return function executedFunction(...args) {
         const later = () => {
             clearTimeout(timeout);
-            func(...args);
+            func.apply(this, args);
         };
         clearTimeout(timeout);
         timeout = setTimeout(later, wait);
@@ -27,17 +27,10 @@ export const sendMessageAsync = (payload) => new Promise((resolve, reject) => {
 
 export function sanitizeString(str, isFilename = false) {
     if (typeof str !== 'string') return str;
-    
     if (isFilename) {
-        // Strict blacklist for folder names / filenames: / \ : * ? " < > | $ ; & `
-        // Also remove newlines and tabs.
         return str.replace(/["\/:*?<>|$;&`\n\r\t]/g, '').trim();
     } else {
-        // Minimal destruction for URLs/Titles. 
-        // Only remove characters that are strictly illegal in M3U or break our JSON/logging.
-        // Quotes and backticks are removed as they are the primary injection risks.
-        // Preserves functional characters like &, ?, =, ;, and $ for URLs.
-        return str.replace(/["\`\n\r\t]/g, '').trim();
+        return str.replace(/["`\n\r\t]/g, '').trim();
     }
 }
 
@@ -59,29 +52,26 @@ export function normalizeYouTubeUrl(ytUrl) {
     if (!ytUrl || typeof ytUrl !== 'string') return ytUrl;
     try {
         const urlObj = new URL(ytUrl);
-        if (urlObj.hostname.includes('youtube.com') && urlObj.pathname === '/watch') {
+        const isStandard = urlObj.hostname.includes('youtube.com') && urlObj.pathname === '/watch';
+        const isShorts = urlObj.hostname.includes('youtube.com') && urlObj.pathname.startsWith('/shorts/');
+        const isShortLink = urlObj.hostname.includes('youtu.be');
+        
+        if (isStandard || isShortLink || isShorts) {
             urlObj.searchParams.delete('t');
             return urlObj.toString();
         }
-    } catch (e) {
-        // Not a valid URL, return original
-    }
+    } catch (e) {}
     return ytUrl;
 }
 
-/**
- * Standardized Logger for unified output format.
- */
 export class Logger {
     constructor(tag = 'BG') {
         this.tag = tag;
     }
-
     _format(msg) {
         const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
         return `[${time}] [${this.tag}]: ${msg}`;
     }
-
     info(msg) { console.log(this._format(msg)); }
     warn(msg) { console.warn(this._format(msg)); }
     error(msg) { console.error(this._format(msg)); }

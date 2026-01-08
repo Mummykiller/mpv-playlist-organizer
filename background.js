@@ -32,6 +32,7 @@ const actionHandlers = {
     // UI State
     'content_script_init': ui_state_handlers.handleContentScriptInit,
     'get_ui_state_for_tab': ui_state_handlers.handleGetUiStateForTab,
+    'report_page_url': ui_state_handlers.handleReportPageUrl,
     'set_last_folder_id': ui_state_handlers.handleSetLastFolderId,
     'switch_playlist': ui_state_handlers.handleSwitchPlaylist,
     'get_last_folder_id': async () => {

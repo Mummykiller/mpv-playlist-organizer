@@ -16,12 +16,14 @@ const scrapingInProgress = new Set();
 async function addUrlToFolder(folderId, url, title, originalTab = null, sender = null) {
     try {
         const sanitizedUrl = sanitizeString(url);
+        // Normalized URL is now the one we store and use for everything
+        const normalizedUrl = normalizeYouTubeUrl(sanitizedUrl);
         const sanitizedTitle = sanitizeString(title);
 
         const data = await storage.get();
         const playlist = data.folders[folderId]?.playlist || [];
         const duplicateBehavior = data.settings.ui_preferences.global.duplicate_url_behavior || 'ask';
-        const normalizedUrl = normalizeYouTubeUrl(sanitizedUrl);
+        
         const isDuplicate = playlist.some(item => normalizeYouTubeUrl(item.url) === normalizedUrl);
 
         if (isDuplicate) {
@@ -69,7 +71,7 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
 
         // Generate a stable ID for the item immediately.
         const newItem = { 
-            url: sanitizedUrl, 
+            url: normalizedUrl, 
             title: sanitizedTitle, 
             id: crypto.randomUUID() 
         };

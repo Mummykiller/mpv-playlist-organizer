@@ -775,10 +775,64 @@ class MpvCommandBuilder:
         else:
             full_command = self.mpv_args
             
+        if platform.system() != "Windows" and self.has_terminal_flag:
+            term_cmd = []
+            modern_terminals = ['konsole', 'gnome-terminal', 'xfce4-terminal', 'kitty', 'alacritty', 'tilix', 'foot', 'wezterm']
+            
+            if self.is_forced_terminal:
+                # FORCED MODE: Needs to stay open after MPV exits
+                inner_cmd_str = ' '.join(shlex.quote(arg) for arg in full_command)
+                
+                # Try Konsole specifically first because it has a nice native --hold
+                konsole_path = shutil.which('konsole')
+                if konsole_path:
+                    logging.info(f"Terminal Wrapper: Using Konsole native --hold at {konsole_path}")
+                    term_cmd = [konsole_path, '--hold', '-e'] + full_command
+                
+                if not term_cmd:
+                    # Fallback to sh -c "cmd; sleep" hack for other terminals
+                    wrapped_cmd_str = f"{inner_cmd_str}; echo ''; echo '--- MPV Finished. Closing in 10s... ---'; sleep 10"
+                    
+                    if shutil.which('xdg-terminal-exec'):
+                        term_cmd = ['xdg-terminal-exec', 'sh', '-c', wrapped_cmd_str]
+                    
+                    if not term_cmd:
+                        for t in modern_terminals:
+                            t_path = shutil.which(t)
+                            if t_path:
+                                term_cmd = [t_path, '--', 'sh', '-c', wrapped_cmd_str]
+                                break
+            else:
+                # REGULAR MODE: Just launch MPV inside a terminal
+                if shutil.which('xdg-terminal-exec'):
+                    term_cmd = ['xdg-terminal-exec'] + full_command
+                
+                if not term_cmd:
+                    # Prefer -e for general compatibility, as -- is handled differently
+                    # across various versions of Konsole and other terminals.
+                    for t in modern_terminals:
+                        t_path = shutil.which(t)
+                        if t_path:
+                            term_cmd = [t_path, '-e'] + full_command
+                            break
+                
+                if not term_cmd:
+                    # Final desperate fallback
+                    for t in ['x-terminal-emulator', 'xterm', 'urxvt']:
+                        t_path = shutil.which(t)
+                        if t_path:
+                            term_cmd = [t_path, '-e'] + full_command
+                            break
+            
+            if term_cmd:
+                full_command = term_cmd
+            else:
+                logging.warning("Terminal Wrapper: No supported terminal emulator found. Launching without terminal.")
+
         logging.info(f"Constructed MPV command (Copy-Paste): {' '.join(shlex.quote(arg) for arg in full_command)}")
         logging.info("MPV Command Arguments (Detailed):\n" + "\n".join(f"  [{i}] {arg}" for i, arg in enumerate(full_command)))
 
-        # Write to inspection file for easy user verification (overwrites every launch)
+        # Write to inspection file for easy user verification
         try:
             inspection_path = os.path.join(file_io.DATA_DIR, "last_mpv_command.txt")
             with open(inspection_path, 'w', encoding='utf-8') as f:
@@ -789,66 +843,7 @@ class MpvCommandBuilder:
                 f.write("DETAILED ARGUMENT LIST:\n")
                 for i, arg in enumerate(full_command):
                     f.write(f"[{i:02d}] {arg}\n")
-            logging.debug(f"Successfully wrote launch command to {inspection_path}")
-        except Exception as e:
-            logging.warning(f"Failed to write inspection file 'last_mpv_command.txt': {e}")
-
-        if platform.system() != "Windows" and self.has_terminal_flag:
-            # We use a shell wrapper inside the terminal to ensure it stays open 
-            # if the terminal emulator itself forks and exits immediately.
-            inner_cmd_str = ' '.join(shlex.quote(arg) for arg in full_command)
-            
-            if self.is_forced_terminal:
-                # Forced terminal stays open for 10s or requires manual close (hold)
-                wrapped_cmd_str = f"{inner_cmd_str}; echo ''; echo '--- Process Finished. Closing in 10s... ---'; sleep 10"
-            else:
-                # Standard terminal flag closes immediately
-                wrapped_cmd_str = f"{inner_cmd_str}"
-            
-            term_cmd = []
-            
-            # 1. Try modern/generic wrappers first
-            if shutil.which('xdg-terminal-exec'):
-                logging.info("Terminal Wrapper: Using xdg-terminal-exec")
-                term_cmd = ['xdg-terminal-exec', 'sh', '-c', wrapped_cmd_str]
-            elif shutil.which('x-terminal-emulator'):
-                logging.info("Terminal Wrapper: Using x-terminal-emulator")
-                term_cmd = ['x-terminal-emulator', '-e', 'sh', '-c', wrapped_cmd_str]
-            
-            # 2. Modern Terminals (Modern Konsole, Gnome, Kitty, Alacritty, etc. all support --)
-            if not term_cmd:
-                modern_terminals = ['gnome-terminal', 'kitty', 'alacritty', 'tilix', 'foot', 'wezterm']
-                for t in modern_terminals:
-                    t_path = shutil.which(t)
-                    if t_path:
-                        logging.info(f"Terminal Wrapper: Using modern terminal syntax for {t} at {t_path}")
-                        term_cmd = [t_path, '--', 'sh', '-c', wrapped_cmd_str]
-                        break
-            
-            # 3. Classic Terminals (Legacy/X11 style using -e)
-            if not term_cmd:
-                classic_terminals = ['konsole', 'xfce4-terminal', 'urxvt', 'rxvt', 'termit', 'terminology', 'xterm']
-                for t in classic_terminals:
-                    t_path = shutil.which(t)
-                    if t_path:
-                        logging.info(f"Terminal Wrapper: Using classic terminal syntax for {t} at {t_path}")
-                        if t == 'konsole':
-                            if self.is_forced_terminal:
-                                # Forced Konsole uses native --hold
-                                term_cmd = [t_path, '--hold', '-e'] + full_command
-                            else:
-                                # Standard Konsole closes on exit
-                                term_cmd = [t_path, '-e'] + full_command
-                        elif t == 'xfce4-terminal':
-                            term_cmd = [t_path, '--disable-server', '-x', 'sh', '-c', wrapped_cmd_str]
-                        else:
-                            term_cmd = [t_path, '-e', 'sh', '-c', wrapped_cmd_str]
-                        break
-            
-            if term_cmd:
-                full_command = term_cmd
-            else:
-                logging.warning("Terminal Wrapper: No supported terminal emulator found in PATH. Launching without terminal.")
+        except: pass
 
         return full_command, self.has_terminal_flag
 
@@ -909,8 +904,8 @@ def construct_mpv_command(
 def get_mpv_popen_kwargs(has_terminal_flag):
     """Returns the subprocess arguments for launching MPV."""
     popen_kwargs = {
-        'stdout': subprocess.PIPE,
-        'stderr': subprocess.STDOUT,
+        'stdout': subprocess.PIPE if not has_terminal_flag else None,
+        'stderr': subprocess.STDOUT if not has_terminal_flag else None,
         'universal_newlines': False
     }
     if platform.system() == "Windows":

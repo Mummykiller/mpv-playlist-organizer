@@ -300,16 +300,22 @@ class LauncherService:
 
             popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
             env = os.environ.copy()
-            for key in ['LD_LIBRARY_PATH', 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH']:
-                env.pop(key, None)
+            
+            # Security/Compatibility: browser-injected libs can break MPV.
+            # However, we MUST NOT strip these if we are launching a terminal emulator (like Konsole)
+            # because it needs its own Qt environment to start.
+            if not has_terminal_flag:
+                for key in ['LD_LIBRARY_PATH', 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH']:
+                    env.pop(key, None)
 
             process = subprocess.Popen(full_command, env=env, **popen_kwargs)
             self.session.process = process
             self.session.ipc_path = ipc_path
 
-            stderr_thread = threading.Thread(target=self.session.log_stream, args=(process.stdout, logging.warning, folder_id))
-            stderr_thread.daemon = True
-            stderr_thread.start()
+            if process.stdout:
+                stderr_thread = threading.Thread(target=self.session.log_stream, args=(process.stdout, logging.warning, folder_id))
+                stderr_thread.daemon = True
+                stderr_thread.start()
 
             self.session.ipc_manager = ipc_utils.IPCSocketManager()
             if not self.session.ipc_manager.connect(self.session.ipc_path, timeout=15.0):
