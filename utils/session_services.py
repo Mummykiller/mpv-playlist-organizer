@@ -321,6 +321,24 @@ class LauncherService:
             if not self.session.ipc_manager.connect(self.session.ipc_path, timeout=15.0):
                 raise RuntimeError(f"Failed to connect to MPV IPC at {self.session.ipc_path}")
 
+            # --- PID Resolution & Persistence ---
+            # IMPORTANT: We must get the REAL mpv PID from the IPC server because
+            # if a terminal wrapper was used, process.pid is the terminal emulator's PID.
+            self.session.pid = process.pid # Fallback to process PID
+            try:
+                pid_response = self.session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=5.0, expect_response=True)
+                if pid_response and pid_response.get("error") == "success":
+                    actual_mpv_pid = pid_response.get("data")
+                    if actual_mpv_pid:
+                        self.session.pid = actual_mpv_pid
+                        logging.info(f"[PY][Session] Resolved actual MPV PID: {self.session.pid} (Process PID: {process.pid})")
+            except Exception as e:
+                logging.debug(f"[PY][Session] Failed to resolve actual MPV PID via IPC (using process PID): {e}")
+
+            self.session.owner_folder_id = folder_id
+            self.session.is_alive = True
+            self.session.persist_session()
+
             self.session.playlist = kwargs.get('full_playlist') if kwargs.get('full_playlist') is not None else [url_item]
             
             if self.session.playlist:
@@ -354,24 +372,9 @@ class LauncherService:
 
             self.session.ipc_manager.send({"command": ["set_property", "user-data/original-url", url_item.get('original_url', launch_url)]})
 
-            self.session.pid = process.pid
-            self.session.owner_folder_id = folder_id
-            self.session.is_alive = True
-            
-            self.session.persist_session()
-            
             from playlist_tracker import PlaylistTracker
             self.session.playlist_tracker = PlaylistTracker(folder_id, self.session.playlist, file_io, settings, self.session.ipc_path, self.session.send_message)
             self.session.playlist_tracker.start_tracking()
-
-            if platform.system() != "Windows" and has_terminal_flag:
-                try:
-                    pid_response = self.session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=5.0, expect_response=True)
-                    if pid_response and pid_response.get("error") == "success":
-                        actual_mpv_pid = pid_response.get("data")
-                        if actual_mpv_pid:
-                            self.session.pid = actual_mpv_pid
-                except: pass
 
             def process_waiter(proc, f_id):
                 initial_pid = proc.pid
@@ -384,6 +387,15 @@ class LauncherService:
                 pids_to_check = list(set(filter(None, [initial_pid, actual_pid])))
                 
                 logging.debug(f"[PY][Session] Process {initial_pid} exited. Return code: {return_code}. Checking flags for PIDs: {pids_to_check}")
+
+                # --- Handle Terminal Wrapper Exit ---
+                # If the wrapper exited but the actual MPV PID is still running,
+                # we don't clear the session yet. Instead, we hand off to the orphaned watcher.
+                if actual_pid and actual_pid != initial_pid:
+                    if ipc_utils.is_pid_running(actual_pid):
+                        logging.info(f"[PY][Session] Terminal wrapper (PID {initial_pid}) exited, but MPV (PID {actual_pid}) is still alive. Handing off to restored process watcher.")
+                        self.start_restored_process_watcher(actual_pid, self.session.ipc_path, f_id)
+                        return
 
                 flag_found = False
                 for pid in pids_to_check:

@@ -61,7 +61,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 let videoTitle = findFirst(titleSelectors, 'content') || document.title;
                 const channelName = findFirst(channelSelectors);
                 
-                videoTitle = videoTitle.replace(/^(\d+)\s*/, '').replace(/\s-\sYouTube$/, '').trim();
+                // Only strip leading notification counts in parentheses, e.g., "(1) Video Title"
+                videoTitle = videoTitle.replace(/^\(\d+\)\s*/, '').replace(/\s-\sYouTube$/, '').trim();
                 return { url: url, title: channelName ? `${channelName} - ${videoTitle}` : videoTitle };
             }
 
@@ -75,7 +76,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 /s(?:eason)?\s*(\d+)\s*e(?:pisode)?\s*(\d+(?:\.\d+)?)/i,
                 /(\d+)x(\d+(?:\.\d+)?)/i,
                 /(?:(\d+)(?:st|nd|rd|th)\s+season)|s(?:eason)?\.?\s*(\d+)/i,
-                /e(?:p(?:isode)?)?`?.?.\s*(\d+(?:\.\d+)?)/i
+                /e(?:p(?:isode)?)?\.?\s*(\d+(?:\.\d+)?)/i
             ];
 
             const findDetails = (text) => {
@@ -144,7 +145,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
             const junkRegex = new RegExp(`(^|\\s)(${this.filterWords.join('|')})(\\s|$)`, 'gi');
             cleanTitle = cleanTitle.replace(junkRegex, ' ');
 
-            if (episode) cleanTitle = cleanTitle.replace(new RegExp(`\\b${episode}\b`, 'g'), '');
+            if (episode) cleanTitle = cleanTitle.replace(new RegExp(`\\b${episode}\\b`, 'g'), '');
             cleanTitle = cleanTitle.replace(/\s\.\d+\s/g, ' '); 
             cleanTitle = cleanTitle.replace(/\s*[-|:]\s*$/, '').replace(/\s+/g, ' ').trim();
 

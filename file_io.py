@@ -4,6 +4,7 @@ import logging
 import platform
 import shutil
 import sys
+import re
 
 # Prevent __pycache__ generation
 sys.dont_write_bytecode = True
@@ -16,10 +17,11 @@ import threading
 
 class FileLock:
     """
-    A simple cross-process file locking mechanism using a .lock file.
-    Also includes a thread-level RLock for safety and reentrancy within the same process.
+    A robust cross-process file locking mechanism using a .lock file.
+    Includes per-path thread-level synchronization and stale lock detection.
     """
-    _thread_lock = threading.RLock()
+    _locks = {}
+    _global_lock = threading.Lock()
     _held_locks = threading.local()
 
     def __init__(self, filepath, timeout=5.0, delay=0.05):
@@ -28,54 +30,121 @@ class FileLock:
         self.timeout = timeout
         self.delay = delay
         self.is_file_locked = False
+        
+        # Get or create a thread-level RLock for this specific path
+        with FileLock._global_lock:
+            if self.filepath not in FileLock._locks:
+                FileLock._locks[self.filepath] = threading.RLock()
+            self.thread_lock = FileLock._locks[self.filepath]
+
+    def _is_pid_running(self, pid):
+        """Checks if a process ID is currently running on the system."""
+        if pid <= 0: return False
+        try:
+            if platform.system() == "Windows":
+                import ctypes
+                # 0x1000 = PROCESS_QUERY_LIMITED_INFORMATION
+                h_process = ctypes.windll.kernel32.OpenProcess(0x1000, 0, pid)
+                if h_process:
+                    ctypes.windll.kernel32.CloseHandle(h_process)
+                    return True
+                return ctypes.windll.kernel32.GetLastError() == 5 # Access Denied means it exists
+            else:
+                os.kill(pid, 0)
+                return True
+        except (OSError, ImportError):
+            return False
 
     def __enter__(self):
-        # 1. Acquire thread-level RLock first (reentrant)
-        FileLock._thread_lock.acquire()
+        # 1. Acquire thread-level RLock (prevents internal process contention)
+        if not self.thread_lock.acquire(timeout=self.timeout):
+            raise RuntimeError(f"Could not acquire thread lock for {self.filepath} after {self.timeout}s")
         
-        # Initialize thread-local storage if needed
-        if not hasattr(FileLock._held_locks, 'paths'):
-            FileLock._held_locks.paths = {}
-
-        # 2. Check if this thread already holds the file lock
-        if self.filepath in FileLock._held_locks.paths:
-            FileLock._held_locks.paths[self.filepath] += 1
+        # Initialize thread-local storage for recursion counting
+        if not hasattr(FileLock._held_locks, 'counters'):
+            FileLock._held_locks.counters = {}
+        
+        count = FileLock._held_locks.counters.get(self.filepath, 0)
+        if count > 0:
+            # Recursion: already held by this thread
+            FileLock._held_locks.counters[self.filepath] = count + 1
             return self
-        
-        # 3. Acquire cross-process file lock
+
+        # 2. Acquire cross-process file lock
         start_time = time.time()
+        my_pid = str(os.getpid())
+        
         while time.time() - start_time < self.timeout:
             try:
-                # O_EXCL + O_CREAT is atomic at the OS level
+                # Attempt atomic creation of lock file
                 fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-                os.close(fd)
+                try:
+                    os.write(fd, my_pid.encode())
+                finally:
+                    os.close(fd)
+                
                 self.is_file_locked = True
-                FileLock._held_locks.paths[self.filepath] = 1
+                FileLock._held_locks.counters[self.filepath] = 1
                 return self
             except OSError:
-                # File already exists (locked by another process)
+                # Lock file exists. Check if it is stale.
+                try:
+                    if os.path.exists(self.lockfile):
+                        with open(self.lockfile, 'r') as f:
+                            content = f.read().strip()
+                            if content:
+                                locked_pid = int(content)
+                                # Check if PID is dead OR if it matches our own PID (orphaned file from this process)
+                                # Since we hold thread_lock, no other thread in this process owns the file lock.
+                                if locked_pid == int(my_pid) or not self._is_pid_running(locked_pid):
+                                    logging.warning(f"[PY][IO] Removing stale lock for {self.filepath} (PID {locked_pid} {'matches current' if locked_pid == int(my_pid) else 'dead'})")
+                                    try: os.remove(self.lockfile)
+                                    except: pass
+                                    continue # Try acquiring again immediately
+                            else:
+                                # Lock file is empty. Check if it's old enough to be considered stale/crashed.
+                                try:
+                                    if time.time() - os.path.getmtime(self.lockfile) > 1.0:
+                                        logging.warning(f"[PY][IO] Removing stale empty lock file for {self.filepath}")
+                                        os.remove(self.lockfile)
+                                        continue
+                                except OSError:
+                                    pass # File might have been removed by another process
+                except:
+                    pass
+                
+                # Still locked, wait and retry
                 time.sleep(self.delay)
         
-        # If we timed out, release the thread lock and raise error
-        FileLock._thread_lock.release()
-        raise RuntimeError(f"Could not acquire lock for {self.filepath} after {self.timeout}s")
+        # Failed to acquire lock within timeout
+        self.thread_lock.release()
+        holder_pid = "unknown"
+        try:
+             with open(self.lockfile, 'r') as f:
+                holder_pid = f.read().strip()
+        except: pass
+        raise RuntimeError(f"Could not acquire lock for {self.filepath} after {self.timeout}s. Held by PID: {holder_pid}")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
-            if self.filepath in FileLock._held_locks.paths:
-                FileLock._held_locks.paths[self.filepath] -= 1
-                
-                if FileLock._held_locks.paths[self.filepath] == 0:
-                    del FileLock._held_locks.paths[self.filepath]
-                    if self.is_file_locked:
-                        try:
-                            if os.path.exists(self.lockfile):
-                                os.remove(self.lockfile)
-                        except:
-                            pass
-                        self.is_file_locked = False
+            count = FileLock._held_locks.counters.get(self.filepath, 0)
+            if count > 1:
+                FileLock._held_locks.counters[self.filepath] = count - 1
+            else:
+                # Final release for this thread
+                if self.is_file_locked:
+                    try:
+                        # Verify we still own the lock before deleting
+                        if os.path.exists(self.lockfile):
+                            with open(self.lockfile, 'r') as f:
+                                if f.read().strip() == str(os.getpid()):
+                                    os.remove(self.lockfile)
+                    except:
+                        pass
+                    self.is_file_locked = False
+                FileLock._held_locks.counters[self.filepath] = 0
         finally:
-            FileLock._thread_lock.release()
+            self.thread_lock.release()
 
 # --- Path Definitions ---
 
@@ -239,7 +308,6 @@ def sanitize_ytdlp_options(options_str):
         'python-interpreter', 'plugin-dirs', 'netrc-location', 'netrc'
     }
 
-    import re
     safe_options = []
     # Split by comma NOT preceded by backslash
     parts = re.split(r'(?<!\\),', options_str)
@@ -269,7 +337,6 @@ def sanitize_ytdlp_options(options_str):
 
 def merge_ytdlp_options(*args):
     """Merges multiple ytdl-raw-options strings into one, deduplicating keys. Handles escaped commas."""
-    import re
     merged_map = {}
     for options_str in args:
         if not options_str: continue
@@ -395,6 +462,9 @@ def write_export_file(filename, data, subfolder=None):
             base = base[:-5]
             
         safe_basename = os.path.basename(base)
+        # Enforce strict filename sanitization
+        safe_basename = sanitize_string(safe_basename, is_filename=True)
+        
         final_filename = f"{safe_basename}.json"
         filepath = os.path.join(target_dir, final_filename)
 

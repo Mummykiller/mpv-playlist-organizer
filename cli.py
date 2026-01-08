@@ -56,7 +56,10 @@ def _cli_play_folder(args):
         sys.exit(0)
 
     print(f"Starting mpv for folder '{folder_id}' with {len(playlist_items)} item(s)...")
-    result = mpv_session.start(playlist_items, folder_id, clear_on_completion=True)
+    
+    # Retrieve settings to pass to start()
+    settings = file_io.get_settings()
+    result = mpv_session.start(playlist_items, folder_id, settings, file_io, clear_on_completion=True)
 
     if not result.get("success"):
         print(f"Error starting mpv: {result.get('error')}", file=sys.stderr)

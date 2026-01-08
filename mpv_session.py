@@ -144,19 +144,49 @@ class MpvSessionManager:
                 if not all([pid, ipc_path, owner_folder_id]):
                     raise ValueError("Session file is malformed.")
 
-                if ipc_utils.is_process_alive(pid, ipc_path):
+                # Try to connect and get the REAL PID from MPV
+                actual_mpv_pid = None
+                temp_manager = ipc_utils.IPCSocketManager()
+                if temp_manager.connect(ipc_path, timeout=2.0):
+                    try:
+                        pid_resp = temp_manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=1.0)
+                        if pid_resp and pid_resp.get("error") == "success":
+                            actual_mpv_pid = pid_resp.get("data")
+                    except: pass
+                    temp_manager.close()
+
+                # Validation: Success if PID matches OR if IPC is alive (handles terminal wrappers)
+                is_alive = False
+                if actual_mpv_pid:
+                    if actual_mpv_pid == pid:
+                        is_alive = True
+                    elif ipc_utils.is_pid_running(pid):
+                        # PID mismatch but recorded PID (terminal) is still running
+                        is_alive = True
+                        logging.info(f"[PY][Session] Restore: PID mismatch (Recorded: {pid}, Actual: {actual_mpv_pid}) but wrapper still alive. Updating to actual PID.")
+                    else:
+                        # PID mismatch and recorded PID is gone, but MPV is alive!
+                        is_alive = True
+                        logging.info(f"[PY][Session] Restore: Terminal wrapper PID {pid} is gone, but MPV PID {actual_mpv_pid} is alive. Updating.")
+                
+                if is_alive:
                     all_folders = self.get_all_folders_from_file()
                     folder_data = all_folders.get(owner_folder_id)
                     if not folder_data:
                         raise RuntimeError(f"Could not find data for restored folder '{owner_folder_id}'.")
 
-                    self.pid = pid
+                    # Use the actual PID for all future operations
+                    self.pid = actual_mpv_pid if actual_mpv_pid else pid
                     self.ipc_path = ipc_path
                     self.playlist = folder_data.get("playlist", [])
                     self.owner_folder_id = owner_folder_id
                     self.current_token = token
                     self.is_alive = True
                     
+                    # Update session file with correct PID if it changed
+                    if actual_mpv_pid and actual_mpv_pid != pid:
+                        self.persist_session()
+
                     self.ipc_manager = ipc_utils.IPCSocketManager()
                     self.ipc_manager.connect(self.ipc_path)
                     
@@ -186,7 +216,7 @@ class MpvSessionManager:
                     self.playlist_tracker = PlaylistTracker(owner_folder_id, self.playlist, file_io, file_io.get_settings(), self.ipc_path, self.send_message)
                     self.playlist_tracker.start_tracking()
 
-                    self.launcher.start_restored_process_watcher(pid, ipc_path, owner_folder_id)
+                    self.launcher.start_restored_process_watcher(self.pid, ipc_path, owner_folder_id)
 
                     logging.info(f"[PY][Session] Successfully restored session for folder '{owner_folder_id}'.")
                     return {"was_stale": False, "folderId": owner_folder_id, "lastPlayedId": last_played_id, "token": token}
@@ -330,6 +360,25 @@ class MpvSessionManager:
         with self.sync_lock:
             return self.ipc_service.reorder_live(folder_id, new_order_items)
 
+    def clear_live(self, folder_id):
+        """Clears all items from the active MPV playlist."""
+        with self.sync_lock:
+            if not self.is_alive or self.owner_folder_id != folder_id:
+                return {"success": False, "message": "Session not active or folder mismatch."}
+            
+            logging.info(f"Clearing live MPV playlist for folder '{folder_id}'.")
+            # We use 'playlist-clear' which removes everything except the currently playing file.
+            # To clear everything, we might need a different approach or just stop.
+            self.ipc_manager.send({"command": ["playlist-clear"]}, expect_response=True)
+            
+            # Reset internal playlist state
+            self.playlist = []
+            if self.playlist_tracker:
+                self.playlist_tracker.update_playlist_order([])
+            
+            self.ipc_manager.send({"command": ["show-text", "Playlist cleared", 2000]}, expect_response=True)
+            return {"success": True, "message": "Live playlist cleared."}
+
     def _generate_m3u_content(self, items):
         """Generates M3U content from a list of items."""
         m3u_lines = ["#EXTM3U"]
@@ -365,18 +414,18 @@ class MpvSessionManager:
                 first_enriched = self.enricher.enrich_single_item(_url_items_list[0], folder_id, self.session_cookies, self.sync_lock, settings=settings)
                 _url_items_list = first_enriched + _url_items_list[1:]
 
-        # Smart Resume
-        playlist_start_index = 0
-        if settings.get("enable_smart_resume", True):
-            last_id = file_io.get_all_folders_from_file().get(folder_id, {}).get("last_played_id")
-            for idx, item in enumerate(_url_items_list):
-                if item.get('id') == last_id:
-                    playlist_start_index = idx
-                    break
-
-        launch_item = _url_items_list[playlist_start_index]
-        
         with self.sync_lock:
+            # Smart Resume
+            playlist_start_index = 0
+            if settings.get("enable_smart_resume", True):
+                last_id = file_io.get_all_folders_from_file().get(folder_id, {}).get("last_played_id")
+                for idx, item in enumerate(_url_items_list):
+                    if item.get('id') == last_id:
+                        playlist_start_index = idx
+                        break
+
+            launch_item = _url_items_list[playlist_start_index]
+
             if self.pid:
                 if not ipc_utils.is_process_alive(self.pid, self.ipc_path):
                     self.clear() 

@@ -55,6 +55,8 @@ export async function handleContentScriptInit(request, sender) {
         const folder = data.folders[folderId];
         lastPlayedId = folder?.last_played_id;
 
+        const detectedUrl = m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId);
+
         await chrome.tabs.sendMessage(tabId, { 
             action: 'init_ui_state', 
             tabId: tabId,
@@ -62,7 +64,8 @@ export async function handleContentScriptInit(request, sender) {
             folderId: folderId,
             lastPlayedId: lastPlayedId,
             isFolderActive: isFolderActive,
-            playlist: folder?.playlist || []
+            playlist: folder?.playlist || [],
+            detectedUrl: detectedUrl
         }).catch(() => {});
     }
 }
@@ -108,9 +111,12 @@ export async function handleReportPageUrl(request, sender) {
         
         if (isWatchPage || isPlaylistPage) {
             urlToReport = normalizeYouTubeUrl(urlToReport);
-            // Only update if it changed or wasn't already set by the scanner
+            
             const currentState = m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId);
-            if (!currentState || isYouTubeUrl(currentState)) {
+            
+            // Only update if it changed or wasn't already set by the scanner (M3U8 takes priority over YouTube page URL)
+            if (currentState !== urlToReport && (!currentState || isYouTubeUrl(currentState))) {
+                m3u8_scanner_handlers.handleUpdateDetectedUrlForTab(tabId, urlToReport);
                 broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: urlToReport });
             }
         }
