@@ -233,6 +233,25 @@ export async function findM3u8InUrl(url, originalTab) {
 }
 
 // Handler for the 'get_detected_url_for_tab' action, to be called from background.js
+
 export function handleGetDetectedUrlForTab(tabId) {
+
     return _detectedUrlsState[tabId] || null;
+
+}
+
+
+
+export function handleUpdateDetectedUrlForTab(tabId, url) {
+
+    if (url) {
+
+        _detectedUrlsState[tabId] = url;
+
+    } else {
+
+        delete _detectedUrlsState[tabId];
+
+    }
+
 }

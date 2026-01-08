@@ -375,6 +375,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
             
             this.applyInitialState().then(() => {
                 this.setMinimizedState(req.shouldBeMinimized, false);
+                if (req.detectedUrl) {
+                    this.state.update({ detectedUrl: req.detectedUrl });
+                }
                 if (req.folderId) {
                     this.updateFolderDropdowns(req.folderId, req.lastPlayedId, req.isFolderActive);
                 }

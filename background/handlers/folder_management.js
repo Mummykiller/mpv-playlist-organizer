@@ -3,10 +3,14 @@ import { storage } from '../storage_instance.js';
 import { broadcastToTabs } from '../messaging.js';
 import { debouncedSyncToNativeHostFile } from '../core_services.js';
 import { updateContextMenus } from '../../utils/contextMenu.js';
+import { sanitizeString } from '../../utils/sanitization.js';
 
 export async function handleCreateFolder(request) {
     let { folderId } = request;
     if (!folderId) return { success: false, error: 'No folder name provided.' };
+
+    folderId = sanitizeString(folderId, true);
+    if (!folderId) return { success: false, error: 'Invalid folder name after sanitization.' };
 
     const data = await storage.get();
     if (data.folders[folderId]) return { success: false, error: 'Folder already exists.' };
@@ -57,8 +61,11 @@ export async function handleRemoveFolder(request) {
 }
 
 export async function handleRenameFolder(request) {
-    const { oldId, newId } = request;
+    let { oldId, newId } = request;
     if (!oldId || !newId) return { success: false, error: 'Missing folder IDs.' };
+
+    newId = sanitizeString(newId, true);
+    if (!newId) return { success: false, error: 'Invalid new folder name.' };
 
     const data = await storage.get();
     if (!data.folders[oldId]) return { success: false, error: 'Folder not found.' };

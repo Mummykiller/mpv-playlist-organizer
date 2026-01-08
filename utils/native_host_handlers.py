@@ -291,6 +291,12 @@ class HandlerManager:
             return {"success": False, "error": "Missing folderId or new_order."}
         return self.mpv_session.reorder(folder_id, new_order)
 
+    def handle_clear_live(self, message):
+        folder_id = message.get('folderId')
+        if not folder_id:
+            return {"success": False, "error": "Missing folderId."}
+        return self.mpv_session.clear_live(folder_id)
+
     def handle_append(self, message):
         url_item = message.get('url_item')
         url_items_list = message.get('url_items')

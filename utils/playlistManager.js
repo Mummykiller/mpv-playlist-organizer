@@ -229,8 +229,15 @@ export async function handleClear(request) {
             isFolderActive: isFolderActive(request.folderId)
         });
     } catch (e) { /* Suppress errors if no content scripts exist */ }
-    debouncedSyncToNativeHostFile(true);
-    return { success: true, message: `Playlist in folder ${request.folderId} cleared` };
+        debouncedSyncToNativeHostFile(true);
+
+        // Attempt to clear live MPV session
+        callNativeHost({
+            action: 'clear_live',
+            folderId: folderId
+        }).catch(() => {});
+
+        return { success: true, message: `Playlist for '${folderId}' cleared.` };
 }
 
 export async function handleRemoveItem(request) {
@@ -280,6 +287,14 @@ export async function handleSetPlaylistOrder(request) {
     storageData.folders[folderId].playlist = order;
     await storage.set(storageData);
     debouncedSyncToNativeHostFile(true);
+
+    broadcastToTabs({ 
+        action: 'render_playlist', 
+        folderId: folderId, 
+        playlist: order,
+        last_played_id: storageData.folders[folderId].last_played_id,
+        isFolderActive: isFolderActive(folderId)
+    });
 
     // Attempt to reorder live MPV session
     callNativeHost({

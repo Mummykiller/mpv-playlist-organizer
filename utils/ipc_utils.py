@@ -330,11 +330,17 @@ def is_process_alive(pid, ipc_path):
         return False
 
     # If connected, send a command to verify the PID.
-    ipc_response = temp_manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=1.0) # Added timeout
+    ipc_response = temp_manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=1.0)
     temp_manager.close() # Always close the temporary connection.
 
-    if ipc_response and ipc_response.get("error") == "success" and ipc_response.get("data") == pid:
-        return True
+    if ipc_response and ipc_response.get("error") == "success":
+        actual_pid = ipc_response.get("data")
+        if actual_pid == pid:
+            return True
+        else:
+            logging.warning(f"[PY][IPC] is_process_alive: PID mismatch. Expected {pid}, got {actual_pid}. (Socket is alive)")
+    else:
+        logging.warning(f"[PY][IPC] is_process_alive: Failed to get PID from MPV. Response: {ipc_response}")
             
     return False
 

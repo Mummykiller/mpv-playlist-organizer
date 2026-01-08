@@ -269,12 +269,10 @@ try:
     def signal_handler(sig, frame):
         """Handles termination signals from the browser."""
         sig_name = "SIGTERM" if sig == signal.SIGTERM else "SIGHUP"
-        logging.info(f"[PY] Received {sig_name}. Shutting down active sessions...")
-        try:
-            # Tell MPV to quit gracefully via IPC
-            mpv_session.close()
-        except:
-            pass
+        logging.info(f"[PY] Received {sig_name}. Browser connection lost. Native host exiting...")
+        # NOTE: We do NOT call mpv_session.close() here. 
+        # We want to preserve MPV autonomy so it can be reconnected to later.
+        # Calling sys.exit(0) ensures that atexit handlers (like cleanup_ipc_socket) still run.
         sys.exit(0)
 
     # Register signal handlers for graceful shutdown (Unix only)
@@ -353,6 +351,7 @@ try:
             'play_m3u': handler_manager.handle_play_m3u,
             'remove_item_live': handler_manager.handle_remove_item_live,
             'reorder_live': handler_manager.handle_reorder_live,
+            'clear_live': handler_manager.handle_clear_live,
             'append': handler_manager.handle_append,
             'play_new_instance': handler_manager.handle_play_new_instance,
             'close_mpv': handler_manager.handle_close_mpv,
