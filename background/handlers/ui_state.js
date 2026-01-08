@@ -3,6 +3,7 @@ import { storage } from '../storage_instance.js';
 import { broadcastLog, broadcastToTabs } from '../messaging.js';
 import { callNativeHost } from '../../utils/nativeConnection.js';
 import { updateContextMenus } from '../../utils/contextMenu.js';
+import { isYouTubeUrl, normalizeYouTubeUrl } from '../../utils/commUtils.module.js';
 import * as m3u8_scanner_handlers from './m3u8_scanner.js';
 import * as playback_handlers from './playback.js';
 
@@ -56,6 +57,7 @@ export async function handleContentScriptInit(request, sender) {
 
         await chrome.tabs.sendMessage(tabId, { 
             action: 'init_ui_state', 
+            tabId: tabId,
             shouldBeMinimized: isMinimized,
             folderId: folderId,
             lastPlayedId: lastPlayedId,
@@ -91,6 +93,28 @@ export async function handleGetUiStateForTab(request) {
             detectedUrl: m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId)
         }
     };
+}
+
+export async function handleReportPageUrl(request, sender) {
+    const tabId = sender.tab?.id;
+    if (!tabId || !request.url) return;
+
+    let urlToReport = request.url;
+    
+    // Centralized Smart Logic: Deciding what counts as a "detectable" video URL
+    if (isYouTubeUrl(urlToReport)) {
+        const isWatchPage = urlToReport.includes('/watch') || urlToReport.includes('youtu.be/');
+        const isPlaylistPage = urlToReport.includes('/playlist');
+        
+        if (isWatchPage || isPlaylistPage) {
+            urlToReport = normalizeYouTubeUrl(urlToReport);
+            // Only update if it changed or wasn't already set by the scanner
+            const currentState = m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId);
+            if (!currentState || isYouTubeUrl(currentState)) {
+                broadcastToTabs({ action: 'detected_url_changed', tabId: tabId, url: urlToReport });
+            }
+        }
+    }
 }
 
 export async function handleSetLastFolderId(request) {

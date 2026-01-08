@@ -1,7 +1,8 @@
-document.addEventListener('DOMContentLoaded', async () => {
-    // --- Local Utility Exposure ---
-    const { sendMessageAsync, debounce, isYouTubeUrl, getYoutubeId, normalizeYouTubeUrl, AniListRenderer } = window.MPV;
+import { sendMessageAsync, debounce, isYouTubeUrl, getYoutubeId, normalizeYouTubeUrl } from './utils/commUtils.js';
+import { AniListRenderer } from './utils/anilist_renderer.js';
+import { OptionsManager } from './utils/settings.js';
 
+document.addEventListener('DOMContentLoaded', async () => {
     try { // This line is intentionally kept for the diff
 
     // IMPORTANT: You must include settings.js in your popup.html before this script, like so:

@@ -1,7 +1,7 @@
 /**
  * Manages the settings UI, including loading, saving, and event handling for all preferences.
  */
-class OptionsManager {
+export class OptionsManager {
     /**
      * @param {object} dependencies - An object containing functions and elements this manager depends on.
      * @param {Function} dependencies.sendMessageAsync - The promise-based function to send messages to the background script.
@@ -99,11 +99,9 @@ class OptionsManager {
         const isUltra = prefs.performance_profile === 'ultra';
         document.getElementById('ultra-options-container').style.display = isUltra ? 'block' : 'none';
 
-        // --- Update Ultra Interp dependency state ---
         const videoSyncCheckbox = document.getElementById('ultra-video-sync-checkbox');
         const interpSelect = document.getElementById('ultra-interpolation-select');
         if (videoSyncCheckbox && interpSelect) {
-            // We rely on the checked state which was just set by the loop above
             const isSyncEnabled = videoSyncCheckbox.checked; 
             interpSelect.disabled = !isSyncEnabled;
             interpSelect.parentElement.style.opacity = isSyncEnabled ? '1' : '0.5';
@@ -115,25 +113,22 @@ class OptionsManager {
                 const value = prefs[mapping.key];
                 if (mapping.type === 'checkbox') {
                     el.checked = !!value;
-                } else { // select, input, textarea, slider
+                } else {
                     el.value = value !== undefined ? value : '';
                 }
             }
         });
 
-        // Handle special UI logic that depends on preferences
         document.getElementById('custom-geometry-container').style.display = isCustom ? 'flex' : 'none';
         const enableAnilist = prefs.enable_anilist_integration ?? true;
         document.getElementById('anilist-options-container').style.display = enableAnilist ? 'block' : 'none';
         document.getElementById('shared-anilist-section').style.display = enableAnilist ? 'block' : 'none';
 
-        // --- Networking Master Toggle Logic ---
         const networkMasterToggle = document.getElementById('disable-network-overrides-checkbox');
         if (networkMasterToggle) {
             this._updateNetworkingSectionState(networkMasterToggle.checked);
         }
 
-        // --- YouTube Cookies Interdependency ---
         const ytCookiesToggle = document.getElementById('yt-use-cookies-checkbox');
         const ytMarkWatchedToggle = document.getElementById('yt-mark-watched-checkbox');
         const ytIgnoreConfigToggle = document.getElementById('yt-ignore-config-checkbox');
@@ -148,17 +143,13 @@ class OptionsManager {
             }
         }
 
-        // Manual handling for MPV flags list
-        // Custom flags are now stored as objects {flag: string, enabled: boolean} OR legacy string
         const customFlagsRaw = prefs.custom_mpv_flags || [];
         const customFlags = Array.isArray(customFlagsRaw) ? customFlagsRaw : 
                            (typeof customFlagsRaw === 'string' ? customFlagsRaw.match(/(?:[^\s"]+|"[^"]*")+/g) || [] : []);
         
-        // Normalize custom flags to objects
         const normalizedCustomFlags = customFlags.map(f => typeof f === 'string' ? { flag: f, enabled: true } : f);
         this._renderMpvFlagsList(normalizedCustomFlags);
 
-        // Manual handling for Automatic MPV flags list
         const automaticFlags = prefs.automatic_mpv_flags || [];
         this._renderAutomaticMpvFlagsList(automaticFlags);
 
@@ -192,20 +183,14 @@ class OptionsManager {
         let newDomain = input.value.trim().toLowerCase();
         if (!newDomain) return;
 
-        // Smart cleanup: Remove http/https, trailing slashes, and paths
         try {
-            // If it's a full URL, parse it to get just the hostname
             if (newDomain.includes('://')) {
                 newDomain = new URL(newDomain).hostname;
             } else {
-                // Remove trailing slash and path if user typed "domain.com/path"
                 newDomain = newDomain.split('/')[0];
             }
-        } catch (e) {
-            // Fallback to original string if URL parsing fails
-        }
+        } catch (e) {}
 
-        // Basic domain validation - Relaxed to allow modern long TLDs
         if (!/^[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,13}$/.test(newDomain)) {
             this.showStatus('Invalid format. Use "domain.com"', true);
             return;
@@ -216,9 +201,7 @@ class OptionsManager {
 
         if (!currentDomains.includes(newDomain)) {
             const newDomains = [...currentDomains, newDomain];
-            // Update UI immediately for responsiveness
             this._renderRestrictedDomainsList(newDomains);
-            // Save to storage
             await this.sendMessageAsync({ action: 'set_ui_preferences', preferences: { restricted_domains: newDomains } });
             this.showStatus(`Domain "${newDomain}" restricted.`);
         } else {
@@ -246,40 +229,40 @@ class OptionsManager {
         if (mpvEl) {
             if (status.mpv?.found) {
                 mpvEl.textContent = `Found at ${status.mpv.path}`;
-                mpvEl.style.color = 'var(--accent-primary)';
+                mpvEl.style.color = 'var(--accent-positive)';
             } else {
                 mpvEl.textContent = status.mpv?.error || 'Not Found';
-                mpvEl.style.color = 'var(--text-error)';
+                mpvEl.style.color = 'var(--accent-danger)';
             }
         }
 
         if (ytdlpEl) {
             if (status.ytdlp?.found) {
                 ytdlpEl.textContent = `${status.ytdlp.version || 'Found'} at ${status.ytdlp.path}`;
-                ytdlpEl.style.color = 'var(--accent-primary)';
+                ytdlpEl.style.color = 'var(--accent-positive)';
             } else {
                 ytdlpEl.textContent = status.ytdlp?.error || 'Not Found';
-                ytdlpEl.style.color = 'var(--text-error)';
+                ytdlpEl.style.color = 'var(--accent-danger)';
             }
         }
 
         if (ffmpegEl) {
             if (status.ffmpeg?.found) {
                 ffmpegEl.textContent = `${status.ffmpeg.version || 'Found'} at ${status.ffmpeg.path}`;
-                ffmpegEl.style.color = 'var(--accent-primary)';
+                ffmpegEl.style.color = 'var(--accent-positive)';
             } else {
                 ffmpegEl.textContent = status.ffmpeg?.error || 'Not Found';
-                ffmpegEl.style.color = 'var(--text-error)';
+                ffmpegEl.style.color = 'var(--accent-danger)';
             }
         }
 
         if (nodeEl) {
             if (status.node?.found) {
                 nodeEl.textContent = `${status.node.version || 'Found'} at ${status.node.path}`;
-                nodeEl.style.color = 'var(--accent-primary)';
+                nodeEl.style.color = 'var(--accent-positive)';
             } else {
                 nodeEl.textContent = status.node?.error || 'Not Found';
-                nodeEl.style.color = 'var(--text-secondary)'; // Use secondary color for non-critical dependency
+                nodeEl.style.color = 'var(--text-secondary)';
             }
         }
     }
@@ -288,7 +271,6 @@ class OptionsManager {
         const networkingSection = document.getElementById('disable-network-overrides-checkbox')?.closest('.settings-section');
         if (networkingSection) {
             const content = networkingSection.querySelector('.settings-section-content');
-            // Gray out everything EXCEPT the master toggle itself
             const otherControls = Array.from(content.children).filter(child => !child.contains(document.getElementById('disable-network-overrides-checkbox')));
             
             otherControls.forEach(control => {
@@ -298,7 +280,6 @@ class OptionsManager {
                     control.classList.remove('disabled-overlay');
                 }
                 
-                // Also literally disable the inputs/selects
                 control.querySelectorAll('input, select').forEach(input => {
                     input.disabled = isDisabled;
                 });
@@ -322,7 +303,6 @@ class OptionsManager {
             }
         });
 
-        // Gather MPV flags from the DOM list
         const flagPills = document.querySelectorAll('#mpv-flags-list-container .filter-pill');
         if (flagPills.length > 0) {
             preferences.custom_mpv_flags = Array.from(flagPills).map(p => ({
@@ -333,7 +313,6 @@ class OptionsManager {
             preferences.custom_mpv_flags = [];
         }
 
-        // Gather Automatic MPV flags from the DOM list
         const automaticFlagPills = document.querySelectorAll('#automatic-mpv-flags-list-container .filter-pill');
         if (automaticFlagPills.length > 0) {
             preferences.automatic_mpv_flags = Array.from(automaticFlagPills).map(p => {
@@ -344,7 +323,6 @@ class OptionsManager {
                 }
             });
         }
-
 
         preferences.stream_scanner_timeout = Number(preferences.stream_scanner_timeout) || 60;
 
@@ -371,7 +349,6 @@ class OptionsManager {
         let effectiveWidth = Number(width || 600);
         if (effectiveWidth > 780) effectiveWidth = 780;
         
-        // Apply to both html and body to push browser limits
         document.documentElement.style.width = `${effectiveWidth}px`;
         document.body.style.width = `${effectiveWidth}px`;
         const currentPopupWidthEl = document.getElementById('popup-width-current');
@@ -426,7 +403,7 @@ class OptionsManager {
             }
             pill.textContent = flagData.flag;
             pill.dataset.flag = flagData.flag;
-            pill.title = flagData.description || ''; // Use empty string fallback
+            pill.title = flagData.description || '';
             container.appendChild(pill);
         });
     }
@@ -437,14 +414,12 @@ class OptionsManager {
         const newFlag = input.value.trim();
         if (!newFlag) return;
 
-        // Check if already exists
         const existing = Array.from(document.querySelectorAll('#mpv-flags-list-container .filter-pill')).find(p => p.dataset.flag === newFlag);
         if (existing) {
             input.value = '';
             return;
         }
 
-        // Create pill and append to DOM immediately
         const container = document.getElementById('mpv-flags-list-container');
         const pill = document.createElement('div');
         pill.className = 'filter-pill';
@@ -468,7 +443,7 @@ class OptionsManager {
     }
 
     _resetMpvFlags() {
-        this._renderMpvFlagsList([]); // Clear list
+        this._renderMpvFlagsList([]);
         this.debouncedSaveAllPreferences();
     }
 
@@ -526,19 +501,16 @@ class OptionsManager {
     }
 
     initializeEventListeners() {
-        // --- Generic Listeners ---
         this.preferenceMappings.forEach(mapping => {
             const control = document.getElementById(mapping.elementId);
             if (control) {
                 const eventType = (mapping.type === 'textarea' || mapping.type === 'input' || mapping.type === 'slider') ? 'input' : 'change';
                 control.addEventListener(eventType, this.debouncedSaveAllPreferences);
                 
-                // Extra logic for networking master toggle
                 if (mapping.elementId === 'disable-network-overrides-checkbox') {
                     control.addEventListener('change', () => this._updateNetworkingSectionState(control.checked));
                 }
 
-                // Extra logic for YouTube cookies interdependency
                 if (mapping.elementId === 'yt-use-cookies-checkbox') {
                     control.addEventListener('change', () => {
                         const ytMarkWatchedToggle = document.getElementById('yt-mark-watched-checkbox');
@@ -554,7 +526,6 @@ class OptionsManager {
                     });
                 }
 
-                // Extra logic for Ultra Interpolation dependency
                 if (mapping.elementId === 'ultra-video-sync-checkbox') {
                     control.addEventListener('change', () => {
                         const interpSelect = document.getElementById('ultra-interpolation-select');
@@ -567,15 +538,11 @@ class OptionsManager {
             }
         });
 
-        // --- Special-cased Listeners ---
         const performanceProfileSelect = document.getElementById('performance-profile-select');
         if (performanceProfileSelect) {
             performanceProfileSelect.addEventListener('change', () => {
                 document.getElementById('ultra-options-container').style.display = 
                     performanceProfileSelect.value === 'ultra' ? 'block' : 'none';
-                // Trigger save because this specific listener doesn't use the generic loop above (or relies on it)
-                // Actually, the generic loop adds a 'change' listener to EVERYTHING in mappings.
-                // But since we want immediate UI feedback before the debounce save, we add this.
             });
         }
 
@@ -660,7 +627,6 @@ class OptionsManager {
             });
         }
 
-        // --- Restricted Domains Listeners ---
         const restrictedInput = document.getElementById('restricted-domain-input');
         if (restrictedInput) {
             restrictedInput.addEventListener('keydown', (e) => {
@@ -680,7 +646,6 @@ class OptionsManager {
             });
         }
 
-        // --- MPV Flags Listeners ---
         const mpvFlagInput = document.getElementById('mpv-flag-input');
         if (mpvFlagInput) {
             mpvFlagInput.addEventListener('keydown', (e) => {
@@ -693,7 +658,6 @@ class OptionsManager {
 
         const mpvFlagsList = document.getElementById('mpv-flags-list-container');
         if (mpvFlagsList) {
-            // Use a click delay to distinguish single vs double click
             let clickTimer = null;
             
             mpvFlagsList.addEventListener('click', (e) => {
@@ -701,12 +665,10 @@ class OptionsManager {
                     if (clickTimer) {
                         clearTimeout(clickTimer);
                         clickTimer = null;
-                        // Double click: Remove
                         this._removeMpvFlag(e.target);
                     } else {
                         clickTimer = setTimeout(() => {
                             clickTimer = null;
-                            // Single click: Toggle
                             this._toggleMpvFlag(e.target);
                         }, 250);
                     }
@@ -733,13 +695,11 @@ class OptionsManager {
             resetAutomaticMpvFlagsBtn.addEventListener('click', () => this._resetAutomaticMpvFlags());
         }
 
-        // --- Search Listener ---
         const searchInput = document.getElementById('settings-search-input');
         if (searchInput) {
             searchInput.addEventListener('input', (e) => this._handleSettingsSearch(e.target.value));
         }
 
-        // --- Keybind Record Listeners ---
         const recordBtns = document.querySelectorAll('.btn-record-keybind');
         recordBtns.forEach(btn => {
             const input = btn.parentElement.querySelector('input');
@@ -748,7 +708,6 @@ class OptionsManager {
             }
         });
 
-        // --- Section Reload Listeners ---
         const reloadBtns = document.querySelectorAll('.section-reload-btn');
         reloadBtns.forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -792,25 +751,21 @@ class OptionsManager {
     async _handleSectionReload(btn) {
         if (btn.classList.contains('reloading')) return;
 
-        // Visual feedback: Start continuous spin
         btn.classList.add('reloading');
         
         this.showStatus('Syncing settings across all tabs...');
         
         try {
-            // Give it at least 600ms of spin for visual satisfaction
             const syncPromise = this.sendMessageAsync({ action: 'force_reload_settings' });
             const delayPromise = new Promise(resolve => setTimeout(resolve, 600));
             
             await Promise.all([syncPromise, delayPromise]);
 
-            // Optional: Re-fetch preferences to ensure UI is fresh
             const response = await this.sendMessageAsync({ action: 'get_ui_preferences' });
             if (response?.success) {
                 this.updateAllPreferencesUI(response.preferences);
             }
             
-            // Brief "success" state
             setTimeout(() => {
                 btn.classList.remove('reloading');
                 this.showStatus('Settings synchronized!');
@@ -827,15 +782,13 @@ class OptionsManager {
         this.debouncedSaveAllPreferences();
     }
 
-    // --- Search & Reorder Logic ---
     _handleSettingsSearch(query) {
         const wrapper = document.getElementById('settings-sections-wrapper');
         const sections = Array.from(wrapper.querySelectorAll('.settings-section'));
         const normalizedQuery = query.toLowerCase().trim();
 
         if (!normalizedQuery) {
-            // Restore default order (as defined in HTML)
-            sections.sort((a, b) => 0); // Keep current order or implement a fixed sequence if needed
+            sections.sort((a, b) => 0);
             sections.forEach(s => {
                 s.style.display = 'block';
                 s.style.boxShadow = 'none';
@@ -855,7 +808,7 @@ class OptionsManager {
                 const settingName = setting.dataset.settingName || '';
                 if (settingName.includes(normalizedQuery)) {
                     bestScore = Math.max(bestScore, 5);
-                    setting.style.backgroundColor = 'rgba(88, 101, 242, 0.1)'; // Subtle highlight
+                    setting.style.backgroundColor = 'rgba(88, 101, 242, 0.1)';
                 } else {
                     setting.style.backgroundColor = 'transparent';
                 }
@@ -864,13 +817,12 @@ class OptionsManager {
             return { element: section, score: bestScore };
         });
 
-        // Reorder: Highest score first
         scoredSections.sort((a, b) => b.score - a.score);
 
         scoredSections.forEach(item => {
             wrapper.appendChild(item.element);
             if (item.score > 0) {
-                item.element.open = true; // Auto-expand matching sections
+                item.element.open = true;
                 item.element.style.borderColor = 'var(--accent-primary)';
                 item.element.style.boxShadow = '0 0 10px rgba(88, 101, 242, 0.2)';
             } else {
@@ -880,14 +832,12 @@ class OptionsManager {
         });
     }
 
-    // --- Keybind Recorder Logic ---
     _startRecording(btn, input) {
-        // Clear previous state
         this._stopRecording();
 
         this.activeRecorder = { btn, input, originalValue: input.value };
         btn.classList.add('recording');
-        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>'; // Spinner icon
+        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>';
         input.value = 'Press combination...';
         input.classList.add('recording-active');
 
@@ -904,7 +854,6 @@ class OptionsManager {
             if (e.altKey) combo.push('Alt');
             if (e.metaKey) combo.push('Meta');
             
-            // Normalize key name
             let keyName = e.key;
             if (keyName === ' ') keyName = 'Space';
             if (keyName.length === 1) keyName = keyName.toUpperCase();
@@ -919,7 +868,6 @@ class OptionsManager {
 
         window.addEventListener('keydown', this.keyHandler, true);
         
-        // Click outside or ESC to cancel
         this.escHandler = (e) => {
             if (e.key === 'Escape') {
                 input.value = this.activeRecorder.originalValue;

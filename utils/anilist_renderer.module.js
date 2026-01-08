@@ -1,5 +1,5 @@
 /**
- * ES Module version of AniListRenderer for Background context.
+ * ES Module version of AniListRenderer for Background/Module context.
  */
 import { sendMessageAsync } from './commUtils.module.js';
 
@@ -11,12 +11,8 @@ export class AniListRenderer {
 
     static async fetchReleases(forceRefresh = false) {
         const now = Date.now();
-        if (!forceRefresh && this._cache && (now - this._cacheTimestamp < this.CACHE_DURATION_MS)) {
-            return this._cache;
-        }
-        if (this._inFlightRequest && !forceRefresh) {
-            return this._inFlightRequest;
-        }
+        if (!forceRefresh && this._cache && (now - this._cacheTimestamp < this.CACHE_DURATION_MS)) return this._cache;
+        if (this._inFlightRequest && !forceRefresh) return this._inFlightRequest;
         this._inFlightRequest = (async () => {
             try {
                 const response = await sendMessageAsync({ action: 'get_anilist_releases', force: forceRefresh });
@@ -34,13 +30,11 @@ export class AniListRenderer {
     }
 
     static render(container, releases) {
-        // Render logic is usually for UI contexts, but we keep the class consistent.
         if (!container) return;
         container.innerHTML = '';
         if (!releases || !releases.releases || releases.releases.length === 0) {
             container.innerHTML = '<li>No anime episodes found releasing today.</li>';
             return;
         }
-        // ... (minimal render implementation)
     }
 }
