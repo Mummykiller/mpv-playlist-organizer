@@ -427,7 +427,18 @@ export async function handlePlay(request) {
         if (response.success && !play_new_instance) {
             const session = playbackManager.getSession(folderId);
             session.isPlaying = true;
-            session.currentPlayingItem = { urlItem: url_item, folderId: folderId, isLastInFolder: true };
+            
+            // Smart Detection: Is this actually the last item in the folder?
+            let isLast = true;
+            if (folderId && data.folders[folderId]) {
+                const playlist = data.folders[folderId].playlist;
+                if (playlist.length > 0) {
+                    const lastItem = playlist[playlist.length - 1];
+                    isLast = (lastItem.id === url_item.id);
+                }
+            }
+
+            session.currentPlayingItem = { urlItem: url_item, folderId: folderId, isLastInFolder: isLast };
         }
         return response;
     } else if (folderId) {

@@ -775,7 +775,10 @@ class MpvCommandBuilder:
         else:
             full_command = self.mpv_args
             
-        if platform.system() != "Windows" and self.has_terminal_flag:
+        # Use configured platform for consistency
+        platform_name = self.settings.get('os_platform', platform.system()) if self.settings else platform.system()
+
+        if platform_name != "Windows" and self.has_terminal_flag:
             term_cmd = []
             modern_terminals = ['konsole', 'gnome-terminal', 'xfce4-terminal', 'kitty', 'alacritty', 'tilix', 'foot', 'wezterm']
             

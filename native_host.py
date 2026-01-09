@@ -14,6 +14,8 @@ sys.dont_write_bytecode = True
 
 # --- Standalone Function for Failsafe Path ---
 # This is used ONLY for the very early crash handler before file_io is imported.
+# NOTE: This logic duplicates `file_io.get_user_data_dir`. If you change that,
+# you MUST update this fallback to ensure crash logs are stored in the correct location.
 def _get_emergency_log_path():
     """A minimal, dependency-free function to find a place to log fatal startup errors."""
     app_name = "MPVPlaylistOrganizer"
@@ -206,6 +208,7 @@ try:
         """Reads a message from stdin and decodes it."""
         raw_length = sys.stdin.buffer.read(4)
         if len(raw_length) == 0:
+            logging.info("[PY][MAIN] Stdin closed (EOF). Exiting native host.")
             sys.exit(0)
         message_length = struct.unpack('@I', raw_length)[0]
         message = sys.stdin.buffer.read(message_length).decode('utf-8')
@@ -215,12 +218,19 @@ try:
 
     def send_message(message_content):
         """Encodes and sends a message to stdout."""
-        with print_lock:
-            encoded_content = json.dumps(message_content).encode('utf-8')
-            message_length = struct.pack('@I', len(encoded_content))
-            sys.stdout.buffer.write(message_length)
-            sys.stdout.buffer.write(encoded_content)
-            sys.stdout.buffer.flush()
+        try:
+            with print_lock:
+                encoded_content = json.dumps(message_content).encode('utf-8')
+                message_length = struct.pack('@I', len(encoded_content))
+                sys.stdout.buffer.write(message_length)
+                sys.stdout.buffer.write(encoded_content)
+                sys.stdout.buffer.flush()
+        except BrokenPipeError:
+            # This happens when the browser closes the connection while we are trying to send a message.
+            # It's a normal occurrence during extension reloads or browser shutdown.
+            logging.info("[PY] Browser disconnected (Broken Pipe). Normal shutdown.")
+        except Exception as e:
+            logging.error(f"[PY] Unexpected error in send_message: {e}")
 
     # --- Global Instances ---
     mpv_session = MpvSessionManager(session_file_path=SESSION_FILE, dependencies={
@@ -290,6 +300,20 @@ try:
         """Main message loop for native messaging from the browser."""
         set_process_name()
 
+        # --- Windows Graceful Shutdown Handler ---
+        if sys.platform == "win32":
+            def windows_ctrl_handler(ctrl_type):
+                # CTRL_CLOSE_EVENT = 2
+                if ctrl_type == 2:
+                    logging.info("[PY] Received Windows close event. Native host exiting...")
+                    sys.exit(0)
+                return False
+            
+            # Create a callback reference to prevent it from being garbage collected
+            self_callback = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)(windows_ctrl_handler)
+            ctypes.windll.kernel32.SetConsoleCtrlHandler(self_callback, True)
+            logging.info("[PY] Windows console control handler registered.")
+
         # The delegation system: One receptionist (main loop), many workers (threads)
         executor = ThreadPoolExecutor(max_workers=10)
 
@@ -300,20 +324,24 @@ try:
             while True:
                 if mpv_session.ipc_manager and mpv_session.ipc_manager.is_connected():
                     event = mpv_session.ipc_manager.receive_event(timeout=1.0)
-                    if event and event.get('event') == 'client-message':
-                        args = event.get('args', [])
-                        # Look for our custom ytdl failure signal
-                        if len(args) >= 1 and args[0] == "ytdl_error_detected":
-                            error_msg = args[1] if len(args) > 1 else "Unknown ytdl error"
-                            logging.warning(f"[PY][IPC] YTDL Failure signaled from Lua: {error_msg}")
-                            send_message({
-                                "action": "ytdlp_update_check", 
-                                "folderId": mpv_session.owner_folder_id,
-                                "log": {
-                                    "text": f"[Native Host]: YTDL Failure detected ({error_msg}). Checking for updates...",
-                                    "type": "error"
-                                }
-                            })
+                    if event:
+                        if event.get('event') == 'client-message':
+                            args = event.get('args', [])
+                            # Look for our custom ytdl failure signal
+                            if len(args) >= 1 and args[0] == "ytdl_error_detected":
+                                error_msg = args[1] if len(args) > 1 else "Unknown ytdl error"
+                                logging.warning(f"[PY][IPC] YTDL Failure signaled from Lua: {error_msg}")
+                                send_message({
+                                    "action": "ytdlp_update_check", 
+                                    "folderId": mpv_session.owner_folder_id,
+                                    "log": {
+                                        "text": f"[Native Host]: YTDL Failure detected ({error_msg}). Checking for updates...",
+                                        "type": "error"
+                                    }
+                                })
+                    else:
+                        # Prevent tight loop if receive_event returns None immediately
+                        time.sleep(0.5)
                 else:
                     time.sleep(1.0)
 

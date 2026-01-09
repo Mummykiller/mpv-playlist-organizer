@@ -70,9 +70,9 @@ class IPCSocketManager:
         self._request_id_counter = 0
 
     def is_connected(self):
-        return self._sock is not None
+        return self._sock is not None and self._event_reader_running
 
-    def connect(self, ipc_path, timeout=15.0):
+    def connect(self, ipc_path, timeout=15.0, start_event_reader=True):
         """
         Connects to the MPV IPC server.
         Retries connection attempts for a specified timeout duration.
@@ -97,12 +97,13 @@ class IPCSocketManager:
                 
                 logging.info(f"Successfully connected to MPV IPC: {ipc_path}")
                 
-                with self._buffer_lock: # Ensure we set running flag under lock
-                    self._event_reader_running = True
-                self._event_reader_thread = threading.Thread(target=self._event_reader_loop)
-                self._event_reader_thread.daemon = True # Allow program to exit even if thread is running
-                self._event_reader_thread.start()
-                logging.debug("IPC event reader thread started.")
+                if start_event_reader:
+                    with self._buffer_lock: # Ensure we set running flag under lock
+                        self._event_reader_running = True
+                    self._event_reader_thread = threading.Thread(target=self._event_reader_loop)
+                    self._event_reader_thread.daemon = True # Allow program to exit even if thread is running
+                    self._event_reader_thread.start()
+                    logging.debug("IPC event reader thread started.")
                 
                 return True
             except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
@@ -125,29 +126,35 @@ class IPCSocketManager:
         Runs in a separate thread to prevent mpv's output buffer from filling up.
         """
         while True:
+            # 1. Thread-safe state check and handle capture
             with self._buffer_lock:
                 if not self._event_reader_running:
                     break
-                if not self._sock or not self._sock_file:
+                
+                # Capture handle to local variable to avoid NoneType race condition
+                reader_handle = self._sock_file
+                if not reader_handle:
                     self._buffer_lock.wait(0.1)
                     continue
 
             try:
-                if self._system != "Windows":
+                if self._system != "Windows" and self._sock:
                     # Use select to check for data availability with a timeout on Unix
                     readable, _, _ = select.select([self._sock], [], [], 0.1)
                     if self._sock not in readable:
                         continue
 
-                # On Windows, named pipes are blocking by default. readline() will block until data arrives.
-                # This is why we use a separate thread.
-                response_line = self._sock_file.readline()
+                # 2. Use the LOCAL handle reference
+                response_line = reader_handle.readline()
 
                 if response_line:
                     line_str = response_line.decode('utf-8').strip()
                     if not line_str: continue # Skip empty lines
                     
-                    event = json.loads(line_str)
+                    try:
+                        event = json.loads(line_str)
+                    except json.JSONDecodeError:
+                        continue
                     
                     # Filter out noisy thumbnail script events
                     if event.get("event") == "client-message":
@@ -166,14 +173,13 @@ class IPCSocketManager:
                         self._event_reader_running = False 
                         self._buffer_lock.notify_all()
                     break
-            except (ConnectionResetError, BrokenPipeError, OSError) as e:
+            except (ConnectionResetError, BrokenPipeError, OSError, ValueError) as e:
+                # ValueError specifically happens if reader_handle is closed during readline()
                 logging.debug(f"IPC event reader thread connection error: {e}. Stopping.")
                 with self._buffer_lock:
                     self._event_reader_running = False 
                     self._buffer_lock.notify_all()
                 break
-            except json.JSONDecodeError as e:
-                logging.error(f"IPC event reader thread failed to decode JSON. Error: {e}")
             except Exception as e:
                 logging.error(f"IPC event reader thread unexpected error: {e}. Stopping.")
                 with self._buffer_lock:
@@ -216,6 +222,23 @@ class IPCSocketManager:
                 if not expect_response:
                     return {"error": "success"} # Command sent, no response expected
 
+                # --- Handle Synchronous Read if Reader Thread is Disabled ---
+                if not self._event_reader_running:
+                    start_wait = time.time()
+                    while time.time() - start_wait < timeout:
+                        try:
+                            # Direct read from file handle
+                            line = self._sock_file.readline()
+                            if not line: break
+                            resp = json.loads(line.decode('utf-8'))
+                            # Check if this is the response we want
+                            if resp.get("request_id") == req_id or ("event" not in resp and "request_id" not in resp):
+                                return resp
+                        except (OSError, json.JSONDecodeError):
+                            break
+                    return None
+
+                # --- Regular Buffered Read (uses Reader Thread) ---
                 start_read_time = time.time()
                 with self._buffer_lock:
                     while True:
@@ -263,7 +286,6 @@ class IPCSocketManager:
                     return event
                 
                 if not self._event_reader_running:
-                    logging.debug("Event reader thread stopped and buffer empty. No more events expected.")
                     return None
                 
                 if timeout is not None:
@@ -278,13 +300,13 @@ class IPCSocketManager:
 
     def close(self):
         """Closes the IPC socket handle and marks it as disconnected."""
-        # Stop the reader thread first if it's running
+        # 1. Stop the reader thread first if it's running
         with self._buffer_lock:
             if self._event_reader_running:
                 self._event_reader_running = False
                 self._buffer_lock.notify_all()
 
-        # On Windows, we must close the handles to break the blocking readline()
+        # 2. Close handles to break any blocking readline() calls
         if self._sock:
             if self._sock_file:
                 try:
@@ -295,7 +317,7 @@ class IPCSocketManager:
                 if self._system == "Windows":
                     self._sock.close()
                 else:
-                    try: self._sock.shutdown(socket.SHUT_RDWR)
+                    try: self._sock.shutdown(socket.AF_UNIX)
                     except: pass
                     self._sock.close()
                 logging.info(f"Closed MPV IPC connection to {self._ipc_path}")
@@ -324,9 +346,10 @@ def is_process_alive(pid, ipc_path):
     if not pid or not ipc_path:
         return False
     
-    # We use a temporary manager to test connectivity without interfering with an active session.
+    # We use a temporary manager to test connectivity without starting a background reader.
+    # This avoids spawning threads for a simple one-shot check.
     temp_manager = IPCSocketManager()
-    if not temp_manager.connect(ipc_path, timeout=2.0): # Increased timeout for a more robust check
+    if not temp_manager.connect(ipc_path, timeout=2.0, start_event_reader=False): 
         return False
 
     # If connected, send a command to verify the PID.

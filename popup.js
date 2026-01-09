@@ -334,9 +334,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         // Add validation for folder name characters by disallowing invalid filename chars.
-        const invalidCharsRegex = /[\\/:*?"<>|]/;
+        const invalidCharsRegex = /[\\/:*?"<>|$;&`]/;
         if (invalidCharsRegex.test(newName)) {
-            showStatus('Folder name cannot contain / \ : * ? " < > |', true);
+            showStatus('Folder name cannot contain / \ : * ? " < > | $ ; & `', true);
             return;
         }
 
@@ -409,9 +409,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         // Add validation for folder name characters by disallowing invalid filename chars.
-        const invalidCharsRegex = /[\\/:*?"<>|]/;
+        const invalidCharsRegex = /[\\/:*?"<>|$;&`]/;
         if (invalidCharsRegex.test(newFolderId)) {
-            showStatus('New folder name cannot contain / \ : * ? " < > |', true);
+            showStatus('New folder name cannot contain / \ : * ? " < > | $ ; & `', true);
             return;
         }
 
@@ -1026,7 +1026,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const filename = importFileSelect.value;
         if (!filename || importFileSelect.options[importFileSelect.selectedIndex].disabled) return;
 
-        chrome.runtime.sendMessage({ action: 'import_from_file', filename }, (response) => {
+        const options = {
+            preserveTitle: document.getElementById('import-opt-title').checked,
+            preserveLastPlayed: document.getElementById('import-opt-lastplayed').checked
+        };
+
+        chrome.runtime.sendMessage({ action: 'import_from_file', filename, options }, (response) => {
             if (response?.success) {
                 showStatus(response.message);
                 populateFolderDropdowns(); // Refresh folder list to show new/updated folders

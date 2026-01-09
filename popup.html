@@ -82,8 +82,18 @@
     <div id="import-selection-modal" style="display: none;">
         <div class="modal-content">
             <p>Select a backup file to import:</p>
-            <select id="import-file-select"></select>
+            <select id="import-file-select" style="margin-bottom: 15px;"></select>
             
+            <div class="import-options-container">
+                <p>Include in Import:</p>
+                <label class="settings-label">
+                    <input type="checkbox" id="import-opt-title" checked> Custom Titles
+                </label>
+                <label class="settings-label">
+                    <input type="checkbox" id="import-opt-lastplayed" checked> Last Played Position
+                </label>
+            </div>
+
             <div class="modal-actions" style="margin-top: 20px;">
                 <button id="import-confirm-btn">Import</button>
                 <button id="import-cancel-btn">Cancel</button>

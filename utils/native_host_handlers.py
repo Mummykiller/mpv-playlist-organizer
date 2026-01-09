@@ -4,10 +4,11 @@ import time
 import uuid
 import platform
 import subprocess
-import re # Added for parsing server output
-import sys # Added for sys.executable
+import re 
+import sys 
 import threading
-from urllib.request import urlopen # Added for server readiness check
+import json
+from urllib.request import urlopen
 
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
@@ -454,8 +455,12 @@ class HandlerManager:
         try:
             os.makedirs(self.file_io.EXPORT_DIR, exist_ok=True)
             path = os.path.abspath(self.file_io.EXPORT_DIR)
-            if platform.system() == "Windows": subprocess.Popen(['explorer', os.path.normpath(path)])
-            elif platform.system() == "Darwin": subprocess.run(['open', path], check=True)
+            
+            # Use configured platform for consistency
+            platform_name = self.file_io.get_settings().get('os_platform', platform.system())
+
+            if platform_name == "Windows": subprocess.Popen(['explorer', os.path.normpath(path)])
+            elif platform_name == "Darwin": subprocess.run(['open', path], check=True)
             else: subprocess.run(['xdg-open', path], check=True)
             return {"success": True, "message": "Opening export folder."}
         except Exception as e:
@@ -535,7 +540,7 @@ class HandlerManager:
             
             try:
                 self.playlist_server_process = subprocess.Popen(
-                    [sys.executable, server_path, '--port', '8000', '--file', self.temp_m3u_file_for_server],
+                    [sys.executable, server_path, '--port', '0', '--file', self.temp_m3u_file_for_server],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -543,20 +548,30 @@ class HandlerManager:
                     env=server_env
                 )
 
-                # ... (read actual port from stderr) ...
+                # Read JSON output from stdout for reliable port detection
                 port_found_timeout = 5
                 start_time = time.time()
                 while time.time() - start_time < port_found_timeout:
-                    line = self.playlist_server_process.stderr.readline()
+                    line = self.playlist_server_process.stdout.readline()
                     if not line: break
-                    logging.info(f"Server process stderr output: {line.strip()}")
-                    match = re.search(r"Serving M3U playlist on port (\d+)", line)
-                    if match:
-                        self.playlist_server_port = int(match.group(1))
-                        break
+                    try:
+                        data = json.loads(line.strip())
+                        if data.get("status") == "running" and data.get("port"):
+                            self.playlist_server_port = int(data.get("port"))
+                            break
+                    except json.JSONDecodeError:
+                        # Log non-JSON output (likely from previous print statements or errors)
+                        logging.info(f"Server stdout: {line.strip()}")
                 
+                # Start a thread to consume stderr to prevent blocking
+                def consume_stderr(proc):
+                    for l in iter(proc.stderr.readline, ''):
+                        logging.info(f"Server stderr: {l.strip()}")
+                    proc.stderr.close()
+                threading.Thread(target=consume_stderr, args=(self.playlist_server_process,), daemon=True).start()
+
                 if self.playlist_server_port is None:
-                    raise RuntimeError("Could not determine playlist server port.")
+                    raise RuntimeError("Could not determine playlist server port (JSON handshake failed).")
 
                 fetch_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u?token={self.server_token}"
                 # Readiness check

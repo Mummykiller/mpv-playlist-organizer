@@ -3,7 +3,7 @@ import { storage } from '../storage_instance.js';
 import { broadcastToTabs } from '../messaging.js';
 import { debouncedSyncToNativeHostFile } from '../core_services.js';
 import { updateContextMenus } from '../../utils/contextMenu.js';
-import { sanitizeString } from '../../utils/sanitization.js';
+import { sanitizeString } from '../../utils/commUtils.module.js';
 
 export async function handleCreateFolder(request) {
     let { folderId } = request;

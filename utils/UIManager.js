@@ -25,7 +25,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
         }
 
         createAndInjectUi() {
-            if (!chrome.runtime?.id) return;
+            if (!chrome.runtime?.id || document.getElementById('m3u8-controller-host')) return;
 
             this.controllerHost = document.createElement('div');
             this.controllerHost.id = 'm3u8-controller-host';

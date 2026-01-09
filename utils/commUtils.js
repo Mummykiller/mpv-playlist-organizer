@@ -1,6 +1,11 @@
 /**
  * Shared communication utilities for the MPV Playlist Organizer.
- * Namespaced Global version for maximum compatibility.
+ * Namespaced Global version for Content Scripts.
+ *
+ * !!! SYNC WARNING !!!
+ * This file is the Master Source of Truth for shared logic.
+ * Any changes made here MUST be replicated in 'utils/commUtils.module.js'
+ * to ensure consistent behavior between Content Scripts and the Background Worker.
  */
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
@@ -31,11 +36,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
         });
     });
 
+    /**
+     * Sanitizes strings for safe use in filenames or OSD titles.
+     * @param {string} str The string to sanitize.
+     * @param {boolean} isFilename If true, applies strict filesystem-safe filtering.
+     */
     MPV.sanitizeString = function(str, isFilename = false) {
         if (typeof str !== 'string') return str;
         if (isFilename) {
-            return str.replace(/["\/:*?<>|$;&`\n\r\t]/g, '').trim();
+            // Strict filtering for filenames (strips / \ : * ? " < > | $ ; & ` and newlines)
+            return str.replace(/[\\/:*?"<>|$;&`\n\r\t]/g, '').trim();
         } else {
+            // Minimal filtering for Titles/URLs (strips " ` and newlines)
             return str.replace(/["`\n\r\t]/g, '').trim();
         }
     };
@@ -54,16 +66,23 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
         return null;
     };
 
+    /**
+     * Normalizes YouTube URLs by removing timestamps and other tracking parameters.
+     */
     MPV.normalizeYouTubeUrl = function(ytUrl) {
         if (!ytUrl || typeof ytUrl !== 'string') return ytUrl;
         try {
             const urlObj = new URL(ytUrl);
-            const isStandard = urlObj.hostname.includes('youtube.com') && urlObj.pathname === '/watch';
-            const isShorts = urlObj.hostname.includes('youtube.com') && urlObj.pathname.startsWith('/shorts/');
-            const isShortLink = urlObj.hostname.includes('youtu.be');
+            const host = urlObj.hostname;
+            const path = urlObj.pathname;
+
+            const isStandard = host.includes('youtube.com') && path === '/watch';
+            const isShorts = host.includes('youtube.com') && path.startsWith('/shorts/');
+            const isShortLink = host.includes('youtu.be');
             
             if (isStandard || isShortLink || isShorts) {
-                urlObj.searchParams.delete('t');
+                // Strip timestamps and index/shuffle parameters that break resume/deduplication logic
+                ['t', 'index', 'start', 'ab_channel', 'attr_tag'].forEach(p => urlObj.searchParams.delete(p));
                 return urlObj.toString();
             }
         } catch (e) {}

@@ -90,8 +90,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
         }
 
         async init() {
-            if (window.mpvControllerInitialized) return;
-
             const initialPrefs = await this.bridge.send('get_ui_preferences');
             const restrictedDomains = initialPrefs?.preferences?.restricted_domains || [];
             const currentHostname = window.location.hostname;
@@ -101,8 +99,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
             );
 
             if (isRestricted) return;
-
-            window.mpvControllerInitialized = true;
 
             // Setup message listener
             this.messageListener = (req, sender, send) => this.handleMessage(req, sender, send);

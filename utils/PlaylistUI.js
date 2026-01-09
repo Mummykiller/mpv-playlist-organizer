@@ -50,6 +50,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     itemDiv.title = item.url;
                     itemDiv.dataset.url = item.url;
                     itemDiv.dataset.title = item.title;
+                    itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
                     const indexSpan = document.createElement('span');
                     indexSpan.className = 'url-index';
                     indexSpan.textContent = `${index + 1}.`;
@@ -174,10 +175,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 const folderId = this.folderSelect.value;
                 if (!folderId) return;
                 const newOrder = [...this.fullContainer.querySelectorAll('.list-item')].map(item => {
-                    const itemData = { url: item.dataset.url, title: item.dataset.title };
-                    const originalItem = this.currentPlaylist.find(i => i.url === item.dataset.url);
-                    if (originalItem && originalItem.id) itemData.id = originalItem.id;
-                    return itemData;
+                    const originalItem = this.currentPlaylist.find(i => i.id === item.dataset.id);
+                    // Return the full original item to preserve metadata, or fallback to basic data
+                    return originalItem || { url: item.dataset.url, title: item.dataset.title, id: item.dataset.id };
                 });
                 this.controller.sendCommandToBackground('set_playlist_order', folderId, { data: { order: newOrder } });
             });

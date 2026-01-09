@@ -145,7 +145,17 @@ class EnrichmentService:
     def handle_standard_flow_launch(self, session, url_items, start_index, folder_id, settings, file_io):
         """Handles the background restoration of playlist order and sequential metadata enrichment."""
         def task():
-            time.sleep(2.0)
+            # Poll for readiness instead of hard sleep
+            start_wait = time.time()
+            while time.time() - start_wait < 10.0:
+                if not session.is_alive: return
+                if session.ipc_manager and session.ipc_manager.is_connected():
+                    # Optional: Ping to ensure responsiveness
+                    ping = session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
+                    if ping:
+                        break
+                time.sleep(0.2)
+            
             if not session.is_alive: return
             
             history_items = url_items[:start_index]
@@ -225,19 +235,32 @@ class LauncherService:
                     logging.info(f"Restored Process Watcher: Detected exit of orphaned MPV process (PID {pid}).")
                     
                     return_code = -1 
+                    exit_reason = None
                     if ipc_path:
-                        ipc_dir = os.path.dirname(ipc_path)
-                        flag_file = os.path.join(ipc_dir, f'mpv_natural_completion_{pid}.flag')
-                        if os.path.exists(flag_file):
-                            if getattr(self.session, 'manual_quit', False):
-                                logging.info(f"Restored Watcher: Natural completion flag found, but manual_quit is TRUE. Ignoring flag.")
-                            else:
-                                logging.info(f"Restored Watcher: Natural completion flag FOUND. Overriding return code to 99.")
-                                return_code = 99
-                            try: os.remove(flag_file)
-                            except Exception as e: logging.warning(f"Restored Watcher: Failed to remove flag file: {e}")
+                        # Check multiple flag locations for robustness
+                        flag_candidates = [
+                            os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{pid}.flag'),
+                            os.path.join(os.path.dirname(ipc_path), f'mpv_natural_completion_{pid}.flag'),
+                            os.path.join("/tmp", f'mpv_natural_completion_{pid}.flag')
+                        ]
+                        
+                        for flag_file in flag_candidates:
+                            if os.path.exists(flag_file):
+                                if getattr(self.session, 'manual_quit', False):
+                                    logging.info(f"Restored Watcher: Natural completion flag found, but manual_quit is TRUE. Ignoring flag.")
+                                else:
+                                    try:
+                                        with open(flag_file, 'r', encoding='utf-8') as f:
+                                            exit_reason = f.read().strip()
+                                    except:
+                                        exit_reason = "completed"
+                                    logging.info(f"Restored Watcher: Natural completion flag FOUND (Reason: {exit_reason}). Overriding return code to 99.")
+                                    return_code = 99
+                                try: os.remove(flag_file)
+                                except: pass
+                                break
 
-                    self.session.send_message({"action": "mpv_exited", "folderId": folder_id, "returnCode": return_code})
+                    self.session.send_message({"action": "mpv_exited", "folderId": folder_id, "returnCode": return_code, "reason": exit_reason})
                     self.session.clear(mpv_return_code=return_code)
                     break
                 
