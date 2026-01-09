@@ -4,8 +4,10 @@ import logging
 import os
 import threading
 import time
-import argparse # Import argparse
-import sys # Import sys
+import argparse 
+import sys 
+import json
+
 
 sys.dont_write_bytecode = True # Prevent __pycache__ generation for this script
 
@@ -100,6 +102,10 @@ def start_playlist_server(start_port=8000, max_port_attempts=5, m3u_file_to_serv
             return None, None, None
 
     try:
+        # Structured output for reliable parsing by native host
+        print(json.dumps({"port": actual_port, "status": "running"}))
+        sys.stdout.flush()
+        
         logging.info(f"Serving M3U playlist on port {actual_port}")
         server_thread = threading.Thread(target=httpd.serve_forever)
         server_thread.daemon = True

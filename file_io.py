@@ -521,6 +521,7 @@ def list_import_files():
 def get_settings():
     """Reads settings from config.json, providing default values for new keys."""
     default_settings = {
+        "os_platform": platform.system(),
         "mpv_path": None, # Will be filled by installer or found in PATH
         "ffmpeg_path": None,
         "node_path": None,

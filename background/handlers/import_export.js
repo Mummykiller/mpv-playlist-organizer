@@ -4,7 +4,7 @@ import { broadcastToTabs } from '../messaging.js';
 import { debouncedSyncToNativeHostFile } from '../core_services.js';
 import { callNativeHost } from '../../utils/nativeConnection.js';
 import { updateContextMenus } from '../../utils/contextMenu.js';
-import { sanitizeString } from '../../utils/sanitization.js';
+import { sanitizeString } from '../../utils/commUtils.module.js';
 
 export async function handleImportFromFile(request, sender) {
     const filename = request.filename;
@@ -21,6 +21,26 @@ export async function handleImportFromFile(request, sender) {
 
         const importedData = JSON.parse(response.data);
 
+        // --- Helper: Item Processor ---
+        const processPlaylist = (playlist) => {
+            return playlist.map(item => {
+                if (typeof item === 'string') {
+                    return { url: sanitizeString(item), title: sanitizeString(item), id: crypto.randomUUID(), settings: {} };
+                } else if (item && typeof item.url === 'string') {
+                    const newItem = {
+                        ...item,
+                        url: sanitizeString(item.url),
+                        title: options.preserveTitle ? sanitizeString(item.title || item.url) : sanitizeString(item.url),
+                        id: item.id || crypto.randomUUID(), // PRESERVE ID IF EXISTS
+                        settings: item.settings || {}
+                    };
+                    if (!options.preserveLastPlayed) delete newItem.resume_time;
+                    return newItem;
+                }
+                return null;
+            }).filter(i => i !== null);
+        };
+
         if (importedData && importedData.type === 'mpv_playlist_organizer_settings') {
             const confirmResponse = await new Promise(resolve => {
                 chrome.runtime.sendMessage({ 
@@ -33,68 +53,60 @@ export async function handleImportFromFile(request, sender) {
             return await handleImportSettings(importedData, filename);
         }
 
-        let combinedPlaylist = [];
-        let importedLastPlayedId = null;
+        const foldersToImport = {};
 
+        // --- Detection: Single Folder or Full Backup? ---
         if (Array.isArray(importedData)) {
-            combinedPlaylist = importedData
-                .filter(item => typeof item === 'string')
-                .map(url => ({ 
-                    url: sanitizeString(url), 
-                    title: sanitizeString(url),
-                    id: crypto.randomUUID(),
-                    settings: {}
-                }));
+            // Case 1: Just a list of URLs
+            foldersToImport[baseFolderName] = { playlist: processPlaylist(importedData) };
+        } else if (importedData && Array.isArray(importedData.playlist)) {
+            // Case 2: A single folder object
+            const folder = { playlist: processPlaylist(importedData.playlist) };
+            if (options.preserveLastPlayed && importedData.last_played_id) {
+                if (folder.playlist.some(i => i.id === importedData.last_played_id)) {
+                    folder.last_played_id = importedData.last_played_id;
+                }
+            }
+            foldersToImport[baseFolderName] = folder;
         } else if (typeof importedData === 'object' && importedData !== null) {
+            // Case 3: Multiple folders (Full Backup)
             for (const key in importedData) {
                 const folderContent = importedData[key];
                 if (folderContent && Array.isArray(folderContent.playlist)) {
-                    if (!importedLastPlayedId && folderContent.last_played_id) importedLastPlayedId = folderContent.last_played_id;
-
-                    const items = folderContent.playlist.map(item => {
-                        if (typeof item === 'string') {
-                            return { url: sanitizeString(item), title: sanitizeString(item), id: crypto.randomUUID(), settings: {} };
-                        } else if (item && typeof item.url === 'string') {
-                            const newItem = {
-                                ...item,
-                                url: sanitizeString(item.url),
-                                title: options.preserveTitle ? sanitizeString(item.title || item.url) : sanitizeString(item.url),
-                                id: item.id || crypto.randomUUID(),
-                                settings: item.settings || {}
-                            };
-                            if (!options.preserveLastPlayed) delete newItem.resume_time;
-                            return newItem;
+                    const folder = { playlist: processPlaylist(folderContent.playlist) };
+                    if (options.preserveLastPlayed && folderContent.last_played_id) {
+                        if (folder.playlist.some(i => i.id === folderContent.last_played_id)) {
+                            folder.last_played_id = folderContent.last_played_id;
                         }
-                        return null;
-                    });
-                    combinedPlaylist.push(...items.filter(item => item !== null));
+                    }
+                    foldersToImport[key] = folder;
                 }
             }
         }
 
-        if (combinedPlaylist.length === 0) return { success: true, message: `Import file was empty.` };
+        if (Object.keys(foldersToImport).length === 0) return { success: true, message: `Import file was empty or incompatible.` };
 
         const localData = await storage.get();
-        let newFolderId = baseFolderName;
-        let counter = 1;
-        while (localData.folders[newFolderId]) {
-            newFolderId = `${baseFolderName} (${counter})`;
-            counter++;
+        let importedCount = 0;
+
+        for (let [folderId, folderData] of Object.entries(foldersToImport)) {
+            let finalId = folderId;
+            let counter = 1;
+            while (localData.folders[finalId]) {
+                finalId = `${folderId} (${counter})`;
+                counter++;
+            }
+            localData.folders[finalId] = folderData;
+            localData.folderOrder.push(finalId);
+            importedCount++;
         }
 
-        const newFolderData = { playlist: combinedPlaylist };
-        if (options.preserveLastPlayed && importedLastPlayedId) {
-            if (combinedPlaylist.some(item => item.id === importedLastPlayedId)) newFolderData.last_played_id = importedLastPlayedId;
-        }
-
-        localData.folders[newFolderId] = newFolderData;
-        localData.folderOrder.push(newFolderId);
         await storage.set(localData);
-
         await updateContextMenus(storage);
         broadcastToTabs({ foldersChanged: true });
-        debouncedSyncToNativeHostFile(newFolderId, true);
-        return { success: true, message: `Imported as new folder '${newFolderId}'.` };
+        debouncedSyncToNativeHostFile();
+        
+        return { success: true, message: `Successfully imported ${importedCount} folder(s).` };
     } catch (e) {
         return { success: false, error: `Import failed: ${e.message}` };
     }

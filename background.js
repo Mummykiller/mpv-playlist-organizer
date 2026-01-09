@@ -2,7 +2,7 @@
 // --- Core Module Imports ---
 import { storage } from './background/storage_instance.js';
 import { broadcastLog, broadcastToTabs } from './background/messaging.js';
-import { debouncedSyncToNativeHostFile } from './background/core_services.js';
+import { debouncedSyncToNativeHostFile, _syncToNativeHostFile } from './background/core_services.js';
 import { callNativeHost, addNativeListener } from './utils/nativeConnection.js';
 import { updateContextMenus } from './utils/contextMenu.js';
 import * as playlistManager from './utils/playlistManager.js';
@@ -138,7 +138,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     } else if (alarm.name === 'native-host-heartbeat') {
         performNativeHostHeartbeat();
     } else if (alarm.name === 'sync-to-native-host') {
-        import('./background/core_services.js').then(m => m._syncToNativeHostFile());
+        _syncToNativeHostFile();
     }
 });
 
@@ -164,37 +164,58 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 });
 
-async function reinjectContentScripts() {
+async function injectIntoTab(tab) {
+    if (!tab.id || !tab.url) return;
+    if (tab.url.startsWith("chrome://") || tab.url.startsWith("about:") || tab.url.includes("chrome.google.com/webstore")) return;
+
     const manifest = chrome.runtime.getManifest();
     const jsFiles = manifest.content_scripts[0].js;
+
     try {
         const data = await storage.get();
         const restrictedDomains = data.settings.ui_preferences.global.restricted_domains || [];
-        const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
-        
+        try {
+            const url = new URL(tab.url);
+            if (restrictedDomains.some(domain => url.hostname === domain || url.hostname.endsWith('.' + domain))) return;
+        } catch (e) { return; }
+
+        const isAlive = await chrome.tabs.sendMessage(tab.id, { action: 'ping' }).then(res => res?.success).catch(() => false);
+        if (isAlive) {
+            // Script is already there, but might have stale data. Refresh it.
+            let origin = null;
+            try { origin = new URL(tab.url).origin; } catch (e) {}
+            await ui_state_handlers.handleContentScriptInit({}, { tab: tab, origin: origin });
+            return;
+        }
+
+        await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+                ['m3u8-controller-host', 'm3u8-minimized-host', 'anilist-panel-host', 'mpv-organizer-host-styles'].forEach(id => document.getElementById(id)?.remove());
+                window.mpvControllerInitialized = false;
+            }
+        }).catch(() => {});
+
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: jsFiles });
+    } catch (err) {}
+}
+
+async function reinjectContentScripts() {
+    try {
+        // Only inject into active tabs on startup/reload
+        const tabs = await chrome.tabs.query({ active: true });
         for (const tab of tabs) {
-            if (tab.url.startsWith("chrome://") || tab.url.startsWith("about:") || tab.url.includes("chrome.google.com/webstore")) continue;
-            try {
-                const url = new URL(tab.url);
-                if (restrictedDomains.some(domain => url.hostname === domain || url.hostname.endsWith('.' + domain))) continue;
-            } catch (e) { continue; }
-
-            try {
-                const isAlive = await chrome.tabs.sendMessage(tab.id, { action: 'ping' }).then(res => res?.success).catch(() => false);
-                if (isAlive) continue;
-
-                await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
-                    func: () => {
-                        ['m3u8-controller-host', 'm3u8-minimized-host', 'anilist-panel-host', 'mpv-organizer-host-styles'].forEach(id => document.getElementById(id)?.remove());
-                        window.mpvControllerInitialized = false;
-                    }
-                }).catch(() => {});
-
-                await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: jsFiles });
-            } catch (tabErr) {}
+            await injectIntoTab(tab);
         }
     } catch (err) {}
 }
+
+// Lazy injection: inject when a user actually switches to a tab
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    try {
+        const tab = await chrome.tabs.get(activeInfo.tabId);
+        await injectIntoTab(tab);
+    } catch (e) {}
+});
 
 reinjectContentScripts();

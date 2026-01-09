@@ -1,7 +1,7 @@
 /**
  * Manages all playlist-related actions like adding, removing, clearing, and reordering.
  */
-import { sanitizeString } from './sanitization.js';
+import { sanitizeString } from './commUtils.module.js';
 import { normalizeYouTubeUrl, sendMessageAsync } from './commUtils.module.js';
 import { storage } from '../background/storage_instance.js';
 import { broadcastLog, broadcastToTabs } from '../background/messaging.js';
@@ -211,22 +211,28 @@ export async function handleAdd(request, sender) {
         }
 
         scrapingInProgress.add(urlToScan);
-        const result = await _scrapeAndAddUrl(folderId, urlToScan, tab, sender);
-        scrapingInProgress.delete(urlToScan);
-        return result;
+        try {
+            const result = await _scrapeAndAddUrl(folderId, urlToScan, tab, sender);
+            return result;
+        } finally {
+            scrapingInProgress.delete(urlToScan);
+        }
     }
 }
 
 export async function handleClear(request) {
     const data = await storage.get();
-    data.folders[request.folderId].playlist = [];
+    const folderId = request.folderId;
+    if (!data.folders[folderId]) return { success: false, error: "Folder not found." };
+
+    data.folders[folderId].playlist = [];
     await storage.set(data);
     try {
         await broadcastToTabs({ 
             action: 'render_playlist', 
-            folderId: request.folderId, 
+            folderId: folderId, 
             playlist: [],
-            isFolderActive: isFolderActive(request.folderId)
+            isFolderActive: isFolderActive(folderId)
         });
     } catch (e) { /* Suppress errors if no content scripts exist */ }
         debouncedSyncToNativeHostFile(true);
@@ -312,9 +318,12 @@ export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
         return { success: true, message: 'Scraping already in progress for this URL.' };
     }
     scrapingInProgress.add(urlToAdd);
-    const result = await _scrapeAndAddUrl(folderId, urlToAdd, tab, null);
-    scrapingInProgress.delete(urlToAdd);
-    return result;
+    try {
+        const result = await _scrapeAndAddUrl(folderId, urlToAdd, tab, null);
+        return result;
+    } finally {
+        scrapingInProgress.delete(urlToAdd);
+    }
 }
 
 export async function handleGetPlaylist(request) {

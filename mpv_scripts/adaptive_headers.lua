@@ -1,5 +1,8 @@
 local utils = require 'mp.utils'
 local url_options = {}
+local url_history = {} -- Track order for FIFO cleanup
+local MAX_ENTRIES = 100 -- Cap memory and lookup time
+
 local last_applied_url = nil
 
 -- Store initial global states to restore them between files
@@ -22,8 +25,19 @@ end)
 mp.register_script_message("set_url_options", function(url, options_json)
     local ok, options = pcall(utils.parse_json, options_json)
     if ok then
-        debug_log("AdaptiveHeaders: Registered options for " .. url)
+        -- FIFO Cleanup logic to prevent memory leak
+        if not url_options[url] then
+            table.insert(url_history, url)
+        end
+        
         url_options[url] = options
+        debug_log("AdaptiveHeaders: Registered options for " .. url)
+
+        if #url_history > MAX_ENTRIES then
+            local oldest = table.remove(url_history, 1)
+            url_options[oldest] = nil
+            debug_log("AdaptiveHeaders: Pruned oldest cache entry: " .. oldest)
+        end
     else
         debug_log("AdaptiveHeaders: Failed to parse options JSON for " .. url)
     end

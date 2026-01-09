@@ -441,6 +441,7 @@ class WindowsLogic(InstallerLogic):
             self.log(f"Found Node.js at: {node_path}")
 
         config_to_save = {
+            "os_platform": "Windows",
             "mpv_path": mpv_path,
             "mpv_decoder": best_decoder,
             "ffmpeg_path": ffmpeg_path,
@@ -598,6 +599,7 @@ class UnixLogic(InstallerLogic):
             self.log(f"Found Node.js at: {node_path}")
 
         config_to_save = {
+            "os_platform": platform.system(),
             "mpv_path": mpv_path,
             "mpv_decoder": unix_decoder,
             "ffmpeg_path": ffmpeg_path,

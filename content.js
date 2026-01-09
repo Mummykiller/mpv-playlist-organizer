@@ -8,6 +8,7 @@
     'use strict';
 
     if (window.mpvControllerInitialized) return;
+    window.mpvControllerInitialized = true;
 
     const MPV = window.MPV_INTERNAL;
 

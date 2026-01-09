@@ -13,13 +13,16 @@ function setupListeners() {
         (details) => {
             const promiseInfo = m3u8DetectionPromises[details.tabId];
             if (promiseInfo) {
-                const INACTIVITY_TIMEOUT_MS = 15000;
-                clearTimeout(promiseInfo.timeoutId);
-                promiseInfo.timeoutId = setTimeout(() => {
-                    if (m3u8DetectionPromises[details.tabId]) {
-                        m3u8DetectionPromises[details.tabId].reject(new Error(`M3U8 detection timed out.`));
-                    }
-                }, INACTIVITY_TIMEOUT_MS);
+                // Respect user preference for timeout instead of hardcoded 15s
+                storage.get().then(data => {
+                    const timeoutMs = (data.settings.ui_preferences.global.stream_scanner_timeout || 60) * 1000;
+                    clearTimeout(promiseInfo.timeoutId);
+                    promiseInfo.timeoutId = setTimeout(() => {
+                        if (m3u8DetectionPromises[details.tabId]) {
+                            m3u8DetectionPromises[details.tabId].reject(new Error(`M3U8 detection timed out after ${timeoutMs/1000}s.`));
+                        }
+                    }, timeoutMs);
+                });
             }
 
             if (!details.url.toLowerCase().includes('.m3u8')) return;

@@ -35,7 +35,7 @@ def sanitize_url(url):
     return file_io.sanitize_string(url, is_filename=False)
 
 def get_cookies_file(browser, url, ignore_config=True):
-    """Extracts cookies once and caches the path."""
+    """Extracts cookies once and caches the path both in memory and on disk."""
     global _COOKIES_CACHE
     import time
     import shutil
@@ -44,8 +44,8 @@ def get_cookies_file(browser, url, ignore_config=True):
     url = sanitize_url(url)
     
     now = time.time()
-    # Cache for 10 minutes
-    if _COOKIES_CACHE["path"] and _COOKIES_CACHE["browser"] == browser and (now - _COOKIES_CACHE["timestamp"] < 600):
+    # Layer 1: In-memory cache check (1 hour)
+    if _COOKIES_CACHE["path"] and _COOKIES_CACHE["browser"] == browser and (now - _COOKIES_CACHE["timestamp"] < 3600):
         if os.path.exists(_COOKIES_CACHE["path"]) and os.path.getsize(_COOKIES_CACHE["path"]) > 0:
             return _COOKIES_CACHE["path"]
 
@@ -54,15 +54,23 @@ def get_cookies_file(browser, url, ignore_config=True):
         cookies_dir = os.path.join(file_io.DATA_DIR, "temp_playlists", "cookies")
         os.makedirs(cookies_dir, exist_ok=True)
         
-        # Include PID in the filename for smart cleanup: mpv_cookies_PID_uuid.txt
-        pid = os.getpid()
-        unique_id = uuid.uuid4().hex[:8]
-        temp_filename = f"{COOKIE_PREFIX}{pid}_{unique_id}{COOKIE_EXT}"
+        # Layer 2: Persistent Disk Cache (Stable filename per browser)
+        # We don't use UUID here so that a restarted host can find the previous file.
+        temp_filename = f"{COOKIE_PREFIX}{browser}{COOKIE_EXT}"
         temp_path = os.path.join(cookies_dir, temp_filename)
         
+        # Check if the file on disk is still fresh (1 hour)
+        if os.path.exists(temp_path) and (now - os.path.getmtime(temp_path) < 3600):
+            if os.path.getsize(temp_path) > 0:
+                logging.info(f"Re-using fresh disk cache for {browser} cookies.")
+                _COOKIES_CACHE["path"] = temp_path
+                _COOKIES_CACHE["browser"] = browser
+                _COOKIES_CACHE["timestamp"] = os.path.getmtime(temp_path)
+                return temp_path
+
+        # Layer 3: Hard Refresh via yt-dlp (The "Slow" path)
         ytdlp_path = shutil.which("yt-dlp") or "yt-dlp"
         
-        # Run a separate yt-dlp call just to dump cookies
         cookie_cmd = [
             ytdlp_path,
             '--cookies-from-browser', browser,

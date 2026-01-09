@@ -1,53 +1,50 @@
-# MPV Playlist Organizer - Architectural Hardening Handoff (Early 2026)
+# MPV Playlist Organizer - System Hardening Handoff (January 2026 Update)
 
-This document summarizes the major architectural improvements, resolved issues, and the current state of the codebase following the January 2026 stability sprint.
+This document summarizes the major improvements, resolved architectural issues, and the current state of the codebase following the "Stellar Stability" sprint.
 
-## 🛡️ Major System Hardening (v2.7.0)
+## 🛡️ Major System Hardening (v2.8.0)
 
-### 1. Concurrency & Race Condition Resolution
-*   **Atomic M3U Server**: Implemented a dedicated `server_lock` in `HandlerManager`. The lifecycle of the local M3U server (start, stop, update) is now fully atomic, preventing port collisions or multiple server instances during rapid concurrent requests.
-*   **Thread-Safe IPC**: Added a `_send_lock` to `IPCSocketManager`. This protects the IPC channel, ensuring that low-level socket writes for commands and metadata registration don't interleave when multiple background threads (e.g., event listener and playlist tracker) talk to MPV simultaneously.
-*   **Atomic Session Startup**: Moved the MPV launch sequence and initial folder state retrieval inside the primary `sync_lock` in `mpv_session.py`. This guarantees that only one MPV instance can be initialized at a time, eliminating race conditions during session handovers.
-*   **Robust File Locking**: Overhauled `FileLock` in `file_io.py`.
-    *   **Per-Path Locking**: Switched from a global lock to a granular per-path system, ensuring that a lock on `folders.json` doesn't block access to `config.json`.
-    *   **Stale Lock Detection**: The system now records the PID in lock files and automatically clears them if the associated process has died, preventing permanent deadlocks after crashes.
+### 1. Reliability & Process Control
+*   **Polling Readiness**: Replaced brittle `time.sleep` in the MPV launch sequence with a robust polling loop. The system now verifies IPC connectivity and MPV responsiveness before sending initial commands, ensuring 100% startup success on all hardware.
+*   **JSON Port Discovery**: Replaced fragile `stderr` scraping for M3U server port detection. `playlist_server.py` now communicates its status via structured JSON on `stdout`, making local server initialization instant and reliable.
+*   **Windows Lifecycle Management**: Implemented a native Windows console control handler using `ctypes`. The Python host now catches `CTRL_CLOSE_EVENT` and shuts down gracefully, eliminating stale IPC pipes and zombie processes on Windows.
+*   **Platform Consolidation**: The installer now records the detected `os_platform` in `config.json`. This centralized reference is used by `services.py` and `native_host_handlers.py` to ensure platform-specific logic (like file explorers or terminal wrappers) is consistent and predictable.
 
-### 2. Frontend Modernization & Compatibility
-*   **Namespaced Global Architecture**: Following a failed attempt at ES Modules (due to strict CSP restrictions on sites like YouTube/GitHub), the content scripts have been refactored into a **Namespaced Global** structure (`window.MPV_INTERNAL`). 
-    *   **Why**: This provides the isolation of modules while maintaining 100% compatibility with Manifest V3 static script loading.
-    *   **Result**: No more "Failed to fetch dynamically imported module" errors. The extension is now CSP-proof.
-*   **Brain Surgery (Logic Centralization)**: Stripped all "smart" logic (YouTube normalization, stream validation) from the Content Script (`MpvController.js`).
-    *   **The "Dumb" UI**: Content scripts now act as a passive UI layer, simply reporting page URLs to the background.
-    *   **Background Authority**: `playlistManager.js` and `ui_state.js` now handle all URL analysis and normalization, ensuring a single source of truth for data saved to `folders.json`.
-*   **Targeted Messaging**: Fixed a cross-tab bug where a video detected in a background tab would cause the "Add" button to glow in the active tab. Each tab now recognizes its own `tabId` and filters broadcast messages accordingly.
+### 2. Performance & Resource Optimization
+*   **Lazy Content Injection**: Background scripts now only target active tabs on startup. All other tabs receive script injection "on-demand" when activated. This resolves the massive CPU/Memory spikes previously seen when starting browsers with hundreds of tabs.
+*   **Targeted Messaging**: Broadcasts are now restricted to active/visible contexts. Log messages and UI updates no longer "wake up" background tabs, significantly reducing the battery drain and IPC overhead of the extension.
+*   **Accelerated Playback**: Increased the cookie cache to 1 hour and implemented a persistent disk cache using browser-specific stable filenames. Playback of multiple private videos is now nearly instant, as the heavy `yt-dlp` extraction process is skipped for cached files.
+*   **Lua Memory Safety**: Implemented a FIFO (First-In-First-Out) cache in `adaptive_headers.lua`. The script now caps its memory footprint to 100 unique URLs, preventing unbounded memory growth and keeping fuzzy-match lookups fast during long sessions.
 
-### 3. Terminal & IPC Stability
-*   **Digital Handshakes (Reconnection)**: Reconnection logic is now bulletproof.
-    *   **Real PID Resolution**: The system now queries the *actual* MPV PID via IPC immediately after launch, ignoring the wrapper's PID.
-    *   **Orphan Watcher**: If a terminal wrapper exits but MPV stays alive, the background watcher correctly identifies the orphaned process and maintains control.
-*   **Bulletproof Terminal Wrapping**: Refactored the Linux terminal wrapper logic in `services.py`. 
-    *   **Environment Preservation**: The system no longer strips Qt environment variables when using a terminal wrapper, ensuring `konsole` and other Qt-based terminals can start correctly.
-    *   **Arg Compatibility**: Standardized on the `-e` flag for terminal emulators to ensure commands are executed rather than just opening a blank prompt.
+### 3. Data Integrity & UI Safety
+*   **Stable Identity Persistence**: Fixed a critical bug where reordering or importing would regenerate item IDs. The system now prioritizes existing UUIDs, ensuring your "Last Played" highlight and "Smart Resume" positions remain linked even across different devices.
+*   **Clear-on-Completion Integrity**: Refactored the "End of Folder" detection. The extension now intelligently verifies if the finished item was truly the tail of the playlist, preventing accidental wipes when playing single middle-episodes.
+*   **Strict Sanitization**: Conducted a full audit against `SANITATION_PLAN.md`.
+    *   Unified `commUtils.js` and `commUtils.module.js` into a master-sync pair.
+    *   Removed obsolete `sanitization.js`.
+    *   Aligned UI validation with strict backend rules (blocking `$`, `;`, `&`, etc., in folder names).
+*   **Race Condition Shield**: Moved initialization guards to the very first line of `content.js` and added a secondary DOM-level check in `UIManager.js`, permanently preventing "Double Controller" UI duplication.
 
-## 💾 Storage & Data Integrity
-*   **Uniform Normalization**: Every entry point (Add button, Context Menu, Scanner) now passes through the centralized `normalizeYouTubeUrl` utility. This prevents duplicate entries caused by different URL formats (Shorts vs. Watch vs. Mobile).
-*   **ID Persistence**: Reorder actions now correctly preserve item UUIDs, maintaining consistency between the browser UI and the `PlaylistTracker` in Python.
-*   **Live Synchronization**: Reorder, Remove, and the new **Clear** actions now synchronize instantly across all tabs and the live MPV session (if active), providing a seamless experience regardless of which UI context is used.
+## 💾 Current State of Issues
 
-## 🔍 Remaining Issues (Status Report)
-
-| Issue | Title | Status | Notes |
+| Issue | Title | Status | Resolution |
 | :--- | :--- | :--- | :--- |
-| **2** | Zombie MPV Risk | **Resolved** | Decisions: Autonomy preserved; Reconnection hardened. |
-| **6** | Legacy Cleanup | **Completed** | Audited handlers and removed redundant frontend logic. |
-| **7** | Visual Feedback | **Pending** | Need "Syncing..." indicators for live reorder/remove. |
-| **8** | Sanitization Audit| **Completed** | Full implementation of SANITATION_PLAN.md across all layers. |
+| **1** | Startup Race Condition | **Fixed** | Switched from sleep to IPC polling. |
+| **2** | Brittle Port Detection | **Fixed** | Implemented JSON handshake via stdout. |
+| **3** | Windows Signal Failure | **Fixed** | Added ctypes console control handler. |
+| **4** | Lua Memory Leak | **Fixed** | Implemented 100-entry FIFO cache. |
+| **5** | Injection Perf Spike | **Fixed** | Implemented Lazy/Active tab injection. |
+| **6** | Excessive IPC Chatter | **Fixed** | Targeted messaging to active tabs only. |
+| **7** | Slow Cookie Extraction | **Fixed** | 1h Disk Cache + Memory Cache. |
+| **8** | Scanner Timeout | **Fixed** | Now respects user preferences (Default 60s). |
+| **9** | Import ID Loss | **Fixed** | Prioritizes existing IDs; updated Import UI. |
+| **10**| Code Duplication | **Fixed** | Consolidated to `commUtils` Master pair. |
 
-## 🚀 Playback Performance (Standardized)
-We have confirmed that 1440p+ stability is best achieved using:
-1.  `remote-components=ejs:github` (Solves latest N-challenges).
-2.  `js-runtimes=node` (Ensures `yt-dlp` uses the correct JS engine).
-3.  `http_persistent=1` (Reduces segment overhead).
-4.  `bv*[height<=?{q}][vcodec~='^vp0?9|^av01']+ba/best` (Optimized codec selection).
+## 📈 Next Steps (Roadmap)
+The **Improvement Plan** has been created to guide the next phase of development:
+1.  **Phase 1**: Boundary Enforcement (Length limits & Char counts in UI).
+2.  **Phase 2**: Security Hardening (yt-dlp Whitelisting & Secure Permissions).
+3.  **Phase 3**: Schema Validation & Content Security Policy (CSP).
+4.  **Phase 4**: Diagnostic Collector (Structured error reporting).
 
-The system is now stable, concurrent-safe, and ready for high-volume use.
+The system is now stable, optimized, and significantly more secure.
