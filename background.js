@@ -43,6 +43,10 @@ const actionHandlers = {
     'get_ui_preferences': ui_state_handlers.handleGetUiPreferences,
     'get_default_automatic_flags': ui_state_handlers.handleGetDefaultAutomaticFlags,
     'set_minimized_state': ui_state_handlers.handleSetMinimizedState,
+    'report_detected_url': (request, sender) => {
+        const tabId = sender.tab?.id;
+        if (tabId) m3u8_scanner_handlers.handleUpdateDetectedUrlForTab(tabId, request.url);
+    },
     'force_reload_settings': ui_state_handlers.handleForceReloadSettings,
     'force_refresh_dependencies': ui_state_handlers.handleForceRefreshDependencies,
     'open_popup': ui_state_handlers.handleOpenPopup,

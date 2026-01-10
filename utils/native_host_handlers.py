@@ -69,6 +69,8 @@ class HandlerManager:
             for entry in entries:
                 # Assign unique ID to every new entry
                 entry['id'] = str(uuid.uuid4())
+                if not entry.get('original_url'):
+                    entry['original_url'] = entry.get('url')
                 entry, all_folders = self._resolve_or_assign_item_id(entry, folder_id, all_folders)
                 
                 # Ensure entries are treated as YouTube but resolved externally
@@ -87,6 +89,7 @@ class HandlerManager:
 
         # Single item processing
         url_item['url'] = processed_url # Update URL with processed one
+        url_item['original_url'] = url_item.get('original_url') or url_item.get('url')
         if script_headers: url_item['headers'] = script_headers
         if ytdl_options: url_item['ytdl_raw_options'] = ytdl_options
         url_item['use_ytdl_mpv'] = use_ytdl_mpv_flag

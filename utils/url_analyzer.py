@@ -221,6 +221,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                         entries.append({
                             "title": title,
                             "url": webpage_url,
+                            "original_url": webpage_url,
                             "is_youtube": True,
                             "use_ytdl_mpv": True, 
                             "disable_http_persistent": True,

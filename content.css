@@ -21,6 +21,7 @@
     --accent-danger: #ed4245; /* Vibrant red */
     --accent-danger-hover: #da3739; /* Darker red on hover */
     --accent-success: #57F287; /* A brighter, more visible green */
+    --accent-inactive: #64748b; /* A greyish blue for inactive states */
     --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     --font-mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
     --radius: 6px;
@@ -144,15 +145,21 @@ button:active {
 /* Primary Action (Play) */
 #btn-play,
 #btn-compact-play {
-    background-color: var(--accent-primary);
+    background-color: var(--accent-inactive);
     color: white; /* Ensure good contrast */
     font-weight: 700;
 }
 #btn-play:hover,
 #btn-compact-play:hover {
-    background-color: var(--accent-primary-hover);
-    border-color: var(--accent-primary); /* Keep accent border */
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    background-color: #475569; /* Slightly darker grey-blue */
+    border-color: var(--accent-inactive);
+    box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6); /* Vibrant blue halo */
+}
+
+#btn-play.btn-playing:hover,
+#btn-compact-play.btn-playing:hover {
+    background-color: var(--accent-primary-hover) !important;
+    box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6) !important; /* Vibrant blue glow */
 }
 
 /* Secondary Play Action (Play New) */
@@ -990,9 +997,9 @@ button.btn-loading::after {
 
 /* State for when MPV is actually active (playing) */
 button.btn-playing {
-    background-color: var(--accent-success) !important;
-    border-color: var(--accent-success) !important;
-    box-shadow: 0 0 8px 0px var(--accent-success) !important;
+    background-color: var(--accent-primary) !important;
+    border-color: var(--accent-primary) !important;
+    box-shadow: 0 0 8px 0px var(--accent-primary) !important;
 }
 
 /* --- Minimized Stub --- */
@@ -1043,9 +1050,13 @@ button.btn-playing {
 }
 
 #m3u8-minimized-stub:hover {
-    background-color: rgba(88, 101, 242, 0.8); /* Accent color on hover */
-    border-color: var(--border-hover);
-    transform: scale(1.1);
+    background-color: var(--bg-tertiary);
+    border-color: var(--accent-inactive);
+    transform: scale(1.05);
+}
+
+#m3u8-minimized-stub.stream-present:hover {
+    border-color: var(--accent-success);
 }
 
 #m3u8-minimized-stub svg {
@@ -1066,7 +1077,7 @@ button.btn-playing {
     width: 28px;
     height: 28px;
     border-radius: 50%;
-    background-color: var(--accent-primary);    
+    background-color: var(--accent-inactive);    
     border: 2px solid rgb(0, 0, 0); /* A static black border for high contrast */
     display: flex;
     align-items: center;
@@ -1079,9 +1090,14 @@ button.btn-playing {
 
 /* This is the style for when you hover your mouse over the play button. */
 .play-button:hover {
-    background-color: var(--accent-primary-hover);
+    background-color: #475569; /* Darker grey-blue */
     transform: scale(1.15); /* Make it pop a bit more */
-    box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6); /* Add a glow effect */
+    box-shadow: 0 0 10px 2px rgba(100, 116, 139, 0.6); /* Add a grey glow */
+}
+
+.play-button.btn-playing:hover {
+    background-color: var(--accent-primary-hover) !important;
+    box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6) !important;
 }
 
 #m3u8-minimized-play-btn svg {

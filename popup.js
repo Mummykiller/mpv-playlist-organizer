@@ -1,5 +1,5 @@
-import { sendMessageAsync, debounce, isYouTubeUrl, getYoutubeId, normalizeYouTubeUrl } from './utils/commUtils.js';
-import { AniListRenderer } from './utils/anilist_renderer.js';
+import { sendMessageAsync, debounce, isYouTubeUrl, getYoutubeId, normalizeYouTubeUrl } from './utils/commUtils.module.js';
+import { AniListRenderer } from './utils/anilist_renderer.module.js';
 import { OptionsManager } from './utils/settings.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -451,6 +451,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             const response = await sendMessageAsync({ action: 'get_playlist', folderId });
             if (response?.success) {
+                // Update play button state
+                miniPlayBtn.classList.toggle('btn-playing', !!response.isFolderActive);
                 renderPlaylist(response.list, response.last_played_id, response.isFolderActive);
             }
         } catch (e) {
@@ -1103,26 +1105,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const payload = { action: 'add', folderId, tabId, tab: activeTab };
 
-            // If we have a detected URL, try to construct a payload with it.
-            if (currentDetectedUrl) {
-                // Try to get a title from the page content script
-                const details = await getPageDetails(tabId);
-                if (details && details.title) {
-                    payload.data = { url: currentDetectedUrl, title: details.title };
-                } else {
-                    // Fallback: use the URL as the title if content script is unreachable
-                    payload.data = { url: currentDetectedUrl, title: currentDetectedUrl };
-                }
+            // 1. Try to get details directly from the on-page controller's scraper.
+            // This now returns the detected URL if one is active on the page.
+            const details = await getPageDetails(tabId);
+            
+            if (details && details.url) {
+                console.log("[Popup] Using details from page scraper:", details);
+                payload.data = { url: details.url, title: details.title };
+            } else {
+                // 2. Fallback: If page script is dead/unreachable, use local popup state
+                const urlToUse = currentDetectedUrl || activeTab.url;
+                console.log("[Popup] Page scraper failed, using fallback URL:", urlToUse);
+                payload.data = { url: urlToUse, title: activeTab.title || urlToUse };
             }
 
-            // The 'add' action now triggers the scraper in the background script.
-            // We just need to provide the folderId and the tabId.
-            // We also pass the full tab object so the background script can show a confirmation dialog on that tab if needed.
             const addResponse = await sendMessageAsync(payload);
             if (addResponse.success) {
                 if (addResponse.message) showStatus(addResponse.message);
+            } else {
+                showStatus(addResponse.error || 'Failed to add URL.', true);
             }
         } catch (error) {
+            console.error("[Popup] MiniAdd Error:", error);
             showStatus(`An error occurred: ${error.message}`, true);
         }
     }
