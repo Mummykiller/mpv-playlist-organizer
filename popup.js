@@ -1098,36 +1098,71 @@ document.addEventListener('DOMContentLoaded', async () => {
         const folderId = miniFolderSelect.value;
         if (!folderId) return showStatus('Please select a folder.', true);
 
+        const miniAddBtn = document.getElementById('btn-mini-add');
+        if (!miniAddBtn) return;
+
         try {
             const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
             const tabId = activeTab?.id;
-            if (!tabId) return showStatus('Could not find an active tab.', true);
+            if (!tabId) {
+                showStatus('Could not find an active tab.', true);
+                throw new Error('No active tab');
+            }
 
-            const payload = { action: 'add', folderId, tabId, tab: activeTab };
-
-            // 1. Try to get details directly from the on-page controller's scraper.
-            // This now returns the detected URL if one is active on the page.
+            // 1. Try to get details from the on-page controller
             const details = await getPageDetails(tabId);
             
-            if (details && details.url) {
-                console.log("[Popup] Using details from page scraper:", details);
-                payload.data = { url: details.url, title: details.title };
-            } else {
-                // 2. Fallback: If page script is dead/unreachable, use local popup state
-                const urlToUse = currentDetectedUrl || activeTab.url;
-                console.log("[Popup] Page scraper failed, using fallback URL:", urlToUse);
-                payload.data = { url: urlToUse, title: activeTab.title || urlToUse };
+            // Check if we actually have a detected stream URL or if it's YouTube
+            const isYouTube = activeTab.url.includes('youtube.com/watch');
+            const streamUrl = details?.url || currentDetectedUrl || (isYouTube ? activeTab.url : null);
+
+            if (!streamUrl) {
+                console.log("[Popup] No stream detected. Add action ignored to match OSC behavior.");
+                showStatus('No stream detected on this page.', true);
+                return;
             }
+
+            // Set loading state
+            miniAddBtn.disabled = true;
+            const originalIcon = miniAddBtn.innerHTML;
+            miniAddBtn.innerHTML = `<svg class="spin-animation" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
+
+            const payload = { 
+                action: 'add', 
+                folderId, 
+                tabId, 
+                tab: activeTab,
+                data: { 
+                    url: streamUrl, 
+                    title: details?.title || activeTab.title || streamUrl 
+                }
+            };
 
             const addResponse = await sendMessageAsync(payload);
             if (addResponse.success) {
                 if (addResponse.message) showStatus(addResponse.message);
+                
+                // Success feedback
+                miniAddBtn.classList.add('url-in-playlist');
+                miniAddBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+                
+                setTimeout(() => {
+                    miniAddBtn.innerHTML = originalIcon;
+                    miniAddBtn.disabled = false;
+                }, 2000);
             } else {
                 showStatus(addResponse.error || 'Failed to add URL.', true);
+                miniAddBtn.innerHTML = originalIcon;
+                miniAddBtn.disabled = false;
             }
         } catch (error) {
             console.error("[Popup] MiniAdd Error:", error);
-            showStatus(`An error occurred: ${error.message}`, true);
+            if (error.message !== 'No active tab') {
+                showStatus(`An error occurred: ${error.message}`, true);
+            }
+            if (miniAddBtn) {
+                miniAddBtn.disabled = false;
+            }
         }
     }
 
@@ -1332,9 +1367,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             // New: Check for a detected URL on initialization and update the button state.
-            if (uiState?.detectedUrl) {
-                currentDetectedUrl = uiState.detectedUrl;
-                miniAddBtn.classList.add('stream-present');
+            if (activeTab && miniAddBtn) {
+                const isYouTube = activeTab.url.includes('youtube.com/watch');
+                const detectedUrl = uiState?.detectedUrl;
+                
+                if (detectedUrl) currentDetectedUrl = detectedUrl;
+                
+                const hasStream = !!detectedUrl || isYouTube;
+                miniAddBtn.classList.toggle('stream-present', hasStream);
+                miniAddBtn.disabled = !hasStream;
+                
+                if (!hasStream) {
+                    miniAddBtn.title = "No stream detected";
+                } else {
+                    miniAddBtn.title = isYouTube ? "YouTube Video detected" : "Stream/video detected";
+                }
             }
 
             uiManager.determineAndSetInitialMode(isHttp, uiState, prefs);
@@ -1425,7 +1472,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // We check if the message is for the currently active tab.
                 if (activeTab && activeTab.id === request.tabId && miniAddBtn) {
                     currentDetectedUrl = request.url;
-                    miniAddBtn.classList.toggle('stream-present', !!request.url);
+                    
+                    const isYouTube = activeTab.url.includes('youtube.com/watch');
+                    const hasStream = !!request.url || isYouTube;
+                    
+                    miniAddBtn.classList.toggle('stream-present', hasStream);
+                    miniAddBtn.disabled = !hasStream;
+                    
+                    if (!hasStream) {
+                        miniAddBtn.title = "No stream detected";
+                    } else {
+                        miniAddBtn.title = isYouTube ? "YouTube Video detected" : "Stream/video detected";
+                    }
                 }
             }).catch(e => console.error("Failed to query tabs for detected_url_changed:", e));
         }

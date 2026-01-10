@@ -334,9 +334,8 @@ button:disabled {
 #mini-controller-actions #btn-mini-close-mpv {
     background-color: var(--accent-danger);
 }
-#mini-controller-actions #btn-mini-clear:hover,
-#mini-controller-actions #btn-mini-close-mpv:hover {
-    background-color: var(--accent-danger-hover);
+#mini-controller-actions button:disabled {
+    cursor: default;
 }
 
 #mini-item-count-container {
