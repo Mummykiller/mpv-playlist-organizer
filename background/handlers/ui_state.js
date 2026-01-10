@@ -246,7 +246,11 @@ export async function handleSetUiPreferences(request, sender) {
                 'http_persistence', 'demuxer_max_bytes', 'demuxer_max_back_bytes',
                 'cache_secs', 'demuxer_readahead_secs', 'stream_buffer_size', 
                 'ytdlp_concurrent_fragments', 'enable_reconnect', 'reconnect_delay', 
-                'performance_profile', 'ffmpeg_path', 'node_path', 'automatic_mpv_flags'
+                'performance_profile', 'ffmpeg_path', 'node_path', 'automatic_mpv_flags',
+                'ultra_scalers', 'ultra_video_sync', 'ultra_interpolation', 
+                'ultra_deband', 'ultra_fbo', 'ytdl_quality', 'enable_precise_resume',
+                'yt_use_cookies', 'yt_mark_watched', 'yt_ignore_config', 
+                'other_sites_use_cookies'
             ];
             
             const syncPrefs = {};

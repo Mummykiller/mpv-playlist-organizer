@@ -156,7 +156,10 @@ class HandlerManager:
         for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
                     'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
                     'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
-                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality']:
+                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
+                    'performance_profile', 'ultra_scalers', 'ultra_video_sync',
+                    'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
+                    'enable_precise_resume']:
             if key in message:
                 settings[key] = message[key]
 
@@ -222,7 +225,10 @@ class HandlerManager:
         for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
                     'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
                     'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
-                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality']:
+                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
+                    'performance_profile', 'ultra_scalers', 'ultra_video_sync',
+                    'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
+                    'enable_precise_resume']:
             if key in message:
                 settings[key] = message[key]
 
@@ -649,7 +655,10 @@ class HandlerManager:
         for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
                     'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
                     'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
-                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality']:
+                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
+                    'performance_profile', 'ultra_scalers', 'ultra_video_sync',
+                    'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
+                    'enable_precise_resume']:
             if key in message:
                 settings[key] = message[key]
         
