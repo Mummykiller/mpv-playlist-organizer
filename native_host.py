@@ -168,6 +168,22 @@ try:
     janitor_thread = threading.Thread(target=janitor.run_startup_sweep, kwargs={'extension_root': SCRIPT_DIR}, daemon=True)
     janitor_thread.start()
 
+    class DiagnosticCollector:
+        def __init__(self):
+            self.errors = []
+            self.lock = threading.Lock()
+
+        def add_error(self, context, error):
+            with self.lock:
+                timestamp = datetime.now().isoformat()
+                self.errors.append({"timestamp": timestamp, "context": context, "error": str(error)})
+                if len(self.errors) > 50: self.errors.pop(0)
+
+        def get_errors(self):
+            with self.lock: return list(self.errors)
+
+    diagnostic_collector = DiagnosticCollector()
+
     def log_stream(stream, log_level, owner_folder_id):
         """Reads from a stream line by line and logs it."""
         # Keywords that suggest yt-dlp is outdated for YouTube.
@@ -384,6 +400,7 @@ try:
             'play_new_instance': handler_manager.handle_play_new_instance,
             'close_mpv': handler_manager.handle_close_mpv,
             'is_mpv_running': handler_manager.handle_is_mpv_running,
+            'get_playback_status': handler_manager.handle_get_playback_status,
             'export_data': handler_manager.handle_export_data,
             'export_playlists': handler_manager.handle_export_playlists,
             'export_all_playlists_separately': handler_manager.handle_export_all_separately,
@@ -396,7 +413,8 @@ try:
             'get_all_folders': handler_manager.handle_get_all_folders,
             'get_ui_preferences': handler_manager.handle_get_ui_preferences,
             'set_ui_preferences': handler_manager.handle_set_ui_preferences,
-            'get_default_automatic_flags': handler_manager.handle_get_default_automatic_flags
+            'get_default_automatic_flags': handler_manager.handle_get_default_automatic_flags,
+            'get_diagnostics': lambda msg: {"success": True, "errors": diagnostic_collector.get_errors()}
         }
 
         def task_wrapper(message):
@@ -417,6 +435,7 @@ try:
                 send_message(response)
 
             except Exception as e:
+                diagnostic_collector.add_error(f"Task: {message.get('action')}", e)
                 logging.error(f"[PY][TASK] Error processing {message.get('action')}: {e}", exc_info=True)
                 try:
                     error_resp = {"success": False, "error": f"Task error: {str(e)}"}

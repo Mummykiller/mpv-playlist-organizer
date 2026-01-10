@@ -122,6 +122,19 @@ class MpvSessionManager:
                 except OSError as e:
                     logging.warning(f"Failed to remove session file during cleanup: {e}")
 
+    def get_pause_state(self):
+        """Queries the current pause state from MPV via IPC."""
+        with self.sync_lock:
+            if not self.is_alive or not self.ipc_manager:
+                return None
+            try:
+                res = self.ipc_manager.send({"command": ["get_property", "pause"]}, expect_response=True, timeout=0.5)
+                if res and res.get("error") == "success":
+                    return res.get("data")
+            except:
+                pass
+            return None
+
     def restore(self):
         """Checks for a persisted session file and restores state if the process is still alive."""
         with self.sync_lock:

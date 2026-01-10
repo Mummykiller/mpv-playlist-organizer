@@ -71,6 +71,7 @@ export class StorageManager {
     async set(data) {
         this.writeQueue = this.writeQueue.then(async () => {
             try {
+                this._validateData(data);
                 if (!data || !data.folders) throw new Error("Invalid data structure");
 
                 // Sync folderOrder with actual folders keys
@@ -156,6 +157,23 @@ export class StorageManager {
                 }
             }
         };
+    }
+
+    _validateData(data) {
+        if (!data || typeof data !== 'object') throw new Error("Data must be an object");
+        if (!data.folders || typeof data.folders !== 'object') throw new Error("Data must contain a 'folders' object");
+        if (!data.settings || typeof data.settings !== 'object') throw new Error("Data must contain a 'settings' object");
+
+        // Validate folders
+        for (const [id, folder] of Object.entries(data.folders)) {
+            if (id.length > 64) throw new Error(`Folder ID '${id}' exceeds 64 characters`);
+            if (!folder.playlist || !Array.isArray(folder.playlist)) throw new Error(`Folder '${id}' must have a playlist array`);
+            
+            folder.playlist.forEach((item, index) => {
+                if (!item.url) throw new Error(`Item at index ${index} in '${id}' missing URL`);
+                if (!item.id) item.id = crypto.randomUUID(); // Auto-fix missing IDs
+            });
+        }
     }
 
     async _runDataMigrations() {

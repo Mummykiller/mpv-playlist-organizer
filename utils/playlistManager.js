@@ -316,10 +316,16 @@ export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
 export async function handleGetPlaylist(request) {
     const data = await storage.get();
     const folder = data.folders[request.folderId] || { playlist: [], last_played_id: null };
+    
+    // Check playback status to get accurate active/paused state
+    const statusResponse = await callNativeHost({ action: 'get_playback_status' }).catch(() => ({}));
+    const isActive = !!(statusResponse?.is_running && statusResponse.folderId === request.folderId);
+    
     return { 
         success: true, 
         list: folder.playlist, 
-        last_played_id: folder.last_played_id,
-        isFolderActive: isFolderActive(request.folderId)
+        last_played_id: folder.last_played_id, 
+        isFolderActive: isActive,
+        isPaused: statusResponse?.is_paused ?? false
     };
 }

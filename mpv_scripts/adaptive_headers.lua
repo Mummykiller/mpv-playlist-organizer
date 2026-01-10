@@ -137,39 +137,46 @@ mp.add_hook("on_load", 1, function()
     local local_raw_options = ""
     local ytdl_format = initial_ytdl_format
 
-    -- Reset dynamic properties for every file load to prevent leakage
-    mp.set_property("http-header-fields", "")
-    mp.set_property("user-agent", "")
-    mp.set_property("referrer", "")
-    mp.set_property("cookies-file", "")
-    mp.set_property("ytdl-raw-options", initial_ytdl_raw)
-    mp.set_property("ytdl-format", initial_ytdl_format)
-
     -- SAFETY: If the path is a YouTube URL, we MUST use ytdl
     if path:find("youtube%.com") or path:find("youtu%.be") then
         use_ytdl = "yes"
     end
 
+    -- Only reset dynamic properties if we have new options to apply, OR if this is NOT the first load.
+    -- This prevents wiping command-line headers (from LauncherService) before IPC can provide enriched ones.
+    if opts or last_applied_url ~= nil then
+        debug_log("AdaptiveHeaders: Resetting dynamic properties.")
+        -- We only reset the generic fields; user-agent and referrer are typically
+        -- set by the specific properties and will be overwritten if needed.
+        mp.set_property("http-header-fields", "")
+        mp.set_property("cookies-file", "")
+        mp.set_property("ytdl-raw-options", initial_ytdl_raw)
+        mp.set_property("ytdl-format", initial_ytdl_format)
+    end
+
     if opts then
-        debug_log("AdaptiveHeaders: Found registered options.")
+        debug_log("AdaptiveHeaders: Applying registered options.")
         
         -- Apply HTTP Headers
         if opts.headers then
             local header_list = {}
             for k, v in pairs(opts.headers) do
-                -- Sanitize: remove commas and newlines
-                local clean_v = v:gsub(",", ""):gsub("[\r\n]", "")
-                table.insert(header_list, k .. ": " .. clean_v)
+                local k_low = k:lower()
+                -- Apply UA and Referer to their dedicated properties for better compatibility
+                if k_low == "user-agent" then
+                    mp.set_property("user-agent", v)
+                elseif k_low == "referer" then
+                    mp.set_property("referrer", v)
+                else
+                    -- Sanitize other headers for the comma-separated string
+                    local clean_v = v:gsub(",", ""):gsub("[\r\n]", "")
+                    table.insert(header_list, k .. ": " .. clean_v)
+                end
             end
-            local header_str = table.concat(header_list, ",")
-            debug_log("AdaptiveHeaders: Setting http-header-fields: " .. header_str)
-            mp.set_property("http-header-fields", header_str)
-            
-            if opts.headers["User-Agent"] then
-                mp.set_property("user-agent", opts.headers["User-Agent"])
-            end
-            if opts.headers["Referer"] then
-                mp.set_property("referrer", opts.headers["Referer"])
+            if #header_list > 0 then
+                local header_str = table.concat(header_list, ",")
+                debug_log("AdaptiveHeaders: Setting http-header-fields: " .. header_str)
+                mp.set_property("http-header-fields", header_str)
             end
         end
 
@@ -246,6 +253,16 @@ mp.add_hook("on_load", 1, function()
             -- Reset title if not provided to let MPV decide
             mp.set_property("force-media-title", "")
         end
+
+        -- Apply Resume Time (if provided and valid)
+        if opts.resume_time then
+            local start_time = tonumber(opts.resume_time)
+            if start_time and start_time > 0 then
+                debug_log("AdaptiveHeaders: Applying resume time: " .. start_time)
+                -- We set the 'start' option which MPV respects when opening the file
+                mp.set_property("file-local-options/start", start_time)
+            end
+        end
     else
         -- Reset title if no options found
         mp.set_property("force-media-title", "")
@@ -268,6 +285,8 @@ mp.add_hook("on_load", 1, function()
     if ytdl_format ~= "" and mp.get_property("ytdl-format") ~= ytdl_format then
         mp.set_property("ytdl-format", ytdl_format)
     end
+
+    last_applied_url = path
 end)
 
 -- Monitor for stream errors related to yt-dlp

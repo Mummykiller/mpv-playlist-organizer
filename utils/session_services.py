@@ -214,7 +214,8 @@ class EnrichmentService:
                     "disable_network_overrides": settings.get('disable_network_overrides', False),
                     "http_persistence": settings.get('http_persistence', 'auto'),
                     "enable_reconnect": settings.get('enable_reconnect', True),
-                    "reconnect_delay": settings.get('reconnect_delay', 4)
+                    "reconnect_delay": settings.get('reconnect_delay', 4),
+                    "resume_time": url_item.get('resume_time') if settings.get('enable_precise_resume') else None
                 }
                 session.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options)]})
                 session.ipc_manager.send({"command": ["set_property", f"playlist/{idx}/url", target_url]})
@@ -285,19 +286,21 @@ class LauncherService:
         playlist_start_index = kwargs.get('playlist_start_index', 0)
 
         # Prioritize item-specific flags if they were enriched just before this call
-        is_youtube = kwargs.get('is_youtube', url_item.get('is_youtube', False))
-        use_ytdl_mpv = kwargs.get('use_ytdl_mpv', url_item.get('use_ytdl_mpv', False))
-        ytdl_raw_options = kwargs.get('ytdl_raw_options', url_item.get('ytdl_raw_options'))
-        headers = kwargs.get('headers', url_item.get('headers'))
-        disable_http_persistent = kwargs.get('disable_http_persistent', url_item.get('disable_http_persistent', False))
+        is_youtube = kwargs.get('is_youtube') if kwargs.get('is_youtube') is not None else url_item.get('is_youtube', False)
+        use_ytdl_mpv = kwargs.get('use_ytdl_mpv') if kwargs.get('use_ytdl_mpv') is not None else url_item.get('use_ytdl_mpv', False)
+        ytdl_raw_options = kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options')
+        headers = kwargs.get('headers') or url_item.get('headers')
+        disable_http_persistent = kwargs.get('disable_http_persistent') if kwargs.get('disable_http_persistent') is not None else url_item.get('disable_http_persistent', False)
 
         launch_url = sanitize_url(url_item.get('url'))
 
         try:
+            # IDLE LAUNCH: Start MPV empty, then load file via IPC. 
+            # This ensures IPC options (headers) are registered before the file starts loading.
             full_command, has_terminal_flag = services.construct_mpv_command(
                 mpv_exe=mpv_exe,
                 ipc_path=ipc_path,
-                url=launch_url, # Pass URL directly along with options
+                url=None, # Start idle
                 is_youtube=is_youtube,
                 ytdl_raw_options=ytdl_raw_options,
                 geometry=kwargs.get('geometry'),
@@ -322,10 +325,7 @@ class LauncherService:
             )
 
             # Add precise resume if needed for initial launch
-            if settings.get('enable_precise_resume') and url_item.get('resume_time'):
-                resume_time = url_item.get('resume_time')
-                if resume_time > 0:
-                    full_command.insert(1, f"--start={resume_time}")
+            # (Resume logic moved to IPC loadfile command below)
 
             popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
             env = os.environ.copy()
@@ -395,11 +395,16 @@ class LauncherService:
                         "disable_network_overrides": settings.get('disable_network_overrides', False),
                         "http_persistence": settings.get('http_persistence', 'auto'),
                         "enable_reconnect": settings.get('enable_reconnect', True),
-                        "reconnect_delay": settings.get('reconnect_delay', 4)
+                        "reconnect_delay": settings.get('reconnect_delay', 4),
+                        "resume_time": url_item.get('resume_time') if settings.get('enable_precise_resume') else None
                     }
                     self.session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
 
             self.session.ipc_manager.send({"command": ["set_property", "user-data/original-url", url_item.get('original_url', launch_url)]})
+
+            # --- Trigger Load via IPC (After Options Set) ---
+            # We use standard loadfile without options, as resume_time is now handled by adaptive_headers.lua
+            self.session.ipc_manager.send({"command": ["loadfile", launch_url, "replace"]})
 
             from playlist_tracker import PlaylistTracker
             self.session.playlist_tracker = PlaylistTracker(folder_id, self.session.playlist, file_io, settings, self.session.ipc_path, self.session.send_message)
