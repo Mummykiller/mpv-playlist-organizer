@@ -658,22 +658,51 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
         setPlaybackActive(isActive) {
             if (!this.ui.shadowRoot) return;
-            const playBtns = [
-                this.ui.shadowRoot.getElementById('btn-play'),
-                this.ui.shadowRoot.getElementById('btn-compact-play'),
-                this.ui.minimizedHost?.shadowRoot?.getElementById('m3u8-minimized-play-btn')
-            ];
+            this.state.update({ isFolderActive: isActive });
+
+            const playBtn = this.ui.shadowRoot.getElementById('btn-play');
+            const compactPlayBtn = this.ui.shadowRoot.getElementById('btn-compact-play');
+            const minimizedPlayBtn = this.ui.minimizedHost?.shadowRoot?.getElementById('m3u8-minimized-play-btn');
+
+            const playBtns = [playBtn, compactPlayBtn, minimizedPlayBtn];
+
             playBtns.forEach(btn => {
                 if (btn) {
                     btn.classList.toggle('btn-playing', isActive);
-                    if (isActive) btn.classList.remove('btn-loading');
+                    if (isActive) {
+                        btn.classList.remove('btn-loading');
+                        btn.title = "Play/Pause Playlist";
+                    } else {
+                        btn.title = "Play Playlist";
+                    }
                 }
             });
+
+            // Update text/icons for the different play button variants
+            if (playBtn) {
+                playBtn.innerHTML = isActive 
+                    ? '<span class="emoji">⏸️</span> Play/Pause' 
+                    : '<span class="emoji">▶️</span> Play';
+            }
+            if (compactPlayBtn) {
+                compactPlayBtn.innerHTML = isActive 
+                    ? '<span class="emoji">⏸️</span>' 
+                    : '<span class="emoji">▶️</span>';
+            }
         }
 
         sendCommandToBackground(action, folderId, data = {}) {
-            if (action === 'play') {
+            // Optimistic Toggle Check
+            const isToggle = action === 'play' && this.state.state.isFolderActive;
+            
+            if (action === 'play' && !isToggle) {
                 this.setPlaybackLoading(true);
+            }
+
+            // Fire and forget for toggles if we don't want to wait at all
+            if (isToggle) {
+                this.bridge.send(action, folderId, data);
+                return;
             }
 
             this.bridge.send(action, folderId, data).then(response => {

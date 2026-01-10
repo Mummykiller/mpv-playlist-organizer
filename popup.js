@@ -484,7 +484,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Update the play button based on current playback state
         if (miniPlayBtn) {
             if (isFolderActive && !isPaused) {
-                miniPlayBtn.title = "Pause Playlist";
+                miniPlayBtn.title = "Play/Pause Playlist";
                 miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
             } else {
                 miniPlayBtn.title = "Play Playlist";

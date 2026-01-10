@@ -100,6 +100,7 @@ local last_error = false
 -- Monitor start-file to ensure we don't trigger completion before anything even played
 mp.register_event("start-file", function()
     last_error = false
+    log("File started. Resetting error state.")
     if not has_started then
         log("First file started. Watch history tracking active.")
         has_started = true

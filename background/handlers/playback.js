@@ -577,7 +577,12 @@ export async function handlePlayM3U(request) {
             }
         }
 
-        return { success: true, message: `Playback initiated for playlist '${folderId}'.` };
+        const successMessage = response.already_active ? null : (response.message || `Playback initiated for playlist '${folderId}'.`);
+        return { 
+            success: true, 
+            message: successMessage,
+            playlist_items: response.playlist_items 
+        };
     } else {
         return response;
     }

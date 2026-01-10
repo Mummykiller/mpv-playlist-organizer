@@ -6,7 +6,24 @@ local MAX_ENTRIES = 100 -- Cap memory and lookup time
 local last_applied_url = nil
 
 -- Store initial global states to restore them between files
-local initial_ytdl_raw = mp.get_property("ytdl-raw-options") or ""
+local function clean_ytdl_raw(s)
+    if not s or s == "" then return "" end
+    local parts = {}
+    -- Simple comma split
+    for part in s:gmatch("([^,]+)") do
+        local trimmed = part:gsub("^%s*(.-)%s*$", "%1")
+        -- Check if this option is one we want to strip
+        local key = trimmed:match("([^=]+)=")
+        if key then key = key:lower() end
+        
+        if not (key and (key == "cookies" or key == "remote-components" or key == "js-runtimes")) then
+            table.insert(parts, trimmed)
+        end
+    end
+    return table.concat(parts, ",")
+end
+
+local initial_ytdl_raw = clean_ytdl_raw(mp.get_property("ytdl-raw-options") or "")
 local initial_ytdl_format = mp.get_property("ytdl-format") or ""
 
 -- Dedicated debug log for AdaptiveHeaders
@@ -101,30 +118,64 @@ local function merge_raw_options(old, new)
     return table.concat(final_parts, ",")
 end
 
+local function url_decode(str)
+    return str:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
+end
+
 -- Apply headers and YTDL Options just-in-time when a file starts loading
--- Priority 1 to ensure it runs before ytdl_hook (usually priority 10)
-mp.add_hook("on_load", 1, function()
+-- Priority 99 to ensure it runs BEFORE ytdl_hook (which usually runs at priority 10)
+mp.add_hook("on_load", 99, function()
     local path = mp.get_property("path")
     if not path then return end
 
     debug_log("AdaptiveHeaders: on_load for " .. path)
     
-    -- TRY 1: Direct path match
-    local opts = url_options[path]
-    
-    -- TRY 2: check if we have an original URL stored in user-data
+    local original_url = mp.get_property("user-data/original-url")
+    local opts = nil
+
+    -- TRY 0: Hot Swap Override (synchronous property set via IPC just before loadfile)
+    local hot_swap_json = mp.get_property("user-data/hot-swap-options")
+    if hot_swap_json and hot_swap_json ~= "" then
+        local ok, hot_opts = pcall(utils.parse_json, hot_swap_json)
+        if ok and hot_opts then
+            -- Verify if these options are for the current path or original-url (basic safety check)
+            local target = hot_opts.original_url or hot_opts.url
+            if target and (path:find(target, 1, true) or target:find(path, 1, true) or (original_url and (original_url:find(target, 1, true) or target:find(original_url, 1, true)))) then
+                debug_log("AdaptiveHeaders: Found Hot Swap options in user-data. Using them.")
+                opts = hot_opts
+                -- Register them in the cache for future navigation (e.g. going back to this item)
+                if not url_options[path] then table.insert(url_history, path) end
+                url_options[path] = opts
+                -- Clear the property so it doesn't apply to the NEXT file in the playlist
+                mp.set_property("user-data/hot-swap-options", "")
+            end
+        end
+    end
+
+    -- TRY 1: Direct path match (if not already found via Hot Swap)
     if not opts then
-        local original_url = mp.get_property("user-data/original-url")
-        if original_url and url_options[original_url] then
-            debug_log("AdaptiveHeaders: Using options from original-url: " .. original_url)
-            opts = url_options[original_url]
+        opts = url_options[path]
+    end
+
+    -- TRY 1.5: Decoded path match (fixes issues where MPV encodes spaces/special chars)
+    if not opts then
+        local decoded_path = url_decode(path)
+        if decoded_path ~= path then
+             debug_log("AdaptiveHeaders: Trying decoded path: " .. decoded_path)
+             opts = url_options[decoded_path]
         end
     end
     
-    -- TRY 3: Fuzzy match
+    -- TRY 2: check if we have an original URL stored in user-data
+    if not opts and original_url and url_options[original_url] then
+        debug_log("AdaptiveHeaders: Using options from original-url: " .. original_url)
+        opts = url_options[original_url]
+    end
+    
+    -- TRY 3: Fuzzy match (more reliable fallback)
     if not opts then
         for k, v in pairs(url_options) do
-            if path:find(k, 1, true) or k:find(path, 1, true) then
+            if path:find(k, 1, true) or k:find(path, 1, true) or (original_url and (original_url:find(k, 1, true) or k:find(original_url, 1, true))) then
                 debug_log("AdaptiveHeaders: Fuzzy match found for '" .. k .. "'")
                 opts = v
                 break
@@ -146,10 +197,12 @@ mp.add_hook("on_load", 1, function()
     -- This prevents wiping command-line headers (from LauncherService) before IPC can provide enriched ones.
     if opts or last_applied_url ~= nil then
         debug_log("AdaptiveHeaders: Resetting dynamic properties.")
-        -- We only reset the generic fields; user-agent and referrer are typically
-        -- set by the specific properties and will be overwritten if needed.
+        -- We reset everything to ensure a clean state for the next file.
+        -- Use standard defaults if possible, or empty strings.
         mp.set_property("http-header-fields", "")
         mp.set_property("cookies-file", "")
+        mp.set_property("user-agent", "libmpv") -- Default MPV UA
+        mp.set_property("referrer", "")
         mp.set_property("ytdl-raw-options", initial_ytdl_raw)
         mp.set_property("ytdl-format", initial_ytdl_format)
     end
@@ -162,16 +215,16 @@ mp.add_hook("on_load", 1, function()
             local header_list = {}
             for k, v in pairs(opts.headers) do
                 local k_low = k:lower()
-                -- Apply UA and Referer to their dedicated properties for better compatibility
+                -- 1. Apply UA and Referer to dedicated properties
                 if k_low == "user-agent" then
                     mp.set_property("user-agent", v)
                 elseif k_low == "referer" then
                     mp.set_property("referrer", v)
-                else
-                    -- Sanitize other headers for the comma-separated string
-                    local clean_v = v:gsub(",", ""):gsub("[\r\n]", "")
-                    table.insert(header_list, k .. ": " .. clean_v)
                 end
+                
+                -- 2. ALSO include them in http-header-fields for broader compatibility (ffmpeg)
+                local clean_v = v:gsub(",", ""):gsub("[\r\n]", "")
+                table.insert(header_list, k .. ": " .. clean_v)
             end
             if #header_list > 0 then
                 local header_str = table.concat(header_list, ",")
