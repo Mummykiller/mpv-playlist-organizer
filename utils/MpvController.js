@@ -80,8 +80,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     this.bridge.send('confirm_clear_playlist', null, { confirmed, folderId: req.folderId });
                 },
                 'scrape_and_get_details': (req, send) => {
-                    const urlToScrape = this.state.state.detectedUrl || window.location.href;
-                    send(this.pageScraper.scrapePageDetails(urlToScrape));
+                    const detectedUrl = this.state.state.detectedUrl;
+                    if (detectedUrl) {
+                        send(this.pageScraper.scrapePageDetails(detectedUrl));
+                    } else {
+                        send({ url: null, title: document.title });
+                    }
                 },
                 'set_minimized_state': (req, send) => { this.setMinimizedState(req.minimized); send({ success: true }); },
                 'get_details_for_last_right_click': (req, send) => this._handleRightClickScrape(send),
@@ -150,7 +154,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
             if (this.isTearingDown) return;
             const action = request.action || (request.foldersChanged ? 'foldersChanged' : null);
             const handler = this.actionMap[action];
-            if (handler) return handler(request, sendResponse);
+            
+            if (handler) {
+                const result = handler(request, sendResponse);
+                // If the handler returns a Promise (indicating async work), return true to keep the channel open.
+                if (result instanceof Promise) {
+                    return true;
+                }
+                return result; // For sync handlers, return their result (though usually void)
+            }
         }
 
         teardown() {
@@ -772,10 +784,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                                   await this.showPageLevelConfirmation("Are you sure you want to close MPV?");
                 if (confirmed) this.sendCommandToBackground('close_mpv', fid);
             });
-            root.getElementById('btn-add')?.addEventListener('click', () => {
+            root.getElementById('btn-add')?.addEventListener('click', async () => {
                 const fid = getFolderId();
                 if (fid && this.state.state.detectedUrl) {
-                    this.sendCommandToBackground('add', fid, { data: this.pageScraper.scrapePageDetails(this.state.state.detectedUrl) });
+                    const result = await this.bridge.send('add', fid, { data: this.pageScraper.scrapePageDetails(this.state.state.detectedUrl) });
+                    if (result?.success) this.refreshPlaylist();
                 }
             });
             root.getElementById('btn-clear')?.addEventListener('click', async () => {
@@ -791,10 +804,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 const fid = root.getElementById('compact-folder-select')?.value;
                 if (fid) this.sendCommandToBackground('play', fid);
             });
-            root.getElementById('btn-compact-add')?.addEventListener('click', () => {
+            root.getElementById('btn-compact-add')?.addEventListener('click', async () => {
                 const fid = root.getElementById('compact-folder-select')?.value;
                 if (fid && this.state.state.detectedUrl) {
-                    this.sendCommandToBackground('add', fid, { data: this.pageScraper.scrapePageDetails(this.state.state.detectedUrl) });
+                    const result = await this.bridge.send('add', fid, { data: this.pageScraper.scrapePageDetails(this.state.state.detectedUrl) });
+                    if (result?.success) this.refreshPlaylist();
                 }
             });
             root.getElementById('btn-compact-clear')?.addEventListener('click', async () => {
@@ -829,15 +843,47 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
             // --- Minimized Stub Events ---
             minRoot?.getElementById('m3u8-minimized-stub')?.addEventListener('click', async (e) => {
-                const stub = minRoot.getElementById('m3u8-minimized-stub');
-                if (stub?.classList.contains('stream-present') && e.button === 0) {
-                    const response = await this.bridge.send('get_last_folder_id');
-                    if (response?.success && response.folderId) {
-                        this.sendCommandToBackground('add', response.folderId, { 
-                            data: this.pageScraper.scrapePageDetails(this.state.state.detectedUrl) 
+                const stub = e.currentTarget;
+                const isStreamPresent = stub?.classList.contains('stream-present');
+                const isAlreadyInPlaylist = stub?.classList.contains('url-in-playlist');
+                
+                console.log("[Stub Click]", { isStreamPresent, isAlreadyInPlaylist, button: e.button });
+
+                if (isStreamPresent && !isAlreadyInPlaylist && e.button === 0) {
+                    const hostname = window.location.hostname;
+                    const isYouTube = hostname.includes('youtube.com') && window.location.pathname.includes('/watch');
+                    const urlToUse = this.state.state.detectedUrl || (isYouTube ? window.location.href : null);
+
+                    console.log("[Stub Click] Attempting to add:", urlToUse);
+
+                    if (!urlToUse) {
+                        this.setMinimizedState(false);
+                        return;
+                    }
+
+                    let targetFolderId = getFolderId();
+                    
+                    if (!targetFolderId) {
+                        const response = await this.bridge.send('get_last_folder_id');
+                        if (response?.success && response.folderId) {
+                            targetFolderId = response.folderId;
+                        }
+                    }
+
+                    console.log("[Stub Click] Target folder:", targetFolderId);
+                    
+                    if (targetFolderId) {
+                        const result = await this.bridge.send('add', targetFolderId, { 
+                            data: this.pageScraper.scrapePageDetails(urlToUse) 
                         });
+                        this.addLogEntry({ text: `[Content]: Adding detected stream via minimized stub...`, type: 'info' });
+                        if (result?.success) this.refreshPlaylist();
+                    } else {
+                        console.warn("[Stub Click] Could not determine target folder.");
+                        this.setMinimizedState(false);
                     }
                 } else {
+                    console.log("[Stub Click] Logic falling through to setMinimizedState(false)");
                     this.setMinimizedState(false);
                 }
             });
@@ -895,9 +941,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
             
             const addBtn = this.ui.shadowRoot.getElementById('btn-add');
             const compactAddBtn = this.ui.shadowRoot.getElementById('btn-compact-add');
+            // Ensure we are looking inside the shadowRoot of the minimizedHost
             const minimizedStub = this.ui.minimizedHost?.shadowRoot?.getElementById('m3u8-minimized-stub');
             
-            const url = this.state.state.detectedUrl;
+            const hostname = window.location.hostname;
+            const isYouTube = hostname.includes('youtube.com') && window.location.pathname.includes('/watch');
+            const url = this.state.state.detectedUrl || (isYouTube ? window.location.href : null);
 
             // Reset button states
             [addBtn, compactAddBtn, minimizedStub].forEach(btn => {
@@ -908,6 +957,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 this.updateStatusBanner('No stream/playlist detected', false);
                 if (minimizedStub) {
                     minimizedStub.title = 'Left-click: Open Controller\nRight-click: Drag to move';
+                    minimizedStub.classList.remove('stream-present', 'url-in-playlist');
                 }
                 [addBtn, compactAddBtn].forEach(btn => {
                     if (btn) {
@@ -916,37 +966,33 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     }
                 });
             } else {
-                this.updateStatusBanner('Stream/video detected', true);
+                this.updateStatusBanner(isYouTube ? 'YouTube Video detected' : 'Stream/video detected', true);
 
                 const playlist = this.playlistUI?.currentPlaylist || [];
                 const isUrlInPlaylist = playlist.some(item => item.url === url);
 
+                const targets = [addBtn, compactAddBtn, minimizedStub];
+
                 if (isUrlInPlaylist) {
-                    [addBtn, compactAddBtn, minimizedStub].forEach(btn => {
-                        btn?.classList.add('url-in-playlist');
-                        if (btn) {
-                            if (btn === minimizedStub) {
-                                btn.title = 'URL is already in playlist\nLeft-click: Open Controller\nRight-click: Drag to move';
-                            } else {
-                                btn.title = 'URL is already in this playlist';
-                            }
-                        }
+                    targets.forEach(btn => {
+                        if (!btn) return;
+                        btn.classList.add('url-in-playlist');
+                        btn.title = btn === minimizedStub 
+                            ? 'URL is already in playlist\nLeft-click: Open Controller\nRight-click: Drag to move'
+                            : 'URL is already in this playlist';
                     });
                 } else {
-                    [addBtn, compactAddBtn, minimizedStub].forEach(btn => {
-                        btn?.classList.add('stream-present');
-                        if (btn) {
-                            if (btn === minimizedStub) {
-                                btn.title = 'Stream Detected!\nLeft-click: Add to Playlist\nRight-click: Drag to move';
-                            } else {
-                                btn.title = 'Click to add URL to playlist';
-                            }
-                        }
+                    targets.forEach(btn => {
+                        if (!btn) return;
+                        btn.classList.add('stream-present');
+                        btn.title = btn === minimizedStub
+                            ? 'Stream Detected!\nLeft-click: Add to Playlist\nRight-click: Drag to move'
+                            : 'Click to add URL to playlist';
                     });
                 }
                 
                 [addBtn, compactAddBtn].forEach(btn => {
-                    if (btn) btn.disabled = isUrlInPlaylist;
+                    if (btn) btn.disabled = false;
                 });
             }
         }

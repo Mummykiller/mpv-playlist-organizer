@@ -16,18 +16,20 @@ const scrapingInProgress = new Set();
 async function addUrlToFolder(folderId, url, title, originalTab = null, sender = null) {
     try {
         const sanitizedUrl = sanitizeString(url);
-        // Normalized URL is now the one we store and use for everything
         const normalizedUrl = normalizeYouTubeUrl(sanitizedUrl);
         const sanitizedTitle = sanitizeString(title);
 
-        const data = await storage.get();
-        const playlist = data.folders[folderId]?.playlist || [];
+        let data = await storage.get();
+        if (!data.folders[folderId]) {
+            data.folders[folderId] = { playlist: [], last_played_id: null };
+        }
+
+        const playlist = data.folders[folderId].playlist;
         const duplicateBehavior = data.settings.ui_preferences.global.duplicate_url_behavior || 'ask';
         
         const isDuplicate = playlist.some(item => normalizeYouTubeUrl(item.url) === normalizedUrl);
 
         if (isDuplicate) {
-            // ... (Duplicate check logic) ...
             if (duplicateBehavior === 'never') {
                 const logMessage = `[Background]: URL already in folder '${folderId}'. "Never Add" is on.`;
                 broadcastLog({ text: logMessage, type: 'info' });
@@ -35,61 +37,90 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
             }
             if (duplicateBehavior === 'ask') {
                 const isFromPopup = sender?.url?.startsWith('chrome-extension://');
+                let confirmed = false;
 
                 if (isFromPopup) {
-                    const response = await sendMessageAsync({
-                        action: 'show_popup_confirmation',
-                        message: `This URL is already in the playlist for "${folderId}". Add it again?`
-                    });
-                    if (!response || !response.confirmed) {
-                        const logMessage = `[Background]: Add action cancelled by user for folder '${folderId}'.`;
-                        broadcastLog({ text: logMessage, type: 'info' });
-                        return { success: true, message: logMessage };
-                    }
-                } else if (originalTab && originalTab.id) {
                     try {
-                        const response = await chrome.tabs.sendMessage(originalTab.id, {
-                            action: 'show_confirmation',
+                        const response = await sendMessageAsync({
+                            action: 'show_popup_confirmation',
                             message: `This URL is already in the playlist for "${folderId}". Add it again?`
                         });
-
-                        if (!response || !response.confirmed) {
-                            const logMessage = `[Background]: Add action cancelled by user for folder '${folderId}'.`;
-                            broadcastLog({ text: logMessage, type: 'info' });
-                            return { success: true, message: logMessage };
-                        }
+                        confirmed = !!response?.confirmed;
                     } catch (e) {
-                        const logMessage = `[Background]: Could not ask for confirmation on tab ${originalTab.id}. Adding duplicate URL to '${folderId}'. Reason: ${e.message}`;
-                        broadcastLog({ text: logMessage, type: 'info' });
+                        console.warn("[PlaylistManager] Popup confirmation failed:", e);
+                        confirmed = true;
                     }
                 } else {
-                    const logMessage = `[Background]: Duplicate URL detected for folder '${folderId}'. Adding anyway as no UI is available to ask for confirmation.`;
-                    broadcastLog({ text: logMessage, type: 'info' });
+                    // Try to find target tab for confirmation
+                    let targetTabId = originalTab?.id;
+                    if (!targetTabId) {
+                        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                        targetTabId = activeTab?.id;
+                    }
+
+                    if (targetTabId) {
+                        try {
+                            const response = await chrome.tabs.sendMessage(targetTabId, {
+                                action: 'show_confirmation',
+                                message: `This URL is already in the playlist for "${folderId}". Add it again?`
+                            });
+                            confirmed = !!response?.confirmed;
+                        } catch (e) {
+                            broadcastLog({ text: `[Background]: Could not ask for confirmation on tab ${targetTabId}. Adding duplicate.`, type: 'info' });
+                            confirmed = true;
+                        }
+                    } else {
+                        confirmed = true;
+                    }
                 }
+
+                if (!confirmed) {
+                    const logMessage = `[Background]: Add action cancelled by user for folder '${folderId}'.`;
+                    broadcastLog({ text: logMessage, type: 'info' });
+                    return { success: true, message: logMessage };
+                }
+
+                // IMPORTANT: Re-fetch data after async confirmation to avoid race conditions
+                data = await storage.get();
+                if (!data.folders[folderId]) data.folders[folderId] = { playlist: [] };
             }
         }
 
-        // Generate a stable ID for the item immediately.
+        // Generate a robust unique ID
+        const itemId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? 
+            crypto.randomUUID() : 
+            'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+
         const newItem = { 
             url: normalizedUrl, 
             title: sanitizedTitle, 
-            id: crypto.randomUUID() 
+            id: itemId,
+            settings: {} 
         };
 
+        // Add to the confirmed fresh data structure
         data.folders[folderId].playlist.push(newItem);
+        
+        // Persist to storage
         await storage.set(data);
-        debouncedSyncToNativeHostFile(true);
+        
+        // Immediate sync to native host file
+        debouncedSyncToNativeHostFile(folderId, true);
 
+        // Notify all UIs to refresh
         broadcastToTabs({ 
             action: 'render_playlist', 
             folderId: folderId, 
             playlist: data.folders[folderId].playlist, 
             last_played_id: data.folders[folderId].last_played_id,
-            isFolderActive: isFolderActive(folderId),
-            fromContextMenu: true 
+            isFolderActive: isFolderActive(folderId)
         });
 
-        // ... (Live append logic) ...
+        // Trigger live append if MPV is running
         const globalPrefs = data.settings.ui_preferences.global;
         if (globalPrefs.auto_append_on_add !== false) {
             callNativeHost({ 
@@ -100,7 +131,6 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
         }
 
         const logMessage = `[Background]: Added "${sanitizedTitle}" to folder '${folderId}'.`;
-
         broadcastLog({ text: logMessage, type: 'info' });
         return { success: true, message: logMessage };
 
@@ -113,12 +143,6 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
 
 /**
  * Centralized function to scrape details for a URL and add it to a folder.
- * This handles YouTube oEmbed, the generic stream scanner, and adding the final result.
- * @param {string} folderId The ID of the folder to add to.
- * @param {string} urlToAdd The initial URL (can be a page URL or direct video URL).
- * @param {chrome.tabs.Tab} tab The originating tab, used for confirmations and scanner focus.
- * @param {chrome.runtime.MessageSender} sender The sender of the message.
- * @param {boolean} [skipYouTubeCheck=false] - Internal flag to prevent oEmbed loops.
  */
 async function _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, skipYouTubeCheck = false) {
     const isYouTubeUrl = /youtube\.com\/(watch|playlist)/.test(urlToAdd);
@@ -126,7 +150,6 @@ async function _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, skipYouTubeChec
     if (isYouTubeUrl && !skipYouTubeCheck) {
         broadcastLog({ text: `[Background]: YouTube URL detected. Scraping title via oEmbed...`, type: 'info' });
         try {
-            // Use a simple fetch for oEmbed as it's more direct than going through the native host.
             const oEmbedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(urlToAdd)}&format=json`;
             const response = await fetch(oEmbedUrl);
             if (!response.ok) throw new Error(`oEmbed request failed: ${response.status}`);
@@ -138,20 +161,14 @@ async function _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, skipYouTubeChec
 
             return await addUrlToFolder(folderId, urlToAdd, finalTitle, tab, sender);
         } catch (e) {
-            broadcastLog({ text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Falling back to stream scanner.`, type: 'info' });
-            // If oEmbed fails, don't just give up. Fall back to the robust stream scanner
-            // which can use PageScraper.js as a final attempt to get a good title.
-            return await _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, true); // Recursive call with the flag set to true
+            broadcastLog({ text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Falling back to scanner.`, type: 'info' });
+            return await _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, true);
         }
     } else {
-        // For all other sites, use the robust stream scanner.
         broadcastLog({ text: `[Background]: Non-YouTube URL detected. Scanning for stream and title...`, type: 'info' });
         let scanResult;
         try {
-            // The findM3u8InUrl function now handles everything: opening the scanner,
-            // waiting for a stream, and scraping the title as a fallback.
             scanResult = await findM3u8InUrl(urlToAdd, tab);
-
             if (scanResult.url) {
                 return await addUrlToFolder(folderId, scanResult.url, scanResult.title, tab, sender);
             } else {
@@ -162,10 +179,8 @@ async function _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, skipYouTubeChec
         } catch (error) {
             const message = `[Background]: Scanner failed for '${urlToAdd}'. Adding original URL as fallback. Error: ${error.message}`;
             broadcastLog({ text: message, type: 'info' });
-            // Fallback: add the original page URL with a basic title.
             return await addUrlToFolder(folderId, urlToAdd, urlToAdd, tab, sender);
         } finally {
-            // Ensure the scanner window is always closed.
             if (scanResult?.scannerTab?.windowId) {
                 chrome.windows.remove(scanResult.scannerTab.windowId).catch(() => {});
             }
@@ -174,46 +189,43 @@ async function _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, skipYouTubeChec
 }
 
 export async function handleAdd(request, sender) {
-    const tabId = request.tabId || sender.tab?.id;
+    let tabId = request.tabId || sender.tab?.id;
     const folderId = request.folderId;
-    // Use the tab object from the request (sent by popup) or the sender (sent by content script)
-    const tab = request.tab || sender.tab; 
+    let tab = request.tab || sender.tab; 
 
-    // --- Loop/Spam Prevention ---
+    if (!tab && tabId) {
+        try { tab = await chrome.tabs.get(tabId); } catch (e) {}
+    }
+    if (!tab) {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        tab = activeTab;
+        tabId = tab?.id;
+    }
+
     const urlToProcess = request.data?.url || tab?.url;
     if (urlToProcess && scrapingInProgress.has(urlToProcess)) {
-        broadcastLog({ text: `[Background]: A request to add "${urlToProcess}" is already in progress. Ignoring.`, type: 'info' });
-        return { success: true, message: 'Scraping already in progress for this URL.' };
+        return { success: true, message: 'Scraping already in progress.' };
     }
 
-    if (!tabId || !folderId) {
-        return { success: false, error: 'Missing tabId or folderId for add action.' };
+    if (!folderId) {
+        return { success: false, error: 'Missing folderId for add action.' };
     }
 
-    // If the title and URL are already provided (by the efficient on-page button),
-    // add them directly without using the scanner.
-    const isYouTubePlaylist = request.data?.url && request.data.url.includes('youtube.com/playlist');
-    if (request.data?.url && request.data?.title && !isYouTubePlaylist) {
+    if (request.data?.url && request.data?.title) {
         scrapingInProgress.add(request.data.url);
-        broadcastLog({ text: `[Background]: Received pre-scraped item. Adding directly.`, type: 'info' });
         try {
             return await addUrlToFolder(folderId, request.data.url, request.data.title, tab, sender);
         } finally {
             scrapingInProgress.delete(request.data.url);
         }
     } else {
-        // Otherwise (e.g., from the popup), trigger the full scrape-and-add process
-        // using the tab's main URL. This will use the scanner.
-        // On restricted pages, tab.url might be missing.
         const urlToScan = tab?.url;
         if (!urlToScan) {
-            return { success: false, error: 'Cannot scrape this page. Use the on-page "Add" button if available, or copy-paste the URL into a folder.' };
+            return { success: false, error: 'Cannot scrape this page. URL missing.' };
         }
-
         scrapingInProgress.add(urlToScan);
         try {
-            const result = await _scrapeAndAddUrl(folderId, urlToScan, tab, sender);
-            return result;
+            return await _scrapeAndAddUrl(folderId, urlToScan, tab, sender);
         } finally {
             scrapingInProgress.delete(urlToScan);
         }
@@ -227,72 +239,57 @@ export async function handleClear(request) {
 
     data.folders[folderId].playlist = [];
     await storage.set(data);
-    try {
-        await broadcastToTabs({ 
-            action: 'render_playlist', 
-            folderId: folderId, 
-            playlist: [],
-            isFolderActive: isFolderActive(folderId)
-        });
-    } catch (e) { /* Suppress errors if no content scripts exist */ }
-        debouncedSyncToNativeHostFile(true);
+    debouncedSyncToNativeHostFile(folderId, true);
 
-        // Attempt to clear live MPV session
-        callNativeHost({
-            action: 'clear_live',
-            folderId: folderId
-        }).catch(() => {});
+    broadcastToTabs({ 
+        action: 'render_playlist', 
+        folderId: folderId, 
+        playlist: [],
+        isFolderActive: isFolderActive(folderId)
+    });
 
-        return { success: true, message: `Playlist for '${folderId}' cleared.` };
+    callNativeHost({ action: 'clear_live', folderId: folderId }).catch(() => {});
+    return { success: true, message: `Playlist for '${folderId}' cleared.` };
 }
 
 export async function handleRemoveItem(request) {
     const data = await storage.get();
-    const playlist = data.folders[request.folderId].playlist;
-    const last_played_id = data.folders[request.folderId].last_played_id;
+    const { folderId } = request;
     const indexToRemove = request.data?.index;
-    if (typeof indexToRemove === 'number' && indexToRemove >= 0 && indexToRemove < playlist.length) {
-        const itemToRemove = playlist[indexToRemove];
-        playlist.splice(indexToRemove, 1);
-        await storage.set(data);
-        broadcastToTabs({ 
-            action: 'render_playlist', 
-            folderId: request.folderId, 
-            playlist: playlist,
-            last_played_id: last_played_id,
-            isFolderActive: isFolderActive(request.folderId)
-        });
-        debouncedSyncToNativeHostFile(true);
+    
+    if (data.folders[folderId] && typeof indexToRemove === 'number') {
+        const playlist = data.folders[folderId].playlist;
+        if (indexToRemove >= 0 && indexToRemove < playlist.length) {
+            const itemToRemove = playlist[indexToRemove];
+            playlist.splice(indexToRemove, 1);
+            await storage.set(data);
+            debouncedSyncToNativeHostFile(folderId, true);
 
-        // Attempt to remove from live MPV session if running AND live removal is enabled
-        const globalPrefs = data.settings.ui_preferences.global;
-        if (globalPrefs.live_removal !== false) {
-            callNativeHost({ 
-                action: 'remove_item_live', 
-                folderId: request.folderId, 
-                item_id: itemToRemove.id 
-            }).catch(() => {});
+            broadcastToTabs({ 
+                action: 'render_playlist', 
+                folderId: folderId, 
+                playlist: playlist,
+                last_played_id: data.folders[folderId].last_played_id,
+                isFolderActive: isFolderActive(folderId)
+            });
+
+            if (data.settings.ui_preferences.global.live_removal !== false) {
+                callNativeHost({ action: 'remove_item_live', folderId, item_id: itemToRemove.id }).catch(() => {});
+            }
+            return { success: true, message: 'Item removed.' };
         }
-
-        return { success: true, message: 'Item removed.' };
     }
     return { success: false, error: 'Invalid item index.' };
 }
 
 export async function handleSetPlaylistOrder(request) {
     const { folderId, data: { order } } = request;
-    if (!folderId || !Array.isArray(order)) {
-        return { success: false, error: 'Invalid data for setting playlist order.' };
-    }
-
     const storageData = await storage.get();
-    if (!storageData.folders[folderId]) {
-        return { success: false, error: `Folder '${folderId}' not found.` };
-    }
+    if (!storageData.folders[folderId]) return { success: false };
 
     storageData.folders[folderId].playlist = order;
     await storage.set(storageData);
-    debouncedSyncToNativeHostFile(true);
+    debouncedSyncToNativeHostFile(folderId, true);
 
     broadcastToTabs({ 
         action: 'render_playlist', 
@@ -302,25 +299,15 @@ export async function handleSetPlaylistOrder(request) {
         isFolderActive: isFolderActive(folderId)
     });
 
-    // Attempt to reorder live MPV session
-    callNativeHost({
-        action: 'reorder_live',
-        folderId: folderId,
-        new_order: order
-    }).catch(() => {});
-
-    return { success: true, message: `Playlist order for '${folderId}' updated.` };
+    callNativeHost({ action: 'reorder_live', folderId, new_order: order }).catch(() => {});
+    return { success: true };
 }
 
 export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
-    if (scrapingInProgress.has(urlToAdd)) {
-        broadcastLog({ text: `[Background]: A request to add "${urlToAdd}" is already in progress. Ignoring.`, type: 'info' });
-        return { success: true, message: 'Scraping already in progress for this URL.' };
-    }
+    if (scrapingInProgress.has(urlToAdd)) return { success: true };
     scrapingInProgress.add(urlToAdd);
     try {
-        const result = await _scrapeAndAddUrl(folderId, urlToAdd, tab, null);
-        return result;
+        return await _scrapeAndAddUrl(folderId, urlToAdd, tab, null);
     } finally {
         scrapingInProgress.delete(urlToAdd);
     }
