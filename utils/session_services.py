@@ -52,6 +52,8 @@ class EnrichmentService:
             for entry in entries:
                 if not entry.get('id'):
                     entry['id'] = str(uuid.uuid4())
+                if not entry.get('original_url'):
+                    entry['original_url'] = entry.get('url')
                 entry['is_youtube'] = True
                 if 'use_ytdl_mpv' not in entry:
                     entry['use_ytdl_mpv'] = False 
@@ -59,6 +61,7 @@ class EnrichmentService:
             return processed_entries
 
         item['url'] = processed_url
+        item['original_url'] = item.get('original_url') or item.get('url')
         item['ytdl_format'] = ytdl_format_from_script # Save format preference
         
         if headers_for_mpv:
@@ -215,7 +218,10 @@ class EnrichmentService:
                 }
                 session.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options)]})
                 session.ipc_manager.send({"command": ["set_property", f"playlist/{idx}/url", target_url]})
-                if idx < len(session.playlist): session.playlist[idx] = enriched
+                
+                # Update in-place to ensure PlaylistTracker sees the changes
+                if idx < len(session.playlist): 
+                    session.playlist[idx].update(enriched)
                 
                 time.sleep(0.05)
 

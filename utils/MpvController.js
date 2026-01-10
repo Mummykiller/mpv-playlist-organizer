@@ -62,8 +62,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     
                     if (req.url) {
                         this.state.update({ detectedUrl: req.url });
+                        // Report to background so it's cached for the popup
+                        this.bridge.send('report_detected_url', null, { url: req.url });
                     } else {
                         this.state.update({ detectedUrl: null });
+                        this.bridge.send('report_detected_url', null, { url: null });
                     }
                     this.updateAddButtonState();
                 },
@@ -76,7 +79,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     const confirmed = await this.showPageLevelConfirmation(`MPV finished naturally. Clear the playlist in "${req.folderId}"?`);
                     this.bridge.send('confirm_clear_playlist', null, { confirmed, folderId: req.folderId });
                 },
-                'scrape_and_get_details': (req, send) => send(this.pageScraper.scrapePageDetails(window.location.href)),
+                'scrape_and_get_details': (req, send) => {
+                    const urlToScrape = this.state.state.detectedUrl || window.location.href;
+                    send(this.pageScraper.scrapePageDetails(urlToScrape));
+                },
                 'set_minimized_state': (req, send) => { this.setMinimizedState(req.minimized); send({ success: true }); },
                 'get_details_for_last_right_click': (req, send) => this._handleRightClickScrape(send),
                 'ytdlp_update_confirm': () => this._handleYtdlpUpdateConfirm()

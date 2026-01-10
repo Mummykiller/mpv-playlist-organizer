@@ -19,6 +19,7 @@
     --accent-danger: #ed4245;
     --accent-danger-hover: #da3739;
     --accent-success: #57F287;
+    --accent-inactive: #64748b; /* A greyish blue for inactive states */
     --accent-export: #3498db;
     --accent-export-hover: #2980b9;
     --accent-import: #1abc9c;
@@ -247,29 +248,6 @@ button:disabled {
     border-radius: var(--radius);
 }
 
-#btn-show-on-page-controller {
-    margin-top: 12px;
-    background-color: var(--accent-success);
-    color: var(--bg-primary);
-    flex: initial; /* Override flex: 1 from .secondary-action class */
-}
-#btn-show-on-page-controller:hover {
-    background-color: #45a062;
-    box-shadow: 0 4px 12px rgba(87, 242, 135, 0.3);
-    transform: translateY(-2px); /* Lift effect */
-}
-
-#btn-hide-on-page-controller {
-    margin-top: 16px;
-    background-color: var(--accent-primary);
-    flex: initial;
-}
-#btn-hide-on-page-controller:hover {
-    background-color: var(--accent-primary-hover);
-    box-shadow: 0 4px 12px rgba(88, 101, 242, 0.4);
-    transform: translateY(-2px);
-}
-
 #status-message {
     font-size: 13px;
     text-align: center;
@@ -304,7 +282,7 @@ button:disabled {
 
 #mini-controller-actions button:hover {
     background-color: var(--surface-hover-color);
-    border-color: var(--accent-primary); /* Highlight on hover */
+    border-color: var(--accent-inactive); /* Neutral highlight on hover */
 }
 
 #mini-controller-actions button:active {
@@ -315,10 +293,24 @@ button:disabled {
 /* Specific colors for key actions */
 /* Play button matches the main UI's primary action color */
 #mini-controller-actions #btn-mini-play {
-    background-color: var(--accent-primary);
+    background-color: var(--accent-inactive);
 }
 #mini-controller-actions #btn-mini-play:hover {
-    background-color: var(--accent-primary-hover);
+    background-color: #475569;
+    border-color: var(--accent-inactive);
+    box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6); /* Vibrant blue halo */
+}
+
+/* State for when MPV is actually active (playing) */
+#mini-controller-actions #btn-mini-play.btn-playing {
+    background-color: var(--accent-primary) !important;
+    border-color: var(--accent-primary) !important;
+    box-shadow: 0 0 8px 0px var(--accent-primary) !important;
+}
+
+#mini-controller-actions #btn-mini-play.btn-playing:hover {
+    background-color: var(--accent-primary-hover) !important;
+    box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6) !important; /* Vibrant blue glow */
 }
 
 /* Add button turns green when a URL is detected, providing clear feedback */
@@ -402,31 +394,21 @@ button:disabled {
     background-color: var(--accent-folder-hover) !important;
 }
 
-#btn-show-on-page-controller {
-    margin-top: 12px;
-    background: linear-gradient(135deg, var(--accent-success) 0%, #45a062 100%) !important;
-    color: #000 !important;
-    flex: initial; /* Override flex: 1 from .secondary-action class */
-    padding: 12px;
-    font-size: 15px;
-    letter-spacing: 0.5px;
-    border: 1px solid rgba(0,0,0,0.1);
-}
-#btn-show-on-page-controller:hover {
-    background: linear-gradient(135deg, #6ef79a 0%, #4db36e 100%) !important;
-    box-shadow: 0 6px 16px rgba(87, 242, 135, 0.4);
-    transform: translateY(-2px); /* Lift effect */
-}
-
+#btn-show-on-page-controller,
 #btn-hide-on-page-controller {
     margin-top: 16px;
     background: linear-gradient(135deg, var(--accent-primary) 0%, #434dbd 100%) !important;
+    color: white !important;
     flex: initial;
     padding: 12px;
     font-size: 15px;
     letter-spacing: 0.5px;
     border: 1px solid rgba(0,0,0,0.1);
+    width: 100%;
+    box-sizing: border-box;
 }
+
+#btn-show-on-page-controller:hover,
 #btn-hide-on-page-controller:hover {
     background: linear-gradient(135deg, #6975f3 0%, #4f5bda 100%) !important;
     box-shadow: 0 6px 16px rgba(88, 101, 242, 0.4);

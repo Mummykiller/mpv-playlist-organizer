@@ -9,6 +9,7 @@ sys.dont_write_bytecode = True
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
 from utils import ipc_utils
+from utils.youtube_history import mark_video_as_watched_threaded
 
 class PlaylistTracker:
     """
@@ -20,6 +21,11 @@ class PlaylistTracker:
         self.playlist = []
         self.played_item_ids = set()
         self.watched_this_session = set() # Track items already marked as watched this session
+        
+        # New: Track playback duration in the current session
+        self.current_session_duration = 0
+        self.last_time_pos = None
+        
         self.file_io = file_io
         self.ipc_path = ipc_path # Store the IPC path to create a dedicated connection
         self.send_message = send_message_func
@@ -97,15 +103,11 @@ class PlaylistTracker:
         # This is set by adaptive_headers.lua and is more reliable than 'path'.
         self.ipc_manager.send({"command": ["observe_property", 1, "user-data/id"]})
         self.ipc_manager.send({"command": ["observe_property", 2, "time-pos"]})
+        # Added: ensure we also observe path changes as a backup/trigger
+        self.ipc_manager.send({"command": ["observe_property", 3, "path"]})
 
         current_id = None
         current_time = 0
-        response = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True)
-        if response and 'data' in response:
-            current_id = response['data']
-            if current_id:
-                logging.info(f"[PY][Tracker] Initial current_id detected: {current_id}")
-                self._update_last_played(current_id)
         
         logging.info(f"[PY][Tracker] Starting event loop. Initial current_id: {current_id}")
 
@@ -147,13 +149,19 @@ class PlaylistTracker:
                                 self._update_resume_time(current_id, current_time)
                                 self.played_item_ids.add(current_id)
 
-                            # 2. Update the active item ID
+                            # 2. Update the active item ID and RESET session duration
                             current_id = new_id
+                            self.current_session_duration = 0
+                            self.last_time_pos = None
                             
                             # 3. Notify the MPV terminal that we are tracking this new video
                             self._remote_log(f"AdaptiveHeaders: Watch history tracking started (Python) for ID: {current_id}")
+                            
+                            # 4. VISIBLE OSD FEEDBACK: Notify the user on screen
+                            if self.ipc_manager and self.ipc_manager.is_connected():
+                                self.ipc_manager.send({"command": ["show-text", f"Tracking: {current_id}", 2000]})
 
-                            # 4. Immediately notify the extension to update the UI highlight
+                            # 5. Immediately notify the extension to update the UI highlight
                             logging.info(f"[PY][Tracker] Active episode changed to ID {current_id}. Notifying UI.")
                             self._update_last_played(current_id)
                     
@@ -162,10 +170,18 @@ class PlaylistTracker:
                             # Ignore negative or invalid timestamps
                             if data < 0: continue
                             
+                            # Update session duration
+                            if self.last_time_pos is not None:
+                                delta = data - self.last_time_pos
+                                # Only count positive progress (no seeks/backwards) up to 2s jump
+                                if 0 < delta < 2:
+                                    self.current_session_duration += delta
+                            
+                            self.last_time_pos = data
                             current_time = data
                             
-                            # 1. Check for mark-as-watched threshold (30s)
-                            if current_time >= 30:
+                            # 1. Check for mark-as-watched threshold (30s of SESSION playback)
+                            if self.current_session_duration >= 30:
                                 self._check_mark_watched(current_id)
 
                             # 2. Periodic save every 5 seconds, but don't let it block the loop
@@ -178,7 +194,9 @@ class PlaylistTracker:
                     
                     if current_id:
                         if reason == 'eof':
-                            # Natural finish: Reset resume time to 0
+                            # Natural finish: Mark as watched immediately (even if < 30s)
+                            self._check_mark_watched(current_id)
+                            # Reset resume time to 0
                             self.played_item_ids.add(current_id)
                             self._update_resume_time(current_id, 0)
                         elif reason == 'stop' or reason == 'quit':
@@ -268,53 +286,53 @@ class PlaylistTracker:
                     break
         
         if not target_item:
+            logging.debug(f"[PY][Tracker] Cannot mark watched: Item ID {item_id} not found in internal playlist.")
             return
 
-        if target_item.get('mark_watched') and target_item.get('cookies_file') and target_item.get('original_url'):
+        is_enabled = target_item.get('mark_watched')
+        has_cookies = target_item.get('cookies_file') is not None
+        has_url = target_item.get('original_url') is not None
+
+        if is_enabled and has_cookies and has_url:
             self.watched_this_session.add(item_id)
             
             watch_url = target_item['original_url']
             cookies = target_item['cookies_file']
+            headers = target_item.get('headers', {})
+            ua = headers.get('User-Agent')
             
-            # Run yt-dlp in a separate thread to avoid blocking the tracker
-            def mark():
-                try:
-                    import subprocess
-                    import shutil
-                    ytdlp_path = shutil.which("yt-dlp") or "yt-dlp"
-                    
-                    cmd = [
-                        ytdlp_path,
-                        "--ignore-config",
-                        "--cookies", cookies,
-                        "--mark-watched",
-                        "--simulate",
-                        "--quiet"
-                    ]
-                    
-                    # Add User-Agent if available from headers
-                    headers = target_item.get('headers', {})
-                    if headers and 'User-Agent' in headers:
-                        cmd.extend(["--user-agent", headers['User-Agent']])
-                    
-                    cmd.append(watch_url)
-                    
-                    logging.info(f"[PY][Tracker] Marking as watched: {watch_url}")
-                    logging.debug(f"[PY][Tracker] Executing command: {' '.join(cmd)}")
-                    self._remote_log(f"AdaptiveHeaders: Threshold met. Marking {watch_url} as watched via background process.")
-                    
-                    # Use subprocess.run with a timeout
-                    subprocess.run(cmd, timeout=30, capture_output=True)
-                    
-                    # Show OSD message via IPC if still connected
-                    if self.ipc_manager and self.ipc_manager.is_connected():
+            logging.info(f"[PY][Tracker] Triggering watch history update for: {watch_url}")
+            self._remote_log(f"AdaptiveHeaders: Threshold met or EOF reached. Marking {watch_url} as watched.")
+
+            def on_done(success, msg):
+                if self.ipc_manager and self.ipc_manager.is_connected():
+                    if success:
                         self.ipc_manager.send({"command": ["show-text", "YouTube: Video marked as watched", 2000]})
                         self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {watch_url}")
-                        
-                except Exception as e:
-                    logging.error(f"[PY][Tracker] Failed to mark {watch_url} as watched: {e}")
+                    else:
+                        self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched failed ({msg})", 3000]})
+                        self._remote_log(f"AdaptiveHeaders: Mark watched failed: {msg}")
 
-            threading.Thread(target=mark, daemon=True).start()
+            mark_video_as_watched_threaded(watch_url, cookies, user_agent=ua, on_done=on_done)
+        else:
+            if target_item.get('is_youtube') and is_enabled:
+                # User wanted to mark watched, but we couldn't. Inform them.
+                if not has_cookies:
+                    reason = "Missing Cookies"
+                elif not has_url:
+                    reason = "Missing URL"
+                else:
+                    reason = "Unknown"
+                
+                logging.warning(f"[PY][Tracker] Cannot mark watched ({reason}): Item ID {item_id}")
+                if self.ipc_manager and self.ipc_manager.is_connected():
+                    self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched skipped ({reason})", 3000]})
+                
+                # Prevent spamming this error for the same item in this session
+                self.watched_this_session.add(item_id)
+            
+            elif target_item.get('is_youtube'):
+                 logging.debug(f"[PY][Tracker] Skipping mark watched for {item_id}: enabled={is_enabled}, has_cookies={has_cookies}, has_url={has_url}")
 
     def _remote_log(self, message):
         """Sends a message to MPV to be printed in its terminal."""

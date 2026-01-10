@@ -149,7 +149,10 @@
         <button id="btn-show-on-page-controller" class="secondary-action">Show On-Page Controller</button>
         <div id="mini-folder-management-controls">
             <div class="control-group">
-                <input type="text" id="mini-new-folder-name" placeholder="New folder name...">
+                <div class="input-with-count" style="flex-grow: 1;">
+                    <input type="text" id="mini-new-folder-name" placeholder="New folder name..." maxlength="64">
+                    <span class="char-count" id="mini-new-folder-char-count">0/64</span>
+                </div>
                 <button id="btn-mini-create-folder">Create</button>
             </div>
             <div class="control-group" style="margin-top: 8px;">
@@ -175,7 +178,10 @@
     <!-- View 2: Folder Management (default view) -->
     <div id="folder-management-view" style="display: none;">
         <div class="control-group">
-            <input type="text" id="new-folder-name" placeholder="Create new folder...">
+            <div class="input-with-count" style="flex-grow: 1;">
+                <input type="text" id="new-folder-name" placeholder="Create new folder..." maxlength="64">
+                <span class="char-count" id="new-folder-char-count">0/64</span>
+            </div>
             <button id="btn-create-folder">Create</button>
         </div>
         <div class="control-group" style="margin-top: 12px;">

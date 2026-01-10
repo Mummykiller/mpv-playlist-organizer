@@ -33,8 +33,27 @@ export class AniListRenderer {
         if (!container) return;
         container.innerHTML = '';
         if (!releases || !releases.releases || releases.releases.length === 0) {
-            container.innerHTML = '<li>No anime episodes found releasing today.</li>';
+            container.innerHTML = '<li class="anilist-empty-message">No anime episodes found releasing today.</li>';
             return;
         }
+        const list = document.createElement('ul');
+        list.className = 'anilist-releases-list';
+        releases.releases.forEach(item => {
+            const li = document.createElement('li');
+            li.className = 'anilist-release-item';
+            li.innerHTML = `
+                <a href="https://anilist.co/anime/${item.id}" target="_blank" title="View on AniList">
+                    <img src="${item.cover_image}" alt="${item.title}" class="release-cover-image">
+                </a>
+                <div class="release-details">
+                    <div class="release-title" title="${item.title}">${item.title}</div>
+                    <div class="release-bottom-info">
+                        <div class="release-episode-info">Ep ${item.episode}</div>
+                        <div class="release-airing-time">${item.airing_at}</div>
+                    </div>
+                </div>`;
+            list.appendChild(li);
+        });
+        container.appendChild(list);
     }
 }
