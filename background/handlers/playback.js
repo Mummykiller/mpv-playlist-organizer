@@ -56,7 +56,14 @@ class PlaybackSession {
             enable_reconnect: globalPrefs.enable_reconnect ?? true,
             reconnect_delay: globalPrefs.reconnect_delay || 4,
             mpv_decoder: globalPrefs.mpv_decoder || 'auto',
-            ytdl_quality: globalPrefs.ytdl_quality || 'best'
+            ytdl_quality: globalPrefs.ytdl_quality || 'best',
+            performance_profile: globalPrefs.performance_profile || 'default',
+            enable_precise_resume: globalPrefs.enable_precise_resume ?? true,
+            ultra_scalers: globalPrefs.ultra_scalers ?? true,
+            ultra_video_sync: globalPrefs.ultra_video_sync ?? true,
+            ultra_interpolation: globalPrefs.ultra_interpolation || 'oversample',
+            ultra_deband: globalPrefs.ultra_deband ?? true,
+            ultra_fbo: globalPrefs.ultra_fbo ?? true
         }, true); // Pass shouldThrow = true
     }
 
@@ -415,7 +422,14 @@ export async function handlePlay(request) {
             enable_reconnect: globalPrefs.enable_reconnect ?? true,
             reconnect_delay: globalPrefs.reconnect_delay || 4,
             mpv_decoder: globalPrefs.mpv_decoder || 'auto',
-            ytdl_quality: globalPrefs.ytdl_quality || 'best'
+            ytdl_quality: globalPrefs.ytdl_quality || 'best',
+            performance_profile: globalPrefs.performance_profile || 'default',
+            enable_precise_resume: globalPrefs.enable_precise_resume ?? true,
+            ultra_scalers: globalPrefs.ultra_scalers ?? true,
+            ultra_video_sync: globalPrefs.ultra_video_sync ?? true,
+            ultra_interpolation: globalPrefs.ultra_interpolation || 'oversample',
+            ultra_deband: globalPrefs.ultra_deband ?? true,
+            ultra_fbo: globalPrefs.ultra_fbo ?? true
         };
 
         if (play_new_instance) {
@@ -528,9 +542,15 @@ export async function handlePlayM3U(request) {
         enable_reconnect: globalPrefs.enable_reconnect ?? true,
         reconnect_delay: globalPrefs.reconnect_delay || 4,
         mpv_decoder: globalPrefs.mpv_decoder || 'auto',
-        ytdl_quality: globalPrefs.ytdl_quality || 'best'
+        ytdl_quality: globalPrefs.ytdl_quality || 'best',
+        performance_profile: globalPrefs.performance_profile || 'default',
+        enable_precise_resume: globalPrefs.enable_precise_resume ?? true,
+        ultra_scalers: globalPrefs.ultra_scalers ?? true,
+        ultra_video_sync: globalPrefs.ultra_video_sync ?? true,
+        ultra_interpolation: globalPrefs.ultra_interpolation || 'oversample',
+        ultra_deband: globalPrefs.ultra_deband ?? true,
+        ultra_fbo: globalPrefs.ultra_fbo ?? true
     };
-
     if (play_new_instance && m3u_data.type === 'items') {
         nativePayload.playlist = m3u_data.value.map(item => item.url);
     }
