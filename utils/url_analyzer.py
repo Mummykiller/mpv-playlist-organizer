@@ -151,7 +151,8 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
             logging.warning(f"URL Analyzer Sanitization: Ignored invalid quality '{q}'")
 
     # --- Case 1: Animepahe-like URLs (VAULT_RE) ---
-    if VAULT_RE.search(url) or KWIK_RE.search(url):
+    # Broaden detection: if 'owocdn' or 'kwik.cx' is in URL, treat as Animepahe
+    if "owocdn" in url or "kwik.cx" in url or VAULT_RE.search(url) or KWIK_RE.search(url):
         # Based on stuff.py, these should NOT use yt-dlp, but require specific headers.
         # Kwik/AnimePahe are extremely sensitive to Referer and User-Agent.
         cookies_file = None

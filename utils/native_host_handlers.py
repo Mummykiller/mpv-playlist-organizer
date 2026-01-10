@@ -182,6 +182,9 @@ class HandlerManager:
         if not first_call_result["success"]:
             return first_call_result
 
+        if first_call_result.get("handled_directly"):
+            return first_call_result
+
         enriched_url_items = first_call_result["enriched_url_items"]
         enriched_item = enriched_url_items[0]
 
@@ -660,6 +663,16 @@ class HandlerManager:
         if not m3u_data or 'type' not in m3u_data or 'value' not in m3u_data:
             return {"success": False, "error": "Missing or malformed 'm3u_data' for play_m3u action."}
 
+        # --- OPTIMIZATION: Quick toggle for already active session ---
+        # If this is a simple folder play request (likely from the big Play button)
+        # and the session is already alive for this folder, toggle IMMEDIATELY.
+        is_simple_play = m3u_data.get('type') == 'items' and not message.get('play_new_instance')
+        if is_simple_play and self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id:
+            if self.mpv_session.ipc_manager:
+                logging.info(f"Fast Toggle: Toggling pause for folder '{folder_id}'")
+                self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
+                return {"success": True, "already_active": True}
+
         m3u_source_value = m3u_data['value']
         m3u_type = m3u_data['type']
 
@@ -743,7 +756,7 @@ class HandlerManager:
                     if self.mpv_session.ipc_manager:
                         logging.info("Linked Playlist: No new items found. Toggling pause state.")
                         self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
-                    return {"success": True, "message": "Playlist is already active. Toggled play/pause."}
+                    return {"success": True, "already_active": True}
 
             # --- ALWAYS write the M3U file for debugging/logging as requested ---
             if not self.temp_m3u_file_for_server:

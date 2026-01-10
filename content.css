@@ -1125,13 +1125,13 @@ button.btn-playing {
 
 /* This is the style for the playlist item number (the counter). */
 .play-button-count {
-    font-size: 13px;   /* The size of the number's font. */
-    font-weight: 800;  /* Very bold number */
+    font-size: 15px;   /* The size of the number's font. */
+    font-weight: 550;  /* Very bold number */
     color: white;
     line-height: 1;
     /* Absolute positioning to place it on its own layer. */
     position: absolute;
-    top: 50%; 
+    top: 52%;
     left: 35%;
     transform: translate(-50%, -50%); /* Center the number on the left side */
     z-index: 2; /* Ensure the number is on top of any overlapping parts */

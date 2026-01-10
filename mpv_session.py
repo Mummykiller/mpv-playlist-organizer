@@ -397,8 +397,12 @@ class MpvSessionManager:
         m3u_lines = ["#EXTM3U"]
         for item in items:
             safe_title = sanitize_url(item.get('title', item['url']))
+            url_to_use = item['url']
+            if item.get('is_youtube') and item.get('original_url'):
+                url_to_use = item['original_url']
+            
             m3u_lines.append(f"#EXTINF:-1,{safe_title}")
-            m3u_lines.append(sanitize_url(item['url']))
+            m3u_lines.append(sanitize_url(url_to_use))
         return "\n".join(m3u_lines)
 
     def start(self, url_items_or_m3u, folder_id, settings, file_io, **kwargs):
@@ -407,6 +411,15 @@ class MpvSessionManager:
         
         if not _url_items_list:
             return {"success": False, "error": "No URL items provided or parsed."}
+
+        # Calculate Smart Resume Index EARLY
+        playlist_start_index = 0
+        if settings.get("enable_smart_resume", True):
+            last_id = file_io.get_all_folders_from_file().get(folder_id, {}).get("last_played_id")
+            for idx, item in enumerate(_url_items_list):
+                if item.get('id') == last_id:
+                    playlist_start_index = idx
+                    break
 
         # Handle Enrichment for Raw Inputs
         if input_was_raw:
@@ -424,25 +437,76 @@ class MpvSessionManager:
                     "message": "Enriched content generated."
                 }
             else:
-                first_enriched = self.enricher.enrich_single_item(_url_items_list[0], folder_id, self.session_cookies, self.sync_lock, settings=settings)
-                _url_items_list = first_enriched + _url_items_list[1:]
+                # Standard Flow: Enrich only the STARTING item immediately
+                # This ensures the item we actually launch with has headers/cookies
+                logging.info(f"Enriching start item at index {playlist_start_index} for immediate launch.")
+                start_item_enriched = self.enricher.enrich_single_item(_url_items_list[playlist_start_index], folder_id, self.session_cookies, self.sync_lock, settings=settings)
+                
+                # Replace the raw item with the enriched one in the list
+                # Note: enrich_single_item returns a list (usually of length 1)
+                if start_item_enriched:
+                    _url_items_list[playlist_start_index] = start_item_enriched[0]
 
         with self.sync_lock:
-            # Smart Resume
-            playlist_start_index = 0
-            if settings.get("enable_smart_resume", True):
-                last_id = file_io.get_all_folders_from_file().get(folder_id, {}).get("last_played_id")
-                for idx, item in enumerate(_url_items_list):
-                    if item.get('id') == last_id:
-                        playlist_start_index = idx
-                        break
-
             launch_item = _url_items_list[playlist_start_index]
 
             if self.pid:
                 if not ipc_utils.is_process_alive(self.pid, self.ipc_path):
                     self.clear() 
                 elif folder_id == self.owner_folder_id: 
+                    # --- HOT SWAP LOGIC ---
+                    # If we are asked to play a SINGLE item in the CURRENT folder, we assume it's a direct switch request.
+                    if len(_url_items_list) == 1 and self.ipc_manager and self.ipc_manager.is_connected():
+                        logging.info(f"Hot Swap: Switching active session to new item: {launch_item.get('title')}")
+                        
+                        target_url = sanitize_url(launch_item['url'])
+                        # For YouTube, we MUST use the original URL to trigger MPV's internal ytdl-hook correctly
+                        if launch_item.get('is_youtube') and launch_item.get('original_url'):
+                            target_url = sanitize_url(launch_item['original_url'])
+                        
+                        # Prepare Lua Options (copied from LauncherService/EnrichmentService logic)
+                        local_essential_flags = "ignore-config="
+                        if settings and settings.get('ffmpeg_path'):
+                            local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
+                        
+                        final_item_raw_opts = file_io.merge_ytdlp_options(launch_item.get('ytdl_raw_options'), local_essential_flags)
+
+                        lua_options = {
+                            "id": launch_item.get('id'), 
+                            "title": launch_item.get('title'),
+                            "headers": launch_item.get('headers'),
+                            "ytdl_raw_options": final_item_raw_opts,
+                            "use_ytdl_mpv": launch_item.get('use_ytdl_mpv', False) or launch_item.get('is_youtube', False),
+                            "ytdl_format": launch_item.get('ytdl_format'),
+                            "ffmpeg_path": settings.get('ffmpeg_path'),
+                            "original_url": sanitize_url(launch_item.get('original_url') or launch_item.get('url')),
+                            "disable_http_persistent": launch_item.get('disable_http_persistent', False),
+                            "cookies_file": launch_item.get('cookies_file'),
+                            "disable_network_overrides": settings.get('disable_network_overrides', False),
+                            "http_persistence": settings.get('http_persistence', 'auto'),
+                            "enable_reconnect": settings.get('enable_reconnect', True),
+                            "reconnect_delay": settings.get('reconnect_delay', 4),
+                            "resume_time": launch_item.get('resume_time') if settings.get('enable_precise_resume') else None
+                        }
+                        
+                        self.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options)]})
+                        self.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(lua_options)]})
+                        self.ipc_manager.send({"command": ["set_property", "user-data/original-url", launch_item.get('original_url', target_url)]})
+                        self.ipc_manager.send({"command": ["loadfile", target_url, "replace"]})
+                        
+                        # If the item isn't in our internal playlist, add it so tracking works
+                        item_id = launch_item.get('id')
+                        if self.playlist and not any(i.get('id') == item_id for i in self.playlist):
+                             self.playlist.append(launch_item)
+                             if self.playlist_tracker: self.playlist_tracker.add_item(launch_item)
+
+                        return {
+                            "success": True, 
+                            "handled_directly": True,
+                            "message": "Switched to new item.",
+                            "enriched_url_items": _url_items_list
+                        }
+
                     return {
                         "success": True, 
                         "already_active": True, 

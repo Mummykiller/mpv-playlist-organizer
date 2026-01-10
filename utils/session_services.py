@@ -218,6 +218,7 @@ class EnrichmentService:
                     "resume_time": url_item.get('resume_time') if settings.get('enable_precise_resume') else None
                 }
                 session.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options)]})
+                session.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(lua_options)]})
                 session.ipc_manager.send({"command": ["set_property", f"playlist/{idx}/url", target_url]})
                 
                 # Update in-place to ensure PlaylistTracker sees the changes
@@ -373,6 +374,8 @@ class LauncherService:
             if self.session.playlist:
                 for item in self.session.playlist:
                     item_url = sanitize_url(item['url'])
+                    if item.get('is_youtube') and item.get('original_url'):
+                        item_url = sanitize_url(item['original_url'])
                     
                     # --- Centralized Flag Collection for Launch ---
                     local_essential_flags = "ignore-config="
