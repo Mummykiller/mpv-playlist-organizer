@@ -121,6 +121,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 if (response !== undefined) sendResponse(response);
             } catch (e) {
                 console.error(`[BG] Error handling action '${request.action}':`, e);
+                broadcastLog({ text: `[Background] Error in ${request.action}: ${e.message}`, type: 'error' });
                 sendResponse({ success: false, error: e.message });
             }
         })();

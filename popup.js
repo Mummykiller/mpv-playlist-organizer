@@ -333,6 +333,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
+        if (newName.length > 64) {
+            showStatus('Folder name is too long (max 64 characters).', true);
+            return;
+        }
+
         // Add validation for folder name characters by disallowing invalid filename chars.
         const invalidCharsRegex = /[\\/:*?"<>|$;&`]/;
         if (invalidCharsRegex.test(newName)) {
@@ -403,6 +408,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!newFolderId) {
             return showStatus('New folder name cannot be empty.', true);
         }
+
+        if (newFolderId.length > 64) {
+            showStatus('New folder name is too long (max 64 characters).', true);
+            return;
+        }
         if (oldFolderId === newFolderId) {
             renameFolderModal.style.display = 'none';
             return; // No change
@@ -453,7 +463,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (response?.success) {
                 // Update play button state
                 miniPlayBtn.classList.toggle('btn-playing', !!response.isFolderActive);
-                renderPlaylist(response.list, response.last_played_id, response.isFolderActive);
+                renderPlaylist(response.list, response.last_played_id, response.isFolderActive, response.isPaused);
             }
         } catch (e) {
             console.error("Failed to refresh playlist:", e);
@@ -466,10 +476,21 @@ document.addEventListener('DOMContentLoaded', async () => {
      * @param {string} lastPlayedId - The ID of the item that was last played in this folder.
      * @param {boolean} isFolderActive - Whether this folder is currently being played in MPV.
      */
-    async function renderPlaylist(playlist, lastPlayedId, isFolderActive = false) {
+    async function renderPlaylist(playlist, lastPlayedId, isFolderActive = false, isPaused = false) {
         const oldItemCount = playlistContainer.querySelectorAll('.list-item').length;
         const scrollPosition = playlistContainer.scrollTop;
         playlistContainer.innerHTML = ''; // Clear current content
+
+        // Update the play button based on current playback state
+        if (miniPlayBtn) {
+            if (isFolderActive && !isPaused) {
+                miniPlayBtn.title = "Pause Playlist";
+                miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+            } else {
+                miniPlayBtn.title = "Play Playlist";
+                miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+            }
+        }
 
         if (playlist && playlist.length > 0) {
             const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
@@ -1127,6 +1148,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             const originalIcon = miniAddBtn.innerHTML;
             miniAddBtn.innerHTML = `<svg class="spin-animation" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
 
+            let title = details?.title || activeTab.title || streamUrl;
+            if (title && title.length > 255) {
+                title = title.substring(0, 252) + '...';
+            }
+
             const payload = { 
                 action: 'add', 
                 folderId, 
@@ -1134,7 +1160,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 tab: activeTab,
                 data: { 
                     url: streamUrl, 
-                    title: details?.title || activeTab.title || streamUrl 
+                    title: title 
                 }
             };
 
@@ -1452,7 +1478,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const isMiniView = miniControllerView.style.display === 'flex';
             const currentFolderId = miniFolderSelect.value;
             if (isMiniView && currentFolderId === request.folderId) {
-                renderPlaylist(request.playlist, request.last_played_id, request.isFolderActive);
+                renderPlaylist(request.playlist, request.last_played_id, request.isFolderActive, request.isPaused);
             }
         }
 

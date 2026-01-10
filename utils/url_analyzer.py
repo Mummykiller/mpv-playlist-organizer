@@ -94,6 +94,12 @@ def get_cookies_file(browser, url, ignore_config=True):
             if result.stderr: logging.error(f"STDERR: {result.stderr.strip()}")
 
         if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+            # Secure the cookie file
+            try:
+                os.chmod(temp_path, 0o600)
+            except Exception as e:
+                logging.warning(f"Failed to set secure permissions on cookie file: {e}")
+
             _COOKIES_CACHE["path"] = temp_path
             _COOKIES_CACHE["browser"] = browser
             _COOKIES_CACHE["timestamp"] = now
@@ -114,6 +120,14 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     """
     # First line of defense inside analyzer: sanitize the URL
     url = sanitize_url(url)
+    
+    # --- Protocol Validation ---
+    if not url.startswith(('http://', 'https://', 'file://')):
+        logging.warning(f"Security: Rejected URL with unsafe protocol: {url}")
+        return {
+            "success": False,
+            "error": "Invalid URL protocol. Only http, https, and file schemes are allowed."
+        }
     
     # Use provided UA or a reasonable Chrome-like default
     effective_user_agent = user_agent_str if user_agent_str else "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -142,8 +156,8 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         # Kwik/AnimePahe are extremely sensitive to Referer and User-Agent.
         cookies_file = None
         if is_other_cookies_enabled and browser and browser != "None":
-            # Attempt to get cookies for both AnimePahe and Kwik to cover all bases
-            cookies_file = get_cookies_file(browser, url, ignore_config=is_yt_ignore_config_enabled)
+            # Use a generic public URL for cookie extraction to avoid 403 on the stream URL itself
+            cookies_file = get_cookies_file(browser, "https://kwik.cx/", ignore_config=is_yt_ignore_config_enabled)
 
         return {
             "success": True,

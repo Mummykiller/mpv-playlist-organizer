@@ -20,6 +20,8 @@ import file_io # <--- Added this import
 
 # A set of mpv flags that are considered safe to be passed from the extension.
 # This is a security measure to prevent argument injection vulnerabilities.
+ALLOWED_PROTOCOLS = ('http://', 'https://', 'file://', 'udp://', 'rtmp://', 'rtsp://', 'mms://')
+
 SAFE_MPV_FLAGS_ALLOWLIST = {
     # Playback
     '--start',
@@ -484,9 +486,23 @@ class MpvCommandBuilder:
     def with_url(self, url):
         if url:
             if isinstance(url, list):
-                self.url = [sanitize_url(u) for u in url]
+                # Filter unsafe protocols from list
+                safe_urls = []
+                for u in url:
+                    sanitized = sanitize_url(u)
+                    if sanitized.lower().startswith(ALLOWED_PROTOCOLS):
+                        safe_urls.append(sanitized)
+                    else:
+                        logging.warning(f"Security: Ignored URL with unsafe protocol: {sanitized}")
+                
+                self.url = safe_urls if safe_urls else None
             else:
-                self.url = sanitize_url(url)
+                sanitized = sanitize_url(url)
+                if sanitized.lower().startswith(ALLOWED_PROTOCOLS):
+                    self.url = sanitized
+                else:
+                    logging.warning(f"Security: Ignored URL with unsafe protocol: {sanitized}")
+                    self.url = None
         return self
 
     def with_completion_script(self, script_dir, flag_dir=None):
@@ -573,19 +589,17 @@ class MpvCommandBuilder:
     def with_headers(self, headers):
         effective_headers = self.headers_from_bypass if self.headers_from_bypass else headers
         if effective_headers:
-            header_list = []
-            for k, v in effective_headers.items():
-                # Sanitize value: remove dangerous characters and commas
-                clean_v = file_io.sanitize_string(v).replace(',', '')
-                header_list.append(f"{k}: {clean_v}")
-                
-            self.mpv_args.append(f'--http-header-fields={",".join(header_list)}')
+            # We strictly limit what goes on the command line to prevent shell/terminal crashes.
+            # User-Agent and Referer are the most critical and have dedicated flags.
+            # Other complex headers (like Accept-Language with commas) are handled via IPC
+            # and applied by the adaptive_headers.lua script.
             
-            # Sanitize specific UA/Referer if they exist
             if 'User-Agent' in effective_headers:
-                self.mpv_args.append(f'--user-agent={file_io.sanitize_string(effective_headers["User-Agent"])}')
+                ua = str(effective_headers["User-Agent"])
+                self.mpv_args.append(f'--user-agent={file_io.sanitize_string(ua)}')
             if 'Referer' in effective_headers:
-                self.mpv_args.append(f'--referrer={file_io.sanitize_string(effective_headers["Referer"])}')
+                ref = str(effective_headers["Referer"])
+                self.mpv_args.append(f'--referrer={file_io.sanitize_string(ref)}')
         return self
 
     def with_disable_http_persistent(self, disable_http_persistent):

@@ -401,6 +401,21 @@ class HandlerManager:
             "folderId": self.mpv_session.owner_folder_id if is_running else None
         }
 
+    def handle_get_playback_status(self, message):
+        is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
+        if not is_running:
+            if self.mpv_session.pid:
+                self.mpv_session.clear()
+            return {"success": True, "is_running": False, "is_paused": False}
+        
+        is_paused = self.mpv_session.get_pause_state()
+        return {
+            "success": True,
+            "is_running": True,
+            "is_paused": is_paused if is_paused is not None else False,
+            "folderId": self.mpv_session.owner_folder_id
+        }
+
     def handle_export_data(self, message):
         data = message.get('data')
         is_incremental = message.get('is_incremental', False)
@@ -718,17 +733,16 @@ class HandlerManager:
                     with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
                         f.write(enriched_m3u_content)
                 
-                # Toggle pause state since this folder is already active
-                if self.mpv_session.ipc_manager:
-                    logging.info("Linked Playlist: Toggling pause state.")
-                    self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
-
                 if new_items:
                     logging.info(f"Linked Playlist: Appending {len(new_items)} new items to active session.")
                     # Use the new batch append logic which creates a delta M3U
                     # to preserve titles and settings natively.
                     return self.mpv_session.append_batch(new_items)
                 else:
+                    # Only toggle pause if there are NO new items to add
+                    if self.mpv_session.ipc_manager:
+                        logging.info("Linked Playlist: No new items found. Toggling pause state.")
+                        self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
                     return {"success": True, "message": "Playlist is already active. Toggled play/pause."}
 
             # --- ALWAYS write the M3U file for debugging/logging as requested ---

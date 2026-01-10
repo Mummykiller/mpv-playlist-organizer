@@ -13,6 +13,26 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 import time
 import threading
 
+# --- Security Constants ---
+YTDLP_SAFE_FLAGS_ALLOWLIST = {
+    'cookies', 'cookies-from-browser', 'user-agent', 'referer', 'add-header',
+    'format', 'f', 'concurrent-fragments', 'N', 'limit-rate', 'r', 'retries', 'R',
+    'fragment-retries', 'skip-unavailable-fragments', 'keep-fragments',
+    'buffer-size', 'http-chunk-size', 'playlist-start', 'playlist-end',
+    'playlist-items', 'match-filter', 'no-playlist', 'yes-playlist', 'age-limit',
+    'min-filesize', 'max-filesize', 'date', 'datebefore', 'dateafter',
+    'min-views', 'max-views', 'min-downloads', 'max-downloads', 'min-likes',
+    'max-likes', 'min-dislikes', 'max-dislikes', 'match-title', 'reject-title',
+    'id', 'I', 'proxy', 'socket-timeout', 'source-address', 'force-ipv4', '4',
+    'force-ipv6', '6', 'geo-verification-proxy', 'geo-bypass',
+    'geo-bypass-country', 'geo-bypass-ip-block', 'flat-playlist',
+    'no-flat-playlist', 'live-from-start', 'wait-for-video', 'no-wait-for-video',
+    'ignore-config', 'no-ignore-config', 'compat-options', 'alias', 'print',
+    'no-warnings', 'dump-user-agent', 'version', 'update', 'verbose', 'v',
+    'quiet', 'q', 'no-check-certificate', 'prefer-insecure', 'ffmpeg-location',
+    'remote-components', 'js-runtimes'
+}
+
 # --- Concurrency & Locking ---
 
 class FileLock:
@@ -291,22 +311,11 @@ def get_youtube_id(url):
 def sanitize_ytdlp_options(options_str):
     """
     Sanitizes a comma-separated string of yt-dlp options (key=value).
-    Removes dangerous flags and ensures boolean flags have a trailing '='.
+    Enforces a strict whitelist of safe flags.
     Handles escaped commas correctly.
     """
     if not options_str or not isinstance(options_str, str):
         return ""
-
-    BLOCKED_KEYS = {
-        'exec', 'exec-before-download', 'exec_before_download',
-        'output', 'o', 'paths', 'P', 'batch-file', 'batch_file', 'a',
-        'config-location', 'config_location', 'load-info-json', 'load_info_json',
-        'write-description', 'write_description', 'write-info-json', 'write_info_json',
-        'write-annotations', 'write_annotations', 'write-thumbnail', 'write_thumbnail',
-        'write-subs', 'write_subs', 'write-auto-subs', 'write_auto_subs',
-        'external-downloader', 'downloader', 'external-downloader-args', 'downloader-args',
-        'python-interpreter', 'plugin-dirs', 'netrc-location', 'netrc'
-    }
 
     safe_options = []
     # Split by comma NOT preceded by backslash
@@ -323,15 +332,17 @@ def sanitize_ytdlp_options(options_str):
             value = ""
             
         clean_key = key.strip().lower()
-        if clean_key in BLOCKED_KEYS:
-            logging.warning(f"Security: Removed dangerous yt-dlp option '{key}'")
-            continue
-            
-        # Ensure boolean flags or empty values have exactly one trailing '='
-        if value == "":
-            safe_options.append(f"{clean_key}=")
+        # Remove leading dashes for lookup
+        lookup_key = clean_key.lstrip('-')
+        
+        if lookup_key in YTDLP_SAFE_FLAGS_ALLOWLIST:
+            # Ensure boolean flags or empty values have exactly one trailing '='
+            if value == "":
+                safe_options.append(f"{clean_key}=")
+            else:
+                safe_options.append(f"{clean_key}={value}")
         else:
-            safe_options.append(f"{clean_key}={value}")
+            logging.warning(f"Security: Removed unauthorized yt-dlp option '{key}' (not in whitelist)")
         
     return ",".join(safe_options)
 
@@ -357,7 +368,9 @@ def merge_ytdlp_options(*args):
             final_parts.append(f"{k}=")
         else:
             final_parts.append(f"{k}={v}")
-    return ",".join(final_parts)
+    
+    merged_str = ",".join(final_parts)
+    return sanitize_ytdlp_options(merged_str)
 
 def _migrate_legacy_data(raw_folders):
     """
