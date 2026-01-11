@@ -402,8 +402,15 @@ class LauncherService:
                         "resume_time": url_item.get('resume_time') if settings.get('enable_precise_resume') else None
                     }
                     self.session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
+                    self.session.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(lua_options)]})
 
-            self.session.ipc_manager.send({"command": ["set_property", "user-data/original-url", url_item.get('original_url', launch_url)]})
+            orig_url = url_item.get('original_url') or url_item.get('url', '')
+            self.session.ipc_manager.send({"command": ["set_property", "user-data/original-url", sanitize_url(orig_url)]})
+            self.session.ipc_manager.send({"command": ["set_property", "user-data/id", url_item.get('id', '')]})
+
+            # Explicitly force ytdl state for initial file
+            ytdl_val = "yes" if url_item.get('is_youtube') or url_item.get('use_ytdl_mpv') else "no"
+            self.session.ipc_manager.send({"command": ["set_property", "ytdl", ytdl_val]})
 
             # --- Trigger Load via IPC (After Options Set) ---
             # We use standard loadfile without options, as resume_time is now handled by adaptive_headers.lua

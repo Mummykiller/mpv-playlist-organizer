@@ -181,6 +181,30 @@ class PlaybackManager {
 export const playbackManager = new PlaybackManager();
 
 /**
+ * Robust async check for visual playback state.
+ * Returns { isActive, isPaused } and accounts for sync status (UI Reversion).
+ */
+export async function getVisualPlaybackState(folderId, playlist = null) {
+    try {
+        const statusResponse = await callNativeHost({ action: 'get_playback_status' }).catch(() => ({}));
+        let isActive = !!(statusResponse?.is_running && statusResponse.folderId === folderId);
+        const isPaused = (statusResponse?.is_paused || statusResponse?.is_idle) ?? false;
+
+        if (isActive && statusResponse.session_ids && playlist) {
+            const sessionIds = new Set(statusResponse.session_ids);
+            const hasNewItems = playlist.some(item => !sessionIds.has(item.id));
+            if (hasNewItems) {
+                isActive = false; // Revert to Play icon to signal append needed
+            }
+        }
+
+        return { isActive, isPaused };
+    } catch (e) {
+        return { isActive: false, isPaused: false };
+    }
+}
+
+/**
  * Checks if a specific folder is currently active in MPV.
  * @param {string} folderId The ID of the folder to check.
  * @returns {boolean} True if the folder is active and playing.

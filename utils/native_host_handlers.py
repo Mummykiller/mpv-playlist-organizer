@@ -412,11 +412,16 @@ class HandlerManager:
             return {"success": True, "is_running": False, "is_paused": False}
         
         is_paused = self.mpv_session.get_pause_state()
+        is_idle = self.mpv_session.get_idle_state()
+        session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
+        
         return {
             "success": True,
             "is_running": True,
             "is_paused": is_paused if is_paused is not None else False,
-            "folderId": self.mpv_session.owner_folder_id
+            "is_idle": is_idle if is_idle is not None else False,
+            "folderId": self.mpv_session.owner_folder_id,
+            "session_ids": session_ids
         }
 
     def handle_export_data(self, message):
@@ -665,13 +670,27 @@ class HandlerManager:
 
         # --- OPTIMIZATION: Quick toggle for already active session ---
         # If this is a simple folder play request (likely from the big Play button)
-        # and the session is already alive for this folder, toggle IMMEDIATELY.
+        # and the session is already alive for this folder, toggle IMMEDIATELY
+        # ONLY if there are no new items to add.
         is_simple_play = m3u_data.get('type') == 'items' and not message.get('play_new_instance')
         if is_simple_play and self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id:
-            if self.mpv_session.ipc_manager:
-                logging.info(f"Fast Toggle: Toggling pause for folder '{folder_id}'")
-                self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
-                return {"success": True, "already_active": True}
+            # Check if there are ANY new items by ID
+            new_item_found = False
+            incoming_items = m3u_data.get('value', [])
+            current_ids = {item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')}
+            
+            for item in incoming_items:
+                if item.get('id') and item.get('id') not in current_ids:
+                    new_item_found = True
+                    break
+            
+            if not new_item_found:
+                if self.mpv_session.ipc_manager:
+                    logging.info(f"Fast Toggle: No new items, toggling pause for folder '{folder_id}'")
+                    self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
+                    return {"success": True, "already_active": True}
+            else:
+                logging.info(f"Fast Toggle: New items detected in folder '{folder_id}'. Proceeding to sync.")
 
         m3u_source_value = m3u_data['value']
         m3u_type = m3u_data['type']
@@ -748,9 +767,23 @@ class HandlerManager:
                 
                 if new_items:
                     logging.info(f"Linked Playlist: Appending {len(new_items)} new items to active session.")
+                    
+                    # ENRICH NEW ITEMS: Ensure they have titles, YouTube flags, etc.
+                    from concurrent.futures import ThreadPoolExecutor
+                    processed_new_items = []
+                    with ThreadPoolExecutor(max_workers=5) as executor:
+                        def process_wrapper(item):
+                            # We use the existing _process_url_item which handles expansion and enrichment
+                            processed, _ = self._process_url_item(item, folder_id, all_folders)
+                            return processed
+                        
+                        results = list(executor.map(process_wrapper, new_items))
+                        for processed_list in results:
+                            processed_new_items.extend(processed_list)
+
                     # Use the new batch append logic which creates a delta M3U
                     # to preserve titles and settings natively.
-                    return self.mpv_session.append_batch(new_items)
+                    return self.mpv_session.append_batch(processed_new_items)
                 else:
                     # Only toggle pause if there are NO new items to add
                     if self.mpv_session.ipc_manager:

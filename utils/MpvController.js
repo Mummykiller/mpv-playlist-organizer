@@ -80,7 +80,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     this.bridge.send('confirm_clear_playlist', null, { confirmed, folderId: req.folderId });
                 },
                 'scrape_and_get_details': (req, send) => {
-                    const detectedUrl = this.state.state.detectedUrl;
+                    // Prefer the URL passed in the request (from background scanner)
+                    // otherwise fall back to local state.
+                    const detectedUrl = req.detectedUrl || this.state.state.detectedUrl;
                     if (detectedUrl) {
                         send(this.pageScraper.scrapePageDetails(detectedUrl));
                     } else {
