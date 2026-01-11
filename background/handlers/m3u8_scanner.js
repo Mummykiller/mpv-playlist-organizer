@@ -87,13 +87,10 @@ setupListeners();
 async function _createScannerWindow(url) {
     let finalUrl = url;
     try {
-        // Add a parameter to the URL to identify it as a scanner window.
-        // This prevents the content script from injecting the UI into it.
         const scannerUrl = new URL(url);
         scannerUrl.searchParams.set('mpv_playlist_scanner', 'true');
         finalUrl = scannerUrl.toString();
     } catch (e) {
-        // If URL parsing fails, use the original URL. This is a fallback.
         console.warn(`Could not parse URL to add scanner parameter: ${url}`);
     }
 
@@ -211,24 +208,35 @@ export async function findM3u8InUrl(url, originalTab) {
         });
 
         const streamPromise = _waitForM3u8Detection(scannerTab.id, timeoutInSeconds);
-        const titlePromise = chrome.tabs.sendMessage(scannerTab.id, { action: 'scrape_and_get_details' })
-            .catch(() => ({ title: url, url: url }));
-
+        
         let detectedStreamUrl = null;
         let scrapedDetails = { title: url, url: url };
         try {
-            [detectedStreamUrl, scrapedDetails] = await Promise.all([streamPromise, titlePromise]);
+            detectedStreamUrl = await streamPromise;
+            // Only scrape title AFTER the stream is detected. 
+            // This ensures the content script has the detectedUrl in its state for better cleaning.
+            scrapedDetails = await chrome.tabs.sendMessage(scannerTab.id, { 
+                action: 'scrape_and_get_details',
+                detectedUrl: detectedStreamUrl 
+            }).catch(() => ({ title: url, url: url }));
         } catch (error) {
             broadcastLog({ text: `[Scanner]: Stream detection failed or timed out: ${error.message}`, type: 'warning' });
-            // This block will be entered if the stream detection times out or the tab is closed.
-            // We only need the title, so we'll still wait for that promise to resolve.
-            scrapedDetails = await titlePromise;
+            // Fallback scrape if detection fails
+            scrapedDetails = await chrome.tabs.sendMessage(scannerTab.id, { 
+                action: 'scrape_and_get_details',
+                detectedUrl: null
+            }).catch(() => ({ title: url, url: url }));
         }
 
         const finalUrl = detectedStreamUrl; // Only use the detected stream.
         const finalTitle = scrapedDetails.title;
 
-        return { url: finalUrl, title: finalTitle, scannerTab: scannerTab, originalUrl: url };
+        return { 
+            url: finalUrl, 
+            title: finalTitle, 
+            scannerTab: finalUrl ? scannerTab : null, 
+            originalUrl: url 
+        };
 
     } finally {
         await _focusOriginalTab(originalTab);

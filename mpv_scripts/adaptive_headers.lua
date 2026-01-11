@@ -1,355 +1,197 @@
 local utils = require 'mp.utils'
 local url_options = {}
-local url_history = {} -- Track order for FIFO cleanup
-local MAX_ENTRIES = 100 -- Cap memory and lookup time
+local url_history = {}
+local MAX_ENTRIES = 100
 
-local last_applied_url = nil
-
--- Store initial global states to restore them between files
-local function clean_ytdl_raw(s)
-    if not s or s == "" then return "" end
-    local parts = {}
-    -- Simple comma split
-    for part in s:gmatch("([^,]+)") do
-        local trimmed = part:gsub("^%s*(.-)%s*$", "%1")
-        -- Check if this option is one we want to strip
-        local key = trimmed:match("([^=]+)=")
-        if key then key = key:lower() end
-        
-        if not (key and (key == "cookies" or key == "remote-components" or key == "js-runtimes")) then
-            table.insert(parts, trimmed)
-        end
-    end
-    return table.concat(parts, ",")
-end
-
-local initial_ytdl_raw = clean_ytdl_raw(mp.get_property("ytdl-raw-options") or "")
+-- Store initial global states
+local initial_ytdl_raw = mp.get_property("ytdl-raw-options") or ""
 local initial_ytdl_format = mp.get_property("ytdl-format") or ""
+local initial_ua = mp.get_property("user-agent") or "libmpv"
+local initial_referrer = mp.get_property("referrer") or ""
 
--- Dedicated debug log for AdaptiveHeaders
+-- Dedicated debug log
 local function debug_log(msg)
-    mp.msg.info(msg)
+    mp.msg.info("AdaptiveHeaders: " .. msg)
 end
 
-debug_log("AdaptiveHeaders: Script loaded and initializing...")
+-- Helper to decode percent-encoded URLs
+local function url_decode(str)
+    if not str or str == "" then return "" end
+    return str:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
+end
 
--- Allow Python to print logs to the MPV terminal for visibility
-mp.register_script_message("python_log", function(msg)
-    debug_log(msg)
-end)
-
--- Receive per-URL options directly from Python
+-- Register options from Python
 mp.register_script_message("set_url_options", function(url, options_json)
     local ok, options = pcall(utils.parse_json, options_json)
-    if ok then
-        -- FIFO Cleanup logic to prevent memory leak
-        if not url_options[url] then
+    if ok and options then
+        local d_url = url_decode(url)
+        if not url_options[url] and not (d_url ~= "" and url_options[d_url]) then
             table.insert(url_history, url)
         end
-        
         url_options[url] = options
-        debug_log("AdaptiveHeaders: Registered options for " .. url)
+        if d_url ~= "" then url_options[d_url] = options end
+        debug_log("Registered options for " .. url)
 
         if #url_history > MAX_ENTRIES then
             local oldest = table.remove(url_history, 1)
             url_options[oldest] = nil
-            debug_log("AdaptiveHeaders: Pruned oldest cache entry: " .. oldest)
         end
-    else
-        debug_log("AdaptiveHeaders: Failed to parse options JSON for " .. url)
     end
 end)
 
--- Helper to split strings (needed for merging options)
-local function split(s, sep)
-    local res = {}
-    for part in s:gmatch("([^" .. sep .. "]+)") do
-        table.insert(res, part)
-    end
-    return res
-end
-
--- Function to merge two ytdl-raw-options strings
-local function merge_raw_options(old, new)
-    if old == "" then return new end
-    if new == "" then return old end
-    
-    local merged_map = {}
-    
-    local function parse_into_map(s)
-        -- Improved split: find commas NOT preceded by a backslash
-        local last_pos = 1
-        while true do
-            local comma_pos = s:find("[^\\],", last_pos)
-            local part
-            if not comma_pos then
-                part = s:sub(last_pos)
-            else
-                part = s:sub(last_pos, comma_pos)
-            end
-            
-            if part and part ~= "" then
-                part = part:gsub("^%s*(.-)%s*$", "%1") -- trim
-                local key, val = part:match("([^=]+)=(.*)")
-                if key then
-                    merged_map[key:lower()] = val
-                else
-                    -- Boolean flag with no =
-                    merged_map[part:lower()] = ""
-                end
-            end
-            
-            if not comma_pos then break end
-            last_pos = comma_pos + 2
-        end
-    end
-    
-    parse_into_map(old)
-    parse_into_map(new)
-    
-    local final_parts = {}
-    for k, v in pairs(merged_map) do
-        if v == "" then
-            table.insert(final_parts, k .. "=")
-        else
-            table.insert(final_parts, k .. "=" .. v)
-        end
-    end
-    return table.concat(final_parts, ",")
-end
-
-local function url_decode(str)
-    return str:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
-end
-
--- Apply headers and YTDL Options just-in-time when a file starts loading
--- Priority 99 to ensure it runs BEFORE ytdl_hook (which usually runs at priority 10)
-mp.add_hook("on_load", 99, function()
+-- Main logic to apply settings
+local function apply_adaptive_settings()
     local path = mp.get_property("path")
     if not path then return end
 
-    debug_log("AdaptiveHeaders: on_load for " .. path)
+    local d_path = url_decode(path)
     
-    local original_url = mp.get_property("user-data/original-url")
+    -- 1. CAPTURE PERSISTENT PROPERTIES
+    local hot_swap_json = mp.get_property("user-data/hot-swap-options") or ""
+    local original_url = mp.get_property("user-data/original-url") or ""
+    local item_id = mp.get_property("user-data/id") or ""
+    
+    -- Clear the hot-swap manifest immediately
+    mp.set_property("user-data/hot-swap-options", "")
+
+    -- 2. ABSOLUTE RESET (Global reset for maximum authority)
+    -- Note: ytdl is NOT reset here; it's handled at the end of this function.
+    mp.set_property("user-agent", initial_ua)
+    mp.set_property("referrer", initial_referrer)
+    mp.set_property("http-header-fields", "")
+    mp.set_property("cookies-file", "")
+    mp.set_property("ytdl-raw-options", initial_ytdl_raw)
+    mp.set_property("ytdl-format", initial_ytdl_format)
+    mp.set_property("demuxer-lavf-o", "")
+    
+    -- Reset titles so they don't leak from previous files
+    mp.set_property("title", "")
+    mp.set_property("force-media-title", "")
+
     local opts = nil
 
-    -- TRY 0: Hot Swap Override (synchronous property set via IPC just before loadfile)
-    local hot_swap_json = mp.get_property("user-data/hot-swap-options")
-    if hot_swap_json and hot_swap_json ~= "" then
+    -- 3. RESOLVE OPTIONS
+    if hot_swap_json ~= "" then
         local ok, hot_opts = pcall(utils.parse_json, hot_swap_json)
         if ok and hot_opts then
-            -- Verify if these options are for the current path or original-url (basic safety check)
-            local target = hot_opts.original_url or hot_opts.url
-            if target and (path:find(target, 1, true) or target:find(path, 1, true) or (original_url and (original_url:find(target, 1, true) or target:find(original_url, 1, true)))) then
-                debug_log("AdaptiveHeaders: Found Hot Swap options in user-data. Using them.")
-                opts = hot_opts
-                -- Register them in the cache for future navigation (e.g. going back to this item)
-                if not url_options[path] then table.insert(url_history, path) end
-                url_options[path] = opts
-                -- Clear the property so it doesn't apply to the NEXT file in the playlist
-                mp.set_property("user-data/hot-swap-options", "")
-            end
+            debug_log("Using Hot Swap manifest.")
+            opts = hot_opts
         end
     end
 
-    -- TRY 1: Direct path match (if not already found via Hot Swap)
     if not opts then
-        opts = url_options[path]
-    end
-
-    -- TRY 1.5: Decoded path match (fixes issues where MPV encodes spaces/special chars)
-    if not opts then
-        local decoded_path = url_decode(path)
-        if decoded_path ~= path then
-             debug_log("AdaptiveHeaders: Trying decoded path: " .. decoded_path)
-             opts = url_options[decoded_path]
-        end
-    end
-    
-    -- TRY 2: check if we have an original URL stored in user-data
-    if not opts and original_url and url_options[original_url] then
-        debug_log("AdaptiveHeaders: Using options from original-url: " .. original_url)
-        opts = url_options[original_url]
-    end
-    
-    -- TRY 3: Fuzzy match (more reliable fallback)
-    if not opts then
-        for k, v in pairs(url_options) do
-            if path:find(k, 1, true) or k:find(path, 1, true) or (original_url and (original_url:find(k, 1, true) or k:find(original_url, 1, true))) then
-                debug_log("AdaptiveHeaders: Fuzzy match found for '" .. k .. "'")
-                opts = v
-                break
-            end
+        -- Robust matching: try original, decoded, and stripped versions
+        opts = url_options[path] or url_options[d_path] or 
+               (original_url ~= "" and url_options[original_url]) or 
+               (original_url ~= "" and url_options[url_decode(original_url)])
+        
+        if not opts and path:find("?") then
+            local stripped_path = path:gsub("%?.*$", "")
+            opts = url_options[stripped_path]
         end
     end
 
-    -- DEFAULT STATE
+    -- 4. APPLY OPTIONS
     local use_ytdl = "no"
-    local local_raw_options = ""
-    local ytdl_format = initial_ytdl_format
+    local is_yt = path:find("youtube%.com") or path:find("youtu%.be") or 
+                  original_url:find("youtube%.com") or original_url:find("youtu%.be")
+    
+    local is_pahe = path:find("owocdn%.top") or path:find("kwik%.cx") or
+                    original_url:find("owocdn%.top") or original_url:find("kwik%.cx")
 
-    -- SAFETY: If the path is a YouTube URL, we MUST use ytdl
-    if path:find("youtube%.com") or path:find("youtu%.be") then
+    if is_yt then 
         use_ytdl = "yes"
-    end
-
-    -- Only reset dynamic properties if we have new options to apply, OR if this is NOT the first load.
-    -- This prevents wiping command-line headers (from LauncherService) before IPC can provide enriched ones.
-    if opts or last_applied_url ~= nil then
-        debug_log("AdaptiveHeaders: Resetting dynamic properties.")
-        -- We reset everything to ensure a clean state for the next file.
-        -- Use standard defaults if possible, or empty strings.
-        mp.set_property("http-header-fields", "")
-        mp.set_property("cookies-file", "")
-        mp.set_property("user-agent", "libmpv") -- Default MPV UA
-        mp.set_property("referrer", "")
-        mp.set_property("ytdl-raw-options", initial_ytdl_raw)
-        mp.set_property("ytdl-format", initial_ytdl_format)
+        debug_log("YouTube detected. Defaulting ytdl=yes")
     end
 
     if opts then
-        debug_log("AdaptiveHeaders: Applying registered options.")
+        debug_log("Applying settings for " .. path)
         
-        -- Apply HTTP Headers
+        if opts.title and opts.title ~= "" then
+            debug_log("Setting title: " .. opts.title)
+            mp.set_property("title", opts.title)
+            mp.set_property("force-media-title", opts.title)
+        end
+
+        local h_list = {}
         if opts.headers then
-            local header_list = {}
             for k, v in pairs(opts.headers) do
-                local k_low = k:lower()
-                -- 1. Apply UA and Referer to dedicated properties
-                if k_low == "user-agent" then
+                local kl = k:lower()
+                if kl == "user-agent" then 
                     mp.set_property("user-agent", v)
-                elseif k_low == "referer" then
+                elseif kl == "referer" then 
                     mp.set_property("referrer", v)
                 end
                 
-                -- 2. ALSO include them in http-header-fields for broader compatibility (ffmpeg)
-                local clean_v = v:gsub(",", ""):gsub("[\r\n]", "")
-                table.insert(header_list, k .. ": " .. clean_v)
-            end
-            if #header_list > 0 then
-                local header_str = table.concat(header_list, ",")
-                debug_log("AdaptiveHeaders: Setting http-header-fields: " .. header_str)
-                mp.set_property("http-header-fields", header_str)
+                -- IMPORTANT: DO NOT escape commas when using mp.set_property_native with a table.
+                -- MPV handles the separation automatically.
+                table.insert(h_list, k .. ": " .. v)
             end
         end
 
-        -- Determine YTDL state from options
-        if opts.ytdl_raw_options then
-            local_raw_options = opts.ytdl_raw_options
+        -- If no Referer was provided but it's a known Pahe link, add the standard one
+        if is_pahe and (not opts.headers or not opts.headers["Referer"]) then
+            mp.set_property("referrer", "https://kwik.cx/")
+            table.insert(h_list, "Referer: https://kwik.cx/")
+            debug_log("Auto-added Referer for Animepahe link.")
         end
 
-        -- Always ignore local yt-dlp config for consistency
-        if not local_raw_options:find("ignore%-config") then
-            if local_raw_options == "" then local_raw_options = "ignore-config=" 
-            else local_raw_options = local_raw_options .. ",ignore-config=" end
+        if #h_list > 0 then
+            mp.set_property_native("http-header-fields", h_list)
         end
 
-        -- Inject FFmpeg location if provided
-        if opts.ffmpeg_path and opts.ffmpeg_path ~= "" then
-            if not local_raw_options:find("ffmpeg%-location") then
-                local_raw_options = local_raw_options .. ",ffmpeg-location=" .. opts.ffmpeg_path
-            end
-        end
-
-        if opts.use_ytdl_mpv == true then
+        if opts.use_ytdl_mpv == true then 
             use_ytdl = "yes"
+            debug_log("use_ytdl_mpv=true found in options. Setting ytdl=yes")
         end
-        if opts.ytdl_format then
-            ytdl_format = opts.ytdl_format
-        end
-
-        -- Networking & Reconnect
-        if not opts.disable_network_overrides then
-            local network_threads = tostring(opts.ytdlp_concurrent_fragments or 4)
-            
-            local persistence_val = "1"
-            if opts.http_persistence == "off" then
-                persistence_val = "0"
-            elseif opts.http_persistence == "on" then
-                persistence_val = "1"
-            else
-                -- 'auto': follow the site-specific recommendation (e.g. False for YouTube)
-                persistence_val = opts.disable_http_persistent and "0" or "1"
-            end
-
-            local lavf_dict = {
-                hls_segment_parallel_downloads = network_threads,
-                http_persistent = persistence_val
-            }
-
-            if opts.enable_reconnect ~= false then
-                lavf_dict.reconnect = "1"
-                lavf_dict.reconnect_at_eof = "1"
-                lavf_dict.reconnect_streamed = "1"
-                lavf_dict.reconnect_delay_max = tostring(opts.reconnect_delay or 4)
-            end
-            
-            local lavf_pairs = {}
-            for k, v in pairs(lavf_dict) do table.insert(lavf_pairs, k .. "=" .. v) end
-            mp.set_property("demuxer-lavf-o", table.concat(lavf_pairs, ","))
-        end
-
-        -- Apply cookies file
-        if opts.cookies_file and opts.cookies_file ~= "" then
-            mp.set_property("cookies-file", opts.cookies_file)
-        end
-
-        -- Store metadata
-        if opts.original_url then mp.set_property("user-data/original-url", opts.original_url) end
-        if opts.id then mp.set_property("user-data/id", opts.id) end
         
-        -- Apply Title if provided
-        if opts.title and opts.title ~= "" then
-            debug_log("AdaptiveHeaders: Applying title: " .. opts.title)
-            mp.set_property("force-media-title", opts.title)
-        else
-            -- Reset title if not provided to let MPV decide
-            mp.set_property("force-media-title", "")
-        end
-
-        -- Apply Resume Time (if provided and valid)
-        if opts.resume_time then
-            local start_time = tonumber(opts.resume_time)
-            if start_time and start_time > 0 then
-                debug_log("AdaptiveHeaders: Applying resume time: " .. start_time)
-                -- We set the 'start' option which MPV respects when opening the file
-                mp.set_property("file-local-options/start", start_time)
+        if opts.ytdl_format then mp.set_property("ytdl-format", opts.ytdl_format) end
+        
+        if opts.ytdl_raw_options then
+            local ytdl_opts = opts.ytdl_raw_options
+            if not ytdl_opts:find("ignore%-config") then
+                ytdl_opts = ytdl_opts .. (ytdl_opts == "" and "" or ",") .. "ignore-config="
             end
+            if opts.ffmpeg_path and not ytdl_opts:find("ffmpeg%-location") then
+                ytdl_opts = ytdl_opts .. "," .. "ffmpeg-location=" .. opts.ffmpeg_path
+            end
+            mp.set_property("ytdl-raw-options", ytdl_opts)
         end
-    else
-        -- Reset title if no options found
-        mp.set_property("force-media-title", "")
+
+        -- Networking overrides
+        if not opts.disable_network_overrides then
+            local persistence = "1"
+            if opts.http_persistence == "off" then persistence = "0"
+            elseif opts.http_persistence == "auto" and opts.disable_http_persistent then persistence = "0" end
+            
+            local lavf_str = "http_persistent=" .. persistence .. ",reconnect=" .. ((opts.enable_reconnect ~= false) and "1" or "0") .. ",reconnect_at_eof=1,reconnect_streamed=1,reconnect_delay_max=" .. tostring(opts.reconnect_delay or 4)
+            mp.set_property("demuxer-lavf-o", lavf_str)
+        end
+
+        if opts.cookies_file then mp.set_property("cookies-file", opts.cookies_file) end
+        if opts.title then mp.set_property("force-media-title", opts.title) end
+        if opts.resume_time and tonumber(opts.resume_time) > 0 then
+            mp.set_property("file-local-options/start", opts.resume_time)
+        end
     end
 
-    -- Apply YTDL changes
-    if mp.get_property("ytdl") ~= use_ytdl then
-        mp.set_property("ytdl", use_ytdl)
-    end
-
-    -- Final merge with global command-line options
-    local current_global_raw = mp.get_property("ytdl-raw-options") or ""
-    local final_raw = merge_raw_options(current_global_raw, local_raw_options)
+    -- Finish by setting ytdl state
+    debug_log("Final ytdl state for this file: " .. use_ytdl)
+    mp.set_property("ytdl", use_ytdl)
     
-    if final_raw ~= "" and mp.get_property("ytdl-raw-options") ~= final_raw then
-        debug_log("AdaptiveHeaders: Applying merged ytdl-raw-options=" .. final_raw)
-        mp.set_property("ytdl-raw-options", final_raw)
-    end
+    -- Restore metadata for current session visibility
+    if item_id ~= "" then mp.set_property("user-data/id", item_id) end
+    if original_url ~= "" then mp.set_property("user-data/original-url", original_url) end
+end
 
-    if ytdl_format ~= "" and mp.get_property("ytdl-format") ~= ytdl_format then
-        mp.set_property("ytdl-format", ytdl_format)
-    end
+-- Hook at priority 10 (Early, but after initial property set)
+mp.add_hook("on_load", 10, apply_adaptive_settings)
 
-    last_applied_url = path
-end)
-
--- Monitor for stream errors related to yt-dlp
+-- Error reporting
 mp.register_event("end-file", function(event)
     if event.reason == 'error' then
-        -- MPV sets 'ytdl-error' property when the hook fails
         local ytdl_err = mp.get_property("ytdl-error")
         if ytdl_err and ytdl_err ~= "" then
-            debug_log("AdaptiveHeaders: YTDL Failure detected: " .. ytdl_err)
-            -- Signal Python via a script message (digital signal)
             mp.commandv("script-message", "ytdl_error_detected", ytdl_err)
         end
     end

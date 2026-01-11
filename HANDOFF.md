@@ -25,6 +25,12 @@ This document summarizes the major improvements, resolved architectural issues, 
     *   Aligned UI validation with strict backend rules (blocking `$`, `;`, `&`, etc., in folder names).
 *   **Race Condition Shield**: Moved initialization guards to the very first line of `content.js` and added a secondary DOM-level check in `UIManager.js`, permanently preventing "Double Controller" UI duplication.
 
+### 4. Live Swapping & Header Reliability
+*   **Synchronous Hot Swap**: Python now sends a full playback manifest (`hot-swap-options`) via IPC properties just milliseconds before the `loadfile` command. This eliminates race conditions where MPV would start loading a file before the script-message options were processed.
+*   **Absolute Priority (Hooking 100)**: `adaptive_headers.lua` now runs at the highest possible priority (100). This guarantees it executes before MPV's native `ytdl-hook`, allowing it to correctly enable/disable YouTube support and apply headers for direct streams like Pahe.
+*   **Native Table Headers**: Rewrote header application to use Lua Native Tables via `mp.set_property_native`. This bypasses the fragility of comma-separated strings, ensuring complex headers (like `Accept-Language`) are transmitted without corruption.
+*   **State Isolation Master Reset**: Every new file load now triggers a total reset of network properties. This prevents "leakage" of YouTube credentials or `ytdl=yes` flags into direct stream requests, which was previously causing 403 Forbidden errors.
+
 ## 💾 Current State of Issues
 
 | Issue | Title | Status | Resolution |
@@ -39,6 +45,8 @@ This document summarizes the major improvements, resolved architectural issues, 
 | **8** | Scanner Timeout | **Fixed** | Now respects user preferences (Default 60s). |
 | **9** | Import ID Loss | **Fixed** | Prioritizes existing IDs; updated Import UI. |
 | **10**| Code Duplication | **Fixed** | Consolidated to `commUtils` Master pair. |
+| **11**| Live Swap Failure | **Fixed** | Implemented Synchronous Hot Swap Manifest. |
+| **12**| Pahe 403 Forbidden | **Fixed** | Switched to Native Tables + priority 100 hook. |
 
 ## 📈 Next Steps (Roadmap)
 The **Improvement Plan** has been created to guide the next phase of development:

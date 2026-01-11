@@ -27,9 +27,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
         createAndInjectUi() {
             if (!chrome.runtime?.id || document.getElementById('m3u8-controller-host')) return;
 
+            const isScanner = window.location.search.includes('mpv_playlist_scanner=true');
+
             this.controllerHost = document.createElement('div');
             this.controllerHost.id = 'm3u8-controller-host';
             this.controllerHost.style.display = 'none';
+            if (isScanner) {
+                this.controllerHost.style.visibility = 'hidden';
+                this.controllerHost.style.pointerEvents = 'none';
+            }
 
             const uiWrapper = document.createElement('div');
             uiWrapper.id = 'm3u8-controller';
@@ -61,6 +67,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
             this.minimizedHost = document.createElement('div');
             this.minimizedHost.id = 'm3u8-minimized-host';
             this.minimizedHost.style.display = 'none';
+            if (isScanner) {
+                this.minimizedHost.style.visibility = 'hidden';
+                this.minimizedHost.style.pointerEvents = 'none';
+            }
             const minimizedShadowRoot = this.minimizedHost.attachShadow({ mode: 'open' });
             minimizedShadowRoot.innerHTML = `
                 <link rel="stylesheet" type="text/css" href="${cssUrl}">
@@ -71,6 +81,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
             this.anilistPanelHost = document.createElement('div');
             this.anilistPanelHost.id = 'anilist-panel-host';
             this.anilistPanelHost.style.display = 'none';
+            if (isScanner) {
+                this.anilistPanelHost.style.visibility = 'hidden';
+                this.anilistPanelHost.style.pointerEvents = 'none';
+            }
             this.anilistShadowRoot = this.anilistPanelHost.attachShadow({ mode: 'open' });
             const anilistPanelWrapper = document.createElement('div');
             anilistPanelWrapper.id = 'anilist-panel-wrapper';

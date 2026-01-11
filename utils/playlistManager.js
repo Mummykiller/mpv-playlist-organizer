@@ -7,7 +7,7 @@ import { storage } from '../background/storage_instance.js';
 import { broadcastLog, broadcastToTabs } from '../background/messaging.js';
 import { debouncedSyncToNativeHostFile } from '../background/core_services.js';
 import { callNativeHost } from './nativeConnection.js';
-import { isFolderActive, getMpvPlaylistCompletedExitCode } from '../background/handlers/playback.js';
+import { isFolderActive, getVisualPlaybackState, getMpvPlaylistCompletedExitCode } from '../background/handlers/playback.js';
 import { findM3u8InUrl } from '../background/handlers/m3u8_scanner.js';
 
 // A lock to prevent multiple scraping processes for the same URL at the same time.
@@ -111,13 +111,17 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
         // Immediate sync to native host file
         debouncedSyncToNativeHostFile(folderId, true);
 
+        // Calculate visual state (async) for the broadcast
+        const { isActive, isPaused } = await getVisualPlaybackState(folderId, data.folders[folderId].playlist);
+
         // Notify all UIs to refresh
         broadcastToTabs({ 
             action: 'render_playlist', 
             folderId: folderId, 
             playlist: data.folders[folderId].playlist, 
             last_played_id: data.folders[folderId].last_played_id,
-            isFolderActive: isFolderActive(folderId)
+            isFolderActive: isActive,
+            isPaused: isPaused
         });
 
         // Trigger live append if MPV is running
@@ -319,13 +323,23 @@ export async function handleGetPlaylist(request) {
     
     // Check playback status to get accurate active/paused state
     const statusResponse = await callNativeHost({ action: 'get_playback_status' }).catch(() => ({}));
-    const isActive = !!(statusResponse?.is_running && statusResponse.folderId === request.folderId);
+    let isActive = !!(statusResponse?.is_running && statusResponse.folderId === request.folderId);
     
+    // UI REVERSION LOGIC: If we are active but there are new items in storage not in MPV,
+    // we want the play button to show "Play" (not Pause) to signal an append is needed.
+    if (isActive && statusResponse.session_ids) {
+        const sessionIds = new Set(statusResponse.session_ids);
+        const hasNewItems = folder.playlist.some(item => !sessionIds.has(item.id));
+        if (hasNewItems) {
+            isActive = false; // Revert to Play icon
+        }
+    }
+
     return { 
         success: true, 
         list: folder.playlist, 
         last_played_id: folder.last_played_id, 
         isFolderActive: isActive,
-        isPaused: statusResponse?.is_paused ?? false
+        isPaused: (statusResponse?.is_paused || statusResponse?.is_idle) ?? false
     };
 }

@@ -135,6 +135,19 @@ class MpvSessionManager:
                 pass
             return None
 
+    def get_idle_state(self):
+        """Queries the current idle state from MPV via IPC."""
+        with self.sync_lock:
+            if not self.is_alive or not self.ipc_manager:
+                return None
+            try:
+                res = self.ipc_manager.send({"command": ["get_property", "idle-active"]}, expect_response=True, timeout=0.5)
+                if res and res.get("error") == "success":
+                    return res.get("data")
+            except:
+                pass
+            return None
+
     def restore(self):
         """Checks for a persisted session file and restores state if the process is still alive."""
         with self.sync_lock:
@@ -261,7 +274,12 @@ class MpvSessionManager:
                 return {"success": False, "error": "No active session for append."}
 
             for item in items:
-                item_url = sanitize_url(item['url'])
+                # Use the same logic as _generate_m3u_content to determine the key
+                item_url = item['url']
+                if item.get('is_youtube') and item.get('original_url'):
+                    item_url = item['original_url']
+                
+                item_url = sanitize_url(item_url)
                 
                 # --- Centralized Flag Collection for Appending ---
                 local_essential_flags = "ignore-config="
@@ -396,11 +414,15 @@ class MpvSessionManager:
         """Generates M3U content from a list of items."""
         m3u_lines = ["#EXTM3U"]
         for item in items:
-            safe_title = sanitize_url(item.get('title', item['url']))
+            # Minimal sanitization for titles: only remove newlines and commas to avoid breaking M3U format.
+            raw_title = item.get('title', item['url'])
+            safe_title = str(raw_title).replace('\n', ' ').replace('\r', '').replace(',', ' ').strip()
+            
             url_to_use = item['url']
             if item.get('is_youtube') and item.get('original_url'):
                 url_to_use = item['original_url']
             
+            logging.debug(f"[PY][Session] Generating M3U entry: {safe_title} -> {url_to_use[:50]}...")
             m3u_lines.append(f"#EXTINF:-1,{safe_title}")
             m3u_lines.append(sanitize_url(url_to_use))
         return "\n".join(m3u_lines)
@@ -460,11 +482,10 @@ class MpvSessionManager:
                         logging.info(f"Hot Swap: Switching active session to new item: {launch_item.get('title')}")
                         
                         target_url = sanitize_url(launch_item['url'])
-                        # For YouTube, we MUST use the original URL to trigger MPV's internal ytdl-hook correctly
                         if launch_item.get('is_youtube') and launch_item.get('original_url'):
                             target_url = sanitize_url(launch_item['original_url'])
                         
-                        # Prepare Lua Options (copied from LauncherService/EnrichmentService logic)
+                        # Prepare Lua Options
                         local_essential_flags = "ignore-config="
                         if settings and settings.get('ffmpeg_path'):
                             local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
@@ -489,9 +510,24 @@ class MpvSessionManager:
                             "resume_time": launch_item.get('resume_time') if settings.get('enable_precise_resume') else None
                         }
                         
-                        self.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options)]})
+                        # PRE-LOAD PROPERTY SYNC (Eliminates race conditions)
+                        # Set user-data manifest for the Lua script to find immediately
                         self.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(lua_options)]})
-                        self.ipc_manager.send({"command": ["set_property", "user-data/original-url", launch_item.get('original_url', target_url)]})
+                        
+                        orig_url = launch_item.get('original_url') or launch_item.get('url', '')
+                        self.ipc_manager.send({"command": ["set_property", "user-data/original-url", sanitize_url(orig_url)]})
+                        self.ipc_manager.send({"command": ["set_property", "user-data/id", launch_item.get('id', '')]})
+                        
+                        # Explicitly set global state as a fallback layer
+                        ytdl_val = "yes" if launch_item.get('is_youtube') or launch_item.get('use_ytdl_mpv') else "no"
+                        self.ipc_manager.send({"command": ["set_property", "ytdl", ytdl_val]})
+
+                        if lua_options.get('headers'):
+                            ua = lua_options['headers'].get('User-Agent')
+                            ref = lua_options['headers'].get('Referer')
+                            if ua: self.ipc_manager.send({"command": ["set_property", "user-agent", ua]})
+                            if ref: self.ipc_manager.send({"command": ["set_property", "referrer", ref]})
+
                         self.ipc_manager.send({"command": ["loadfile", target_url, "replace"]})
                         
                         # If the item isn't in our internal playlist, add it so tracking works
