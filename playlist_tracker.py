@@ -282,6 +282,40 @@ class PlaylistTracker:
         except Exception as e:
             logging.error(f"[PY][Tracker] Failed to update resume_time: {e}")
 
+    def _update_marked_as_watched(self, item_id, status):
+        """Saves the marked_as_watched status for a specific item to the folder's playlist metadata."""
+        if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
+            return
+        
+        try:
+            # 1. Update internal playlist state
+            with self.lock:
+                for item in self.playlist:
+                    if item.get('id') == item_id:
+                        item["marked_as_watched"] = status
+                        break
+
+            # 2. Update the local folders.json file
+            all_folders = self.file_io.get_all_folders_from_file()
+            if self.folder_id in all_folders:
+                folder = all_folders[self.folder_id]
+                for item in folder.get("playlist", []):
+                    if item.get("id") == item_id:
+                        item["marked_as_watched"] = status
+                        self.file_io.write_folders_file(all_folders)
+                        logging.debug(f"[PY][Tracker] Updated marked_as_watched for item '{item_id}' to {status}.")
+                        
+                        # 3. Notify the extension
+                        self.send_message({
+                            "action": "update_item_marked_as_watched",
+                            "folderId": self.folder_id,
+                            "itemId": item_id,
+                            "markedAsWatched": status
+                        })
+                        break
+        except Exception as e:
+            logging.error(f"[PY][Tracker] Failed to update marked_as_watched: {e}")
+
     def _check_mark_watched(self, item_id):
         """Checks if the item should be marked as watched on YouTube and triggers the call if so."""
         if item_id in self.watched_this_session:
@@ -303,10 +337,11 @@ class PlaylistTracker:
             return
 
         is_enabled = target_item.get('mark_watched')
+        already_marked = target_item.get('marked_as_watched', False)
         has_cookies = target_item.get('cookies_file') is not None
         has_url = target_item.get('original_url') is not None
 
-        if is_enabled and has_cookies and has_url:
+        if is_enabled and not already_marked and has_cookies and has_url:
             self.watched_this_session.add(item_id)
             
             watch_url = target_item['original_url']
@@ -326,6 +361,7 @@ class PlaylistTracker:
                         self.ipc_manager.send({"command": ["show-text", "YouTube: Video marked as watched", 2000]})
                         self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {title}")
                         self.send_message({"log": {"text": f"[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
+                        self._update_marked_as_watched(item_id, True)
                     else:
                         self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched failed ({msg})", 3000]})
                         self._remote_log(f"AdaptiveHeaders: Mark watched failed for {title}: {msg}")
@@ -336,13 +372,14 @@ class PlaylistTracker:
             # Report why it was skipped
             reasons = []
             if not is_enabled: reasons.append("setting disabled")
+            if already_marked: reasons.append("already marked as watched")
             if not has_cookies: reasons.append("missing cookies (is 'Use Cookies' ON?)")
             if not has_url: reasons.append("missing original URL")
             
             reason_str = ", ".join(reasons)
             logging.warning(f"[PY][Tracker] Mark-as-watched skipped for {item_id}: {reason_str}")
             
-            if is_enabled: # Only bother the user with a log if they actually expected it to work
+            if is_enabled and not already_marked: # Only bother the user with a log if they actually expected it to work
                 self.send_message({"log": {"text": f"[Tracker]: Mark-as-watched skipped: {reason_str}", "type": "warning"}})
                 if self.ipc_manager and self.ipc_manager.is_connected():
                     self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched skipped ({reasons[0] if reasons else 'unknown'})", 3000]})
