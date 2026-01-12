@@ -694,14 +694,16 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
         }
 
         sendCommandToBackground(action, folderId, data = {}) {
-            // Optimistic Toggle Check
-            const isToggle = action === 'play' && this.state.state.isFolderActive;
+            // Optimistic Toggle Check: 
+            // Play/Pause should be INSTANT for better UX.
+            // We only bypass the response wait if it's a toggle (folder already active).
+            const isToggle = action === 'play' && this.state.state.isFolderActive && !data.play_new_instance;
             
             if (action === 'play' && !isToggle) {
                 this.setPlaybackLoading(true);
             }
 
-            // Fire and forget for toggles if we don't want to wait at all
+            // Fire and forget for toggles
             if (isToggle) {
                 this.bridge.send(action, folderId, data);
                 return;
@@ -715,11 +717,21 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     }
                 }
 
-                if (action === 'get_playlist' && response?.success) {
-                    this.playlistUI?.render(response.list, response.last_played_id, response.isFolderActive);
-                    this.setPlaybackActive(response.isFolderActive);
+                // UI Refresh Logic for State-Modifying Actions:
+                // If the action is known to modify the playlist, ensure we refresh our local view.
+                const stateModifyingActions = ['add', 'clear', 'remove_item', 'set_playlist_order', 'get_playlist'];
+                if (response?.success && stateModifyingActions.includes(action)) {
+                    // Prefer using the list returned in the response if available (faster)
+                    if (response.list) {
+                        this.playlistUI?.render(response.list, response.last_played_id, response.isFolderActive);
+                        this.setPlaybackActive(response.isFolderActive);
+                    } else {
+                        // Fallback to a full refresh if the response is generic
+                        this.refreshPlaylist();
+                    }
                 }
-            }).catch(() => {
+            }).catch((err) => {
+                console.error(`[Controller] Command '${action}' failed:`, err);
                 if (action === 'play') this.setPlaybackLoading(false);
             });
         }

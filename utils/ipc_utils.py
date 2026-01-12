@@ -207,7 +207,7 @@ class IPCSocketManager:
             else:
                 req_id = command_dict["request_id"]
 
-            ipc_logger.info(f"IPC SEND: {json.dumps(command_dict)}")
+            logging.info(f"[PY][IPC] SEND: {json.dumps(command_dict)}")
             command_str = json.dumps(command_dict) + '\n'
 
             try:

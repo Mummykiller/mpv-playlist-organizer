@@ -1,5 +1,7 @@
 local utils = require 'mp.utils'
 local url_options = {}
+local indexed_options = {}
+local playlist_id_options = {}
 local url_history = {}
 local MAX_ENTRIES = 100
 
@@ -20,8 +22,24 @@ local function url_decode(str)
     return str:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
 end
 
+-- Promotion logic: Map index-based options to sticky MPV playlist IDs
+local function promote_indices()
+    local playlist = mp.get_property_native("playlist")
+    if not playlist then return end
+    
+    for index, options in pairs(indexed_options) do
+        -- MPV native playlist is a 1-indexed table in Lua
+        local item = playlist[index + 1]
+        if item then
+            playlist_id_options[item.id] = options
+            debug_log("Promoted index " .. index .. " to sticky ID " .. item.id)
+            indexed_options[index] = nil
+        end
+    end
+end
+
 -- Register options from Python
-mp.register_script_message("set_url_options", function(url, options_json)
+mp.register_script_message("set_url_options", function(url, options_json, index)
     local ok, options = pcall(utils.parse_json, options_json)
     if ok and options then
         local d_url = url_decode(url)
@@ -30,7 +48,13 @@ mp.register_script_message("set_url_options", function(url, options_json)
         end
         url_options[url] = options
         if d_url ~= "" then url_options[d_url] = options end
-        debug_log("Registered options for " .. url)
+        
+        if index and index ~= "" then
+            indexed_options[tonumber(index)] = options
+            promote_indices()
+        else
+            debug_log("Registered options for " .. url)
+        end
 
         if #url_history > MAX_ENTRIES then
             local oldest = table.remove(url_history, 1)
@@ -39,20 +63,29 @@ mp.register_script_message("set_url_options", function(url, options_json)
     end
 end)
 
+-- Handle logs from Python
+mp.register_script_message("python_log", function(msg)
+    mp.msg.info(msg)
+end)
+
 -- Main logic to apply settings
 local function apply_adaptive_settings()
     local path = mp.get_property("path")
     if not path then return end
 
     local d_path = url_decode(path)
+    local playlist_id = mp.get_property_number("playlist-id")
+    local pos = mp.get_property_number("playlist-pos")
     
+    -- Ensure all pending indices are promoted before lookup
+    promote_indices()
+
     -- 1. CAPTURE PERSISTENT PROPERTIES
     local hot_swap_json = mp.get_property("user-data/hot-swap-options") or ""
-    local original_url = mp.get_property("user-data/original-url") or ""
-    local item_id = mp.get_property("user-data/id") or ""
+    local captured_orig = mp.get_property("user-data/original-url") or ""
     
     -- Clear the hot-swap manifest immediately
-    mp.set_property("user-data/hot-swap-options", "")
+    mp.set_property_native("user-data/hot-swap-options", nil)
 
     -- 2. ABSOLUTE RESET (Global reset for maximum authority)
     -- Note: ytdl is NOT reset here; it's handled at the end of this function.
@@ -67,8 +100,14 @@ local function apply_adaptive_settings()
     -- Reset titles so they don't leak from previous files
     mp.set_property("title", "")
     mp.set_property("force-media-title", "")
+    
+    -- Reset metadata so it doesn't leak from previous file in natural progression
+    mp.set_property_native("user-data/id", nil)
+    mp.set_property_native("user-data/original-url", nil)
 
     local opts = nil
+    local item_id = ""
+    local original_url = ""
 
     -- 3. RESOLVE OPTIONS
     if hot_swap_json ~= "" then
@@ -80,10 +119,15 @@ local function apply_adaptive_settings()
     end
 
     if not opts then
-        -- Robust matching: try original, decoded, and stripped versions
-        opts = url_options[path] or url_options[d_path] or 
-               (original_url ~= "" and url_options[original_url]) or 
-               (original_url ~= "" and url_options[url_decode(original_url)])
+        -- Robust matching order:
+        -- 1. Sticky Playlist ID (Shuffle-proof)
+        -- 2. Current Index (Initial load / Sync)
+        -- 3. URL-based fallbacks
+        opts = (playlist_id and playlist_id_options[playlist_id]) or
+               (pos and indexed_options[pos]) or 
+               url_options[path] or url_options[d_path] or 
+               (captured_orig ~= "" and url_options[captured_orig]) or 
+               (captured_orig ~= "" and url_options[url_decode(captured_orig)])
         
         if not opts and path:find("?") then
             local stripped_path = path:gsub("%?.*$", "")
@@ -91,13 +135,22 @@ local function apply_adaptive_settings()
         end
     end
 
+    if not opts then
+        debug_log("No options found for path: " .. path)
+    end
+
     -- 4. APPLY OPTIONS
     local use_ytdl = "no"
-    local is_yt = path:find("youtube%.com") or path:find("youtu%.be") or 
-                  original_url:find("youtube%.com") or original_url:find("youtu%.be")
+    local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
     
-    local is_pahe = path:find("owocdn%.top") or path:find("kwik%.cx") or
-                    original_url:find("owocdn%.top") or original_url:find("kwik%.cx")
+    -- Try to find original_url for YT detection if path is a direct stream link
+    if opts and opts.original_url then
+        if opts.original_url:find("youtube%.com") or opts.original_url:find("youtu%.be") then
+            is_yt = true
+        end
+    end
+
+    local is_pahe = path:find("owocdn%.top") or path:find("kwik%.cx")
 
     if is_yt then 
         use_ytdl = "yes"
@@ -107,6 +160,14 @@ local function apply_adaptive_settings()
     if opts then
         debug_log("Applying settings for " .. path)
         
+        if opts.id then item_id = opts.id end
+        if opts.original_url then original_url = opts.original_url end
+
+        -- Sticky promotion if we matched by index or URL but now have a playlist ID
+        if playlist_id and not playlist_id_options[playlist_id] then
+            playlist_id_options[playlist_id] = opts
+        end
+
         if opts.title and opts.title ~= "" then
             debug_log("Setting title: " .. opts.title)
             mp.set_property("title", opts.title)
@@ -180,8 +241,8 @@ local function apply_adaptive_settings()
     mp.set_property("ytdl", use_ytdl)
     
     -- Restore metadata for current session visibility
-    if item_id ~= "" then mp.set_property("user-data/id", item_id) end
-    if original_url ~= "" then mp.set_property("user-data/original-url", original_url) end
+    if item_id ~= "" then mp.set_property_native("user-data/id", item_id) end
+    if original_url ~= "" then mp.set_property_native("user-data/original-url", original_url) end
 end
 
 -- Hook at priority 10 (Early, but after initial property set)

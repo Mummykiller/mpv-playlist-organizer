@@ -153,13 +153,22 @@ class PlaylistTracker:
                             current_id = new_id
                             self.current_session_duration = 0
                             self.last_time_pos = None
+
+                            # Try to find title for better logs/OSD
+                            display_name = current_id
+                            with self.lock:
+                                for item in self.playlist:
+                                    if item.get('id') == current_id:
+                                        display_name = item.get('title') or item.get('url')
+                                        if len(display_name) > 50: display_name = display_name[:47] + "..."
+                                        break
                             
                             # 3. Notify the MPV terminal that we are tracking this new video
-                            self._remote_log(f"AdaptiveHeaders: Watch history tracking started (Python) for ID: {current_id}")
+                            self._remote_log(f"AdaptiveHeaders: Watch history tracking started (Python) for: {display_name}")
                             
                             # 4. VISIBLE OSD FEEDBACK: Notify the user on screen
                             if self.ipc_manager and self.ipc_manager.is_connected():
-                                self.ipc_manager.send({"command": ["show-text", f"Tracking: {current_id}", 2000]})
+                                self.ipc_manager.send({"command": ["show-text", f"Tracking: {display_name}", 2000]})
 
                             # 5. Immediately notify the extension to update the UI highlight
                             logging.info(f"[PY][Tracker] Active episode changed to ID {current_id}. Notifying UI.")
@@ -289,6 +298,10 @@ class PlaylistTracker:
             logging.debug(f"[PY][Tracker] Cannot mark watched: Item ID {item_id} not found in internal playlist.")
             return
 
+        # Diagnostic: Check if this is even a YouTube video
+        if not target_item.get('is_youtube'):
+            return
+
         is_enabled = target_item.get('mark_watched')
         has_cookies = target_item.get('cookies_file') is not None
         has_url = target_item.get('original_url') is not None
@@ -300,39 +313,42 @@ class PlaylistTracker:
             cookies = target_item['cookies_file']
             headers = target_item.get('headers', {})
             ua = headers.get('User-Agent')
+            title = target_item.get('title') or watch_url
+            if len(title) > 50: title = title[:47] + "..."
             
             logging.info(f"[PY][Tracker] Triggering watch history update for: {watch_url}")
-            self._remote_log(f"AdaptiveHeaders: Threshold met or EOF reached. Marking {watch_url} as watched.")
+            self.send_message({"log": {"text": f"[Tracker]: Mark-as-watched triggered for YouTube video.", "type": "info"}})
+            self._remote_log(f"AdaptiveHeaders: Threshold met or EOF reached. Marking {title} as watched.")
 
             def on_done(success, msg):
                 if self.ipc_manager and self.ipc_manager.is_connected():
                     if success:
                         self.ipc_manager.send({"command": ["show-text", "YouTube: Video marked as watched", 2000]})
-                        self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {watch_url}")
+                        self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {title}")
+                        self.send_message({"log": {"text": f"[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
                     else:
                         self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched failed ({msg})", 3000]})
-                        self._remote_log(f"AdaptiveHeaders: Mark watched failed: {msg}")
+                        self._remote_log(f"AdaptiveHeaders: Mark watched failed for {title}: {msg}")
+                        self.send_message({"log": {"text": f"[Tracker]: Failed to mark YouTube video as watched: {msg}", "type": "error"}})
 
             mark_video_as_watched_threaded(watch_url, cookies, user_agent=ua, on_done=on_done)
         else:
-            if target_item.get('is_youtube') and is_enabled:
-                # User wanted to mark watched, but we couldn't. Inform them.
-                if not has_cookies:
-                    reason = "Missing Cookies"
-                elif not has_url:
-                    reason = "Missing URL"
-                else:
-                    reason = "Unknown"
-                
-                logging.warning(f"[PY][Tracker] Cannot mark watched ({reason}): Item ID {item_id}")
-                if self.ipc_manager and self.ipc_manager.is_connected():
-                    self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched skipped ({reason})", 3000]})
-                
-                # Prevent spamming this error for the same item in this session
-                self.watched_this_session.add(item_id)
+            # Report why it was skipped
+            reasons = []
+            if not is_enabled: reasons.append("setting disabled")
+            if not has_cookies: reasons.append("missing cookies (is 'Use Cookies' ON?)")
+            if not has_url: reasons.append("missing original URL")
             
-            elif target_item.get('is_youtube'):
-                 logging.debug(f"[PY][Tracker] Skipping mark watched for {item_id}: enabled={is_enabled}, has_cookies={has_cookies}, has_url={has_url}")
+            reason_str = ", ".join(reasons)
+            logging.warning(f"[PY][Tracker] Mark-as-watched skipped for {item_id}: {reason_str}")
+            
+            if is_enabled: # Only bother the user with a log if they actually expected it to work
+                self.send_message({"log": {"text": f"[Tracker]: Mark-as-watched skipped: {reason_str}", "type": "warning"}})
+                if self.ipc_manager and self.ipc_manager.is_connected():
+                    self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched skipped ({reasons[0] if reasons else 'unknown'})", 3000]})
+            
+            # Prevent spamming this error for the same item in this session
+            self.watched_this_session.add(item_id)
 
     def _remote_log(self, message):
         """Sends a message to MPV to be printed in its terminal."""
