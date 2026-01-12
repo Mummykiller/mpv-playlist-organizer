@@ -13,6 +13,7 @@ from utils import ipc_utils
 from utils.m3u_parser import parse_m3u
 from services import apply_bypass_script
 import services
+import file_io
 
 def sanitize_url(url):
     import file_io
@@ -148,84 +149,111 @@ class EnrichmentService:
     def handle_standard_flow_launch(self, session, url_items, start_index, folder_id, settings, file_io):
         """Handles the background restoration of playlist order and sequential metadata enrichment."""
         def task():
-            # Poll for readiness instead of hard sleep
-            start_wait = time.time()
-            while time.time() - start_wait < 10.0:
+            try:
+                # Poll for readiness instead of hard sleep
+                start_wait = time.time()
+                while time.time() - start_wait < 10.0:
+                    if not session.is_alive: return
+                    if session.ipc_manager and session.ipc_manager.is_connected():
+                        # Optional: Ping to ensure responsiveness
+                        ping = session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
+                        if ping:
+                            break
+                    time.sleep(0.2)
+                
                 if not session.is_alive: return
+                
+                history_items = url_items[:start_index]
+                future_items = url_items[start_index + 1:]
+                
+                logging.info(f"[PY][Session] Background Flow: start_index={start_index}, history={len(history_items)}, future={len(future_items)}")
+                
+                # 1. Restore Order
+                if future_items:
+                    logging.info(f"[PY][Session] Background: Appending {len(future_items)} future items.")
+                    res = session.append_batch(future_items, mode="append")
+                    logging.info(f"[PY][Session] Background: Future append result: {res}")
+                    time.sleep(0.5)
+
+                if history_items:
+                    logging.info(f"[PY][Session] Background: Appending {len(history_items)} history items.")
+                    res = session.append_batch(history_items, mode="append")
+                    logging.info(f"[PY][Session] Background: History append result: {res}")
+                    time.sleep(0.5)
+                    
+                    total_len = len(url_items)
+                    history_count = len(history_items)
+                    for i in range(history_count):
+                        source_idx = (total_len - history_count) + i
+                        session.ipc_manager.send({"command": ["playlist-move", source_idx, i]})
+                        if session.playlist and source_idx < len(session.playlist):
+                            item = session.playlist.pop(source_idx)
+                            session.playlist.insert(i, item)
+
+                if session.playlist_tracker:
+                    session.playlist_tracker.update_playlist_order(session.playlist)
+                
+                # --- REFRESH LUA INDICES AFTER MOVE ---
+                # Since we moved history items to the front, we must update Lua's index mapping
+                # so it can promote them to sticky IDs correctly when they load.
                 if session.ipc_manager and session.ipc_manager.is_connected():
-                    # Optional: Ping to ensure responsiveness
-                    ping = session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
-                    if ping:
-                        break
-                time.sleep(0.2)
-            
-            if not session.is_alive: return
-            
-            history_items = url_items[:start_index]
-            future_items = url_items[start_index + 1:]
-            
-            # 1. Restore Order
-            if future_items:
-                session.append_batch(future_items, mode="append")
-                time.sleep(0.5)
+                    essential_flags = services.get_essential_ytdlp_flags()
+                    for idx, item in enumerate(session.playlist):
+                        item_url = sanitize_url(item['url'])
+                        if item.get('is_youtube') and item.get('original_url'):
+                            item_url = sanitize_url(item['original_url'])
+                        
+                        final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), essential_flags)
+                        lua_options = {
+                            "id": item.get('id'), "title": item.get('title'),
+                            "headers": item.get('headers'), "ytdl_raw_options": final_item_raw_opts,
+                            "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
+                            "ytdl_format": item.get('ytdl_format'),
+                            "ffmpeg_path": settings.get('ffmpeg_path'),
+                            "original_url": sanitize_url(item.get('original_url') or item.get('url')),
+                            "resume_time": item.get('resume_time')
+                        }
+                        session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
 
-            if history_items:
-                session.append_batch(history_items, mode="append")
-                time.sleep(0.5)
-                
-                total_len = len(url_items)
-                history_count = len(history_items)
-                for i in range(history_count):
-                    source_idx = (total_len - history_count) + i
-                    session.ipc_manager.send({"command": ["playlist-move", source_idx, i]})
-                    if session.playlist and source_idx < len(session.playlist):
-                        item = session.playlist.pop(source_idx)
-                        session.playlist.insert(i, item)
+                # 2. Sequential Enrichment
+                for idx, item in enumerate(url_items):
+                    if idx == start_index or not session.is_alive: continue
+                    
+                    enriched = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings)[0]
+                    target_url = sanitize_url(enriched['url'])
+                    if enriched.get('is_youtube') and enriched.get('original_url'):
+                        target_url = sanitize_url(enriched['original_url'])
 
-            if session.playlist_tracker:
-                session.playlist_tracker.update_playlist_order(session.playlist)
-            
-            # 2. Sequential Enrichment
-            for idx, item in enumerate(url_items):
-                if idx == start_index or not session.is_alive: continue
-                
-                enriched = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings)[0]
-                target_url = sanitize_url(enriched['url'])
-                if enriched.get('is_youtube') and enriched.get('original_url'):
-                    target_url = sanitize_url(enriched['original_url'])
+                    # --- Centralized Flag Collection for Background Enrichment ---
+                    essential_flags = services.get_essential_ytdlp_flags()
+                    final_item_raw_opts = file_io.merge_ytdlp_options(enriched.get('ytdl_raw_options'), essential_flags)
 
-                # --- Centralized Flag Collection for Background Enrichment ---
-                local_essential_flags = "ignore-config="
-                if settings and settings.get('ffmpeg_path'):
-                    local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
-                
-                final_item_raw_opts = file_io.merge_ytdlp_options(enriched.get('ytdl_raw_options'), local_essential_flags)
-
-                lua_options = {
-                    "id": enriched.get('id'), "title": enriched.get('title'),
-                    "headers": enriched.get('headers'),
-                    "ytdl_raw_options": final_item_raw_opts,
-                    "use_ytdl_mpv": enriched.get('use_ytdl_mpv', False),
-                    "ytdl_format": enriched.get('ytdl_format'),
-                    "ffmpeg_path": settings.get('ffmpeg_path'),
-                    "original_url": sanitize_url(enriched.get('original_url') or enriched.get('url')),
-                    "disable_http_persistent": enriched.get('disable_http_persistent', False),
-                    "cookies_file": enriched.get('cookies_file'),
-                    "disable_network_overrides": settings.get('disable_network_overrides', False),
-                    "http_persistence": settings.get('http_persistence', 'auto'),
-                    "enable_reconnect": settings.get('enable_reconnect', True),
-                    "reconnect_delay": settings.get('reconnect_delay', 4),
-                    "resume_time": url_item.get('resume_time') if settings.get('enable_precise_resume') else None
-                }
-                session.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options)]})
-                session.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(lua_options)]})
-                session.ipc_manager.send({"command": ["set_property", f"playlist/{idx}/url", target_url]})
-                
-                # Update in-place to ensure PlaylistTracker sees the changes
-                if idx < len(session.playlist): 
-                    session.playlist[idx].update(enriched)
-                
-                time.sleep(0.05)
+                    lua_options = {
+                        "id": enriched.get('id'), "title": enriched.get('title'),
+                        "headers": enriched.get('headers'),
+                        "ytdl_raw_options": final_item_raw_opts,
+                        "use_ytdl_mpv": enriched.get('use_ytdl_mpv', False),
+                        "ytdl_format": enriched.get('ytdl_format'),
+                        "ffmpeg_path": settings.get('ffmpeg_path'),
+                        "original_url": sanitize_url(enriched.get('original_url') or enriched.get('url')),
+                        "disable_http_persistent": enriched.get('disable_http_persistent', False),
+                        "cookies_file": enriched.get('cookies_file'),
+                        "disable_network_overrides": settings.get('disable_network_overrides', False),
+                        "http_persistence": settings.get('http_persistence', 'auto'),
+                        "enable_reconnect": settings.get('enable_reconnect', True),
+                        "reconnect_delay": settings.get('reconnect_delay', 4),
+                        "resume_time": enriched.get('resume_time') if settings.get('enable_precise_resume') else None
+                    }
+                    session.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options), str(idx)]})
+                    session.ipc_manager.send({"command": ["set_property", f"playlist/{idx}/url", target_url]})
+                    
+                    # Update in-place to ensure PlaylistTracker sees the changes
+                    if idx < len(session.playlist): 
+                        session.playlist[idx].update(enriched)
+                    
+                    time.sleep(0.05)
+            except Exception as e:
+                logging.error(f"[PY][Session] Background task error: {e}", exc_info=True)
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -372,17 +400,14 @@ class LauncherService:
             self.session.playlist = kwargs.get('full_playlist') if kwargs.get('full_playlist') is not None else [url_item]
             
             if self.session.playlist:
-                for item in self.session.playlist:
+                for i, item in enumerate(self.session.playlist):
                     item_url = sanitize_url(item['url'])
                     if item.get('is_youtube') and item.get('original_url'):
                         item_url = sanitize_url(item['original_url'])
                     
                     # --- Centralized Flag Collection for Launch ---
-                    local_essential_flags = "ignore-config="
-                    if settings and settings.get('ffmpeg_path'):
-                        local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
-                    
-                    final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), local_essential_flags)
+                    essential_flags = services.get_essential_ytdlp_flags()
+                    final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), essential_flags)
 
                     lua_options = {
                         "id": item.get('id'),
@@ -399,14 +424,38 @@ class LauncherService:
                         "http_persistence": settings.get('http_persistence', 'auto'),
                         "enable_reconnect": settings.get('enable_reconnect', True),
                         "reconnect_delay": settings.get('reconnect_delay', 4),
-                        "resume_time": url_item.get('resume_time') if settings.get('enable_precise_resume') else None
+                        "resume_time": item.get('resume_time') if settings.get('enable_precise_resume') else None
                     }
-                    self.session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
-                    self.session.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(lua_options)]})
+                    self.session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(playlist_start_index + i)]})
+
+            # --- PRE-LOAD PROPERTY SYNC (Eliminates race conditions) ---
+            # We only set hot-swap-options for the SPECIFIC item we are about to load.
+            # This ensures adaptive_headers.lua has the correct context immediately.
+            essential_flags = services.get_essential_ytdlp_flags()
+            final_launch_raw_opts = file_io.merge_ytdlp_options(url_item.get('ytdl_raw_options'), essential_flags)
+            
+            launch_lua_options = {
+                "id": url_item.get('id'),
+                "title": url_item.get('title'),
+                "headers": url_item.get('headers'),
+                "ytdl_raw_options": final_launch_raw_opts,
+                "use_ytdl_mpv": url_item.get('use_ytdl_mpv', False) or url_item.get('is_youtube', False),
+                "ytdl_format": url_item.get('ytdl_format'),
+                "ffmpeg_path": settings.get('ffmpeg_path'),
+                "original_url": sanitize_url(url_item.get('original_url') or url_item.get('url')),
+                "disable_http_persistent": url_item.get('disable_http_persistent', False) or kwargs.get('disable_http_persistent', False),
+                "cookies_file": url_item.get('cookies_file'),
+                "disable_network_overrides": settings.get('disable_network_overrides', False),
+                "http_persistence": settings.get('http_persistence', 'auto'),
+                "enable_reconnect": settings.get('enable_reconnect', True),
+                "reconnect_delay": settings.get('reconnect_delay', 4),
+                "resume_time": url_item.get('resume_time') if settings.get('enable_precise_resume') else None
+            }
+            self.session.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(launch_lua_options)]})
 
             orig_url = url_item.get('original_url') or url_item.get('url', '')
             self.session.ipc_manager.send({"command": ["set_property", "user-data/original-url", sanitize_url(orig_url)]})
-            self.session.ipc_manager.send({"command": ["set_property", "user-data/id", url_item.get('id', '')]})
+            self.session.ipc_manager.send({"command": ["set_property", "user-data/id", url_item.get('id', "")]})
 
             # Explicitly force ytdl state for initial file
             ytdl_val = "yes" if url_item.get('is_youtube') or url_item.get('use_ytdl_mpv') else "no"
@@ -553,6 +602,29 @@ class IPCService:
                 simulated_playlist.insert(target_index, item_to_move)
         
         self.session.playlist = simulated_playlist
+        
+        # --- REFRESH LUA INDICES ---
+        # After reordering, we must tell Lua that IDs have moved to new indices.
+        if self.session.ipc_manager and self.session.ipc_manager.is_connected():
+            import file_io
+            settings = file_io.get_settings()
+            essential_flags = services.get_essential_ytdlp_flags()
+            
+            for idx, item in enumerate(simulated_playlist):
+                item_url = sanitize_url(item['url'])
+                if item.get('is_youtube') and item.get('original_url'):
+                    item_url = sanitize_url(item['original_url'])
+                
+                final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), essential_flags)
+                lua_options = {
+                    "id": item.get('id'), "title": item.get('title'),
+                    "headers": item.get('headers'), "ytdl_raw_options": final_item_raw_opts,
+                    "use_ytdl_mpv": item.get('use_ytdl_mpv', False),
+                    "original_url": sanitize_url(item.get('original_url') or item.get('url')),
+                    "resume_time": item.get('resume_time')
+                }
+                self.session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
+
         if self.session.playlist_tracker:
             self.session.playlist_tracker.update_playlist_order(simulated_playlist)
         self.session.ipc_manager.send({"command": ["show-text", "Playlist reordered", 2000]})

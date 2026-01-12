@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import uuid
+import services
 from utils import ipc_utils, session_services
 from utils.session_services import EnrichmentService, LauncherService, IPCService
 
@@ -264,7 +265,9 @@ class MpvSessionManager:
         if not items:
             return {"success": True, "message": "No items to append."}
 
-        logging.info(f"Linked Playlist: Preparing to append {len(items)} items.")
+        logging.info(f"Linked Playlist: Preparing to append {len(items)} items. Mode: {mode}")
+        for idx, item in enumerate(items):
+            logging.debug(f"  [{idx}] {item.get('title') or item.get('url')}")
 
         import file_io
         settings = file_io.get_settings()
@@ -273,6 +276,18 @@ class MpvSessionManager:
             if not self.is_alive or not self.ipc_manager:
                 return {"success": False, "error": "No active session for append."}
 
+            if self.playlist is None: self.playlist = []
+            
+            # We need to know the starting index for these new items in MPV
+            # playlist-count property is the most reliable way to know current size
+            mpv_playlist_count = 0
+            try:
+                res = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True, timeout=0.5)
+                if res and res.get("error") == "success":
+                    mpv_playlist_count = int(res.get("data", 0))
+            except:
+                mpv_playlist_count = len(self.playlist)
+
             for item in items:
                 # Use the same logic as _generate_m3u_content to determine the key
                 item_url = item['url']
@@ -280,13 +295,14 @@ class MpvSessionManager:
                     item_url = item['original_url']
                 
                 item_url = sanitize_url(item_url)
+                item_id = item.get('id')
                 
+                # Check duplicate status BEFORE adding to local list
+                is_duplicate = any(i.get('id') == item_id for i in self.playlist)
+
                 # --- Centralized Flag Collection for Appending ---
-                local_essential_flags = "ignore-config="
-                if settings and settings.get('ffmpeg_path'):
-                    local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
-                
-                final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), local_essential_flags)
+                essential_flags = services.get_essential_ytdlp_flags()
+                final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), essential_flags)
 
                 lua_options = {
                     "id": item.get('id'), 
@@ -302,22 +318,27 @@ class MpvSessionManager:
                     "disable_network_overrides": settings.get('disable_network_overrides', False),
                     "http_persistence": settings.get('http_persistence', 'auto'),
                     "enable_reconnect": settings.get('enable_reconnect', True),
-                    "reconnect_delay": settings.get('reconnect_delay', 4)
+                    "reconnect_delay": settings.get('reconnect_delay', 4),
+                    "resume_time": item.get('resume_time')
                 }
                 
-                self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
-                
-                if self.playlist is None: self.playlist = []
-                
-                item_id = item.get('id')
-                is_duplicate = any(i.get('id') == item_id for i in self.playlist)
-
+                # Calculate the final index where this item will reside in MPV
+                # If we are appending, it's current_count + offset
                 if not is_duplicate:
+                    # Map metadata to the future index in MPV
+                    # Note: this assumes items are appended to the end (mode="append")
+                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(mpv_playlist_count)]})
+                    
                     item['url'] = item_url 
                     self.playlist.append(item)
                     if self.playlist_tracker: self.playlist_tracker.add_item(item)
+                    mpv_playlist_count += 1
+                else:
+                    # For duplicates, we still update metadata by URL as a fallback
+                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
 
             m3u_content = self._generate_m3u_content(items)
+            logging.debug(f"[PY][Session] Generated M3U content for batch:\n{m3u_content}")
             
             temp_path = None
             try:
@@ -331,10 +352,12 @@ class MpvSessionManager:
                 with open(temp_path, 'w', encoding='utf-8') as tf:
                     tf.write(m3u_content)
                 
+                logging.info(f"[PY][Session] Sending loadlist command to MPV (mode: {mode}, path: {temp_path})")
                 res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True)
                 
                 if res and res.get("error") == "success":
-                    idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]})
+                    logging.info(f"[PY][Session] MPV successfully processed loadlist.")
+                    idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]}, expect_response=True)
                     if idle_resp and idle_resp.get("data") == True:
                         logging.info("MPV is idle. Forcing playback to start after append.")
                         self.ipc_manager.send({"command": ["set_property", "pause", False]})
@@ -345,6 +368,7 @@ class MpvSessionManager:
                     
                     return {"success": True, "message": f"Appended {len(items)} items to active session."}
                 else:
+                    logging.error(f"[PY][Session] MPV rejected loadlist command: {res}")
                     raise RuntimeError(f"MPV rejected loadlist command: {res}")
 
             except Exception as e:
@@ -353,6 +377,8 @@ class MpvSessionManager:
             finally:
                 if temp_path and os.path.exists(temp_path):
                     try:
+                        # Small sleep to ensure MPV has finished reading the file
+                        time.sleep(0.1)
                         os.remove(temp_path)
                     except: pass
 
@@ -486,11 +512,8 @@ class MpvSessionManager:
                             target_url = sanitize_url(launch_item['original_url'])
                         
                         # Prepare Lua Options
-                        local_essential_flags = "ignore-config="
-                        if settings and settings.get('ffmpeg_path'):
-                            local_essential_flags = f"{local_essential_flags},ffmpeg-location={settings['ffmpeg_path']}"
-                        
-                        final_item_raw_opts = file_io.merge_ytdlp_options(launch_item.get('ytdl_raw_options'), local_essential_flags)
+                        essential_flags = services.get_essential_ytdlp_flags()
+                        final_item_raw_opts = file_io.merge_ytdlp_options(launch_item.get('ytdl_raw_options'), essential_flags)
 
                         lua_options = {
                             "id": launch_item.get('id'), 
@@ -516,7 +539,7 @@ class MpvSessionManager:
                         
                         orig_url = launch_item.get('original_url') or launch_item.get('url', '')
                         self.ipc_manager.send({"command": ["set_property", "user-data/original-url", sanitize_url(orig_url)]})
-                        self.ipc_manager.send({"command": ["set_property", "user-data/id", launch_item.get('id', '')]})
+                        self.ipc_manager.send({"command": ["set_property", "user-data/id", launch_item.get('id', "")]})
                         
                         # Explicitly set global state as a fallback layer
                         ytdl_val = "yes" if launch_item.get('is_youtube') or launch_item.get('use_ytdl_mpv') else "no"

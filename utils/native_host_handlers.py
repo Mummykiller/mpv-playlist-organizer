@@ -695,6 +695,9 @@ class HandlerManager:
         m3u_source_value = m3u_data['value']
         m3u_type = m3u_data['type']
 
+        # Fetch all_folders once for the entire method
+        all_folders = self.file_io.get_all_folders_from_file()
+
         # Get common settings for both mpv_session.start calls
         settings = self.file_io.get_settings()
         
@@ -828,7 +831,6 @@ class HandlerManager:
             
             # Calculate start index for the final launch
             playlist_start_index = 0
-            all_folders = self.file_io.get_all_folders_from_file()
             last_played_id = all_folders.get(folder_id, {}).get("last_played_id")
             if settings.get("enable_smart_resume", True) and last_played_id:
                 for idx, item in enumerate(enriched_url_items):

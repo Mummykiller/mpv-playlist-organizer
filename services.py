@@ -394,6 +394,17 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
 
 # --- MPV Command Construction ---
 
+def get_essential_ytdlp_flags():
+    """Returns the baseline yt-dlp flags required for reliable streaming and security."""
+    flags = "ignore-config=,remote-components=ejs:github,js-runtimes=node"
+    
+    config = file_io._safe_json_load(file_io.CONFIG_FILE)
+    ffmpeg_path = config.get("ffmpeg_path")
+    if ffmpeg_path and os.path.exists(ffmpeg_path):
+        flags = f"{flags},ffmpeg-location={ffmpeg_path}"
+    
+    return flags
+
 # --- MPV Command Construction ---
 
 class MpvCommandBuilder:
@@ -701,7 +712,9 @@ class MpvCommandBuilder:
             
         logging.info(f"MpvCommandBuilder: Determined ytdl_quality is '{q}'")
 
-        # Global stability and responsiveness for all streaming content
+        # --- GLOBAL STREAMING DEFAULTS ---
+        # These improve stability and responsiveness for all streaming content
+        # regardless of whether ytdl is active for the current file.
         self.mpv_args.append("--force-seekable=yes")
         self.mpv_args.append("--demuxer-thread=yes")
         self.mpv_args.append("--cache-pause-initial=no")
@@ -717,60 +730,29 @@ class MpvCommandBuilder:
             # Absolute best merged stream
             ytdl_format = "bv*+ba/best"
         
+        if ytdl_format:
+            self.mpv_args.append(f"--ytdl-format={ytdl_format}")
+        
         logging.info(f"MpvCommandBuilder: Final ytdl_format string: '{ytdl_format}'")
 
         # --- Centralized Flag Collection ---
-        essential_flags = "ignore-config=,remote-components=ejs:github,js-runtimes=node"
-        config = file_io._safe_json_load(file_io.CONFIG_FILE)
+        essential_flags = get_essential_ytdlp_flags()
         
-        ffmpeg_path = config.get("ffmpeg_path")
-        if ffmpeg_path and os.path.exists(ffmpeg_path):
-            essential_flags = f"{essential_flags},ffmpeg-location={ffmpeg_path}"
-            
-        node_path = config.get("node_path")
-        if node_path and os.path.exists(node_path):
-            # yt-dlp uses --javascript-delay but for the runtime path it looks at PATH
-            # or we can sometimes specify it. 
-            # Actually, yt-dlp doesn't have a direct 'node-location' flag in ytdl-raw-options 
-            # that is standard, but some versions/forks might.
-            # The most reliable way is to ensure it's in PATH, which native_host.py does.
-            # HOWEVER, we can also try to pass it if we use a specific yt-dlp wrapper.
-            # For now, let's stick to the PATH injection in native_host.py but 
-            # let's also ensure we don't have any conflicting 'no-check-certificate' or similar
-            # that might be causing issues.
-            pass
+        # Always set essential flags as a baseline on the command line.
+        # This ensures that even in idle mode, the baseline is captured by adaptive_headers.lua
+        raw_opts = ytdl_raw_options or self.ytdl_raw_options_from_bypass or ""
+        if self.settings and self.settings.get('ytdlp_concurrent_fragments', 1) > 1:
+            frag_opt = f"concurrent-fragments={self.settings['ytdlp_concurrent_fragments']}"
+            raw_opts = f"{raw_opts},{frag_opt}" if raw_opts else frag_opt
+        
+        final_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
+        if final_raw_opts:
+            self.mpv_args.append(f'--ytdl-raw-options={final_raw_opts}')
 
-        if self.use_ytdl_mpv:
+        # Determine if we should enable ytdl by default
+        if self.use_ytdl_mpv or (original_is_youtube and not self.is_youtube_override):
             self.mpv_args.append('--ytdl=yes')
-            if ytdl_format:
-                self.mpv_args.append(f"--ytdl-format={ytdl_format}")
-
-            raw_opts = ytdl_raw_options or self.ytdl_raw_options_from_bypass or ""
-            
-            if self.settings and self.settings.get('ytdlp_concurrent_fragments', 1) > 1:
-                frag_opt = f"concurrent-fragments={self.settings['ytdlp_concurrent_fragments']}"
-                raw_opts = f"{raw_opts},{frag_opt}" if raw_opts else frag_opt
-            
-            # Merge with essential flags
-            final_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
-            if final_raw_opts:
-                self.mpv_args.append(f'--ytdl-raw-options={final_raw_opts}')
-
-        elif original_is_youtube and not self.is_youtube_override:
-            self.mpv_args.append('--ytdl=yes')
-            if ytdl_format:
-                self.mpv_args.append(f"--ytdl-format={ytdl_format}")
-            
-            raw_opts = ytdl_raw_options or ""
-
-            if self.settings and self.settings.get('ytdlp_concurrent_fragments', 1) > 1:
-                frag_opt = f"concurrent-fragments={self.settings['ytdlp_concurrent_fragments']}"
-                raw_opts = f"{raw_opts},{frag_opt}" if raw_opts else frag_opt
-
-            # Merge with essential flags
-            final_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
-            if final_raw_opts:
-                self.mpv_args.append(f'--ytdl-raw-options={final_raw_opts}')
+        
         return self
 
     def build(self):

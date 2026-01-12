@@ -12,11 +12,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
     MPV.PageScraper = class PageScraper {
         constructor() {
-            this.filterWords = ['watch', 'online', 'free', 'episode', 'season', 'full', 'hd', 'eng sub', 'subbed', 'dubbed', 'animepahe'];
+            this.builtInWords = ['watch', 'online', 'free', 'episode', 'season', 'full', 'hd', 'eng sub', 'subbed', 'dubbed', 'animepahe'];
+            this.filterWords = [...this.builtInWords];
         }
 
         updateFilterWords(words) {
-            if (Array.isArray(words)) this.filterWords = words;
+            if (Array.isArray(words)) {
+                // Merge user words with built-ins, removing duplicates
+                this.filterWords = [...new Set([...this.builtInWords, ...words])];
+            }
         }
 
         /**

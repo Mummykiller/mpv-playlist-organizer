@@ -92,6 +92,8 @@ def get_cookies_file(browser, url, ignore_config=True):
             logging.error(f"yt-dlp cookie extraction failed (Code {result.returncode})")
             if result.stdout: logging.error(f"STDOUT: {result.stdout.strip()}")
             if result.stderr: logging.error(f"STDERR: {result.stderr.strip()}")
+            # Notify the UI about the failure if possible (might need a way to pass send_message here)
+            # For now, we rely on the caller or generic logging.
 
         if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
             # Secure the cookie file
@@ -106,9 +108,9 @@ def get_cookies_file(browser, url, ignore_config=True):
             logging.info(f"Successfully extracted {os.path.getsize(temp_path)} bytes of cookies to {temp_path}")
             return temp_path
         else:
-            logging.warning(f"Extracted cookie file is empty or missing: {temp_path}")
-            if not result.stderr and not result.stdout:
-                logging.warning("yt-dlp exited silently with no cookies found. Check if the browser profile is correct.")
+            msg = f"yt-dlp found no cookies in {browser}. Ensure you are logged into YouTube in that browser."
+            logging.warning(msg)
+            # Note: caller should report this to UI if appropriate
             return None
     except Exception as e:
         logging.warning(f"Failed to extract cookies for MPV: {e}")

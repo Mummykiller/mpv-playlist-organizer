@@ -26,7 +26,6 @@ def mark_video_as_watched(url, cookies_path, user_agent=None, timeout=30):
         "--ignore-config",
         "--cookies", cookies_path,
         "--mark-watched",
-        "--simulate",
         "--no-playlist",
         "--quiet",
         "--no-warnings"
