@@ -19,6 +19,7 @@ const eventListeners = {
     'mpv_exited': [],
     'update_last_played': [],
     'update_item_resume_time': [],
+    'update_item_marked_as_watched': [],
     'session_restored': [],
     'log': []
 };

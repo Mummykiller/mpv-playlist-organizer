@@ -9,6 +9,7 @@ const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;
 addNativeListener('mpv_exited', (data) => handleMpvExited(data));
 addNativeListener('update_last_played', (data) => handleUpdateLastPlayed(data));
 addNativeListener('update_item_resume_time', (data) => handleUpdateItemResumeTime(data));
+addNativeListener('update_item_marked_as_watched', (data) => handleUpdateItemMarkedAsWatched(data));
 addNativeListener('session_restored', (data) => handleSessionRestored(data));
 
 class PlaybackSession {
@@ -650,6 +651,26 @@ export async function handleUpdateItemResumeTime(data) {
         for (let item of folder.playlist) {
             if (item.id === itemId) {
                 item.resume_time = resumeTime;
+                await storage.set(storageData);
+                break;
+            }
+        }
+    }
+}
+
+/**
+ * Handles the 'update_item_marked_as_watched' message from the native host tracker.
+ */
+export async function handleUpdateItemMarkedAsWatched(data) {
+    const { folderId, itemId, markedAsWatched } = data;
+    if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
+
+    const storageData = await storage.get();
+    if (storageData.folders[folderId]) {
+        const folder = storageData.folders[folderId];
+        for (let item of folder.playlist) {
+            if (item.id === itemId) {
+                item.marked_as_watched = markedAsWatched;
                 await storage.set(storageData);
                 break;
             }
