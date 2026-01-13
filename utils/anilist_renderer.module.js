@@ -9,16 +9,24 @@ export class AniListRenderer {
     static _inFlightRequest = null;
     static CACHE_DURATION_MS = 60 * 1000;
 
-    static async fetchReleases(forceRefresh = false) {
+    static async fetchReleases(forceRefresh = false, daysOffset = 0) {
         const now = Date.now();
-        if (!forceRefresh && this._cache && (now - this._cacheTimestamp < this.CACHE_DURATION_MS)) return this._cache;
+        // Only use cache for 'today' (offset 0)
+        if (daysOffset === 0 && !forceRefresh && this._cache && (now - this._cacheTimestamp < this.CACHE_DURATION_MS)) return this._cache;
+        
         if (this._inFlightRequest && !forceRefresh) return this._inFlightRequest;
         this._inFlightRequest = (async () => {
             try {
-                const response = await sendMessageAsync({ action: 'get_anilist_releases', force: forceRefresh });
+                const response = await sendMessageAsync({ 
+                    action: 'get_anilist_releases', 
+                    force: forceRefresh,
+                    days: daysOffset
+                });
                 if (response.success) {
-                    this._cache = response.output;
-                    this._cacheTimestamp = Date.now();
+                    if (daysOffset === 0) {
+                        this._cache = response.output;
+                        this._cacheTimestamp = Date.now();
+                    }
                     return response.output;
                 }
                 throw new Error(response.error || 'Failed to fetch releases.');
@@ -29,11 +37,18 @@ export class AniListRenderer {
         return this._inFlightRequest;
     }
 
-    static render(container, releases) {
+    static render(container, releases, offset = 0) {
         if (!container) return;
-        container.innerHTML = '';
+        
+        // Find existing list and remove it (to preserve nav controls)
+        const oldList = container.querySelector('.anilist-releases-list, .anilist-empty-message');
+        if (oldList) oldList.remove();
+
         if (!releases || !releases.releases || releases.releases.length === 0) {
-            container.innerHTML = '<li class="anilist-empty-message">No anime episodes found releasing today.</li>';
+            const emptyMsg = document.createElement('div');
+            emptyMsg.className = 'anilist-empty-message';
+            emptyMsg.textContent = offset === 0 ? 'No anime episodes found releasing today.' : 'No anime episodes found for this day.';
+            container.appendChild(emptyMsg);
             return;
         }
         const list = document.createElement('ul');

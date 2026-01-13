@@ -506,8 +506,13 @@ class HandlerManager:
             
     def handle_get_anilist_releases(self, message):
         return self.services.get_anilist_releases_with_cache(
-            message.get('force', False), message.get('delete_cache', False), message.get('is_cache_disabled', False), 
-            self.anilist_cache_file, self.script_dir, self.send_message
+            message.get('force', False), 
+            message.get('delete_cache', False), 
+            message.get('is_cache_disabled', False), 
+            message.get('days', 0),
+            self.anilist_cache_file, 
+            self.script_dir, 
+            self.send_message
         )
 
     def handle_run_ytdlp_update(self, message):

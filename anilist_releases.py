@@ -129,20 +129,22 @@ def convert_utc_to_local(utc_timestamp):
 def main():
     parser = argparse.ArgumentParser(description="Fetch AniList airing schedule.")
     parser.add_argument('--ping', action='store_true', help='Only fetch the total count of releases.')
+    parser.add_argument('--days', type=int, default=0, help='Day offset from today (e.g., 1 for tomorrow).')
     args = parser.parse_args()
 
     if args.ping:
         # In ping mode, we don't need to print this verbose message.
         pass
     else:
-        print("Fetching anime episodes releasing today...", file=sys.stderr)
+        print(f"Fetching anime episodes releasing (Offset: {args.days} days)...", file=sys.stderr)
     
     # Get the current time in the user's local timezone
     local_tz = datetime.now().astimezone().tzinfo
     now_local = datetime.now(local_tz)
 
-    # Determine the start and end of the current day in the local timezone
-    start_of_day_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Determine the start and end of the target day in the local timezone
+    target_date_local = now_local + timedelta(days=args.days)
+    start_of_day_local = target_date_local.replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_day_local = start_of_day_local + timedelta(days=1) - timedelta(microseconds=1)
 
     # Convert the local start and end times to UTC timestamps for the API query

@@ -219,9 +219,18 @@
             <span>AniList Releases Today</span>
             <button id="btn-refresh-anilist" class="anilist-refresh-btn" title="Refresh Releases"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"></path><path d="M21 12A9 9 0 0 0 6 5.3L3 8"></path><path d="M21 22v-6h-6"></path><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"></path></svg></button>
         </summary>
-        <div id="anilist-releases-content">
-            Loading releases...
-        </div>
+                <div id="anilist-releases-content">
+                    <div class="anilist-nav-controls" style="display: none;">
+                        <button id="btn-anilist-prev" class="anilist-nav-btn" title="Previous Day">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                        </button>
+                        <button id="btn-anilist-today" class="anilist-nav-btn today-btn">Today</button>
+                        <button id="btn-anilist-next" class="anilist-nav-btn" title="Next Day">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                        </button>
+                    </div>
+                    <div class="loading-spinner"></div>
+                </div>
     </details>
 
     <!-- Shared Status Message Container (moved via JS) -->

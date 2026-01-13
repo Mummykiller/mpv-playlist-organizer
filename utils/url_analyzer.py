@@ -176,12 +176,13 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
 
     # --- Case 1: Animepahe-like URLs (VAULT_RE) ---
     if "owocdn" in url or "kwik.cx" in url or VAULT_RE.search(url) or KWIK_RE.search(url):
-        # Animepahe still needs explicit cookie extraction because we don't use yt-dlp 
-        # for playback here (we use direct URL with headers).
-        cookies_file = None
+        # Header-First Direct: Stop extracting cookie files to RAM for Animepahe.
+        # Instead, we pass the browser name to MPV and force ytdl=yes.
+        # This allows MPV to handle the Kwik.cx decryption natively and faster.
+        
+        cookies_browser = None
         if is_other_cookies_enabled and browser and browser != "None":
-            # Use a generic public URL for cookie extraction
-            cookies_file = get_cookies_file(browser, "https://kwik.cx/", ignore_config=is_yt_ignore_config_enabled)
+            cookies_browser = browser
 
         return {
             "success": True,
@@ -197,11 +198,11 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 "Sec-Fetch-Site": "cross-site",
             },
             "ytdl_raw_options": None,
-            "use_ytdl_mpv": False,
+            "use_ytdl_mpv": True, # Force ytdl to use the native Kwik extractor
             "is_youtube": False,
             "disable_http_persistent": True,
-            "cookies_file": cookies_file,
-            "cookies_browser": None # Explicitly null for this case
+            "cookies_file": None, # No more RAM files
+            "cookies_browser": cookies_browser
         }
 
     # --- Case 1b: Generic Direct Stream Detection ---

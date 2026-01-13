@@ -880,6 +880,52 @@ select:focus-visible {
     border-radius: 4px;
 }
 
+/* --- AniList Navigation Controls --- */
+.anilist-nav-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    background-color: transparent;
+    border-bottom: 1px solid var(--border-primary);
+}
+
+.anilist-nav-btn {
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    color: var(--text-secondary);
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    min-width: 32px;
+    height: 28px;
+    box-shadow: none;
+}
+
+.anilist-nav-btn:hover:not(:disabled) {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+}
+
+.anilist-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.anilist-nav-btn.today-btn {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    min-width: 100px;
+}
+
 .anilist-releases-list {
     list-style: none;
     padding: 0 0 8px 0; /* Reset left/right/top padding, keep bottom */

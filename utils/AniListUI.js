@@ -20,6 +20,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
             this.forceAttached = false;
             this.attachOnOpen = true;
             this.isEnabled = true;
+            this.currentOffset = 0;
         }
 
         updateDynamicStyles() {
@@ -34,7 +35,37 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
         bindEvents() {
             if (!this.shadowRoot || !this.controllerShadowRoot) return;
             this.shadowRoot.getElementById('btn-close-anilist-panel')?.addEventListener('click', () => this.toggleVisibility(false));
-            this.shadowRoot.getElementById('btn-refresh-anilist')?.addEventListener('click', () => this.fetchReleases(true));
+            this.shadowRoot.getElementById('btn-refresh-anilist')?.addEventListener('click', () => this.fetchReleases(true, this.currentOffset));
+            
+            // --- Navigation Event Listeners ---
+            const btnPrev = this.shadowRoot.getElementById('btn-anilist-prev');
+            const btnNext = this.shadowRoot.getElementById('btn-anilist-next');
+            const btnToday = this.shadowRoot.getElementById('btn-anilist-today');
+
+            btnPrev?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.currentOffset > -6) {
+                    this.currentOffset--;
+                    this.fetchReleases(false, this.currentOffset);
+                }
+            });
+
+            btnNext?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.currentOffset < 6) {
+                    this.currentOffset++;
+                    this.fetchReleases(false, this.currentOffset);
+                }
+            });
+
+            btnToday?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.currentOffset !== 0) {
+                    this.currentOffset = 0;
+                    this.fetchReleases(false, 0);
+                }
+            });
+
             this.shadowRoot.getElementById('btn-pin-anilist-panel')?.addEventListener('click', (e) => {
                 this.isLocked = !this.isLocked;
                 e.currentTarget.classList.toggle('pinned', this.isLocked);
@@ -76,7 +107,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 this.panelHost.style.display = 'block';
                 if (this.attachOnOpen && typeof forceState !== 'boolean') this.isManuallyPositioned = false;
                 if (this.forceAttached || !this.isManuallyPositioned) this.snapToController();
-                this.fetchReleases();
+                this.fetchReleases(false, this.currentOffset);
                 if (savePref) this.controller.savePreference({ anilistPanelVisible: true });
                 leftBtn?.classList.add('active-toggle');
                 rightBtn?.classList.add('active-toggle');
@@ -104,14 +135,35 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
             this.panelHost.style.bottom = 'auto';
         }
 
-        async fetchReleases(forceRefresh = false) {
+        async fetchReleases(forceRefresh = false, daysOffset = 0) {
             if (!this.shadowRoot || !this.controller.checkContext()) return;
             const container = this.shadowRoot.getElementById('anilist-releases-list');
             if (!container) return;
+
+            // --- Update Nav Button States ---
+            const btnPrev = this.shadowRoot.getElementById('btn-anilist-prev');
+            const btnNext = this.shadowRoot.getElementById('btn-anilist-next');
+            const btnToday = this.shadowRoot.getElementById('btn-anilist-today');
+
+            if (btnPrev) btnPrev.disabled = (daysOffset <= -6);
+            if (btnNext) btnNext.disabled = (daysOffset >= 6);
+            if (btnToday) {
+                btnToday.style.opacity = (daysOffset === 0) ? '0.5' : '1';
+                btnToday.style.cursor = (daysOffset === 0) ? 'default' : 'pointer';
+                
+                if (daysOffset !== 0) {
+                    const targetDate = new Date();
+                    targetDate.setDate(targetDate.getDate() + daysOffset);
+                    btnToday.textContent = targetDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                } else {
+                    btnToday.textContent = 'Today';
+                }
+            }
+
             container.innerHTML = '<div class="loading-spinner"></div>';
             try {
-                const releases = await MPV.AniListRenderer.fetchReleases(forceRefresh);
-                if (this.controller.checkContext()) MPV.AniListRenderer.render(container, releases);
+                const releases = await MPV.AniListRenderer.fetchReleases(forceRefresh, daysOffset);
+                if (this.controller.checkContext()) MPV.AniListRenderer.render(container, releases, daysOffset);
             } catch (error) {
                 container.innerHTML = `<li class="anilist-error">Error: ${error.message}</li>`;
             }

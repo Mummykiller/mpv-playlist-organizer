@@ -98,14 +98,17 @@ try:
     current_path_list = os.environ.get("PATH", "").split(os.pathsep)
     
     if platform.system() == "Linux":
+        # We want to ensure common binary locations are searched.
+        # We prepend them to current_path_list. To maintain the priority 
+        # (left-to-right), we insert them in reverse order at index 0.
         extra_paths = [
-            "/usr/bin", "/usr/local/bin", "/bin", "/usr/sbin", "/sbin",
+            "/sbin", "/usr/sbin", "/bin", "/usr/local/bin", "/usr/bin",
             os.path.expanduser("~/.local/bin"),
             os.path.expanduser("~/bin")
         ]
         for p in extra_paths:
             if p not in current_path_list:
-                current_path_list.insert(0, p) # Prepend for priority
+                current_path_list.insert(0, p)
     
     # Inject configured paths for ffmpeg and node if they are set
     config = file_io.get_settings()

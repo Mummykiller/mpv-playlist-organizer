@@ -284,22 +284,24 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
     node_status = {"found": False, "path": None, "version": None, "error": None}
     system = platform.system()
 
-    # MPV Check
+    # --- 1. MPV Check ---
     mpv_exe_name = "mpv.exe" if system == "Windows" else "mpv"
-    mpv_path = get_mpv_executable_func()
+    # Prioritize PATH over config for self-healing
+    mpv_path = shutil.which(mpv_exe_name)
     
-    if os.path.isabs(mpv_path) and os.path.exists(mpv_path):
+    if not mpv_path:
+        # Fallback to configured path if not in PATH
+        configured_path = get_mpv_executable_func()
+        if os.path.isabs(configured_path) and os.path.exists(configured_path):
+            mpv_path = configured_path
+
+    if mpv_path:
         mpv_status["found"] = True
         mpv_status["path"] = mpv_path
     else:
-        found_mpv_in_path = shutil.which(mpv_exe_name)
-        if found_mpv_in_path:
-            mpv_status["found"] = True
-            mpv_status["path"] = found_mpv_in_path
-        else:
-            mpv_status["error"] = f"'{mpv_exe_name}' not found in system PATH."
+        mpv_status["error"] = f"'{mpv_exe_name}' not found in system PATH or config."
 
-    # yt-dlp Check
+    # --- 2. yt-dlp Check ---
     ytdlp_exe_name = "yt-dlp.exe" if system == "Windows" else "yt-dlp"
     ytdlp_path = shutil.which(ytdlp_exe_name)
 
@@ -314,52 +316,43 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
     else:
         ytdlp_status["error"] = f"'{ytdlp_exe_name}' not found in system PATH."
 
-    # ffmpeg Check (Critical for >1080p)
+    # --- 3. FFmpeg Check ---
     ffmpeg_exe_name = "ffmpeg.exe" if system == "Windows" else "ffmpeg"
     
-    # 1. Try Configured Path
-    config = file_io._safe_json_load(file_io.CONFIG_FILE)
-    ffmpeg_path = config.get("ffmpeg_path")
+    # Prioritize PATH (shutil.which) for FFmpeg to ensure we catch /usr/bin over /sbin
+    ffmpeg_path = shutil.which(ffmpeg_exe_name)
     
-    if ffmpeg_path and not (os.path.exists(ffmpeg_path) and os.access(ffmpeg_path, os.X_OK)):
-        ffmpeg_path = None # Invalid, reset to trigger search
-
-    # 2. Aggressive Search Fallback
+    config = file_io._safe_json_load(file_io.CONFIG_FILE)
+    
     if not ffmpeg_path:
-        ffmpeg_path = shutil.which(ffmpeg_exe_name)
-        
-        if not ffmpeg_path:
-            search_dirs = []
-            if system == "Linux":
-                search_dirs.extend([
-                    "/usr/bin", "/usr/local/bin", "/usr/bin/ffmpeg-static",
-                    os.path.expanduser("~/.local/bin"),
-                    os.path.expanduser("~/bin")
-                ])
-            
-            if mpv_status["found"] and os.path.isabs(mpv_status["path"]):
-                search_dirs.append(os.path.dirname(mpv_status["path"]))
+        # Fallback to configured path
+        ffmpeg_path = config.get("ffmpeg_path")
+        if ffmpeg_path and not (os.path.exists(ffmpeg_path) and os.access(ffmpeg_path, os.X_OK)):
+            ffmpeg_path = None # Invalid, trigger aggressive search
 
-            for d in search_dirs:
-                p = os.path.join(d, ffmpeg_exe_name)
-                if os.path.exists(p) and os.access(p, os.X_OK):
-                    ffmpeg_path = p
-                    break
+    # Aggressive Search Fallback
+    if not ffmpeg_path:
+        search_dirs = []
+        if system == "Linux":
+            search_dirs.extend([
+                "/usr/bin", "/usr/local/bin", "/bin", "/usr/sbin", "/sbin",
+                os.path.expanduser("~/.local/bin"),
+                os.path.expanduser("~/bin")
+            ])
         
-        # 3. Shell Fallback
-        if not ffmpeg_path and system == "Linux":
-            for cmd in [["which", "ffmpeg"], ["sh", "-c", "command -v ffmpeg"]]:
-                try:
-                    res = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
-                    if res and os.path.exists(res):
-                        ffmpeg_path = res
-                        break
-                except: pass
+        if mpv_status["found"] and os.path.isabs(mpv_status["path"]):
+            search_dirs.append(os.path.dirname(mpv_status["path"]))
 
+        for d in search_dirs:
+            p = os.path.join(d, ffmpeg_exe_name)
+            if os.path.exists(p) and os.access(p, os.X_OK):
+                ffmpeg_path = p
+                break
+    
     if ffmpeg_path:
         ffmpeg_status["found"] = True
         ffmpeg_status["path"] = ffmpeg_path
-        # Auto-update config if this is a new discovery
+        # Auto-update config if this is a new discovery OR if it differs from stored path
         if ffmpeg_path != config.get("ffmpeg_path"):
             file_io.set_settings({"ffmpeg_path": ffmpeg_path})
             logging.info(f"Self-Healing: Updated FFmpeg path to {ffmpeg_path}")
@@ -370,12 +363,22 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
     else:
         ffmpeg_status["error"] = "Not found. Required for 1440p/4K resolution."
 
-    # Node.js Check (Critical for YouTube n-challenge/1440p+)
+    # --- 4. Node.js Check ---
     node_exe_name = "node.exe" if system == "Windows" else "node"
     node_path = shutil.which(node_exe_name)
+    
+    if not node_path:
+        node_path = config.get("node_path")
+        if node_path and not (os.path.exists(node_path) and os.access(node_path, os.X_OK)):
+            node_path = None
+
     if node_path:
         node_status["found"] = True
         node_status["path"] = node_path
+        # Sync config
+        if node_path != config.get("node_path"):
+            file_io.set_settings({"node_path": node_path})
+
         node_ver = _get_node_version(node_path)
         if node_ver:
             node_status["version"] = node_ver
@@ -1019,13 +1022,15 @@ class AniListCache:
         self.send_message = send_message_func
         self.CACHE_DURATION_S = 30 * 60 # 30 minutes
 
-    def _fetch_from_anilist_script(self, is_ping):
+    def _fetch_from_anilist_script(self, is_ping, days=0):
         """Helper function to execute the anilist_releases.py script."""
         try:
             script_path = os.path.join(self.script_dir, 'anilist_releases.py')
             script_args = [sys.executable, script_path]
             if is_ping:
                 script_args.append('--ping')
+            if days != 0:
+                script_args.extend(['--days', str(days)])
             result = subprocess.run(script_args, capture_output=True, text=True, check=True, encoding='utf-8')
             return {"success": True, "output": result.stdout}
         except subprocess.CalledProcessError as e:
@@ -1044,7 +1049,7 @@ class AniListCache:
                     return json.load(f)
             except (json.JSONDecodeError, IOError) as e:
                 logging.warning(f"Could not read {self.cache_file}: {e}. Will perform a full fetch.")
-        return None
+        return {}
 
     def _save_cache(self, cache_data):
         """Saves cache data to the cache file."""
@@ -1055,89 +1060,90 @@ class AniListCache:
         except (IOError) as e:
             logging.error(f"Failed to write new {self.cache_file}: {e}")
 
-def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabled, cache_file, script_dir, send_message_func):
-    """Handles fetching AniList releases with a file-based caching mechanism."""
+def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabled, days, cache_file, script_dir, send_message_func):
+    """Handles fetching AniList releases with a multi-day file-based caching mechanism."""
+    from datetime import datetime
     global LAST_ANILIST_FRESH_LOG_TIME
     anilist_cache = AniListCache(cache_file, script_dir, send_message_func)
     now = time.time()
+    
+    # 1. Handle Master Cache Invalidation (Manual delete or New day)
+    full_cache = anilist_cache._load_cache()
+    today_ts = full_cache.get("today_timestamp", 0)
+    
+    # Only check for 'new day' if we have a cached Today to compare with
+    is_new_day = False
+    if today_ts > 0:
+        cache_date = datetime.fromtimestamp(today_ts).date()
+        is_new_day = datetime.fromtimestamp(now).date() != cache_date
+    
+    if delete_cache or is_new_day:
+        if delete_cache:
+            logging.info("AniList Cache: Manual deletion requested.")
+            send_message_func({"log": {"text": "[AniList]: Cache file deleted.", "type": "info"}})
+        elif is_new_day:
+            logging.info("AniList Cache: New day detected. Wiping all offsets.")
+            send_message_func({"log": {"text": "[AniList]: New day detected. Refreshing schedule...", "type": "info"}})
+            
+        if os.path.exists(cache_file):
+            try: os.remove(cache_file)
+            except: pass
+        full_cache = {}
+        today_ts = 0
 
     if is_cache_disabled:
-        logging.info("AniList cache is disabled. Fetching directly from API.")
-        send_message_func({"log": {"text": "[AniList]: Cache disabled. Fetching new data from API.", "type": "info"}})
-        return anilist_cache._fetch_from_anilist_script(is_ping=False)
+        return anilist_cache._fetch_from_anilist_script(is_ping=False, days=days)
 
-    if delete_cache and os.path.exists(anilist_cache.cache_file):
-        try:
-            os.remove(anilist_cache.cache_file)
-            logging.info("Deleted anilist_cache.json as requested.")
-            send_message_func({"log": {"text": "[AniList]: Cache file deleted.", "type": "info"}})
-        except OSError as e:
-            logging.error(f"Failed to delete anilist_cache.json: {e}")
+    offsets = full_cache.get("offsets", {})
+    day_key = str(days)
+    day_cache = offsets.get(day_key)
 
-    if force_refresh:
-        logging.info("Forcing a full refresh of AniList data.")
-        send_message_func({"log": {"text": "[AniList]: Manual refresh requested. Fetching new data...", "type": "info"}})
-        return anilist_cache._fetch_from_anilist_script(is_ping=False)
-
-    cache = anilist_cache._load_cache()
-
-    if cache and 'timestamp' in cache and 'data' in cache:
-        from datetime import datetime
-        is_expired_by_timer = (now - cache['timestamp'] > anilist_cache.CACHE_DURATION_S)
-        cache_date = datetime.fromtimestamp(cache['timestamp']).date()
-        is_new_day = datetime.fromtimestamp(now).date() != cache_date
-        next_airing_at = cache['data'].get('next_airing_at')
-        is_expired_by_release = next_airing_at and now > next_airing_at
-
-        if is_expired_by_release: send_message_func({"log": {"text": "[AniList]: A new episode has aired. Refreshing...", "type": "info"}})
-        if is_new_day: send_message_func({"log": {"text": "[AniList]: New day detected. Refreshing data...", "type": "info"}})
-
-        if not is_expired_by_timer and not is_expired_by_release and not is_new_day:
-            logging.info("Serving AniList data from fresh local file cache.")
-            if now - LAST_ANILIST_FRESH_LOG_TIME > 300:
-                send_message_func({"log": {"text": "[AniList]: Loaded from local file (cache is fresh).", "type": "info"}})
-                LAST_ANILIST_FRESH_LOG_TIME = now
-            return {"success": True, "output": json.dumps(cache['data'])}
-
-    if cache and 'data' in cache and 'total' in cache['data']:
-        logging.info("AniList cache is stale. Pinging API for changes...")
-        send_message_func({"log": {"text": "[AniList]: Cache is stale. Pinging for changes...", "type": "info"}})
+    def perform_full_fetch_and_cache(target_days):
+        if target_days == 0:
+            send_message_func({"log": {"text": "[AniList]: Fetching fresh data from API...", "type": "info"}})
         
-        ping_response = anilist_cache._fetch_from_anilist_script(is_ping=True)
-        
-        if ping_response['success']:
+        res = anilist_cache._fetch_from_anilist_script(is_ping=False, days=target_days)
+        if res['success']:
             try:
-                ping_data = json.loads(ping_response['output'])
-                ping_airing_ats = ping_data.get('airingAt_list', [])
-                cached_airing_ats = cache.get('sorted_airing_ats', [])
+                parsed_data = json.loads(res['output'])
+                offsets[str(target_days)] = {
+                    "timestamp": now,
+                    "data": parsed_data,
+                    "sorted_airing_ats": sorted([s['airingAt'] for s in parsed_data.get('raw_schedules_for_cache', [])])
+                }
+                if target_days == 0:
+                    full_cache["today_timestamp"] = now
+                
+                full_cache["offsets"] = offsets
+                anilist_cache._save_cache(full_cache)
+            except Exception as e:
+                logging.error(f"Failed to process AniList fetch for cache: {e}")
+        return res
 
-                if sorted(ping_airing_ats) == cached_airing_ats:
-                    logging.info("No change in release timestamps. Serving from local file and updating timestamp.")
-                    if now - LAST_ANILIST_FRESH_LOG_TIME > 300:
-                        send_message_func({"log": {"text": "[AniList]: Loaded from local file (no new releases found).", "type": "info"}})
-                        LAST_ANILIST_FRESH_LOG_TIME = now
-                    
-                    cache['timestamp'] = now
-                    anilist_cache._save_cache(cache)
-                    
-                    return {"success": True, "output": json.dumps(cache['data'])}
-            except (json.JSONDecodeError, KeyError) as e:
-                logging.warning(f"Failed to process ping response: {e}. Proceeding with full fetch.")
-        else:
-            logging.warning("AniList ping failed. Proceeding with full fetch.")
+    # 2. Check Today's Specific Expiry (only offset 0 triggers a global refresh)
+    is_today_expired = False
+    if day_key == "0" and day_cache:
+        is_expired_by_timer = (now - day_cache['timestamp'] > anilist_cache.CACHE_DURATION_S)
+        next_airing_at = day_cache['data'].get('next_airing_at')
+        is_expired_by_release = next_airing_at and now > next_airing_at
+        
+        if is_expired_by_timer or is_expired_by_release or force_refresh:
+            is_today_expired = True
+            if is_expired_by_timer: logging.info("AniList Cache: Today expired by timer.")
+            if is_expired_by_release: send_message_func({"log": {"text": "[AniList]: New episode aired. Refreshing...", "type": "info"}})
+            # Force global refresh
+            full_cache = {}
+            offsets = {}
+            day_cache = None
 
-    logging.info("Performing a full fetch of AniList data.")
-    send_message_func({"log": {"text": "[AniList]: Fetching new data from AniList API...", "type": "info"}})
-    full_fetch_response = anilist_cache._fetch_from_anilist_script(is_ping=False)
-    
-    if full_fetch_response['success'] and not is_cache_disabled:
-        try:
-            full_data = json.loads(full_fetch_response['output'])
-            sorted_ats = sorted([s['airingAt'] for s in full_data.get('raw_schedules_for_cache', [])])
-            new_cache = {"timestamp": now, "data": full_data, "sorted_airing_ats": sorted_ats}
-            anilist_cache._save_cache(new_cache)
-            logging.info("AniList file cache updated with new data.")
-        except (json.JSONDecodeError, IOError) as e:
-            logging.error(f"Failed to write new AniList cache file: {e}")
+    # 3. Serve from cache if valid
+    if not force_refresh and day_cache:
+        if day_key != "0" or not is_today_expired:
+            if now - LAST_ANILIST_FRESH_LOG_TIME > 300:
+                send_message_func({"log": {"text": f"[AniList]: Loaded from local cache (Day Offset: {days}).", "type": "info"}})
+                LAST_ANILIST_FRESH_LOG_TIME = now
+            return {"success": True, "output": json.dumps(day_cache['data'])}
 
-    return full_fetch_response
+    # 4. Fetch and Refresh
+    logging.info(f"AniList Cache: Fetching fresh data for offset {days}.")
+    return perform_full_fetch_and_cache(days)
