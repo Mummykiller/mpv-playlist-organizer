@@ -190,18 +190,19 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
         const statusResponse = await callNativeHost({ action: 'get_playback_status' }).catch(() => ({}));
         let isActive = !!(statusResponse?.is_running && statusResponse.folderId === folderId);
         const isPaused = (statusResponse?.is_paused || statusResponse?.is_idle) ?? false;
+        let needsAppend = false;
 
         if (isActive && statusResponse.session_ids && playlist) {
             const sessionIds = new Set(statusResponse.session_ids);
-            const hasNewItems = playlist.some(item => !sessionIds.has(item.id));
-            if (hasNewItems) {
+            needsAppend = playlist.some(item => !sessionIds.has(item.id));
+            if (needsAppend) {
                 isActive = false; // Revert to Play icon to signal append needed
             }
         }
 
-        return { isActive, isPaused };
+        return { isActive, isPaused, needsAppend };
     } catch (e) {
-        return { isActive: false, isPaused: false };
+        return { isActive: false, isPaused: false, needsAppend: false };
     }
 }
 

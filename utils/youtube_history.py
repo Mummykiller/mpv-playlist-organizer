@@ -24,6 +24,7 @@ def mark_video_as_watched(url, cookies_path, user_agent=None, timeout=30):
     cmd = [
         ytdlp_path,
         "--ignore-config",
+        "--simulate",
         "--cookies", cookies_path,
         "--mark-watched",
         "--no-playlist",
