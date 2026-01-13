@@ -8,36 +8,36 @@ let _inFlightReleasesRequest = null;
 
 export async function handleGetAnilistReleases(request) {
     const forceRefresh = request.force ?? false;
+    const daysOffset = request.days ?? 0;
     const data = await storage.get();
     const isCacheDisabled = data.settings.ui_preferences.global.disable_anilist_cache ?? false;
 
-    if (_inFlightReleasesRequest && !forceRefresh && !isCacheDisabled) return _inFlightReleasesRequest;
+    // Use a composite key for in-flight requests to handle different days
+    const requestKey = `anilist_${daysOffset}_${forceRefresh}`;
+    if (_inFlightReleasesRequest === requestKey && !isCacheDisabled) return _inFlightReleasesRequest;
 
-    _inFlightReleasesRequest = (async () => {
-        try {
-            const deleteCache = isCacheDisabled;
-            const nativeResponse = await callNativeHost({
-                action: 'get_anilist_releases',
-                force: forceRefresh || isCacheDisabled,
-                delete_cache: deleteCache,
-                is_cache_disabled: isCacheDisabled
-            });
+    try {
+        const deleteCache = isCacheDisabled;
+        const nativeResponse = await callNativeHost({
+            action: 'get_anilist_releases',
+            force: forceRefresh || isCacheDisabled, // Removed '|| daysOffset !== 0'
+            delete_cache: deleteCache,
+            is_cache_disabled: isCacheDisabled,
+            days: daysOffset
+        });
 
-            if (nativeResponse.success && nativeResponse.output) {
-                try {
-                    const data = JSON.parse(nativeResponse.output);
-                    return { success: true, output: data };
-                } catch (e) {
-                    return { success: false, error: `JSON Parse failed: ${e.message}` };
-                }
+        if (nativeResponse.success && nativeResponse.output) {
+            try {
+                const data = JSON.parse(nativeResponse.output);
+                return { success: true, output: data };
+            } catch (e) {
+                return { success: false, error: `JSON Parse failed: ${e.message}` };
             }
-            return nativeResponse;
-        } finally {
-            _inFlightReleasesRequest = null;
         }
-    })();
-
-    return _inFlightReleasesRequest;
+        return nativeResponse;
+    } finally {
+        _inFlightReleasesRequest = null;
+    }
 }
 
 export async function handleYtdlpUpdateCheck(request) {

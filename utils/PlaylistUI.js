@@ -53,6 +53,17 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     itemDiv.dataset.url = item.url;
                     itemDiv.dataset.title = item.title;
                     itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
+
+                    // 1. Copy URL Button (Now at the start)
+                    if (this.controller.state.state.settings.show_copy_title_button) {
+                        const copyBtn = document.createElement('button');
+                        copyBtn.className = 'btn-copy-item';
+                        copyBtn.dataset.url = item.url;
+                        copyBtn.title = 'Copy URL';
+                        copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+                        itemDiv.appendChild(copyBtn);
+                    }
+
                     const indexSpan = document.createElement('span');
                     indexSpan.className = 'url-index';
                     indexSpan.textContent = `${index + 1}.`;
@@ -73,28 +84,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                         
                         watchedCheckbox.addEventListener('change', (e) => {
                             e.stopPropagation();
-                            const isMarked = !watchedCheckbox.checked;
-                            const folderId = this.folderSelect.value;
-                            chrome.runtime.sendMessage({
-                                action: 'update_item_marked_as_watched',
-                                folderId: folderId,
-                                itemId: item.id,
-                                markedAsWatched: isMarked
-                            });
+                            this.controller.handleWatchedToggle(item.id, watchedCheckbox.checked);
                         });
                         itemDiv.appendChild(watchedCheckbox);
                     }
 
                     itemDiv.append(urlSpan);
-                    
-                    const copyBtn = document.createElement('button');
-                    if (this.controller.state.state.settings.show_copy_title_button) {
-                        copyBtn.className = 'btn-copy-item';
-                        copyBtn.dataset.url = item.url;
-                        copyBtn.title = 'Copy URL';
-                        copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-                        itemDiv.appendChild(copyBtn);
-                    }
     
                     const removeBtn = document.createElement('button');
                     removeBtn.className = 'btn-remove-item';

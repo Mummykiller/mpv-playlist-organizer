@@ -73,7 +73,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 'foldersChanged': (req) => this.updateFolderDropdowns(req.folderId, req.lastPlayedId, req.isFolderActive),
                 'last_folder_changed': (req) => this._syncFolderChange(req),
                 'log': (req) => this.addLogEntry(req.log),
-                'preferences_changed': () => this.applyInitialState(),
+                'preferences_changed': () => this.applyInitialState().then(() => this.refreshPlaylist()),
                 'show_confirmation': (req, send) => this._handleAsyncConfirmation(req, send),
                 'show_clear_confirmation': async (req) => {
                     const confirmed = await this.showPageLevelConfirmation(`MPV finished naturally. Clear the playlist in "${req.folderId}"?`);
@@ -642,6 +642,22 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     }
                 });
             }
+        }
+
+        handleWatchedToggle(itemId, isChecked) {
+            const folderId = this.ui.shadowRoot?.getElementById('folder-select')?.value;
+            if (!folderId) return;
+
+            const isMarked = !isChecked;
+            this.bridge.send('update_item_marked_as_watched', folderId, {
+                itemId: itemId,
+                markedAsWatched: isMarked
+            });
+            
+            this.addLogEntry({ 
+                text: `[Content]: ${isMarked ? 'Marked' : 'Unmarked'} item as watched.`, 
+                type: 'info' 
+            });
         }
 
         setPlaybackLoading(isLoading) {

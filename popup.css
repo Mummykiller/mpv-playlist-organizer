@@ -250,7 +250,7 @@ button:disabled {
 
 #status-message {
     font-size: 13px;
-    text-align: center;
+    text-align: left;
     padding-bottom: 4px;
     min-height: 1.2em;
     transition: color 0.2s ease;
@@ -936,6 +936,51 @@ button:disabled {
     border-color: var(--accent-primary);
 }
 
+.anilist-nav-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    margin-bottom: 4px;
+    background-color: transparent; /* Subtle/Invisible background as requested */
+}
+
+.anilist-nav-btn {
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    color: var(--text-secondary);
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    min-width: 32px;
+    height: 28px;
+    box-shadow: none;
+}
+
+.anilist-nav-btn:hover:not(:disabled) {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+}
+
+.anilist-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.anilist-nav-btn.today-btn {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    min-width: 80px;
+}
+
 .anilist-release-delay-info {
     font-size: 13px;
     color: var(--text-secondary);
@@ -1244,9 +1289,9 @@ button:disabled {
     border-radius: var(--radius);
     padding: 8px;
     background-color: var(--bg-secondary);
-    max-height: 200px;
+    max-height: 220px; /* Increased slightly */
     overflow-y: auto;
-    margin-top: 0; /* Changed from 8px to align better */
+    margin-top: 0;
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -1273,8 +1318,30 @@ button:disabled {
 }
 
 .playlist-container .list-item:hover {
-    background-color: #44484e; /* Slightly darker tertiary */
+    background-color: #44484e;
     border-color: var(--border-hover);
+}
+
+.btn-copy-item {
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    margin-right: 8px; /* Spacing before index */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background-color: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    box-shadow: none;
+}
+
+.btn-copy-item:hover {
+    color: var(--text-primary);
+    box-shadow: 0 0 6px 0 var(--accent-primary);
 }
 
 /* --- Highlighting the active (last played) item --- */
@@ -1319,6 +1386,7 @@ button:disabled {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    text-align: left;
 }
 
 .playlist-container .list-item .main-title-highlight {

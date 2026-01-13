@@ -539,6 +539,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                     itemDiv.dataset.index = index;
                     itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
 
+                    // 1. Copy URL Button
+                    if (prefs.show_copy_title_button) {
+                        const copyBtn = document.createElement('button');
+                        copyBtn.className = 'btn-copy-item';
+                        copyBtn.dataset.url = item.url;
+                        copyBtn.title = 'Copy URL';
+                        copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+                        itemDiv.appendChild(copyBtn);
+                    }
+
                     const indexSpan = document.createElement('span');
                     indexSpan.className = 'url-index';
                     indexSpan.textContent = `${index + 1}.`;
@@ -568,8 +578,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     itemId: item.id,
                                     markedAsWatched: isMarked
                                 });
+                                showStatus(`${isMarked ? 'Marked' : 'Unmarked'} item as watched.`);
                             } catch (err) {
                                 console.error("Failed to update watched status:", err);
+                                showStatus("Failed to update watched status.", true);
                             }
                         });
                         itemDiv.appendChild(watchedCheckbox);
@@ -1329,6 +1341,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- Playlist Event Binding ---
     playlistContainer.addEventListener('click', (e) => {
         const removeBtn = e.target.closest('.btn-remove-item');
+        const copyBtn = e.target.closest('.btn-copy-item');
+
         if (removeBtn) {
             const index = parseInt(removeBtn.dataset.index, 10);
             const folderId = miniFolderSelect.value;
@@ -1336,6 +1350,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                  sendMessageAsync({ action: 'remove_item', folderId, data: { index } }).catch(err => {
                      showStatus("Failed to remove item: " + err.message, true);
                  });
+            }
+        } else if (copyBtn) {
+            const url = copyBtn.dataset.url;
+            if (url) {
+                navigator.clipboard.writeText(url)
+                    .then(() => showStatus("Copied URL to clipboard."))
+                    .catch(err => showStatus("Failed to copy URL.", true));
             }
         }
     });
@@ -1479,7 +1500,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                     const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
                     const activeTab = tabs && tabs.length > 0 ? tabs[0] : null;
-                    const isHttp = activeTab?.url?.startsWith('http');
+                    const isHttp = activeTab?.url?.startsWith('http') ?? false;
                     const tabId = activeTab?.id;
 
                     // Sync Mode: Correct initial mode if tab-specific state differs
@@ -1496,7 +1517,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                     // Update Add button state based on detected URL
                     if (activeTab && miniAddBtn) {
-                        const isYouTube = activeTab.url.includes('youtube.com/watch');
+                        const isYouTube = activeTab.url ? activeTab.url.includes('youtube.com/watch') : false;
                         const detectedUrl = uiState?.detectedUrl;
                         if (detectedUrl) currentDetectedUrl = detectedUrl;
                         
@@ -1624,31 +1645,97 @@ document.addEventListener('DOMContentLoaded', async () => {
     const anilistReleasesSection = document.querySelector('.anilist-releases-section');
     const anilistReleasesContent = document.getElementById('anilist-releases-content');
     const refreshAnilistBtn = document.getElementById('btn-refresh-anilist');
+    const anilistNavControls = document.querySelector('.anilist-nav-controls');
+    const btnAnilistPrev = document.getElementById('btn-anilist-prev');
+    const btnAnilistNext = document.getElementById('btn-anilist-next');
+    const btnAnilistToday = document.getElementById('btn-anilist-today');
 
-    async function fetchAniListReleases(forceRefresh = false) {
-        anilistReleasesContent.innerHTML = '<div class="loading-spinner"></div>';
+    let currentAnilistOffset = 0;
+
+    async function fetchAniListReleases(forceRefresh = false, offset = 0) {
+        // Show nav controls if they were hidden
+        if (anilistNavControls) anilistNavControls.style.display = 'flex';
+        
+        // Remove existing list but keep nav controls
+        const existingList = anilistReleasesContent.querySelector('.anilist-releases-list, .anilist-empty-message, .anilist-error');
+        if (existingList) existingList.remove();
+
+        // Add spinner after nav controls
+        let spinner = anilistReleasesContent.querySelector('.loading-spinner');
+        if (!spinner) {
+            spinner = document.createElement('div');
+            spinner.className = 'loading-spinner';
+            anilistReleasesContent.appendChild(spinner);
+        }
+        spinner.style.display = 'block';
+
+        // Update nav buttons state
+        if (btnAnilistPrev) btnAnilistPrev.disabled = (offset <= -6);
+        if (btnAnilistNext) btnAnilistNext.disabled = (offset >= 6);
+        if (btnAnilistToday) {
+            btnAnilistToday.style.opacity = (offset === 0) ? '0.5' : '1';
+            btnAnilistToday.style.cursor = (offset === 0) ? 'default' : 'pointer';
+            
+            // Show date on today button if not zero
+            if (offset !== 0) {
+                const targetDate = new Date();
+                targetDate.setDate(targetDate.getDate() + offset);
+                btnAnilistToday.textContent = targetDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+            } else {
+                btnAnilistToday.textContent = 'Today';
+            }
+        }
+
         try {
-            const releases = await AniListRenderer.fetchReleases(forceRefresh);
-            AniListRenderer.render(anilistReleasesContent, releases);
-            // After a refresh, if the section is open, scroll to the bottom to ensure
-            // the new content is visible. This fixes the issue in the mini-view.
+            const releases = await AniListRenderer.fetchReleases(forceRefresh, offset);
+            spinner.style.display = 'none';
+            AniListRenderer.render(anilistReleasesContent, releases, offset);
+            
             if (anilistReleasesSection.open) {
-                // Use a short timeout to allow the new content to render first.
                 setTimeout(() => smoothScrollTo(document.body.scrollHeight, 400), 50);
             }
         } catch (error) {
-            const errorElement = document.createElement('li');
+            spinner.style.display = 'none';
+            const errorElement = document.createElement('div');
             errorElement.className = 'anilist-error';
             errorElement.textContent = `Error: ${error.message}`;
-            anilistReleasesContent.innerHTML = '';
             anilistReleasesContent.appendChild(errorElement);
         }
     }
 
+    if (btnAnilistPrev) {
+        btnAnilistPrev.addEventListener('click', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (currentAnilistOffset > -6) {
+                currentAnilistOffset--;
+                fetchAniListReleases(false, currentAnilistOffset);
+            }
+        });
+    }
+
+    if (btnAnilistNext) {
+        btnAnilistNext.addEventListener('click', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (currentAnilistOffset < 6) {
+                currentAnilistOffset++;
+                fetchAniListReleases(false, currentAnilistOffset);
+            }
+        });
+    }
+
+    if (btnAnilistToday) {
+        btnAnilistToday.addEventListener('click', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (currentAnilistOffset !== 0) {
+                currentAnilistOffset = 0;
+                fetchAniListReleases(false, 0);
+            }
+        });
+    }
+
     refreshAnilistBtn.addEventListener('click', (e) => {
-        e.preventDefault(); // Prevent the <details> from toggling
-        e.stopPropagation();
-        fetchAniListReleases(true); // Force a refresh
+        e.preventDefault(); e.stopPropagation();
+        fetchAniListReleases(true, currentAnilistOffset);
     });
 
     anilistReleasesSection.addEventListener('toggle', (event) => {

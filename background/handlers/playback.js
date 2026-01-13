@@ -715,6 +715,18 @@ export async function handleUpdateItemMarkedAsWatched(data) {
             if (item.id === itemId) {
                 item.marked_as_watched = markedAsWatched;
                 await storage.set(storageData);
+                
+                // Broadcast update so all UI instances refresh (Tabs + Popup)
+                const playbackState = await getVisualPlaybackState(folderId, folder.playlist);
+                broadcastToTabs({ 
+                    action: 'render_playlist', 
+                    folderId: folderId, 
+                    playlist: folder.playlist,
+                    last_played_id: folder.last_played_id,
+                    isFolderActive: playbackState.isActive,
+                    isPaused: playbackState.isPaused,
+                    needsAppend: playbackState.needsAppend
+                });
                 break;
             }
         }

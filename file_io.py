@@ -255,13 +255,19 @@ def _safe_json_load(filepath, default_factory=dict):
 # --- File I/O Functions ---
 
 def get_mpv_executable():
-    """Gets the path to the mpv executable based on OS and config."""
+    """Gets the path to the mpv executable by prioritizing PATH then config."""
     current_platform = platform.system()
     mpv_default_name = "mpv.exe" if current_platform == "Windows" else "mpv"
 
+    # 1. Prioritize System PATH
+    found_in_path = shutil.which(mpv_default_name)
+    if found_in_path:
+        return found_in_path
+
+    # 2. Fallback to Configured Path
     config = _safe_json_load(CONFIG_FILE)
     configured_mpv_path = config.get("mpv_path")
-    if configured_mpv_path:
+    if configured_mpv_path and os.path.exists(configured_mpv_path):
         return configured_mpv_path
     
     return mpv_default_name
