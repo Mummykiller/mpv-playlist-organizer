@@ -1422,12 +1422,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             // 1. INSTANT RENDER: Direct storage access (No Background Script required)
             // This bypasses Service Worker wakeup lag completely.
-            const initialStorage = await chrome.storage.local.get(['mpv_settings', 'mpv_folder_index']);
+            const initialStorage = await chrome.storage.local.get(['mpv_settings', 'mpv_folder_index', 'mpv_playback_cache']);
             
             // Reconstruct minimal baseline data for instant render
             const prefs = initialStorage.mpv_settings?.ui_preferences?.global;
             const folderIds = initialStorage.mpv_folder_index || ['Default'];
             const lastUsedFolderId = initialStorage.mpv_settings?.last_used_folder_id || folderIds[0];
+            const playbackCache = initialStorage.mpv_playback_cache || {};
             
             // Get initial playlist for the last used folder instantly
             const initialPlaylistData = await chrome.storage.local.get(`mpv_folder_data_${lastUsedFolderId}`);
@@ -1451,8 +1452,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             populateFolderDropdowns({ success: true, folderIds, lastUsedFolderId });
             
             if (uiManager.isMiniView()) {
-                // Render playlist instantly from storage (Static state)
-                renderPlaylist(initialPlaylist, lastPlayedId, false, false, false);
+                // Render playlist instantly from storage (Static state + Playback cache)
+                const isFolderActive = playbackCache.folderId === lastUsedFolderId && !playbackCache.isIdle;
+                const isPaused = playbackCache.isPaused || false;
+                
+                // Determine if we need append based on session IDs in cache vs current playlist
+                let needsAppend = false;
+                if (playbackCache.session_ids && initialPlaylist.length > 0) {
+                    const sessionIds = new Set(playbackCache.session_ids);
+                    needsAppend = initialPlaylist.some(item => !sessionIds.has(item.id));
+                }
+
+                renderPlaylist(initialPlaylist, lastPlayedId, isFolderActive, isPaused, needsAppend);
+                if (miniPlayBtn) miniPlayBtn.classList.toggle('btn-playing', isFolderActive);
+                
                 if (miniAddBtn) miniAddBtn.focus();
             } else {
                 if (prefs?.autofocus_new_folder) newFolderNameInput.focus();

@@ -10,6 +10,7 @@ addNativeListener('mpv_exited', (data) => handleMpvExited(data));
 addNativeListener('update_last_played', (data) => handleUpdateLastPlayed(data));
 addNativeListener('update_item_resume_time', (data) => handleUpdateItemResumeTime(data));
 addNativeListener('update_item_marked_as_watched', (data) => handleUpdateItemMarkedAsWatched(data));
+addNativeListener('playback_status_changed', (data) => handlePlaybackStatusChanged(data));
 addNativeListener('session_restored', (data) => handleSessionRestored(data));
 
 class PlaybackSession {
@@ -627,6 +628,13 @@ export async function handleUpdateLastPlayed(data) {
     if (storageData.folders[folderId]) {
         storageData.folders[folderId].last_played_id = itemId;
         await storage.set(storageData);
+
+        // Also update playback cache for instant render consistency
+        const currentCache = (await chrome.storage.local.get('mpv_playback_cache')).mpv_playback_cache || {};
+        if (currentCache.folderId === folderId) {
+            currentCache.isIdle = false;
+            await chrome.storage.local.set({ 'mpv_playback_cache': currentCache });
+        }
         
         // Broadcast the update so the UI highlights the new item immediately
         broadcastToTabs({ 
@@ -656,6 +664,40 @@ export async function handleUpdateItemResumeTime(data) {
                 break;
             }
         }
+    }
+}
+
+/**
+ * Handles 'playback_status_changed' from the native host tracker.
+ * Caches the state in storage for instant UI access.
+ */
+export async function handlePlaybackStatusChanged(data) {
+    const { folderId, is_paused, is_idle, session_ids } = data;
+    if (!folderId) return;
+
+    // Cache in local storage for instant popup access
+    await chrome.storage.local.set({
+        'mpv_playback_cache': {
+            folderId,
+            isPaused: is_paused,
+            isIdle: is_idle,
+            session_ids: session_ids || [],
+            timestamp: Date.now()
+        }
+    });
+
+    // Notify UI
+    const storageData = await storage.get();
+    const folder = storageData.folders[folderId];
+    if (folder) {
+        broadcastToTabs({ 
+            action: 'render_playlist', 
+            folderId: folderId, 
+            playlist: folder.playlist,
+            last_played_id: folder.last_played_id,
+            isFolderActive: !is_idle,
+            isPaused: is_paused
+        });
     }
 }
 

@@ -105,6 +105,9 @@ class PlaylistTracker:
         self.ipc_manager.send({"command": ["observe_property", 2, "time-pos"]})
         # Added: ensure we also observe path changes as a backup/trigger
         self.ipc_manager.send({"command": ["observe_property", 3, "path"]})
+        # Added: observe pause and idle state for proactive UI updates
+        self.ipc_manager.send({"command": ["observe_property", 4, "pause"]})
+        self.ipc_manager.send({"command": ["observe_property", 5, "idle-active"]})
 
         current_id = None
         current_time = 0
@@ -118,6 +121,8 @@ class PlaylistTracker:
                     logging.info("[PY][Tracker] Tracker reconnected. Re-observing properties.")
                     self.ipc_manager.send({"command": ["observe_property", 1, "user-data/id"]})
                     self.ipc_manager.send({"command": ["observe_property", 2, "time-pos"]})
+                    self.ipc_manager.send({"command": ["observe_property", 4, "pause"]})
+                    self.ipc_manager.send({"command": ["observe_property", 5, "idle-active"]})
                 else:
                     time.sleep(2)
                     continue
@@ -186,7 +191,13 @@ class PlaylistTracker:
                             # 5. Immediately notify the extension to update the UI highlight
                             logging.info(f"[PY][Tracker] Active episode changed to ID {current_id}. Notifying UI.")
                             self._update_last_played(current_id)
+                            # Also update general status
+                            self._update_playback_status()
                     
+                    elif prop_name == 'pause' or prop_name == 'idle-active':
+                        logging.debug(f"[PY][Tracker] property-change '{prop_name}' detected: {data}")
+                        self._update_playback_status()
+
                     elif prop_name == 'time-pos':
                         if current_id and current_id != -1 and current_id != "-1" and data is not None:
                             # Ignore negative or invalid timestamps
@@ -405,6 +416,37 @@ class PlaylistTracker:
             
             # Prevent spamming this error for the same item in this session
             self.watched_this_session.add(item_id)
+
+    def _update_playback_status(self):
+        """Notifies the host about general playback status changes (pause, idle, playlist)."""
+        if not self.ipc_manager or not self.ipc_manager.is_connected():
+            return
+
+        try:
+            pause_res = self.ipc_manager.send({"command": ["get_property", "pause"]}, expect_response=True, timeout=0.2)
+            idle_res = self.ipc_manager.send({"command": ["get_property", "idle-active"]}, expect_response=True, timeout=0.2)
+            
+            is_paused = pause_res.get("data") if pause_res and pause_res.get("error") == "success" else False
+            is_idle = idle_res.get("data") if idle_res and idle_res.get("error") == "success" else False
+            
+            # Send status update back to Python Host
+            self.send_message({
+                "action": "playback_status_changed",
+                "folderId": self.folder_id,
+                "is_paused": is_paused,
+                "is_idle": is_idle,
+                "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
+            })
+        except Exception as e:
+            logging.debug(f"[PY][Tracker] Failed to update playback status: {e}")
+
+    def _update_last_played(self, item_id):
+        """Notifies the host about which item is currently playing."""
+        self.send_message({
+            "action": "update_last_played",
+            "folderId": self.folder_id,
+            "itemId": item_id
+        })
 
     def _remote_log(self, message):
         """Sends a message to MPV to be printed in its terminal."""
