@@ -9,6 +9,7 @@ sys.dont_write_bytecode = True
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
 from utils import ipc_utils
+from utils import url_analyzer
 from utils.youtube_history import mark_video_as_watched_threaded
 
 class PlaylistTracker:
@@ -363,10 +364,30 @@ class PlaylistTracker:
         is_enabled = target_item.get('mark_watched')
         already_marked = target_item.get('marked_as_watched', False)
         has_cookies = target_item.get('cookies_file') is not None
+        has_browser = target_item.get('cookies_browser') is not None
         has_url = target_item.get('original_url') is not None
         
         title = target_item.get('title') or target_item.get('original_url') or item_id
         if len(title) > 50: title = title[:47] + "..."
+
+        # Lazy Extraction: If we are using direct browser access, we won't have a file yet.
+        # Extract it now solely for the purpose of marking as watched.
+        if is_enabled and not already_marked and has_url and not has_cookies and has_browser:
+            browser = target_item['cookies_browser']
+            watch_url = target_item['original_url']
+            logging.info(f"[PY][Tracker] Lazy-extracting cookies from {browser} for history update...")
+            self._remote_log(f"AdaptiveHeaders: Extracting cookies for history...")
+            
+            # Use volatile storage (RAM)
+            extracted_path = url_analyzer.get_cookies_file(browser, watch_url, force_refresh=False)
+            
+            if extracted_path:
+                with self.lock:
+                    target_item['cookies_file'] = extracted_path
+                has_cookies = True
+                logging.info(f"[PY][Tracker] Cookies extracted to {extracted_path}")
+            else:
+                logging.warning(f"[PY][Tracker] Failed to lazy-extract cookies for history.")
 
         if is_enabled and not already_marked and has_cookies and has_url:
             self.watched_this_session.add(item_id)

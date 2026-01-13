@@ -45,7 +45,8 @@ class EnrichmentService:
             disable_http_persistent_flag,
             cookies_file,
             mark_watched_flag,
-            ytdl_format_from_script
+            ytdl_format_from_script,
+            cookies_browser
         ) = apply_bypass_script(url_dict_for_analysis, self.send_message, settings=settings)
         
         if entries:
@@ -58,6 +59,11 @@ class EnrichmentService:
                 entry['is_youtube'] = True
                 if 'use_ytdl_mpv' not in entry:
                     entry['use_ytdl_mpv'] = False 
+                
+                # Propagate cookies browser if available
+                if cookies_browser: entry['cookies_browser'] = cookies_browser
+                if cookies_file: entry['cookies_file'] = cookies_file
+
                 processed_entries.append(entry)
             return processed_entries
 
@@ -81,6 +87,7 @@ class EnrichmentService:
         item['is_youtube'] = is_youtube_flag_from_script
         item['disable_http_persistent'] = disable_http_persistent_flag
         item['cookies_file'] = cookies_file
+        item['cookies_browser'] = cookies_browser # Store browser name
         item['mark_watched'] = mark_watched_flag
         
         if cookies_file and session_cookies_ref is not None:
@@ -105,8 +112,8 @@ class EnrichmentService:
                 
                 if is_youtube_playlist:
                     logging.info(f"Expanding YouTube playlist: {url_items_or_m3u}")
-                    # Unpack all 10 values to avoid ValueError
-                    _, _, _, _, _, entries, _, _, _, _ = apply_bypass_script({'url': url_items_or_m3u}, self.send_message)
+                    # Unpack all 11 values to avoid ValueError
+                    _, _, _, _, _, entries, _, _, _, _, _ = apply_bypass_script({'url': url_items_or_m3u}, self.send_message)
                     if entries:
                         _url_items_list = entries
                         input_was_raw = True
@@ -203,7 +210,12 @@ class EnrichmentService:
                         if item.get('is_youtube') and item.get('original_url'):
                             item_url = sanitize_url(item['original_url'])
                         
-                        final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), essential_flags)
+                        raw_opts = item.get('ytdl_raw_options')
+                        if item.get('cookies_browser'):
+                             browser_opt = f"cookies-from-browser={item['cookies_browser']}"
+                             raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
+                        final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
+
                         lua_options = {
                             "id": item.get('id'), "title": item.get('title'),
                             "headers": item.get('headers'), "ytdl_raw_options": final_item_raw_opts,
@@ -226,7 +238,11 @@ class EnrichmentService:
 
                     # --- Centralized Flag Collection for Background Enrichment ---
                     essential_flags = services.get_essential_ytdlp_flags()
-                    final_item_raw_opts = file_io.merge_ytdlp_options(enriched.get('ytdl_raw_options'), essential_flags)
+                    raw_opts = enriched.get('ytdl_raw_options')
+                    if enriched.get('cookies_browser'):
+                         browser_opt = f"cookies-from-browser={enriched['cookies_browser']}"
+                         raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
+                    final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
 
                     lua_options = {
                         "id": enriched.get('id'), "title": enriched.get('title'),
@@ -320,6 +336,7 @@ class LauncherService:
         ytdl_raw_options = kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options')
         headers = kwargs.get('headers') or url_item.get('headers')
         disable_http_persistent = kwargs.get('disable_http_persistent') if kwargs.get('disable_http_persistent') is not None else url_item.get('disable_http_persistent', False)
+        cookies_browser = kwargs.get('cookies_browser') or url_item.get('cookies_browser')
 
         launch_url = sanitize_url(url_item.get('url'))
 
@@ -350,7 +367,8 @@ class LauncherService:
                 input_terminal="no" if not force_terminal else "yes",
                 settings=settings,
                 flag_dir=self.session.FLAG_DIR,
-                playlist_start_index=playlist_start_index
+                playlist_start_index=playlist_start_index,
+                cookies_browser=cookies_browser
             )
 
             # Add precise resume if needed for initial launch
@@ -407,7 +425,11 @@ class LauncherService:
                     
                     # --- Centralized Flag Collection for Launch ---
                     essential_flags = services.get_essential_ytdlp_flags()
-                    final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), essential_flags)
+                    raw_opts = item.get('ytdl_raw_options')
+                    if item.get('cookies_browser'):
+                         browser_opt = f"cookies-from-browser={item['cookies_browser']}"
+                         raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
+                    final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
 
                     lua_options = {
                         "id": item.get('id'),
@@ -432,7 +454,11 @@ class LauncherService:
             # We only set hot-swap-options for the SPECIFIC item we are about to load.
             # This ensures adaptive_headers.lua has the correct context immediately.
             essential_flags = services.get_essential_ytdlp_flags()
-            final_launch_raw_opts = file_io.merge_ytdlp_options(url_item.get('ytdl_raw_options'), essential_flags)
+            raw_opts = url_item.get('ytdl_raw_options')
+            if url_item.get('cookies_browser'):
+                 browser_opt = f"cookies-from-browser={url_item['cookies_browser']}"
+                 raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
+            final_launch_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
             
             launch_lua_options = {
                 "id": url_item.get('id'),
