@@ -38,6 +38,7 @@ export class OptionsManager {
             { key: 'autofocus_new_folder', elementId: 'autofocus-new-folder-checkbox', type: 'checkbox' },
             { key: 'enable_dblclick_copy', elementId: 'enable-dblclick-copy-checkbox', type: 'checkbox' },
             { key: 'show_copy_title_button', elementId: 'show-copy-title-button-checkbox', type: 'checkbox' },
+            { key: 'show_watched_status_gui', elementId: 'show-watched-status-gui-checkbox', type: 'checkbox' },
             { key: 'lockAnilistPanel', elementId: 'lock-anilist-panel-checkbox', type: 'checkbox' },
             { key: 'forcePanelAttached', elementId: 'force-panel-attached-checkbox', type: 'checkbox' },
             { key: 'anilistAttachOnOpen', elementId: 'anilist-attach-on-open-checkbox', type: 'checkbox' },

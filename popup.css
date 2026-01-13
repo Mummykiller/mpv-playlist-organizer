@@ -1326,6 +1326,14 @@ button:disabled {
     font-weight: 500;
 }
 
+.item-watched-checkbox {
+    margin: 0 8px 0 4px;
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
 .playlist-container .list-item .btn-remove-item {
     background: none;
     border: none;

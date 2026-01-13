@@ -427,6 +427,14 @@ select:focus-visible {
     color: var(--accent-success); /* Use the green accent color */
 }
 
+.item-watched-checkbox {
+    margin: 0 8px 0 4px;
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
 /* --- New: Animation for Copy Feedback --- */
 /* Defines the keyframes for the text glow animation. */
 @keyframes text-glow-success {
