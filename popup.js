@@ -291,10 +291,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     /**
-     * Fetches all folder IDs and populates all folder dropdowns in the popup.
+     * Populates all folder dropdowns in the popup.
+     * @param {object} data Optional pre-fetched folder data.
      */
-    function populateFolderDropdowns() {
-        sendMessageAsync({ action: 'get_all_folder_ids' }).then(response => {
+    function populateFolderDropdowns(data = null) {
+        const processResponse = (response) => {
             if (!response?.success) return;
 
             // Clear existing options
@@ -315,11 +316,19 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             updateRemoveButtonState();
-            refreshPlaylist(); // Now fetches the full playlist
-        }).catch(e => {
-            console.error("Failed to populate folder dropdowns:", e);
-            showStatus("Connection to background script lost.", true);
-        });
+        };
+
+        if (data) {
+            processResponse(data);
+        } else {
+            sendMessageAsync({ action: 'get_all_folder_ids' })
+                .then(processResponse)
+                .then(() => refreshPlaylist())
+                .catch(e => {
+                    console.error("Failed to populate folder dropdowns:", e);
+                    showStatus("Connection to background script lost.", true);
+                });
+        }
     }
 
     /**
@@ -370,7 +379,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
             const prefs = prefsResponse?.preferences;
-            if (prefs?.preferences?.confirm_remove_folder ?? true) {
+            if (prefs?.confirm_remove_folder ?? true) {
                 const confirmed = await showPopupConfirmation(`Are you sure you want to remove the folder "${folderId}"? This action cannot be undone.`);
                 if (!confirmed) return;
             }
@@ -453,18 +462,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /**
      * Fetches the playlist for a given folder and renders it.
+     * @param {object} data Optional pre-fetched playlist data.
      */
-    async function refreshPlaylist() {
-        const folderId = miniFolderSelect.value;
-        if (!folderId) return;
-
-        try {
-            const response = await sendMessageAsync({ action: 'get_playlist', folderId });
+    async function refreshPlaylist(data = null) {
+        const processResponse = (response) => {
             if (response?.success) {
                 // Update play button state
                 miniPlayBtn.classList.toggle('btn-playing', !!response.isFolderActive);
                 renderPlaylist(response.list, response.last_played_id, response.isFolderActive, response.isPaused, response.needsAppend);
             }
+        };
+
+        if (data) {
+            processResponse(data);
+            return;
+        }
+
+        const folderId = miniFolderSelect.value;
+        if (!folderId) return;
+
+        try {
+            const response = await sendMessageAsync({ action: 'get_playlist', folderId });
+            processResponse(response);
         } catch (e) {
             console.error("Failed to refresh playlist:", e);
         }
@@ -1401,76 +1420,94 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- Main Initialization ---
     async function initializePopup() {
         try {
-            // Update native host status immediately
-            updateNativeHostStatusUI();
+            // 1. INSTANT RENDER: Direct storage access (No Background Script required)
+            // This bypasses Service Worker wakeup lag completely.
+            const initialStorage = await chrome.storage.local.get(['mpv_settings', 'mpv_folder_index']);
+            
+            // Reconstruct minimal baseline data for instant render
+            const prefs = initialStorage.mpv_settings?.ui_preferences?.global;
+            const folderIds = initialStorage.mpv_folder_index || ['Default'];
+            const lastUsedFolderId = initialStorage.mpv_settings?.last_used_folder_id || folderIds[0];
+            
+            // Get initial playlist for the last used folder instantly
+            const initialPlaylistData = await chrome.storage.local.get(`mpv_folder_data_${lastUsedFolderId}`);
+            const initialPlaylist = initialPlaylistData[`mpv_folder_data_${lastUsedFolderId}`]?.playlist || [];
+            const lastPlayedId = initialPlaylistData[`mpv_folder_data_${lastUsedFolderId}`]?.last_played_id;
 
-            // Fetch all necessary data in parallel for faster startup
-            const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
-            const activeTab = tabs && tabs.length > 0 ? tabs[0] : null;
-            const isHttp = activeTab?.url?.startsWith('http');
+            // Set initial mode optimistically based on prefs
+            const showMiniView = (prefs?.mode === 'minimized');
+            uiManager.setMode(showMiniView ? 'mini' : 'full');
 
-            const [uiStateResponse, prefsResponse] = await Promise.all([
-                isHttp ? sendMessageAsync({ action: 'get_ui_state_for_tab', tabId: activeTab.id }) : Promise.resolve({ success: false }),
-                sendMessageAsync({ action: 'get_ui_preferences' })
-            ]);
-
-            const prefs = prefsResponse?.preferences;
-            const uiState = uiStateResponse?.state;
-
-            // Store the open-popup keybind for toggle behavior
-            if (prefs?.kb_open_popup) {
-                popupKeybinds.openPopup = prefs.kb_open_popup;
-            }
-
-            // New: Check for a detected URL on initialization and update the button state.
-            if (activeTab && miniAddBtn) {
-                const isYouTube = activeTab.url.includes('youtube.com/watch');
-                const detectedUrl = uiState?.detectedUrl;
-                
-                if (detectedUrl) currentDetectedUrl = detectedUrl;
-                
-                const hasStream = !!detectedUrl || isYouTube;
-                miniAddBtn.classList.toggle('stream-present', hasStream);
-                miniAddBtn.disabled = !hasStream;
-                
-                if (!hasStream) {
-                    miniAddBtn.title = "No stream detected";
-                } else {
-                    miniAddBtn.title = isYouTube ? "YouTube Video detected" : "Stream/video detected";
-                }
-            }
-
-            uiManager.determineAndSetInitialMode(isHttp, uiState, prefs);
-
-            // Populate UI with data
-            populateFolderDropdowns();
+            // Apply baseline UI instantly
             if (prefs) {
                 optionsManager.updateAllPreferencesUI(prefs);
+                if (btnMiniToggleStub) {
+                    const isStubEnabled = prefs.show_minimized_stub ?? true;
+                    btnMiniToggleStub.style.opacity = isStubEnabled ? '1' : '0.5';
+                }
+                if (prefs.kb_open_popup) popupKeybinds.openPopup = prefs.kb_open_popup;
             }
-            
-            if (btnMiniToggleStub) {
-                const isStubEnabled = prefs?.show_minimized_stub ?? true;
-                btnMiniToggleStub.style.opacity = isStubEnabled ? '1' : '0.5';
-            }
-            updateRemoveButtonState();
 
+            populateFolderDropdowns({ success: true, folderIds, lastUsedFolderId });
+            
             if (uiManager.isMiniView()) {
-                refreshPlaylist();
-                showOnPageControllerBtn.style.display = isHttp ? 'block' : 'none';
-                hideOnPageControllerBtn.style.display = 'none';
+                // Render playlist instantly from storage (Static state)
+                renderPlaylist(initialPlaylist, lastPlayedId, false, false, false);
                 if (miniAddBtn) miniAddBtn.focus();
             } else {
-                // Apply focus to the new folder input if the setting is enabled
-                if (prefs?.autofocus_new_folder) {
-                    newFolderNameInput.focus();
-                }
-                // Hide the 'hide' button if the full view is active, show it otherwise.
-                // Only show if on an HTTP page.
-                hideOnPageControllerBtn.style.display = isHttp ? 'block' : 'none';
+                if (prefs?.autofocus_new_folder) newFolderNameInput.focus();
             }
 
+            // 2. BACKGROUND SYNC: Now fetch live/contextual data (Can be slow)
+            (async () => {
+                try {
+                    // Update native host status (Async)
+                    updateNativeHostStatusUI();
+
+                    const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+                    const activeTab = tabs && tabs.length > 0 ? tabs[0] : null;
+                    const isHttp = activeTab?.url?.startsWith('http');
+                    const tabId = activeTab?.id;
+
+                    // Sync Mode: Correct initial mode if tab-specific state differs
+                    let uiState = null;
+                    if (isHttp && tabId) {
+                        const uiStateResponse = await sendMessageAsync({ action: 'get_ui_state_for_tab', tabId });
+                        uiState = uiStateResponse?.state;
+                        uiManager.determineAndSetInitialMode(isHttp, uiState, prefs);
+                        
+                        // Update on-page buttons visibility
+                        showOnPageControllerBtn.style.display = 'block';
+                        hideOnPageControllerBtn.style.display = uiManager.isMiniView() ? 'none' : 'block';
+                    }
+
+                    // Update Add button state based on detected URL
+                    if (activeTab && miniAddBtn) {
+                        const isYouTube = activeTab.url.includes('youtube.com/watch');
+                        const detectedUrl = uiState?.detectedUrl;
+                        if (detectedUrl) currentDetectedUrl = detectedUrl;
+                        
+                        const hasStream = !!detectedUrl || isYouTube;
+                        miniAddBtn.classList.toggle('stream-present', hasStream);
+                        miniAddBtn.disabled = !hasStream;
+                        miniAddBtn.title = !hasStream ? "No stream detected" : (isYouTube ? "YouTube Video detected" : "Stream/video detected");
+                    }
+
+                    // Live Playback Sync: Get current MPV status to update Play/Pause/Append icons
+                    if (uiManager.isMiniView() && lastUsedFolderId) {
+                        const liveResponse = await sendMessageAsync({ action: 'get_playlist', folderId: lastUsedFolderId });
+                        if (liveResponse?.success) {
+                            renderPlaylist(liveResponse.list, liveResponse.last_played_id, liveResponse.isFolderActive, liveResponse.isPaused, liveResponse.needsAppend);
+                            miniPlayBtn.classList.toggle('btn-playing', !!liveResponse.isFolderActive);
+                        }
+                    }
+                } catch (bgError) {
+                    console.warn("[Popup] Background sync failed:", bgError);
+                }
+            })();
+
         } catch (error) {
-            // Fallback to the full management view on any error
+            console.error("[Popup] Initialization error:", error);
             uiManager.setMode('full');
             populateFolderDropdowns();
             updateRemoveButtonState();
