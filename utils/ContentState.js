@@ -35,6 +35,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     show_minimized_stub: true,
                     show_play_new_button: false,
                     enable_anilist_integration: true,
+                    show_watched_status_gui: true,
                     lockAnilistPanel: false,
                     forcePanelAttached: false,
                     anilistAttachOnOpen: true

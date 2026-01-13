@@ -336,6 +336,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                         lockAnilistPanel: prefs.lockAnilistPanel ?? false,
                         forcePanelAttached: prefs.forcePanelAttached ?? false,
                         anilistAttachOnOpen: prefs.anilistAttachOnOpen ?? true,
+                        show_watched_status_gui: prefs.show_watched_status_gui ?? true,
                         enable_dblclick_copy: prefs.enable_dblclick_copy ?? false,
                         show_copy_title_button: prefs.show_copy_title_button ?? false,
                         confirm_clear_playlist: prefs.confirm_clear_playlist ?? true,

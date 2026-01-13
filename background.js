@@ -61,6 +61,7 @@ const actionHandlers = {
     // MPV and Playlist Actions
     'is_mpv_running': playback_handlers.handleIsMpvRunning,
     'update_item_resume_time': playback_handlers.handleUpdateItemResumeTime,
+    'update_item_marked_as_watched': playback_handlers.handleUpdateItemMarkedAsWatched,
     'play': playback_handlers.handlePlay, 
     'play_m3u': playback_handlers.handlePlayM3U, 
     'append': playback_handlers.handleAppend,

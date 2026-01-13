@@ -140,6 +140,7 @@ export class StorageManager {
                         anilist_image_height: 126, lockAnilistPanel: false, forcePanelAttached: false,
                         anilistAttachOnOpen: true, popup_width: 600, yt_use_cookies: true,
                         yt_mark_watched: true, yt_ignore_config: true, other_sites_use_cookies: true,
+                        show_watched_status_gui: true,
                         minimizedStubPosition: { top: '15px', left: '15px' }, show_minimized_stub: true,
                         enable_smart_resume: true, enable_active_item_highlight: true,
                         disable_network_overrides: false, enable_cache: true, http_persistence: 'auto',

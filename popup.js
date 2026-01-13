@@ -476,7 +476,7 @@ document.addEventListener('DOMContentLoaded', async () => {
      * @param {string} lastPlayedId - The ID of the item that was last played in this folder.
      * @param {boolean} isFolderActive - Whether this folder is currently being played in MPV.
      */
-    async function renderPlaylist(playlist, lastPlayedId, isFolderActive = false, isPaused = false) {
+    function renderPlaylist(playlist, lastPlayedId, isFolderActive = false, isPaused = false) {
         const oldItemCount = playlistContainer.querySelectorAll('.list-item').length;
         const scrollPosition = playlistContainer.scrollTop;
         playlistContainer.innerHTML = ''; // Clear current content
@@ -493,45 +493,88 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         if (playlist && playlist.length > 0) {
-            const prefsResponse = await sendMessageAsync({ action: 'get_ui_preferences' });
-            const highlightEnabled = prefsResponse?.preferences?.enable_active_item_highlight ?? true;
-            const showCopyButton = prefsResponse?.preferences?.show_copy_title_button ?? false;
+            // Use storage directly or assume defaults for speed
+            sendMessageAsync({ action: 'get_ui_preferences' }).then(prefsResponse => {
+                const prefs = prefsResponse?.preferences || {};
+                const highlightEnabled = prefs.enable_active_item_highlight ?? true;
+                const showWatchedGUI = prefs.show_watched_status_gui ?? true;
 
-            playlist.forEach((item, index) => {
-                const itemDiv = document.createElement('div');
-                itemDiv.className = 'list-item';
-                
-                if (highlightEnabled && lastPlayedId && item.id === lastPlayedId) {
-                    if (isFolderActive) {
-                        itemDiv.classList.add('active-item');
-                    } else {
-                        itemDiv.classList.add('last-played-item');
+                playlist.forEach((item, index) => {
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'list-item';
+                    
+                    if (highlightEnabled && lastPlayedId && item.id === lastPlayedId) {
+                        if (isFolderActive) {
+                            itemDiv.classList.add('active-item');
+                        } else {
+                            itemDiv.classList.add('last-played-item');
+                        }
                     }
+
+                    itemDiv.draggable = true;
+                    itemDiv.title = item.url;
+                    itemDiv.dataset.url = item.url;
+                    itemDiv.dataset.title = item.title;
+                    itemDiv.dataset.index = index;
+                    itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
+
+                    const indexSpan = document.createElement('span');
+                    indexSpan.className = 'url-index';
+                    indexSpan.textContent = `${index + 1}.`;
+
+                    const urlSpan = document.createElement('span');
+                    urlSpan.className = 'url-text';
+                    _formatTitle(urlSpan, item); // Use the title formatting function
+
+                    itemDiv.append(indexSpan);
+
+                    // --- Watched Status Checkbox (Popup Controller) ---
+                    if (showWatchedGUI && (item.url.includes('youtube.com/') || item.url.includes('youtu.be/'))) {
+                        const watchedCheckbox = document.createElement('input');
+                        watchedCheckbox.type = 'checkbox';
+                        watchedCheckbox.className = 'item-watched-checkbox';
+                        watchedCheckbox.checked = !item.marked_as_watched;
+                        watchedCheckbox.title = watchedCheckbox.checked ? "Will mark as watched on YouTube" : "Already marked or skipped";
+                        
+                        watchedCheckbox.addEventListener('click', (e) => e.stopPropagation());
+                        watchedCheckbox.addEventListener('change', async (e) => {
+                            const isMarked = !watchedCheckbox.checked;
+                            const folderId = miniFolderSelect.value;
+                            try {
+                                await sendMessageAsync({
+                                    action: 'update_item_marked_as_watched',
+                                    folderId: folderId,
+                                    itemId: item.id,
+                                    markedAsWatched: isMarked
+                                });
+                            } catch (err) {
+                                console.error("Failed to update watched status:", err);
+                            }
+                        });
+                        itemDiv.appendChild(watchedCheckbox);
+                    }
+
+                    itemDiv.append(urlSpan);
+
+                    const removeBtn = document.createElement('button');
+                    removeBtn.className = 'btn-remove-item';
+                    removeBtn.dataset.index = index;
+                    removeBtn.title = 'Remove Item';
+                    removeBtn.innerHTML = '&times;';
+                    itemDiv.appendChild(removeBtn);
+
+                    playlistContainer.appendChild(itemDiv);
+                });
+
+                // Post-render scroll logic
+                const newItemCount = playlist.length;
+                const wasItemAdded = newItemCount > oldItemCount;
+                if (wasItemAdded && playlistContainer.scrollHeight > playlistContainer.clientHeight) {
+                    playlistContainer.scrollTop = playlistContainer.scrollHeight;
+                } else if (isFolderActive && lastPlayedId) {
+                    const activeItem = playlistContainer.querySelector('.active-item');
+                    if (activeItem) activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
-
-                itemDiv.draggable = true;
-                itemDiv.title = item.url;
-                itemDiv.dataset.url = item.url;
-                itemDiv.dataset.title = item.title;
-                itemDiv.dataset.index = index;
-                itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
-
-                const indexSpan = document.createElement('span');
-                indexSpan.className = 'url-index';
-                indexSpan.textContent = `${index + 1}.`;
-
-                const urlSpan = document.createElement('span');
-                urlSpan.className = 'url-text';
-                _formatTitle(urlSpan, item); // Use the title formatting function
-
-                const removeBtn = document.createElement('button');
-                removeBtn.className = 'btn-remove-item';
-                removeBtn.dataset.index = index;
-                removeBtn.title = 'Remove Item';
-                removeBtn.innerHTML = '&times;';
-
-                itemDiv.append(indexSpan, urlSpan, removeBtn);
-                playlistContainer.appendChild(itemDiv);
             });
         } else {
             const placeholder = document.createElement('p');
@@ -540,25 +583,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             playlistContainer.appendChild(placeholder);
         }
 
-        const newItemCount = playlist ? playlist.length : 0;
-        const wasItemAdded = newItemCount > oldItemCount;
-        const isScrollable = playlistContainer.scrollHeight > playlistContainer.clientHeight;
-
-        if (wasItemAdded && isScrollable) {
-            // If a new item was added and the list is scrollable, scroll to the bottom.
-            playlistContainer.scrollTop = playlistContainer.scrollHeight;
-        } else if (isFolderActive && lastPlayedId) {
-            // If the folder is active, find the active item and scroll it into view (centered).
-            const activeItem = playlistContainer.querySelector('.active-item');
-            if (activeItem) {
-                activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            } else {
-                playlistContainer.scrollTop = scrollPosition;
-            }
-        } else {
-            // Otherwise, restore the previous scroll position.
-            playlistContainer.scrollTop = scrollPosition;
-        }
+        // Restore scroll position immediately for non-playlist-change updates
+        playlistContainer.scrollTop = scrollPosition;
     }
 
     /**
