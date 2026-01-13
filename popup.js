@@ -463,7 +463,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (response?.success) {
                 // Update play button state
                 miniPlayBtn.classList.toggle('btn-playing', !!response.isFolderActive);
-                renderPlaylist(response.list, response.last_played_id, response.isFolderActive, response.isPaused);
+                renderPlaylist(response.list, response.last_played_id, response.isFolderActive, response.isPaused, response.needsAppend);
             }
         } catch (e) {
             console.error("Failed to refresh playlist:", e);
@@ -475,8 +475,10 @@ document.addEventListener('DOMContentLoaded', async () => {
      * @param {Array} playlist - The array of URL items to render.
      * @param {string} lastPlayedId - The ID of the item that was last played in this folder.
      * @param {boolean} isFolderActive - Whether this folder is currently being played in MPV.
+     * @param {boolean} isPaused - Whether the active playback is paused.
+     * @param {boolean} needsAppend - Whether there are items to append to the active session.
      */
-    function renderPlaylist(playlist, lastPlayedId, isFolderActive = false, isPaused = false) {
+    function renderPlaylist(playlist, lastPlayedId, isFolderActive = false, isPaused = false, needsAppend = false) {
         const oldItemCount = playlistContainer.querySelectorAll('.list-item').length;
         const scrollPosition = playlistContainer.scrollTop;
         playlistContainer.innerHTML = ''; // Clear current content
@@ -487,7 +489,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 miniPlayBtn.title = "Play/Pause Playlist";
                 miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
             } else {
-                miniPlayBtn.title = "Play Playlist";
+                miniPlayBtn.title = needsAppend ? "Append to Playlist" : "Play Playlist";
                 miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
             }
         }
@@ -1506,7 +1508,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const isMiniView = miniControllerView.style.display === 'flex';
             const currentFolderId = miniFolderSelect.value;
             if (isMiniView && currentFolderId === request.folderId) {
-                renderPlaylist(request.playlist, request.last_played_id, request.isFolderActive, request.isPaused);
+                renderPlaylist(request.playlist, request.last_played_id, request.isFolderActive, request.isPaused, request.needsAppend);
             }
         }
 

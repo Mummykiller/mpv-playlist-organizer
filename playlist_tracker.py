@@ -156,19 +156,32 @@ class PlaylistTracker:
 
                             # Try to find title for better logs/OSD
                             display_name = current_id
+                            is_yt = False
+                            is_enabled = True
+                            already_marked = False
                             with self.lock:
                                 for item in self.playlist:
                                     if item.get('id') == current_id:
                                         display_name = item.get('title') or item.get('url')
                                         if len(display_name) > 50: display_name = display_name[:47] + "..."
+                                        is_yt = item.get('is_youtube', False)
+                                        is_enabled = item.get('mark_watched', True)
+                                        already_marked = item.get('marked_as_watched', False)
                                         break
                             
+                            status_info = ""
+                            if is_yt:
+                                if not is_enabled:
+                                    status_info = " (Mark-as-watched: OFF)"
+                                elif already_marked:
+                                    status_info = " (Already marked)"
+
                             # 3. Notify the MPV terminal that we are tracking this new video
-                            self._remote_log(f"AdaptiveHeaders: Watch history tracking started (Python) for: {display_name}")
+                            self._remote_log(f"AdaptiveHeaders: Tracking: {display_name}{status_info}")
                             
                             # 4. VISIBLE OSD FEEDBACK: Notify the user on screen
                             if self.ipc_manager and self.ipc_manager.is_connected():
-                                self.ipc_manager.send({"command": ["show-text", f"Tracking: {display_name}", 2000]})
+                                self.ipc_manager.send({"command": ["show-text", f"Tracking: {display_name}{status_info}", 2000]})
 
                             # 5. Immediately notify the extension to update the UI highlight
                             logging.info(f"[PY][Tracker] Active episode changed to ID {current_id}. Notifying UI.")
@@ -340,6 +353,9 @@ class PlaylistTracker:
         already_marked = target_item.get('marked_as_watched', False)
         has_cookies = target_item.get('cookies_file') is not None
         has_url = target_item.get('original_url') is not None
+        
+        title = target_item.get('title') or target_item.get('original_url') or item_id
+        if len(title) > 50: title = title[:47] + "..."
 
         if is_enabled and not already_marked and has_cookies and has_url:
             self.watched_this_session.add(item_id)
@@ -348,8 +364,6 @@ class PlaylistTracker:
             cookies = target_item['cookies_file']
             headers = target_item.get('headers', {})
             ua = headers.get('User-Agent')
-            title = target_item.get('title') or watch_url
-            if len(title) > 50: title = title[:47] + "..."
             
             logging.info(f"[PY][Tracker] Triggering watch history update for: {watch_url}")
             self.send_message({"log": {"text": f"[Tracker]: Mark-as-watched triggered for YouTube video.", "type": "info"}})
@@ -378,6 +392,11 @@ class PlaylistTracker:
             
             reason_str = ", ".join(reasons)
             logging.warning(f"[PY][Tracker] Mark-as-watched skipped for {item_id}: {reason_str}")
+            
+            if already_marked:
+                self._remote_log(f"AdaptiveHeaders: {title} has been marked, ignoring.")
+            elif not is_enabled:
+                self._remote_log(f"AdaptiveHeaders: Mark-as-watched disabled for {title}, ignoring.")
             
             if is_enabled and not already_marked: # Only bother the user with a log if they actually expected it to work
                 self.send_message({"log": {"text": f"[Tracker]: Mark-as-watched skipped: {reason_str}", "type": "warning"}})

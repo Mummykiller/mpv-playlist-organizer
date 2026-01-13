@@ -52,7 +52,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 'render_playlist': (req) => {
                     if (req.playlist) {
                         this.playlistUI?.render(req.playlist, req.last_played_id, req.isFolderActive);
-                        this.setPlaybackActive(req.isFolderActive);
+                        this.setPlaybackActive(req.isFolderActive, req.needsAppend);
                     } else {
                         this.refreshPlaylist();
                     }
@@ -638,7 +638,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 this.bridge.send('get_playlist', folderId).then(response => {
                     if (response?.success) {
                         this.playlistUI?.render(response.list, targetLastPlayed || response.last_played_id, targetIsActive || response.isFolderActive);
-                        this.setPlaybackActive(targetIsActive || response.isFolderActive);
+                        this.setPlaybackActive(targetIsActive || response.isFolderActive, response.needsAppend);
                     }
                 });
             }
@@ -659,7 +659,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
             });
         }
 
-        setPlaybackActive(isActive) {
+        setPlaybackActive(isActive, needsAppend = false) {
             if (!this.ui.shadowRoot) return;
             this.state.update({ isFolderActive: isActive });
 
@@ -676,7 +676,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                         btn.classList.remove('btn-loading');
                         btn.title = "Play/Pause Playlist";
                     } else {
-                        btn.title = "Play Playlist";
+                        btn.title = needsAppend ? "Append to Playlist" : "Play Playlist";
                     }
                 }
             });
@@ -714,7 +714,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 if (action === 'play') {
                     this.setPlaybackLoading(false);
                     if (response?.success) {
-                        this.setPlaybackActive(true);
+                        this.setPlaybackActive(true, response.needsAppend);
                     }
                 }
 
@@ -725,7 +725,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     // Prefer using the list returned in the response if available (faster)
                     if (response.list) {
                         this.playlistUI?.render(response.list, response.last_played_id, response.isFolderActive);
-                        this.setPlaybackActive(response.isFolderActive);
+                        this.setPlaybackActive(response.isFolderActive, response.needsAppend);
                     } else {
                         // Fallback to a full refresh if the response is generic
                         this.refreshPlaylist();
