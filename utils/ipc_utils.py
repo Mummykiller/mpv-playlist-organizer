@@ -68,9 +68,14 @@ class IPCSocketManager:
         self._event_reader_thread = None # Added for background reader thread
         self._event_reader_running = False # Flag to control reader thread
         self._request_id_counter = 0
+        self._script_handlers = {} # Registry for script message handlers
 
     def is_connected(self):
         return self._sock is not None and self._event_reader_running
+
+    def register_script_message_handler(self, name, handler):
+        """Registers a callback function for a specific client-message name."""
+        self._script_handlers[name] = handler
 
     def connect(self, ipc_path, timeout=15.0, start_event_reader=True):
         """
@@ -156,16 +161,30 @@ class IPCSocketManager:
                     except json.JSONDecodeError:
                         continue
                     
-                    # Filter out noisy thumbnail script events
+                    # Check for script handlers
+                    handled = False
                     if event.get("event") == "client-message":
                         args = event.get("args", [])
-                        if args and isinstance(args[0], str) and args[0].startswith("mpv_thumbnail_script"):
-                            continue
+                        if args and len(args) > 0 and isinstance(args[0], str):
+                            msg_name = args[0]
+                            
+                            # Filter out noisy thumbnail script events
+                            if msg_name.startswith("mpv_thumbnail_script"):
+                                continue
 
-                    ipc_logger.info(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
-                    with self._buffer_lock:
-                        self._event_buffer.append(event)
-                        self._buffer_lock.notify_all() # Notify waiters that new data arrived
+                            if msg_name in self._script_handlers:
+                                try:
+                                    # We invoke the handler directly. Handlers must be non-blocking!
+                                    self._script_handlers[msg_name](args[1:])
+                                    handled = True
+                                except Exception as e:
+                                    logging.error(f"Error in script handler for {msg_name}: {e}")
+
+                    if not handled:
+                        ipc_logger.info(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
+                        with self._buffer_lock:
+                            self._event_buffer.append(event)
+                            self._buffer_lock.notify_all() # Notify waiters that new data arrived
                 else:
                     # EOF detected, connection closed by MPV or remote end
                     ipc_logger.info("IPC event reader detected EOF. Signaling connection closure.")

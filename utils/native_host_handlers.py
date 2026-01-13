@@ -58,8 +58,8 @@ class HandlerManager:
         # Call the refactored _resolve_or_assign_item_id
         url_item, all_folders = self._resolve_or_assign_item_id(url_item, folder_id, all_folders)
         
-        # New return signature from apply_bypass_script (10 values)
-        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, entries, disable_http_persistent_flag, cookies_file, mark_watched_flag, ytdl_format_from_script = self.services.apply_bypass_script(
+        # New return signature from apply_bypass_script (11 values)
+        processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, entries, disable_http_persistent_flag, cookies_file, mark_watched_flag, ytdl_format_from_script, cookies_browser = self.services.apply_bypass_script(
             url_item, self.send_message
         )
 
@@ -79,6 +79,11 @@ class HandlerManager:
                 # Pass the flag to children if they were part of a playlist that triggered it
                 if disable_http_persistent_flag:
                     entry['disable_http_persistent'] = True
+                
+                # Pass browser cookie info to children
+                if cookies_browser: entry['cookies_browser'] = cookies_browser
+                if cookies_file: entry['cookies_file'] = cookies_file
+
                 processed_entries.append(entry)
             
             # Remove the original "playlist container" item from the folder
@@ -95,6 +100,7 @@ class HandlerManager:
         url_item['use_ytdl_mpv'] = use_ytdl_mpv_flag
         url_item['is_youtube'] = is_youtube_flag
         url_item['cookies_file'] = cookies_file # Store cookie path
+        url_item['cookies_browser'] = cookies_browser # Store browser name
         url_item['mark_watched'] = mark_watched_flag # Store mark watched flag
         url_item['ytdl_format'] = ytdl_format_from_script # Store quality preference
         

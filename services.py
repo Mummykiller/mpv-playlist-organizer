@@ -408,10 +408,11 @@ def get_essential_ytdlp_flags():
 # --- MPV Command Construction ---
 
 class MpvCommandBuilder:
-    def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False, is_youtube=False, settings=None):
+    def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False, is_youtube=False, settings=None, cookies_browser=None):
         self.mpv_exe = mpv_exe
         self.mpv_args = [mpv_exe]
         self.settings = settings
+        self.cookies_browser = cookies_browser # Store browser name for direct access
         
         if settings:
             # Apply dynamic networking and buffering flags from settings
@@ -741,6 +742,12 @@ class MpvCommandBuilder:
         # Always set essential flags as a baseline on the command line.
         # This ensures that even in idle mode, the baseline is captured by adaptive_headers.lua
         raw_opts = ytdl_raw_options or self.ytdl_raw_options_from_bypass or ""
+        
+        # Add cookies-from-browser if available
+        if self.cookies_browser:
+            browser_opt = f"cookies-from-browser={self.cookies_browser}"
+            raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
+
         if self.settings and self.settings.get('ytdlp_concurrent_fragments', 1) > 1:
             frag_opt = f"concurrent-fragments={self.settings['ytdlp_concurrent_fragments']}"
             raw_opts = f"{raw_opts},{frag_opt}" if raw_opts else frag_opt
@@ -870,7 +877,8 @@ def construct_mpv_command(
     input_terminal=None,
     settings=None,
     flag_dir=None,
-    playlist_start_index=None
+    playlist_start_index=None,
+    cookies_browser=None
 ):
     """Constructs the MPV command line arguments using MpvCommandBuilder."""
     builder = MpvCommandBuilder(
@@ -878,7 +886,8 @@ def construct_mpv_command(
         use_ytdl_mpv=use_ytdl_mpv,
         is_youtube_override=is_youtube_override,
         is_youtube=is_youtube,
-        settings=settings
+        settings=settings,
+        cookies_browser=cookies_browser
     ) \
         .with_ipc_path(ipc_path) \
         .with_url(url) \
@@ -988,15 +997,16 @@ def apply_bypass_script(url_item, send_message_func, settings=None):
         entries = result.get("entries")
         disable_http_persistent = result.get("disable_http_persistent", False)
         cookies_file = result.get("cookies_file")
+        cookies_browser = result.get("cookies_browser")
         mark_watched = result.get("mark_watched", False)
         ytdl_format_result = result.get("ytdl_format")
 
-        return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script, entries, disable_http_persistent, cookies_file, mark_watched, ytdl_format_result)
+        return (processed_url, headers_for_mpv, ytdl_raw_options_for_mpv, use_ytdl_mpv_flag, is_youtube_flag_from_script, entries, disable_http_persistent, cookies_file, mark_watched, ytdl_format_result, cookies_browser)
 
     except Exception as e:
         logging.error(f"Error during URL analysis: {e}")
         send_message_func({"action": "log_from_native_host", "log": {"text": f"URL analysis failed with exception: {e}. Playing original URL.", "type": "error"}})
-        return (original_url, None, None, False, is_youtube, None, False, None, False, None) # Return 10-tuple here too
+        return (original_url, None, None, False, is_youtube, None, False, None, False, None, None) # Return 11-tuple here too
 # --- AniList Service ---
 
 # Global variable to track the last time a "cache is fresh" message was sent to the UI

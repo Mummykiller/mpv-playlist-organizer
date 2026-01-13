@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 import services
-from utils import ipc_utils, session_services
+from utils import ipc_utils, session_services, url_analyzer
 from utils.session_services import EnrichmentService, LauncherService, IPCService
 
 # Prevent __pycache__ generation
@@ -55,6 +55,116 @@ class MpvSessionManager:
             os.makedirs(self.FLAG_DIR, exist_ok=True)
         except Exception as e:
             logging.warning(f"Could not create flag directory {self.FLAG_DIR}: {e}")
+
+    def register_ipc_callbacks(self):
+        if self.ipc_manager:
+            self.ipc_manager.register_script_message_handler("ytdl_error_detected", self._handle_ytdl_error)
+
+    def _handle_ytdl_error(self, args):
+        error_msg = args[0] if args else ""
+        # Filter for relevant errors
+        # "Sign in" -> Age restriction / Auth
+        # "cookies" -> Generic cookie error
+        # "403" -> Access denied (often stale cookie or bad IP)
+        # "unavailable" -> Generic
+        # "Private video" -> Auth
+        if any(x in error_msg for x in ["Sign in", "cookies", "403", "unavailable", "Private video"]):
+            logging.warning(f"Detected potential cookie error: {error_msg}. Attempting fallback.")
+            threading.Thread(target=self._perform_cookie_fallback, daemon=True).start()
+
+    def _perform_cookie_fallback(self):
+        # Use a separate lock or no lock to avoid deadlock if called from reader thread?
+        # Reader thread calls _handle_ytdl_error -> spawns thread -> calls this.
+        # So we are in a fresh thread. sync_lock is safe.
+        with self.sync_lock:
+            if not self.is_alive or not self.ipc_manager: return
+            
+            try:
+                # 1. Identify current item via user-data/id (set by adaptive_headers.lua)
+                id_resp = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=1.0)
+                item_id = id_resp.get("data") if id_resp else None
+                
+                if not item_id: 
+                    logging.debug("Fallback: Could not identify current item ID.")
+                    return
+                
+                # Find item in playlist
+                target_item = next((i for i in self.playlist if i.get('id') == item_id), None)
+                if not target_item: 
+                    logging.debug(f"Fallback: Item ID {item_id} not found in local playlist.")
+                    return
+                
+                browser = target_item.get('cookies_browser')
+                if not browser: 
+                    logging.debug("Fallback: No browser specified for this item. Cannot extract.")
+                    return 
+                
+                url = target_item.get('original_url') or target_item.get('url')
+                
+                logging.info(f"Fallback: Extracting cookies to RAM for {browser}...")
+                self.ipc_manager.send({"command": ["show-text", "Cookie Error: Retrying with fallback...", 5000]})
+                
+                # 2. Extract (FORCE REFRESH)
+                # This uses the new VolatileCookieManager in url_analyzer
+                cookie_path = url_analyzer.get_cookies_file(browser, url, force_refresh=True)
+                
+                if cookie_path:
+                    logging.info(f"Fallback: Success. Cookie path: {cookie_path}")
+                    
+                    # 3. Update Properties LIVE
+                    # We must manually set these because adaptive_headers.lua only runs on-load.
+                    # Retrying loadfile will re-trigger on-load, so we must ALSO update the persistent Lua options.
+                    
+                    target_item['cookies_file'] = cookie_path
+                    # We keep cookies_browser in the item for record, but we want adaptive_headers 
+                    # to prefer the file if we re-send options.
+                    
+                    import file_io
+                    essential_flags = services.get_essential_ytdlp_flags()
+                    raw_opts = target_item.get('ytdl_raw_options')
+                    # Note: We do NOT append cookies-from-browser string here.
+                    # We assume raw_opts from the item MIGHT have it if it was baked in, 
+                    # but typically we construct it dynamically in append_batch/start.
+                    # Wait, target_item['ytdl_raw_options'] comes from enrichment. 
+                    # In append_batch, we ADDED it to a local var `final_item_raw_opts`, not the item dict.
+                    # So `target_item['ytdl_raw_options']` is clean. Good.
+                    
+                    final_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
+                    
+                    # Send updated options to Lua so they persist for next load
+                    # We need to find the index to update it properly? 
+                    # Or just use the URL key which adaptive_headers uses.
+                    item_url = services.sanitize_url(url)
+                    
+                    lua_options = {
+                        "id": target_item.get('id'), 
+                        "title": target_item.get('title'),
+                        "headers": target_item.get('headers'),
+                        "ytdl_raw_options": final_opts, # CLEAN options (no browser arg)
+                        "use_ytdl_mpv": True,
+                        "ytdl_format": target_item.get('ytdl_format'),
+                        "ffmpeg_path": None, # Should be in essential_flags
+                        "original_url": item_url,
+                        "cookies_file": cookie_path, # FALLBACK FILE
+                        "resume_time": None # Don't seek on retry? or get current pos?
+                    }
+                    
+                    # Update Lua state
+                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
+                    
+                    # 4. Force immediate property update for the retry
+                    self.ipc_manager.send({"command": ["set_property", "cookies-file", cookie_path]})
+                    self.ipc_manager.send({"command": ["set_property", "ytdl-raw-options", final_opts]})
+                    
+                    # 5. Reload
+                    logging.info("Fallback: Reloading file with volatile cookies.")
+                    self.ipc_manager.send({"command": ["loadfile", url, "replace"]})
+                else:
+                    logging.warning("Fallback: Failed to extract cookies.")
+                    self.ipc_manager.send({"command": ["show-text", "Fallback Failed: Could not extract cookies.", 5000]})
+                    
+            except Exception as e:
+                logging.error(f"Fallback failed: {e}")
 
     def _log_audit(self, message):
         """Appends a message to the human-readable audit file."""
@@ -216,6 +326,7 @@ class MpvSessionManager:
 
                     self.ipc_manager = ipc_utils.IPCSocketManager()
                     self.ipc_manager.connect(self.ipc_path)
+                    self.register_ipc_callbacks() # Register event handlers
                     
                     last_played_id = None
                     if self.ipc_manager.is_connected():
@@ -302,7 +413,14 @@ class MpvSessionManager:
 
                 # --- Centralized Flag Collection for Appending ---
                 essential_flags = services.get_essential_ytdlp_flags()
-                final_item_raw_opts = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), essential_flags)
+                raw_opts = item.get('ytdl_raw_options')
+                
+                # Support Direct Browser Access
+                if item.get('cookies_browser'):
+                     browser_opt = f"cookies-from-browser={item['cookies_browser']}"
+                     raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
+
+                final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
 
                 lua_options = {
                     "id": item.get('id'), 
@@ -513,7 +631,14 @@ class MpvSessionManager:
                         
                         # Prepare Lua Options
                         essential_flags = services.get_essential_ytdlp_flags()
-                        final_item_raw_opts = file_io.merge_ytdlp_options(launch_item.get('ytdl_raw_options'), essential_flags)
+                        raw_opts = launch_item.get('ytdl_raw_options')
+
+                        # Support Direct Browser Access
+                        if launch_item.get('cookies_browser'):
+                             browser_opt = f"cookies-from-browser={launch_item['cookies_browser']}"
+                             raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
+
+                        final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
 
                         lua_options = {
                             "id": launch_item.get('id'), 
@@ -581,6 +706,9 @@ class MpvSessionManager:
                 playlist_start_index=playlist_start_index,
                 **kwargs
             )
+            
+            if launch_result.get("success"):
+                self.register_ipc_callbacks()
 
         if launch_result.get("success") and len(_url_items_list) > 1:
             self.enricher.handle_standard_flow_launch(self, _url_items_list, playlist_start_index, folder_id, settings, file_io)
