@@ -32,7 +32,6 @@ local function promote_indices()
         local item = playlist[index + 1]
         if item then
             playlist_id_options[item.id] = options
-            debug_log("Promoted index " .. index .. " to sticky ID " .. item.id)
             indexed_options[index] = nil
         end
     end
@@ -63,11 +62,6 @@ mp.register_script_message("set_url_options", function(url, options_json, index)
     end
 end)
 
--- Handle logs from Python
-mp.register_script_message("python_log", function(msg)
-    mp.msg.info(msg)
-end)
-
 -- Main logic to apply settings
 local function apply_adaptive_settings()
     local path = mp.get_property("path")
@@ -88,7 +82,6 @@ local function apply_adaptive_settings()
     mp.set_property_native("user-data/hot-swap-options", nil)
 
     -- 2. ABSOLUTE RESET (Global reset for maximum authority)
-    -- Note: ytdl is NOT reset here; it's handled at the end of this function.
     mp.set_property("user-agent", initial_ua)
     mp.set_property("referrer", initial_referrer)
     mp.set_property("http-header-fields", "")
@@ -101,9 +94,19 @@ local function apply_adaptive_settings()
     mp.set_property("title", "")
     mp.set_property("force-media-title", "")
     
-    -- Reset metadata so it doesn't leak from previous file in natural progression
+    -- Reset metadata strictly
     mp.set_property_native("user-data/id", nil)
     mp.set_property_native("user-data/original-url", nil)
+    mp.set_property("user-data/is-youtube", "no")
+    mp.set_property("user-data/marked-as-watched", "no")
+    
+    -- Preserve sticky info (project-root and cookies-browser) 
+    -- unless the new 'opts' specifically overrides them.
+    if not (opts and opts.cookies_browser) then
+        -- Keep existing or set to empty if nothing exists yet
+        local current = mp.get_property("user-data/cookies-browser")
+        if not current or current == "" then mp.set_property("user-data/cookies-browser", "") end
+    end
 
     local opts = nil
     local item_id = ""
@@ -113,16 +116,11 @@ local function apply_adaptive_settings()
     if hot_swap_json ~= "" then
         local ok, hot_opts = pcall(utils.parse_json, hot_swap_json)
         if ok and hot_opts then
-            debug_log("Using Hot Swap manifest.")
             opts = hot_opts
         end
     end
 
     if not opts then
-        -- Robust matching order:
-        -- 1. Sticky Playlist ID (Shuffle-proof)
-        -- 2. Current Index (Initial load / Sync)
-        -- 3. URL-based fallbacks
         opts = (playlist_id and playlist_id_options[playlist_id]) or
                (pos and indexed_options[pos]) or 
                url_options[path] or url_options[d_path] or 
@@ -135,26 +133,19 @@ local function apply_adaptive_settings()
         end
     end
 
-    if not opts then
-        debug_log("No options found for path: " .. path)
-    end
-
     -- 4. APPLY OPTIONS
     local use_ytdl = "no"
     local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
     
-    -- Try to find original_url for YT detection if path is a direct stream link
     if opts and opts.original_url then
         if opts.original_url:find("youtube%.com") or opts.original_url:find("youtu%.be") then
             is_yt = true
         end
     end
 
-    local is_pahe = path:find("owocdn%.top") or path:find("kwik%.cx")
-
     if is_yt then 
         use_ytdl = "yes"
-        debug_log("YouTube detected. Defaulting ytdl=yes")
+        mp.set_property("user-data/is-youtube", "yes")
     end
 
     if opts then
@@ -163,13 +154,12 @@ local function apply_adaptive_settings()
         if opts.id then item_id = opts.id end
         if opts.original_url then original_url = opts.original_url end
 
-        -- Sticky promotion if we matched by index or URL but now have a playlist ID
+        -- Sticky promotion
         if playlist_id and not playlist_id_options[playlist_id] then
             playlist_id_options[playlist_id] = opts
         end
 
         if opts.title and opts.title ~= "" then
-            debug_log("Setting title: " .. opts.title)
             mp.set_property("title", opts.title)
             mp.set_property("force-media-title", opts.title)
         end
@@ -178,66 +168,41 @@ local function apply_adaptive_settings()
         if opts.headers then
             for k, v in pairs(opts.headers) do
                 local kl = k:lower()
-                if kl == "user-agent" then 
-                    mp.set_property("user-agent", v)
-                elseif kl == "referer" then 
-                    mp.set_property("referrer", v)
-                end
-                
-                -- IMPORTANT: DO NOT escape commas when using mp.set_property_native with a table.
-                -- MPV handles the separation automatically.
+                if kl == "user-agent" then mp.set_property("user-agent", v)
+                elseif kl == "referer" then mp.set_property("referrer", v) end
                 table.insert(h_list, k .. ": " .. v)
             end
-        end
-
-        -- If no Referer was provided but it's a known Pahe link, add the standard one
-        if is_pahe and (not opts.headers or not opts.headers["Referer"]) then
-            mp.set_property("referrer", "https://kwik.cx/")
-            table.insert(h_list, "Referer: https://kwik.cx/")
-            debug_log("Auto-added Referer for Animepahe link.")
         end
 
         if #h_list > 0 then
             mp.set_property_native("http-header-fields", h_list)
         end
 
-        if opts.use_ytdl_mpv == true then 
-            use_ytdl = "yes"
-            debug_log("use_ytdl_mpv=true found in options. Setting ytdl=yes")
-        end
-        
+        if opts.use_ytdl_mpv == true then use_ytdl = "yes" end
         if opts.ytdl_format then mp.set_property("ytdl-format", opts.ytdl_format) end
-        
-        if opts.ytdl_raw_options then
-            local ytdl_opts = opts.ytdl_raw_options
-            if not ytdl_opts:find("ignore%-config") then
-                ytdl_opts = ytdl_opts .. (ytdl_opts == "" and "" or ",") .. "ignore-config="
-            end
-            if opts.ffmpeg_path and not ytdl_opts:find("ffmpeg%-location") then
-                ytdl_opts = ytdl_opts .. "," .. "ffmpeg-location=" .. opts.ffmpeg_path
-            end
-            mp.set_property("ytdl-raw-options", ytdl_opts)
-        end
+        if opts.ytdl_raw_options then mp.set_property("ytdl-raw-options", opts.ytdl_raw_options) end
 
         -- Networking overrides
         if not opts.disable_network_overrides then
             local persistence = "1"
             if opts.http_persistence == "off" then persistence = "0"
             elseif opts.http_persistence == "auto" and opts.disable_http_persistent then persistence = "0" end
-            
             local lavf_str = "http_persistent=" .. persistence .. ",reconnect=" .. ((opts.enable_reconnect ~= false) and "1" or "0") .. ",reconnect_at_eof=1,reconnect_streamed=1,reconnect_delay_max=" .. tostring(opts.reconnect_delay or 4)
             mp.set_property("demuxer-lavf-o", lavf_str)
         end
 
         if opts.cookies_file then mp.set_property("cookies-file", opts.cookies_file) end
-        if opts.title then mp.set_property("force-media-title", opts.title) end
         if opts.resume_time and tonumber(opts.resume_time) > 0 then
             mp.set_property("file-local-options/start", opts.resume_time)
         end
+
+        -- Fallback Sync (Properties needed by python.lua)
+        if opts.project_root then mp.set_property("user-data/project-root", opts.project_root) end
+        if opts.cookies_browser then mp.set_property("user-data/cookies-browser", opts.cookies_browser) end
+        if opts.marked_as_watched == true then mp.set_property("user-data/marked-as-watched", "yes") end
     end
 
     -- Finish by setting ytdl state
-    debug_log("Final ytdl state for this file: " .. use_ytdl)
     mp.set_property("ytdl", use_ytdl)
     
     -- Restore metadata for current session visibility
@@ -245,7 +210,7 @@ local function apply_adaptive_settings()
     if original_url ~= "" then mp.set_property_native("user-data/original-url", original_url) end
 end
 
--- Hook at priority 10 (Early, but after initial property set)
+-- Hook at priority 10
 mp.add_hook("on_load", 10, apply_adaptive_settings)
 
 -- Error reporting
