@@ -556,6 +556,14 @@ class MpvCommandBuilder:
                 logging.info(f"MPV will load stream reanimator script: {lua_script_path}")
         return self
 
+    def with_python_interaction_script(self, script_dir):
+        if script_dir:
+            lua_script_path = os.path.join(script_dir, "mpv_scripts", "python_loader.lua")
+            if os.path.exists(lua_script_path):
+                self.mpv_args.append(f'--script={lua_script_path}')
+                logging.info(f"MPV will load python interaction script: {lua_script_path}")
+        return self
+
     def with_title(self, title):
         if title:
             # Use --title instead of --force-media-title.
@@ -899,6 +907,8 @@ def construct_mpv_command(
         .with_input_terminal(input_terminal) \
         .with_completion_script(script_dir if load_on_completion_script else None, flag_dir=flag_dir) \
         .with_adaptive_headers_script(script_dir) \
+        .with_python_interaction_script(script_dir) \
+        .with_reanimator_script(script_dir) \
         .with_fix_thumbnailer_script(script_dir) \
         .with_title(title) \
         .with_automatic_flags(automatic_mpv_flags) \

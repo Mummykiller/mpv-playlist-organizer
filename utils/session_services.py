@@ -216,6 +216,15 @@ class EnrichmentService:
                              raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
                         final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
 
+                        # Helper to get mark_watched with proper fallbacks and normalization
+                        def get_mark_watched(it):
+                            val = it.get('mark_watched')
+                            if val is None:
+                                val = it.get('settings', {}).get('yt_mark_watched', True)
+                            if isinstance(val, str):
+                                return val.lower() in ("true", "yes", "1")
+                            return bool(val)
+
                         lua_options = {
                             "id": item.get('id'), "title": item.get('title'),
                             "headers": item.get('headers'), "ytdl_raw_options": final_item_raw_opts,
@@ -223,7 +232,11 @@ class EnrichmentService:
                             "ytdl_format": item.get('ytdl_format'),
                             "ffmpeg_path": settings.get('ffmpeg_path'),
                             "original_url": sanitize_url(item.get('original_url') or item.get('url')),
-                            "resume_time": item.get('resume_time')
+                            "cookies_browser": item.get('cookies_browser'),
+                            "resume_time": item.get('resume_time'),
+                            "project_root": session.SCRIPT_DIR,
+                            "mark_watched": get_mark_watched(item),
+                            "marked_as_watched": item.get('marked_as_watched', False)
                         }
                         session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
 
@@ -244,6 +257,15 @@ class EnrichmentService:
                          raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
                     final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
 
+                    # Helper to get mark_watched with proper fallbacks and normalization
+                    def get_mark_watched(it):
+                        val = it.get('mark_watched')
+                        if val is None:
+                            val = it.get('settings', {}).get('yt_mark_watched', True)
+                        if isinstance(val, str):
+                            return val.lower() in ("true", "yes", "1")
+                        return bool(val)
+
                     lua_options = {
                         "id": enriched.get('id'), "title": enriched.get('title'),
                         "headers": enriched.get('headers'),
@@ -254,11 +276,15 @@ class EnrichmentService:
                         "original_url": sanitize_url(enriched.get('original_url') or enriched.get('url')),
                         "disable_http_persistent": enriched.get('disable_http_persistent', False),
                         "cookies_file": enriched.get('cookies_file'),
+                        "cookies_browser": enriched.get('cookies_browser'),
                         "disable_network_overrides": settings.get('disable_network_overrides', False),
                         "http_persistence": settings.get('http_persistence', 'auto'),
                         "enable_reconnect": settings.get('enable_reconnect', True),
                         "reconnect_delay": settings.get('reconnect_delay', 4),
-                        "resume_time": enriched.get('resume_time') if settings.get('enable_precise_resume') else None
+                        "resume_time": enriched.get('resume_time') if settings.get('enable_precise_resume') else None,
+                        "project_root": session.SCRIPT_DIR,
+                        "mark_watched": get_mark_watched(enriched),
+                        "marked_as_watched": enriched.get('marked_as_watched', False)
                     }
                     session.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options), str(idx)]})
                     session.ipc_manager.send({"command": ["set_property", f"playlist/{idx}/url", target_url]})
@@ -442,11 +468,15 @@ class LauncherService:
                         "original_url": sanitize_url(item.get('original_url') or item.get('url')),
                         "disable_http_persistent": item.get('disable_http_persistent', False) or kwargs.get('disable_http_persistent', False),
                         "cookies_file": item.get('cookies_file'),
+                        "cookies_browser": item.get('cookies_browser'),
                         "disable_network_overrides": settings.get('disable_network_overrides', False),
                         "http_persistence": settings.get('http_persistence', 'auto'),
                         "enable_reconnect": settings.get('enable_reconnect', True),
                         "reconnect_delay": settings.get('reconnect_delay', 4),
-                        "resume_time": item.get('resume_time') if settings.get('enable_precise_resume') else None
+                        "resume_time": item.get('resume_time') if settings.get('enable_precise_resume') else None,
+                        "project_root": self.session.SCRIPT_DIR,
+                        "mark_watched": item.get('mark_watched', False),
+                        "marked_as_watched": item.get('marked_as_watched', False)
                     }
                     self.session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(playlist_start_index + i)]})
 
@@ -460,6 +490,15 @@ class LauncherService:
                  raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
             final_launch_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
             
+            # Helper to get mark_watched with proper fallbacks and normalization
+            def get_mark_watched(it):
+                val = it.get('mark_watched')
+                if val is None:
+                    val = it.get('settings', {}).get('yt_mark_watched', True)
+                if isinstance(val, str):
+                    return val.lower() in ("true", "yes", "1")
+                return bool(val)
+
             launch_lua_options = {
                 "id": url_item.get('id'),
                 "title": url_item.get('title'),
@@ -471,17 +510,24 @@ class LauncherService:
                 "original_url": sanitize_url(url_item.get('original_url') or url_item.get('url')),
                 "disable_http_persistent": url_item.get('disable_http_persistent', False) or kwargs.get('disable_http_persistent', False),
                 "cookies_file": url_item.get('cookies_file'),
+                "cookies_browser": url_item.get('cookies_browser'),
                 "disable_network_overrides": settings.get('disable_network_overrides', False),
                 "http_persistence": settings.get('http_persistence', 'auto'),
                 "enable_reconnect": settings.get('enable_reconnect', True),
                 "reconnect_delay": settings.get('reconnect_delay', 4),
-                "resume_time": url_item.get('resume_time') if settings.get('enable_precise_resume') else None
+                "resume_time": url_item.get('resume_time') if settings.get('enable_precise_resume') else None,
+                "project_root": self.session.SCRIPT_DIR,
+                "mark_watched": get_mark_watched(url_item),
+                "marked_as_watched": url_item.get('marked_as_watched', False)
             }
             self.session.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(launch_lua_options)]})
 
             orig_url = url_item.get('original_url') or url_item.get('url', '')
             self.session.ipc_manager.send({"command": ["set_property", "user-data/original-url", sanitize_url(orig_url)]})
             self.session.ipc_manager.send({"command": ["set_property", "user-data/id", url_item.get('id', "")]})
+            self.session.ipc_manager.send({"command": ["set_property", "user-data/project-root", self.session.SCRIPT_DIR]})
+            self.session.ipc_manager.send({"command": ["set_property", "user-data/cookies-browser", url_item.get('cookies_browser', "")]})
+            self.session.ipc_manager.send({"command": ["set_property", "user-data/is-youtube", "yes" if url_item.get('is_youtube') else "no"]})
 
             # Explicitly force ytdl state for initial file
             ytdl_val = "yes" if url_item.get('is_youtube') or url_item.get('use_ytdl_mpv') else "no"

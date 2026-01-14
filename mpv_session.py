@@ -136,6 +136,15 @@ class MpvSessionManager:
                     # Or just use the URL key which adaptive_headers uses.
                     item_url = services.sanitize_url(url)
                     
+                    # Helper to get mark_watched with proper fallbacks and normalization
+                    def get_mark_watched(it):
+                        val = it.get('mark_watched')
+                        if val is None:
+                            val = it.get('settings', {}).get('yt_mark_watched', True)
+                        if isinstance(val, str):
+                            return val.lower() in ("true", "yes", "1")
+                        return bool(val)
+
                     lua_options = {
                         "id": target_item.get('id'), 
                         "title": target_item.get('title'),
@@ -146,7 +155,11 @@ class MpvSessionManager:
                         "ffmpeg_path": None, # Should be in essential_flags
                         "original_url": item_url,
                         "cookies_file": cookie_path, # FALLBACK FILE
-                        "resume_time": None # Don't seek on retry? or get current pos?
+                        "cookies_browser": target_item.get('cookies_browser'),
+                        "resume_time": None, # Don't seek on retry? or get current pos?
+                        "project_root": self.SCRIPT_DIR,
+                        "mark_watched": get_mark_watched(target_item),
+                        "marked_as_watched": target_item.get('marked_as_watched', False)
                     }
                     
                     # Update Lua state
@@ -155,6 +168,8 @@ class MpvSessionManager:
                     # 4. Force immediate property update for the retry
                     self.ipc_manager.send({"command": ["set_property", "cookies-file", cookie_path]})
                     self.ipc_manager.send({"command": ["set_property", "ytdl-raw-options", final_opts]})
+                    self.ipc_manager.send({"command": ["set_property", "user-data/cookies-browser", target_item.get('cookies_browser', "")]})
+                    self.ipc_manager.send({"command": ["set_property", "user-data/project-root", self.SCRIPT_DIR]})
                     
                     # 5. Reload
                     logging.info("Fallback: Reloading file with volatile cookies.")
@@ -422,6 +437,15 @@ class MpvSessionManager:
 
                 final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
 
+                # Helper to get mark_watched with proper fallbacks and normalization
+                def get_mark_watched(it):
+                    val = it.get('mark_watched')
+                    if val is None:
+                        val = it.get('settings', {}).get('yt_mark_watched', True)
+                    if isinstance(val, str):
+                        return val.lower() in ("true", "yes", "1")
+                    return bool(val)
+
                 lua_options = {
                     "id": item.get('id'), 
                     "title": item.get('title'),
@@ -433,11 +457,15 @@ class MpvSessionManager:
                     "original_url": sanitize_url(item.get('original_url') or item.get('url')),
                     "disable_http_persistent": item.get('disable_http_persistent', False),
                     "cookies_file": item.get('cookies_file'),
+                    "cookies_browser": item.get('cookies_browser'),
                     "disable_network_overrides": settings.get('disable_network_overrides', False),
                     "http_persistence": settings.get('http_persistence', 'auto'),
                     "enable_reconnect": settings.get('enable_reconnect', True),
                     "reconnect_delay": settings.get('reconnect_delay', 4),
-                    "resume_time": item.get('resume_time')
+                    "resume_time": item.get('resume_time'),
+                    "project_root": self.SCRIPT_DIR,
+                    "mark_watched": get_mark_watched(item),
+                    "marked_as_watched": item.get('marked_as_watched', False)
                 }
                 
                 # Calculate the final index where this item will reside in MPV
