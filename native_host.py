@@ -312,6 +312,10 @@ try:
     # Register a cleanup function to run when the script exits.
     atexit.register(cleanup_ipc_socket, mpv_session)
     atexit.register(handler_manager._stop_local_m3u_server)
+    
+    # Import VolatileCookieManager to register cleanup
+    from utils.url_analyzer import VolatileCookieManager
+    atexit.register(VolatileCookieManager.cleanup_volatile_dir)
 
     from concurrent.futures import ThreadPoolExecutor
 
