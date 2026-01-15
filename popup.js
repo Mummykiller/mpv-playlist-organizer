@@ -686,6 +686,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     // --- Folder Management Event Listeners (Refactored) ---
 
+    // Real-time character counts
+    const updateCharCount = (input, spanId) => {
+        const span = document.getElementById(spanId);
+        if (span) span.textContent = `${input.value.length}/64`;
+    };
+    newFolderNameInput.addEventListener('input', () => updateCharCount(newFolderNameInput, 'new-folder-char-count'));
+    miniNewFolderNameInput.addEventListener('input', () => updateCharCount(miniNewFolderNameInput, 'mini-new-folder-char-count'));
+
     // Create Folder
     createFolderBtn.addEventListener('click', handleCreateFolder);
     newFolderNameInput.addEventListener('keydown', (e) => e.key === 'Enter' && createFolderBtn.click());

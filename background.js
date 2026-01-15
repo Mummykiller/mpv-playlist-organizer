@@ -14,6 +14,7 @@ import * as playback_handlers from './background/handlers/playback.js';
 import * as folder_management_handlers from './background/handlers/folder_management.js';
 import * as import_export_handlers from './background/handlers/import_export.js';
 import * as dependency_anilist_handlers from './background/handlers/dependency_anilist.js';
+import { diagnosticCollector } from './utils/diagnosticCollector.js';
 
 // --- Shared State ---
 let nativeHostStatus = { status: 'unknown', lastCheck: 0, info: null };
@@ -83,6 +84,7 @@ const actionHandlers = {
     'ytdlp_update_check': dependency_anilist_handlers.handleYtdlpUpdateCheck,
     'user_confirmed_ytdlp_update': dependency_anilist_handlers.handleUserConfirmedYtdlpUpdate,
     'manual_ytdlp_update': dependency_anilist_handlers.handleManualYtdlpUpdate,
+    'get_js_diagnostics': async () => ({ success: true, errors: diagnosticCollector.getErrors() }),
 };
 
 actionHandlers['session_restored'] = playback_handlers.handleSessionRestored;
