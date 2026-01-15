@@ -184,6 +184,11 @@ def update_ytdlp(send_message_func):
         else:
             success_msg = f"yt-dlp is already at the latest version ({version_after})."
         
+        # Clear the dependency cache so the new version is detected immediately
+        global _DEPENDENCY_STATUS_CACHE
+        _DEPENDENCY_STATUS_CACHE["data"] = None
+        _DEPENDENCY_STATUS_CACHE["timestamp"] = 0
+
         send_message_func({"log": {"text": f"[yt-dlp]: {success_msg}", "type": "info"}})
         return {"success": True, "message": success_msg}
 

@@ -209,11 +209,13 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     url = sanitize_url(url)
     
     # --- Protocol Validation ---
-    if not url.startswith(('http://', 'https://', 'file://')):
+    # Must match services.ALLOWED_PROTOCOLS
+    ALLOWED_PROTOCOLS = ('http://', 'https://', 'file://', 'udp://', 'rtmp://', 'rtsp://', 'mms://')
+    if not url.lower().startswith(ALLOWED_PROTOCOLS):
         logging.warning(f"Security: Rejected URL with unsafe protocol: {url}")
         return {
             "success": False,
-            "error": "Invalid URL protocol. Only http, https, and file schemes are allowed."
+            "error": "Invalid URL protocol. Only http, https, file, udp, rtmp, rtsp, and mms schemes are allowed."
         }
     
     # Use provided UA or a reasonable Chrome-like default

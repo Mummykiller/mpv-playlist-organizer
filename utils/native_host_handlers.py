@@ -30,7 +30,7 @@ class HandlerManager:
         self.temp_playlists_dir = temp_playlists_dir
         self.log_stream = log_stream_func # Passed from native_host for unmanaged MPV logging
         self.all_folders_lock = threading.Lock() # Lock for thread-safe storage updates
-        self.server_lock = threading.Lock() # NEW: Lock for M3U server lifecycle
+        self.server_lock = threading.RLock() # NEW: Lock for M3U server lifecycle
 
         self.playlist_server_process = None
         self.playlist_server_port = None
@@ -726,166 +726,168 @@ class HandlerManager:
                 settings[key] = message[key]
         
         try:
-            # Call mpv_session.start() with the raw M3U content/URL/path.
-            # This call will return the enriched M3U content and enriched items list.
-            logging.info(f"Step 1: Processing and enriching M3U from type '{m3u_type}'.")
-            
-            first_call_result = self.mpv_session.start(
-                m3u_source_value, # Pass the original M3U source
-                folder_id, 
-                settings, 
-                self.file_io,
-                geometry=message.get('geometry'), 
-                custom_width=message.get('custom_width'), 
-                custom_height=message.get('custom_height'), 
-                custom_mpv_flags=message.get('custom_mpv_flags'), 
-                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-                start_paused=message.get('start_paused', False),
-                headers=message.get('headers'), # Pass headers for initial M3U fetch
-                force_terminal=message.get('force_terminal', False)
-            )
-            
-            if not first_call_result["success"]:
-                return first_call_result # Propagate error from first call
-
-            enriched_url_items = first_call_result["enriched_url_items"]
-
-            # --- NEW: Check if playback was already handled directly (Standard Flow optimization) ---
-            if first_call_result.get("handled_directly"):
-                logging.info(f"Step 1: Playback handled directly by Standard Flow. Skipping M3U server.")
-                return first_call_result
-
-            enriched_m3u_content = first_call_result["enriched_m3u_content"]
-
-            # --- LINKED PLAYLIST LOGIC ---
-            # Check if we are already playing this folder.
-            # If so, we "sync" instead of starting a new session.
-            if self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id:
-                logging.info(f"Linked Playlist: Folder '{folder_id}' is already active. Syncing new items.")
+            # Acquire lock to ensure the M3U file content and server state match the launched MPV session
+            with self.server_lock:
+                # Call mpv_session.start() with the raw M3U content/URL/path.
+                # This call will return the enriched M3U content and enriched items list.
+                logging.info(f"Step 1: Processing and enriching M3U from type '{m3u_type}'.")
                 
-                # Identify items that are in the new list but not in the active session
-                # We use ID as the SOLE unique identifier.
-                current_ids = {item['id'] for item in self.mpv_session.playlist if 'id' in item}
+                first_call_result = self.mpv_session.start(
+                    m3u_source_value, # Pass the original M3U source
+                    folder_id, 
+                    settings, 
+                    self.file_io,
+                    geometry=message.get('geometry'), 
+                    custom_width=message.get('custom_width'), 
+                    custom_height=message.get('custom_height'), 
+                    custom_mpv_flags=message.get('custom_mpv_flags'), 
+                    automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+                    start_paused=message.get('start_paused', False),
+                    headers=message.get('headers'), # Pass headers for initial M3U fetch
+                    force_terminal=message.get('force_terminal', False)
+                )
                 
-                new_items = []
-                for item in enriched_url_items:
-                    item_id = item.get('id')
-                    # Skip only if this exact ID is already in the session
-                    if item_id and item_id in current_ids:
-                        continue
-                    new_items.append(item)
-                
-                # Update the M3U file on disk so the server is up-to-date
-                if self.temp_m3u_file_for_server and os.path.exists(self.temp_m3u_file_for_server):
-                    logging.info(f"Linked Playlist: Updating M3U file at {self.temp_m3u_file_for_server}")
-                    with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
-                        f.write(enriched_m3u_content)
-                
-                if new_items:
-                    logging.info(f"Linked Playlist: Appending {len(new_items)} new items to active session.")
+                if not first_call_result["success"]:
+                    return first_call_result # Propagate error from first call
+
+                enriched_url_items = first_call_result["enriched_url_items"]
+
+                # --- NEW: Check if playback was already handled directly (Standard Flow optimization) ---
+                if first_call_result.get("handled_directly"):
+                    logging.info(f"Step 1: Playback handled directly by Standard Flow. Skipping M3U server.")
+                    return first_call_result
+
+                enriched_m3u_content = first_call_result["enriched_m3u_content"]
+
+                # --- LINKED PLAYLIST LOGIC ---
+                # Check if we are already playing this folder.
+                # If so, we "sync" instead of starting a new session.
+                if self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id:
+                    logging.info(f"Linked Playlist: Folder '{folder_id}' is already active. Syncing new items.")
                     
-                    # ENRICH NEW ITEMS: Ensure they have titles, YouTube flags, etc.
-                    from concurrent.futures import ThreadPoolExecutor
-                    processed_new_items = []
-                    with ThreadPoolExecutor(max_workers=5) as executor:
-                        def process_wrapper(item):
-                            # We use the existing _process_url_item which handles expansion and enrichment
-                            processed, _ = self._process_url_item(item, folder_id, all_folders)
-                            return processed
+                    # Identify items that are in the new list but not in the active session
+                    # We use ID as the SOLE unique identifier.
+                    current_ids = {item['id'] for item in self.mpv_session.playlist if 'id' in item}
+                    
+                    new_items = []
+                    for item in enriched_url_items:
+                        item_id = item.get('id')
+                        # Skip only if this exact ID is already in the session
+                        if item_id and item_id in current_ids:
+                            continue
+                        new_items.append(item)
+                    
+                    # Update the M3U file on disk so the server is up-to-date
+                    if self.temp_m3u_file_for_server and os.path.exists(self.temp_m3u_file_for_server):
+                        logging.info(f"Linked Playlist: Updating M3U file at {self.temp_m3u_file_for_server}")
+                        with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
+                            f.write(enriched_m3u_content)
+                    
+                    if new_items:
+                        logging.info(f"Linked Playlist: Appending {len(new_items)} new items to active session.")
                         
-                        results = list(executor.map(process_wrapper, new_items))
-                        for processed_list in results:
-                            processed_new_items.extend(processed_list)
+                        # ENRICH NEW ITEMS: Ensure they have titles, YouTube flags, etc.
+                        from concurrent.futures import ThreadPoolExecutor
+                        processed_new_items = []
+                        with ThreadPoolExecutor(max_workers=5) as executor:
+                            def process_wrapper(item):
+                                # We use the existing _process_url_item which handles expansion and enrichment
+                                processed, _ = self._process_url_item(item, folder_id, all_folders)
+                                return processed
+                            
+                            results = list(executor.map(process_wrapper, new_items))
+                            for processed_list in results:
+                                processed_new_items.extend(processed_list)
 
-                    # Use the new batch append logic which creates a delta M3U
-                    # to preserve titles and settings natively.
-                    return self.mpv_session.append_batch(processed_new_items)
-                else:
-                    # Only toggle pause if there are NO new items to add
-                    if self.mpv_session.ipc_manager:
-                        logging.info("Linked Playlist: No new items found. Toggling pause state.")
-                        self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
-                    return {"success": True, "already_active": True}
+                        # Use the new batch append logic which creates a delta M3U
+                        # to preserve titles and settings natively.
+                        return self.mpv_session.append_batch(processed_new_items)
+                    else:
+                        # Only toggle pause if there are NO new items to add
+                        if self.mpv_session.ipc_manager:
+                            logging.info("Linked Playlist: No new items found. Toggling pause state.")
+                            self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
+                        return {"success": True, "already_active": True}
 
-            # --- ALWAYS write the M3U file for debugging/logging as requested ---
-            if not self.temp_m3u_file_for_server:
-                temp_m3u_filename = f"temp_playlist_{uuid.uuid4().hex}.m3u"
-                self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, temp_m3u_filename)
-            
-            logging.info(f"DEBUG: Writing enriched M3U to {self.temp_m3u_file_for_server}")
-            with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
-                f.write(enriched_m3u_content)
-
-            # Extract common headers/options from the items to apply globally.
-            # We use a "greedy" approach for ytdl: if ANY item needs it, enable it.
-            global_use_ytdl_mpv = any(item.get('use_ytdl_mpv', False) for item in enriched_url_items)
-            
-            # --- FIXED: Only use first item's YouTube status for initial networking ---
-            # This prevents heavy YT settings from poisoning non-YT videos in a mixed folder.
-            first_item = enriched_url_items[playlist_start_index] if playlist_start_index < len(enriched_url_items) else (enriched_url_items[0] if enriched_url_items else {})
-            global_is_youtube = first_item.get('is_youtube', False)
-            
-            # For headers and other flags, we still baseline from the first item
-            # ... (rest of the logic)
-            first_item = enriched_url_items[0] if enriched_url_items else {}
-            
-            # Reformat headers for MPV command line
-            global_headers = first_item.get('headers')
-            if global_headers:
-                header_list = [f"{k}: {v.replace(',', '')}" for k, v in global_headers.items()]
-                global_headers_str = ",".join(header_list)
-            else:
-                global_headers_str = None
-
-            global_ytdl_raw_options = first_item.get('ytdl_raw_options')
-            global_disable_http_persistent = first_item.get('disable_http_persistent', False)
-
-            # --- STEP 2: Start or Reuse Local Server ---
-            logging.info("Step 2: Starting or reusing local M3U server with enriched content.")
-            local_server_url = self._start_local_m3u_server(enriched_m3u_content)
-
-            if not local_server_url:
-                raise RuntimeError("Failed to start local M3U server for enriched content.")
-            
-            # Calculate start index for the final launch
-            playlist_start_index = 0
-            last_played_id = all_folders.get(folder_id, {}).get("last_played_id")
-            if settings.get("enable_smart_resume", True) and last_played_id:
-                for idx, item in enumerate(enriched_url_items):
-                    if item.get('id') == last_played_id:
-                        playlist_start_index = idx
-                        break
-
-            # --- STEP 3: Launch MPV with the Local Server URL ---
-            logging.info(f"Step 3: Launching MPV with local server URL: {local_server_url} and playlist-start={playlist_start_index}.")
-            
-            # Call mpv_session.start() again, this time with the local server URL.
-            # Crucially, pass the `enriched_url_items` so the playlist tracker can use them.
-            final_launch_result = self.mpv_session.start(
-                local_server_url, # MPV will play this URL
-                folder_id, 
-                settings, 
-                self.file_io,
-                geometry=message.get('geometry'), 
-                custom_width=message.get('custom_width'), 
-                custom_height=message.get('custom_height'), 
-                custom_mpv_flags=message.get('custom_mpv_flags'), 
-                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-                start_paused=message.get('start_paused', False),
-                enriched_items_list=enriched_url_items,
-                headers=global_headers, # Adaptive: Baseline headers for the first item
-                ytdl_raw_options=global_ytdl_raw_options,
-                use_ytdl_mpv=global_use_ytdl_mpv,
-                is_youtube=global_is_youtube,
-                disable_http_persistent=global_disable_http_persistent,
-                force_terminal=message.get('force_terminal', False),
-                playlist_start_index=playlist_start_index
-            )
-            
-            if final_launch_result and final_launch_result.get("success"):
-                pass
+                # --- ALWAYS write the M3U file for debugging/logging as requested ---
+                if not self.temp_m3u_file_for_server:
+                    temp_m3u_filename = f"temp_playlist_{uuid.uuid4().hex}.m3u"
+                    self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, temp_m3u_filename)
                 
-            return final_launch_result if final_launch_result else {"success": False, "error": "Failed to start MPV session with M3U."}
+                logging.info(f"DEBUG: Writing enriched M3U to {self.temp_m3u_file_for_server}")
+                with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
+                    f.write(enriched_m3u_content)
+
+                # Extract common headers/options from the items to apply globally.
+                # We use a "greedy" approach for ytdl: if ANY item needs it, enable it.
+                global_use_ytdl_mpv = any(item.get('use_ytdl_mpv', False) for item in enriched_url_items)
+                
+                # --- FIXED: Only use first item's YouTube status for initial networking ---
+                # This prevents heavy YT settings from poisoning non-YT videos in a mixed folder.
+                first_item = enriched_url_items[playlist_start_index] if playlist_start_index < len(enriched_url_items) else (enriched_url_items[0] if enriched_url_items else {})
+                global_is_youtube = first_item.get('is_youtube', False)
+                
+                # For headers and other flags, we still baseline from the first item
+                # ... (rest of the logic)
+                first_item = enriched_url_items[0] if enriched_url_items else {}
+                
+                # Reformat headers for MPV command line
+                global_headers = first_item.get('headers')
+                if global_headers:
+                    header_list = [f"{k}: {v.replace(',', '')}" for k, v in global_headers.items()]
+                    global_headers_str = ",".join(header_list)
+                else:
+                    global_headers_str = None
+
+                global_ytdl_raw_options = first_item.get('ytdl_raw_options')
+                global_disable_http_persistent = first_item.get('disable_http_persistent', False)
+
+                # --- STEP 2: Start or Reuse Local Server ---
+                logging.info("Step 2: Starting or reusing local M3U server with enriched content.")
+                local_server_url = self._start_local_m3u_server(enriched_m3u_content)
+
+                if not local_server_url:
+                    raise RuntimeError("Failed to start local M3U server for enriched content.")
+                
+                # Calculate start index for the final launch
+                playlist_start_index = 0
+                last_played_id = all_folders.get(folder_id, {}).get("last_played_id")
+                if settings.get("enable_smart_resume", True) and last_played_id:
+                    for idx, item in enumerate(enriched_url_items):
+                        if item.get('id') == last_played_id:
+                            playlist_start_index = idx
+                            break
+
+                # --- STEP 3: Launch MPV with the Local Server URL ---
+                logging.info(f"Step 3: Launching MPV with local server URL: {local_server_url} and playlist-start={playlist_start_index}.")
+                
+                # Call mpv_session.start() again, this time with the local server URL.
+                # Crucially, pass the `enriched_url_items` so the playlist tracker can use them.
+                final_launch_result = self.mpv_session.start(
+                    local_server_url, # MPV will play this URL
+                    folder_id, 
+                    settings, 
+                    self.file_io,
+                    geometry=message.get('geometry'), 
+                    custom_width=message.get('custom_width'), 
+                    custom_height=message.get('custom_height'), 
+                    custom_mpv_flags=message.get('custom_mpv_flags'), 
+                    automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+                    start_paused=message.get('start_paused', False),
+                    enriched_items_list=enriched_url_items,
+                    headers=global_headers, # Adaptive: Baseline headers for the first item
+                    ytdl_raw_options=global_ytdl_raw_options,
+                    use_ytdl_mpv=global_use_ytdl_mpv,
+                    is_youtube=global_is_youtube,
+                    disable_http_persistent=global_disable_http_persistent,
+                    force_terminal=message.get('force_terminal', False),
+                    playlist_start_index=playlist_start_index
+                )
+                
+                if final_launch_result and final_launch_result.get("success"):
+                    pass
+                    
+                return final_launch_result if final_launch_result else {"success": False, "error": "Failed to start MPV session with M3U."}
 
         except Exception as e:
             logging.error(f"Error handling play_m3u: {e}", exc_info=True)
