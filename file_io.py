@@ -556,6 +556,7 @@ def get_settings():
         "yt_ignore_config": True,
         "other_sites_use_cookies": True,
         "disable_network_overrides": False,
+        "targeted_defaults": "all-none-yt",
         "enable_cache": True,
         "http_persistence": "auto",
         "demuxer_max_bytes": "1G",
@@ -581,7 +582,8 @@ def get_settings():
             {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
             {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
             {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
-        ]
+        ],
+        "enable_per_item_mark_watched": True
     }
 
     with FileLock(CONFIG_FILE):
@@ -620,6 +622,23 @@ def set_settings(settings_dict):
                 if str(settings_dict['ytdl_quality']) not in valid_qualities:
                     logging.warning(f"[PY][SEC] Invalid ytdl_quality '{settings_dict['ytdl_quality']}' ignored.")
                     del settings_dict['ytdl_quality']
+
+            # --- NEW: Normalize Buffer Settings & Align Cache/Readahead ---
+            
+            # 1. Align demuxer_readahead_secs with cache_secs if one is updated
+            if 'cache_secs' in settings_dict:
+                settings_dict['demuxer_readahead_secs'] = settings_dict['cache_secs']
+            elif 'demuxer_readahead_secs' in settings_dict:
+                 settings_dict['cache_secs'] = settings_dict['demuxer_readahead_secs']
+
+            # 2. Append 'M' suffix to buffer settings if they are purely numeric
+            buffer_keys = ['demuxer_max_bytes', 'demuxer_max_back_bytes', 'stream_buffer_size']
+            for key in buffer_keys:
+                if key in settings_dict:
+                    val = str(settings_dict[key]).strip().upper()
+                    if val and val.isdigit():
+                        settings_dict[key] = f"{val}M"
+                        logging.info(f"[PY][IO] Normalized {key} to {settings_dict[key]}")
 
             merged_settings = {**current_settings, **settings_dict}
 

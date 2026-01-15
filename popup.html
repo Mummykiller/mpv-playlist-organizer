@@ -573,6 +573,18 @@
                         <label for="disable-network-overrides-checkbox" class="settings-label" style="font-weight: bold; color: var(--accent-primary);">Use MPV Defaults <span class="help-icon" title="If checked, the extension will NOT apply any of the performance tweaks below, letting MPV handle buffering its own way.">?</span>:</label>
                         <input type="checkbox" id="disable-network-overrides-checkbox" class="settings-checkbox">
                     </div>
+                    <div class="control-group" data-setting-name="targeted defaults bypass overrides site">
+                        <label for="targeted-defaults-select" class="settings-label">Targeted Defaults <span class="help-icon" title="Selectively disable networking overrides for specific sites to improve speed.
+• None: Apply overrides everywhere.
+• Animepahe: Disable for Animepahe only.
+• All None YT: Disable for everything except YouTube.">?</span>:</label>
+                        <select id="targeted-defaults-select" class="settings-select">
+                            <option value="none">None (Overrides Everywhere)</option>
+                            <option value="animepahe">Animepahe Only</option>
+                            <option value="all-none-yt">All None YouTube</option>
+                        </select>
+                    </div>
+                    <hr class="settings-compact-separator">
                     <div class="control-group stacked-control" data-setting-name="performance usage quality profile">
                         <label for="performance-profile-select" class="settings-label">Performance Profile <span class="help-icon" title="Choose a preset that matches your system power. 'High' improves quality but uses more GPU. 'Low' saves battery. 'Default' uses your own mpv.conf.">?</span>:</label>
                         <select id="performance-profile-select">

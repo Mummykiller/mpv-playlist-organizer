@@ -58,6 +58,7 @@ export class OptionsManager {
             { key: 'enable_precise_resume', elementId: 'enable-precise-resume-checkbox', type: 'checkbox' },
             { key: 'enable_active_item_highlight', elementId: 'enable-active-highlight-checkbox', type: 'checkbox' },
             { key: 'disable_network_overrides', elementId: 'disable-network-overrides-checkbox', type: 'checkbox' },
+            { key: 'targeted_defaults', elementId: 'targeted-defaults-select', type: 'select' },
             { key: 'enable_cache', elementId: 'enable-cache-checkbox', type: 'checkbox' },
             { key: 'http_persistence', elementId: 'http-persistence-select', type: 'select' },
             { key: 'demuxer_max_bytes', elementId: 'demuxer-max-bytes-input', type: 'input' },

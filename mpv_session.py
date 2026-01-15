@@ -157,17 +157,23 @@ class MpvSessionManager:
                         "cookies_file": cookie_path, # FALLBACK FILE
                         "cookies_browser": target_item.get('cookies_browser'),
                         "resume_time": None, # Don't seek on retry? or get current pos?
+                        "demuxer_max_bytes": settings.get('demuxer_max_bytes', '1G'),
+                        "demuxer_max_back_bytes": settings.get('demuxer_max_back_bytes', '500M'),
+                        "cache_secs": settings.get('cache_secs', 500),
+                        "demuxer_readahead_secs": settings.get('demuxer_readahead_secs', 500),
+                        "stream_buffer_size": settings.get('stream_buffer_size', '10M'),
                         "project_root": self.SCRIPT_DIR,
                         "mark_watched": get_mark_watched(target_item),
-                        "marked_as_watched": target_item.get('marked_as_watched', False)
+                        "marked_as_watched": target_item.get('marked_as_watched', False),
+                        "targeted_defaults": settings.get('targeted_defaults', 'none')
                     }
                     
                     # Update Lua state
                     self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
                     
-                    # 4. Force immediate property update for the retry
                     self.ipc_manager.send({"command": ["set_property", "cookies-file", cookie_path]})
                     self.ipc_manager.send({"command": ["set_property", "ytdl-raw-options", final_opts]})
+                    self.ipc_manager.send({"command": ["set_property", "user-data/folder-id", self.owner_folder_id]})
                     self.ipc_manager.send({"command": ["set_property", "user-data/cookies-browser", target_item.get('cookies_browser', "")]})
                     self.ipc_manager.send({"command": ["set_property", "user-data/project-root", self.SCRIPT_DIR]})
                     
@@ -462,10 +468,16 @@ class MpvSessionManager:
                     "http_persistence": settings.get('http_persistence', 'auto'),
                     "enable_reconnect": settings.get('enable_reconnect', True),
                     "reconnect_delay": settings.get('reconnect_delay', 4),
+                    "demuxer_max_bytes": settings.get('demuxer_max_bytes', '1G'),
+                    "demuxer_max_back_bytes": settings.get('demuxer_max_back_bytes', '500M'),
+                    "cache_secs": settings.get('cache_secs', 500),
+                    "demuxer_readahead_secs": settings.get('demuxer_readahead_secs', 500),
+                    "stream_buffer_size": settings.get('stream_buffer_size', '10M'),
                     "resume_time": item.get('resume_time'),
                     "project_root": self.SCRIPT_DIR,
                     "mark_watched": get_mark_watched(item),
-                    "marked_as_watched": item.get('marked_as_watched', False)
+                    "marked_as_watched": item.get('marked_as_watched', False),
+                    "targeted_defaults": settings.get('targeted_defaults', 'none')
                 }
                 
                 # Calculate the final index where this item will reside in MPV
@@ -594,7 +606,14 @@ class MpvSessionManager:
             if item.get('is_youtube') and item.get('original_url'):
                 url_to_use = item['original_url']
             
-            logging.debug(f"[PY][Session] Generating M3U entry: {safe_title} -> {url_to_use[:50]}...")
+            # --- Solid ID Injection ---
+            # Append the UUID as a fragment to the URL. 
+            # MPV/yt-dlp will ignore it, but Lua can read it.
+            if item.get('id'):
+                separator = "#" if "#" not in url_to_use else "&"
+                url_to_use = f"{url_to_use}{separator}mpv_organizer_id={item['id']}"
+
+            logging.debug(f"[PY][Session] Generating M3U entry: {safe_title} -> {url_to_use[:60]}...")
             m3u_lines.append(f"#EXTINF:-1,{safe_title}")
             m3u_lines.append(sanitize_url(url_to_use))
         return "\n".join(m3u_lines)
@@ -657,6 +676,12 @@ class MpvSessionManager:
                         if launch_item.get('is_youtube') and launch_item.get('original_url'):
                             target_url = sanitize_url(launch_item['original_url'])
                         
+                        # --- Solid ID Injection ---
+                        # Append the UUID as a fragment to the URL. 
+                        if launch_item.get('id'):
+                            separator = "#" if "#" not in target_url else "&"
+                            target_url = f"{target_url}{separator}mpv_organizer_id={launch_item['id']}"
+                        
                         # Prepare Lua Options
                         essential_flags = services.get_essential_ytdlp_flags()
                         raw_opts = launch_item.get('ytdl_raw_options')
@@ -667,6 +692,15 @@ class MpvSessionManager:
                              raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
 
                         final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
+
+                        # Helper to get mark_watched with proper fallbacks and normalization
+                        def get_mark_watched(it):
+                            val = it.get('mark_watched')
+                            if val is None:
+                                val = it.get('settings', {}).get('yt_mark_watched', True)
+                            if isinstance(val, str):
+                                return val.lower() in ("true", "yes", "1")
+                            return bool(val)
 
                         lua_options = {
                             "id": launch_item.get('id'), 
@@ -683,7 +717,16 @@ class MpvSessionManager:
                             "http_persistence": settings.get('http_persistence', 'auto'),
                             "enable_reconnect": settings.get('enable_reconnect', True),
                             "reconnect_delay": settings.get('reconnect_delay', 4),
-                            "resume_time": launch_item.get('resume_time') if settings.get('enable_precise_resume') else None
+                            "demuxer_max_bytes": settings.get('demuxer_max_bytes', '1G'),
+                            "demuxer_max_back_bytes": settings.get('demuxer_max_back_bytes', '500M'),
+                            "cache_secs": settings.get('cache_secs', 500),
+                            "demuxer_readahead_secs": settings.get('demuxer_readahead_secs', 500),
+                            "stream_buffer_size": settings.get('stream_buffer_size', '10M'),
+                            "resume_time": launch_item.get('resume_time') if settings.get('enable_precise_resume') else None,
+                            "project_root": self.SCRIPT_DIR,
+                            "mark_watched": get_mark_watched(launch_item),
+                            "marked_as_watched": launch_item.get('marked_as_watched', False),
+                            "targeted_defaults": settings.get('targeted_defaults', 'none')
                         }
                         
                         # PRE-LOAD PROPERTY SYNC (Eliminates race conditions)
