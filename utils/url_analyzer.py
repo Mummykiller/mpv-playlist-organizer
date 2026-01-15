@@ -60,15 +60,71 @@ class VolatileCookieManager:
                 logging.warning(f"Failed to cleanup volatile cookies: {e}")
 
     @staticmethod
-    def extract_with_shadow_copy(browser, url, target_path):
+    def extract_with_shadow_copy(browser, url, target_path, ignore_config=True):
         """
         Creates a shadow copy of the browser DB to bypass lock errors,
         extracts cookies, then cleans up the shadow copy.
         """
-        # This is a complex heuristic. For now, we rely on yt-dlp's internal 
-        # handling or a retry mechanism. Implementing a full DB copier is risky 
-        # across OSes. We'll use a retry strategy in the session manager instead.
-        pass
+        import shutil
+        
+        system = platform.system()
+        user_home = os.path.expanduser("~")
+        
+        # Determine the database path based on OS and browser
+        db_rel_path = None
+        if system == "Linux":
+            base = os.path.join(user_home, ".config")
+            mapping = {
+                "chrome": "google-chrome/Default/Cookies",
+                "brave": "BraveSoftware/Brave-Browser/Default/Cookies",
+                "edge": "microsoft-edge/Default/Cookies",
+                "chromium": "chromium/Default/Cookies",
+                "vivaldi": "vivaldi/Default/Cookies",
+                "opera": "opera/Cookies"
+            }
+            db_rel_path = os.path.join(base, mapping.get(browser.lower(), ""))
+        elif system == "Windows":
+            base = os.environ.get('LOCALAPPDATA', "")
+            mapping = {
+                "chrome": "Google/Chrome/User Data/Default/Network/Cookies",
+                "brave": "BraveSoftware/Brave-Browser/User Data/Default/Network/Cookies",
+                "edge": "Microsoft/Edge/User Data/Default/Network/Cookies",
+                "vivaldi": "Vivaldi/User Data/Default/Network/Cookies"
+            }
+            db_rel_path = os.path.join(base, mapping.get(browser.lower(), ""))
+
+        if not db_rel_path or not os.path.exists(db_rel_path):
+            logging.debug(f"Shadow Copy: Could not locate database for {browser} at {db_rel_path}")
+            return False
+
+        # Create shadow copy in volatile storage
+        shadow_path = f"{target_path}.shadow"
+        try:
+            logging.info(f"Shadow Copy: Duplicating locked database to {shadow_path}")
+            shutil.copy2(db_rel_path, shadow_path)
+            
+            # Use yt-dlp to read from the shadow copy
+            # Note: yt-dlp doesn't have a direct "read from this file" for browser DBs,
+            # but we can use the --cookies-from-browser BROWSER:PATH syntax.
+            ytdlp_path = shutil.which("yt-dlp") or "yt-dlp"
+            cmd = [
+                ytdlp_path,
+                '--cookies-from-browser', f"{browser}:{os.path.dirname(os.path.dirname(db_rel_path)) if system == 'Windows' else os.path.dirname(db_rel_path)}",
+                '--cookies', target_path,
+                '--skip-download', '--quiet', '--no-warnings', url
+            ]
+            if ignore_config: cmd.insert(1, '--ignore-config')
+            
+            subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=20)
+            
+            return os.path.exists(target_path) and os.path.getsize(target_path) > 0
+        except Exception as e:
+            logging.warning(f"Shadow Copy failed: {e}")
+            return False
+        finally:
+            if os.path.exists(shadow_path):
+                try: os.remove(shadow_path)
+                except: pass
 
 def sanitize_url(url):
     """Sanitizes a URL by removing potentially dangerous characters for shell commands."""
@@ -120,7 +176,14 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
         logging.info(f"Extracting cookies to RAM ({temp_path}) for {browser}...")
         result = subprocess.run(cookie_cmd, capture_output=True, text=True, check=False, timeout=30)
         
-        if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+        # --- Check for success or trigger Shadow Copy Fallback ---
+        success = os.path.exists(temp_path) and os.path.getsize(temp_path) > 0
+        
+        if not success:
+            logging.info(f"Primary extraction failed. Triggering Shadow Copy fallback for {browser}...")
+            success = VolatileCookieManager.extract_with_shadow_copy(browser, url, temp_path, ignore_config=ignore_config)
+
+        if success:
             try:
                 os.chmod(temp_path, 0o600) # Read/Write for owner only
             except Exception: pass
@@ -131,7 +194,7 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
             logging.info(f"Cookies extracted to volatile storage: {temp_path}")
             return temp_path
         else:
-            logging.warning(f"yt-dlp failed to extract cookies. Stderr: {result.stderr[:200]}")
+            logging.warning(f"All cookie extraction methods failed for {browser}.")
             return None
     except Exception as e:
         logging.warning(f"Failed to extract cookies for MPV: {e}")
