@@ -577,7 +577,13 @@ class MpvCommandBuilder:
                         if tp: term_cmd = [tp, '-e'] + full_command; break
             if term_cmd: full_command = term_cmd
 
-        logging.info(f"Constructed MPV command: {' '.join(shlex.quote(a) for a in full_command)}")
+        # 6. Command-Line Length Guard (Windows Safety)
+        cmd_str = ' '.join(shlex.quote(a) for a in full_command)
+        if self.settings.get('os_platform', platform.system()) == "Windows" and len(cmd_str) > 7500:
+            logging.error(f"CRITICAL: Command line length ({len(cmd_str)}) exceeds Windows limit (8191). Launch aborted.")
+            raise RuntimeError(f"Command too long for Windows ({len(cmd_str)} chars). Try playing fewer items at once.")
+
+        logging.info(f"Constructed MPV command: {cmd_str}")
         try:
             p = os.path.join(file_io.DATA_DIR, "last_mpv_command.txt")
             with open(p, 'w', encoding='utf-8') as f:

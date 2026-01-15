@@ -162,6 +162,15 @@ export class StorageManager {
 
     _validateData(data) {
         if (!data || typeof data !== 'object') throw new Error("Data must be an object");
+        
+        // Prototype Pollution Protection
+        const isPoisoned = (obj) => {
+            if (!obj || typeof obj !== 'object') return false;
+            if (Object.keys(obj).some(k => k === '__proto__' || k === 'constructor' || k === 'prototype')) return true;
+            return Object.values(obj).some(v => typeof v === 'object' && isPoisoned(v));
+        };
+        if (isPoisoned(data)) throw new Error("Malicious data detected (Prototype Pollution)");
+
         if (!data.folders || typeof data.folders !== 'object') throw new Error("Data must contain a 'folders' object");
         if (!data.settings || typeof data.settings !== 'object') throw new Error("Data must contain a 'settings' object");
 
