@@ -74,6 +74,13 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
             # This is a URL - sanitize it
             sanitized_url = file_io.sanitize_string(line)
             
+            # --- ID Extraction ---
+            # Look for the #mpv_organizer_id= fragment we inject in mpv_session.py
+            extracted_id = None
+            id_match = re.search(r"[#&]mpv_organizer_id=([^#&]+)", sanitized_url)
+            if id_match:
+                extracted_id = id_match.group(1)
+
             url_item = {
                 'url': sanitized_url,
                 'title': current_title if current_title else sanitized_url,
@@ -82,6 +89,9 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
                 'use_ytdl_mpv': False,
                 'is_youtube': 'youtube.com/' in sanitized_url or 'youtu.be/' in sanitized_url
             }
+            if extracted_id:
+                url_item['id'] = extracted_id
+
             url_items.append(url_item)
             current_title = None
             current_headers = {}

@@ -134,7 +134,9 @@ class HandlerManager:
                     if stored_item.get('id') == item_id:
                         logging.debug(f"ResolveOrAssignId: Found existing item by ID: {item_id}. Updating.")
                         stored_item.update(url_item)
-                        return url_item, all_folders
+                        # Return the stored_item as it now contains both old saved data (resume_time) 
+                        # and new incoming data from the request.
+                        return stored_item, all_folders
             else:
                 # No ID provided, generate a new one
                 item_id = str(uuid.uuid4())
@@ -817,9 +819,14 @@ class HandlerManager:
             # Extract common headers/options from the items to apply globally.
             # We use a "greedy" approach for ytdl: if ANY item needs it, enable it.
             global_use_ytdl_mpv = any(item.get('use_ytdl_mpv', False) for item in enriched_url_items)
-            global_is_youtube = any(item.get('is_youtube', False) for item in enriched_url_items)
+            
+            # --- FIXED: Only use first item's YouTube status for initial networking ---
+            # This prevents heavy YT settings from poisoning non-YT videos in a mixed folder.
+            first_item = enriched_url_items[playlist_start_index] if playlist_start_index < len(enriched_url_items) else (enriched_url_items[0] if enriched_url_items else {})
+            global_is_youtube = first_item.get('is_youtube', False)
             
             # For headers and other flags, we still baseline from the first item
+            # ... (rest of the logic)
             first_item = enriched_url_items[0] if enriched_url_items else {}
             
             # Reformat headers for MPV command line

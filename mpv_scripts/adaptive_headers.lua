@@ -1,224 +1,167 @@
 local utils = require 'mp.utils'
 local url_options = {}
+local id_options = {}
 local indexed_options = {}
-local playlist_id_options = {}
-local url_history = {}
-local MAX_ENTRIES = 100
 
 -- Store initial global states
-local initial_ytdl_raw = mp.get_property("ytdl-raw-options") or ""
-local initial_ytdl_format = mp.get_property("ytdl-format") or ""
 local initial_ua = mp.get_property("user-agent") or "libmpv"
 local initial_referrer = mp.get_property("referrer") or ""
+local initial_max_bytes = mp.get_property("demuxer-max-bytes")
+local initial_max_back_bytes = mp.get_property("demuxer-max-back-bytes")
+local initial_cache_secs = mp.get_property("cache-secs")
+local initial_readahead = mp.get_property("demuxer-readahead-secs")
+local initial_stream_buffer = mp.get_property("stream-buffer-size")
+local initial_lavf_opts = mp.get_property("demuxer-lavf-o") or ""
 
--- Dedicated debug log
 local function debug_log(msg)
     mp.msg.info("AdaptiveHeaders: " .. msg)
 end
 
--- Helper to decode percent-encoded URLs
 local function url_decode(str)
     if not str or str == "" then return "" end
     return str:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
-end
-
--- Promotion logic: Map index-based options to sticky MPV playlist IDs
-local function promote_indices()
-    local playlist = mp.get_property_native("playlist")
-    if not playlist then return end
-    
-    for index, options in pairs(indexed_options) do
-        -- MPV native playlist is a 1-indexed table in Lua
-        local item = playlist[index + 1]
-        if item then
-            playlist_id_options[item.id] = options
-            indexed_options[index] = nil
-        end
-    end
 end
 
 -- Register options from Python
 mp.register_script_message("set_url_options", function(url, options_json, index)
     local ok, options = pcall(utils.parse_json, options_json)
     if ok and options then
-        local d_url = url_decode(url)
-        if not url_options[url] and not (d_url ~= "" and url_options[d_url]) then
-            table.insert(url_history, url)
-        end
         url_options[url] = options
+        local d_url = url_decode(url)
         if d_url ~= "" then url_options[d_url] = options end
-        
-        if index and index ~= "" then
-            indexed_options[tonumber(index)] = options
-            promote_indices()
-        else
-            debug_log("Registered options for " .. url)
-        end
-
-        if #url_history > MAX_ENTRIES then
-            local oldest = table.remove(url_history, 1)
-            url_options[oldest] = nil
-        end
+        if options.id then id_options[options.id] = options end
+        if index and index ~= "" then indexed_options[tonumber(index)] = options end
     end
 end)
 
--- Main logic to apply settings
 local function apply_adaptive_settings()
     local path = mp.get_property("path")
-    if not path then return end
+    if not path or path == "" then return end
 
-    local d_path = url_decode(path)
-    local playlist_id = mp.get_property_number("playlist-id")
-    local pos = mp.get_property_number("playlist-pos")
-    
-    -- Ensure all pending indices are promoted before lookup
-    promote_indices()
+    -- 1. Extract Solid ID
+    local solid_id = path:match("[#&]mpv_organizer_id=([^#&]+)")
+    if solid_id then mp.set_property_native("user-data/id", solid_id) end
 
-    -- 1. CAPTURE PERSISTENT PROPERTIES
-    local hot_swap_json = mp.get_property("user-data/hot-swap-options") or ""
-    local captured_orig = mp.get_property("user-data/original-url") or ""
-    
-    -- Clear the hot-swap manifest immediately
-    mp.set_property_native("user-data/hot-swap-options", nil)
+    -- 2. Hot-Swap / Race Condition Recovery
+    -- If Python sent immediate options via user-data, use them first.
+    local hs_json = mp.get_property("user-data/hot-swap-options")
+    if hs_json and hs_json ~= "" then
+        local ok, hs_opts = pcall(utils.parse_json, hs_json)
+        if ok and hs_opts then
+            -- Inject into our tracking tables for future lookups
+            if hs_opts.id then id_options[hs_opts.id] = hs_opts end
+            url_options[path] = hs_opts
+        end
+        mp.set_property_native("user-data/hot-swap-options", nil)
+    end
 
-    -- 2. ABSOLUTE RESET (Global reset for maximum authority)
+    -- 3. Clean up previous state (Full Reset to Initial Defaults)
     mp.set_property("user-agent", initial_ua)
     mp.set_property("referrer", initial_referrer)
     mp.set_property("http-header-fields", "")
     mp.set_property("cookies-file", "")
-    mp.set_property("ytdl-raw-options", initial_ytdl_raw)
-    mp.set_property("ytdl-format", initial_ytdl_format)
-    mp.set_property("demuxer-lavf-o", "")
+    mp.set_property("ytdl-raw-options", "")
+    mp.set_property("demuxer-lavf-o", initial_lavf_opts)
     
-    -- Reset titles so they don't leak from previous files
-    mp.set_property("title", "")
-    mp.set_property("force-media-title", "")
+    -- Reset Buffering to Launch Defaults
+    mp.set_property("demuxer-max-bytes", initial_max_bytes)
+    mp.set_property("demuxer-max-back-bytes", initial_max_back_bytes)
+    mp.set_property("cache-secs", initial_cache_secs)
+    mp.set_property("demuxer-readahead-secs", initial_readahead)
+    mp.set_property("stream-buffer-size", initial_stream_buffer)
+    mp.set_property("cache", "auto")
+
+    -- 4. Resolve Options
+    local item_id = mp.get_property("user-data/id")
+    local pos = mp.get_property_number("playlist-pos")
+    local stripped_path = path:gsub("[#&]mpv_organizer_id=[^#&]+", "")
     
-    -- Reset metadata strictly
-    mp.set_property_native("user-data/id", nil)
-    mp.set_property_native("user-data/original-url", nil)
-    mp.set_property("user-data/is-youtube", "no")
-    mp.set_property("user-data/marked-as-watched", "no")
-    
-    -- Preserve sticky info (project-root and cookies-browser) 
-    -- unless the new 'opts' specifically overrides them.
-    if not (opts and opts.cookies_browser) then
-        -- Keep existing or set to empty if nothing exists yet
-        local current = mp.get_property("user-data/cookies-browser")
-        if not current or current == "" then mp.set_property("user-data/cookies-browser", "") end
+    local opts = (item_id and id_options[item_id]) or 
+                 (pos and indexed_options[pos]) or 
+                 url_options[stripped_path] or url_options[path]
+
+    if not opts then return end
+
+    -- 5. Always apply UI/State features (Titles & Resume)
+    if opts.title and opts.title ~= "" then
+        mp.set_property("title", opts.title)
+        mp.set_property("force-media-title", opts.title)
     end
 
-    local opts = nil
-    local item_id = ""
-    local original_url = ""
-
-    -- 3. RESOLVE OPTIONS
-    if hot_swap_json ~= "" then
-        local ok, hot_opts = pcall(utils.parse_json, hot_swap_json)
-        if ok and hot_opts then
-            opts = hot_opts
-        end
+    if opts.resume_time and tonumber(opts.resume_time) > 0 then
+        mp.set_property_number("file-local-options/start", tonumber(opts.resume_time))
+        mp.set_property("file-local-options/resume-playback", "no")
     end
 
-    if not opts then
-        opts = (playlist_id and playlist_id_options[playlist_id]) or
-               (pos and indexed_options[pos]) or 
-               url_options[path] or url_options[d_path] or 
-               (captured_orig ~= "" and url_options[captured_orig]) or 
-               (captured_orig ~= "" and url_options[url_decode(captured_orig)])
-        
-        if not opts and path:find("?") then
-            local stripped_path = path:gsub("%?.*$", "")
-            opts = url_options[stripped_path]
-        end
-    end
-
-    -- 4. APPLY OPTIONS
-    local use_ytdl = "no"
-    local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
-    
-    if opts and opts.original_url then
-        if opts.original_url:find("youtube%.com") or opts.original_url:find("youtu%.be") then
-            is_yt = true
-        end
-    end
-
-    if is_yt then 
-        use_ytdl = "yes"
-        mp.set_property("user-data/is-youtube", "yes")
-    end
-
-    if opts then
-        debug_log("Applying settings for " .. path)
-        
-        if opts.id then item_id = opts.id end
-        if opts.original_url then original_url = opts.original_url end
-
-        -- Sticky promotion
-        if playlist_id and not playlist_id_options[playlist_id] then
-            playlist_id_options[playlist_id] = opts
-        end
-
-        if opts.title and opts.title ~= "" then
-            mp.set_property("title", opts.title)
-            mp.set_property("force-media-title", opts.title)
-        end
-
+    -- 6. ALWAYS apply Authentication Headers (Essential for connection)
+    if opts.headers then
         local h_list = {}
-        if opts.headers then
-            for k, v in pairs(opts.headers) do
-                local kl = k:lower()
-                if kl == "user-agent" then mp.set_property("user-agent", v)
-                elseif kl == "referer" then mp.set_property("referrer", v) end
-                table.insert(h_list, k .. ": " .. v)
-            end
+        for k, v in pairs(opts.headers) do
+            local kl = k:lower()
+            if kl == "user-agent" then mp.set_property("user-agent", v)
+            elseif kl == "referer" then mp.set_property("referrer", v)
+            else table.insert(h_list, k .. ": " .. v) end
         end
+        if #h_list > 0 then mp.set_property_native("http-header-fields", h_list) end
+    end
 
-        if #h_list > 0 then
-            mp.set_property_native("http-header-fields", h_list)
-        end
+    -- 7. TARGETED BYPASS CHECK
+    local targeted = opts.targeted_defaults or "none"
+    local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
+    local bypass_active = false
 
-        if opts.use_ytdl_mpv == true then use_ytdl = "yes" end
-        if opts.ytdl_format then mp.set_property("ytdl-format", opts.ytdl_format) end
+    if targeted == 'animepahe' and (path:find("kwik%.cx") or path:find("owocdn%.top")) then
+        bypass_active = true
+    elseif targeted == 'all-none-yt' and not is_yt then
+        bypass_active = true
+    end
+
+    if bypass_active then
+        debug_log("True Native Bypass active. Using native MPV networking for speed.")
+        -- Apply Reconnect and Persistence for stability
+        local persistence = "1"
+        if opts.http_persistence == "off" then persistence = "0"
+        elseif opts.http_persistence == "auto" and opts.disable_http_persistent then persistence = "0" end
+        local reconnect_val = (opts.enable_reconnect ~= false) and "1" or "0"
+        local r_delay = tonumber(opts.reconnect_delay) or 4
+        
+        -- Use robust reconnect flags (excluding at_eof to avoid VOD loops)
+        local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d", persistence, reconnect_val, r_delay)
+        mp.set_property("demuxer-lavf-o", lp)
+    else
+        -- 8. Apply "Turbo" Networking Overrides (Only if NOT bypassed)
+        if opts.cookies_file then mp.set_property("cookies-file", opts.cookies_file) end
         if opts.ytdl_raw_options then mp.set_property("ytdl-raw-options", opts.ytdl_raw_options) end
 
-        -- Networking overrides
+        -- Apply Buffering & Cache
+        if opts.enable_cache == false then
+            mp.set_property("cache", "no")
+            debug_log("Buffering disabled by user setting.")
+        else
+            if opts.demuxer_max_bytes then mp.set_property("demuxer-max-bytes", opts.demuxer_max_bytes) end
+            if opts.demuxer_max_back_bytes then mp.set_property("demuxer-max-back-bytes", opts.demuxer_max_back_bytes) end
+            if opts.cache_secs then mp.set_property("cache-secs", tostring(opts.cache_secs)) end
+            if opts.demuxer_readahead_secs then mp.set_property("demuxer-readahead-secs", tostring(opts.demuxer_readahead_secs)) end
+            if opts.stream_buffer_size then mp.set_property("stream-buffer-size", opts.stream_buffer_size) end
+        end
+
         if not opts.disable_network_overrides then
             local persistence = "1"
             if opts.http_persistence == "off" then persistence = "0"
             elseif opts.http_persistence == "auto" and opts.disable_http_persistent then persistence = "0" end
-            local lavf_str = "http_persistent=" .. persistence .. ",reconnect=" .. ((opts.enable_reconnect ~= false) and "1" or "0") .. ",reconnect_at_eof=1,reconnect_streamed=1,reconnect_delay_max=" .. tostring(opts.reconnect_delay or 4)
-            mp.set_property("demuxer-lavf-o", lavf_str)
+            local reconnect_val = (opts.enable_reconnect ~= false) and "1" or "0"
+            local r_delay = tonumber(opts.reconnect_delay) or 4
+            local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d", persistence, reconnect_val, r_delay)
+            mp.set_property("demuxer-lavf-o", lp)
         end
-
-        if opts.cookies_file then mp.set_property("cookies-file", opts.cookies_file) end
-        if opts.resume_time and tonumber(opts.resume_time) > 0 then
-            mp.set_property("file-local-options/start", opts.resume_time)
-        end
-
-        -- Fallback Sync (Properties needed by python.lua)
-        if opts.project_root then mp.set_property("user-data/project-root", opts.project_root) end
-        if opts.cookies_browser then mp.set_property("user-data/cookies-browser", opts.cookies_browser) end
-        if opts.marked_as_watched == true then mp.set_property("user-data/marked-as-watched", "yes") end
     end
 
-    -- Finish by setting ytdl state
-    mp.set_property("ytdl", use_ytdl)
-    
-    -- Restore metadata for current session visibility
-    if item_id ~= "" then mp.set_property_native("user-data/id", item_id) end
-    if original_url ~= "" then mp.set_property_native("user-data/original-url", original_url) end
+    -- 9. Misc context
+    if opts.project_root then mp.set_property("user-data/project-root", opts.project_root) end
+    if opts.cookies_browser then mp.set_property("user-data/cookies-browser", opts.cookies_browser) end
+    if opts.original_url then mp.set_property_native("user-data/original-url", opts.original_url) end
 end
 
--- Hook at priority 10
-mp.add_hook("on_load", 10, apply_adaptive_settings)
-
--- Error reporting
-mp.register_event("end-file", function(event)
-    if event.reason == 'error' then
-        local ytdl_err = mp.get_property("ytdl-error")
-        if ytdl_err and ytdl_err ~= "" then
-            mp.commandv("script-message", "ytdl_error_detected", ytdl_err)
-        end
-    end
+mp.add_hook("on_load", 10, function()
+    pcall(apply_adaptive_settings)
 end)

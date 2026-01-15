@@ -16,109 +16,41 @@ import urllib.request
 import shlex
 import re
 from utils import url_analyzer
-import file_io # <--- Added this import
+import file_io
 
 # A set of mpv flags that are considered safe to be passed from the extension.
-# This is a security measure to prevent argument injection vulnerabilities.
 ALLOWED_PROTOCOLS = ('http://', 'https://', 'file://', 'udp://', 'rtmp://', 'rtsp://', 'mms://')
 
 SAFE_MPV_FLAGS_ALLOWLIST = {
-    # Playback
-    '--start',
-    '--end',
-    '--speed',
-    '--loop',
-    '--loop-playlist',
-    '--loop-file',
-    '--pause',
-    '--save-position-on-quit',
-
-    # Window
-    '--fullscreen',
-    '--ontop',
-    '--border',
-    '--title',
-    '--geometry',
-    '--autofit',
-    '--autofit-larger',
-    '--autofit-smaller',
-    '--keep-open',
-
-    # Video
-    '--aspect',
-    '--correct-pts',
-    '--fps',
-    '--deinterlace',
-    '--hwdec',
-    '--scale',
-    '--cscale',
-    '--dscale',
-    '--dither-depth',
-    '--deband',
-    '--deband-iterations',
-    '--deband-threshold',
-    '--deband-range',
-    '--fbo-format',
-    '--profile',
-    '--video-sync',
-    '--interpolation',
-    '--tscale',
-
-    # Audio
-    '--volume',
-    '--mute',
-    '--audio-device',
-    '--audio-channels',
-
-    # Subtitles
-    '--sub-visibility',
-    '--sub-pos',
-    '--sub-scale',
-    '--sub-font',
-    '--sub-font-size',
-
-    # Miscellaneous
-    '--no-audio',
-    '--no-video',
-    '--force-window',
-    '--cursor-autohide',
-    '--terminal',
-    '--input-terminal',
+    '--start', '--end', '--speed', '--loop', '--loop-playlist', '--loop-file', '--pause',
+    '--save-position-on-quit', '--fullscreen', '--ontop', '--border', '--title',
+    '--geometry', '--autofit', '--autofit-larger', '--autofit-smaller', '--keep-open',
+    '--aspect', '--correct-pts', '--fps', '--deinterlace', '--hwdec', '--scale',
+    '--cscale', '--dscale', '--dither-depth', '--deband', '--deband-iterations',
+    '--deband-threshold', '--deband-range', '--fbo-format', '--profile', '--video-sync',
+    '--interpolation', '--tscale', '--volume', '--mute', '--audio-device',
+    '--audio-channels', '--sub-visibility', '--sub-pos', '--sub-scale', '--sub-font',
+    '--sub-font-size', '--no-audio', '--no-video', '--force-window', '--cursor-autohide',
+    '--terminal', '--input-terminal',
 }
 
-
 def get_gpu_vendor():
-    """Detects the GPU vendor (nvidia, intel, amd, or apple) for hardware decoding selection."""
     system = platform.system()
     try:
         if system == "Windows":
-            # Use wmic to get GPU name on Windows
             cmd = ["wmic", "path", "win32_VideoController", "get", "name"]
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
-            output = output.lower()
-        elif system == "Darwin":
-            return "apple"
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True).lower()
+        elif system == "Darwin": return "apple"
         else:
-            # Use lspci on Linux
-            if shutil.which("lspci"):
-                output = subprocess.check_output(["lspci"], stderr=subprocess.STDOUT, text=True).lower()
-            else:
-                # Fallback for systems without lspci
-                return "unknown"
-
-        if "nvidia" in output:
-            return "nvidia"
-        elif "intel" in output:
-            return "intel"
-        elif "amd" in output or "radeon" in output:
-            return "amd"
-    except Exception as e:
-        logging.debug(f"GPU detection failed: {e}")
-    
+            if shutil.which("lspci"): output = subprocess.check_output(["lspci"], stderr=subprocess.STDOUT, text=True).lower()
+            else: return "unknown"
+        if "nvidia" in output: return "nvidia"
+        elif "intel" in output: return "intel"
+        elif "amd" in output or "radeon" in output: return "amd"
+    except: pass
     return "unknown"
 
 def sanitize_url(url):
-    """Sanitizes a URL by removing potentially dangerous characters for shell commands."""
     return file_io.sanitize_string(url, is_filename=False)
 
 # --- Dependency Checking & Updating ---
@@ -194,8 +126,6 @@ def _get_linux_sudo_command_prefix(ytdlp_path, send_message_func):
         else:
             send_message_func({"log": {"text": "[yt-dlp]: No graphical sudo tool found. Please run `sudo yt-dlp -U` in a terminal.", "type": "error"}})
             return []
-    return []
-
     return []
 
 def _run_update_command(command, send_message_func):
@@ -286,11 +216,9 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
 
     # --- 1. MPV Check ---
     mpv_exe_name = "mpv.exe" if system == "Windows" else "mpv"
-    # Prioritize PATH over config for self-healing
     mpv_path = shutil.which(mpv_exe_name)
     
     if not mpv_path:
-        # Fallback to configured path if not in PATH
         configured_path = get_mpv_executable_func()
         if os.path.isabs(configured_path) and os.path.exists(configured_path):
             mpv_path = configured_path
@@ -318,31 +246,20 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
 
     # --- 3. FFmpeg Check ---
     ffmpeg_exe_name = "ffmpeg.exe" if system == "Windows" else "ffmpeg"
-    
-    # Prioritize PATH (shutil.which) for FFmpeg to ensure we catch /usr/bin over /sbin
     ffmpeg_path = shutil.which(ffmpeg_exe_name)
-    
     config = file_io._safe_json_load(file_io.CONFIG_FILE)
     
     if not ffmpeg_path:
-        # Fallback to configured path
         ffmpeg_path = config.get("ffmpeg_path")
         if ffmpeg_path and not (os.path.exists(ffmpeg_path) and os.access(ffmpeg_path, os.X_OK)):
-            ffmpeg_path = None # Invalid, trigger aggressive search
+            ffmpeg_path = None
 
-    # Aggressive Search Fallback
     if not ffmpeg_path:
         search_dirs = []
         if system == "Linux":
-            search_dirs.extend([
-                "/usr/bin", "/usr/local/bin", "/bin", "/usr/sbin", "/sbin",
-                os.path.expanduser("~/.local/bin"),
-                os.path.expanduser("~/bin")
-            ])
-        
+            search_dirs.extend(["/usr/bin", "/usr/local/bin", "/bin", "/usr/sbin", "/sbin", os.path.expanduser("~/.local/bin"), os.path.expanduser("~/bin")])
         if mpv_status["found"] and os.path.isabs(mpv_status["path"]):
             search_dirs.append(os.path.dirname(mpv_status["path"]))
-
         for d in search_dirs:
             p = os.path.join(d, ffmpeg_exe_name)
             if os.path.exists(p) and os.access(p, os.X_OK):
@@ -352,250 +269,166 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
     if ffmpeg_path:
         ffmpeg_status["found"] = True
         ffmpeg_status["path"] = ffmpeg_path
-        # Auto-update config if this is a new discovery OR if it differs from stored path
         if ffmpeg_path != config.get("ffmpeg_path"):
             file_io.set_settings({"ffmpeg_path": ffmpeg_path})
-            logging.info(f"Self-Healing: Updated FFmpeg path to {ffmpeg_path}")
-            
         ffmpeg_ver = _get_ffmpeg_version(ffmpeg_path, send_message_func)
-        if ffmpeg_ver:
-            ffmpeg_status["version"] = ffmpeg_ver
+        if ffmpeg_ver: ffmpeg_status["version"] = ffmpeg_ver
     else:
         ffmpeg_status["error"] = "Not found. Required for 1440p/4K resolution."
 
     # --- 4. Node.js Check ---
     node_exe_name = "node.exe" if system == "Windows" else "node"
     node_path = shutil.which(node_exe_name)
-    
     if not node_path:
         node_path = config.get("node_path")
         if node_path and not (os.path.exists(node_path) and os.access(node_path, os.X_OK)):
             node_path = None
-
     if node_path:
         node_status["found"] = True
         node_status["path"] = node_path
-        # Sync config
-        if node_path != config.get("node_path"):
-            file_io.set_settings({"node_path": node_path})
-
+        if node_path != config.get("node_path"): file_io.set_settings({"node_path": node_path})
         node_ver = _get_node_version(node_path)
-        if node_ver:
-            node_status["version"] = node_ver
+        if node_ver: node_status["version"] = node_ver
     else:
         node_status["error"] = "Not found. Highly recommended for 1440p+ YouTube playback."
 
     logging.info(f"Dependency check: MPV={mpv_status['found']}, YTDLP={ytdlp_status['found']}, FFMPEG={ffmpeg_status['found']}, NODE={node_status['found']}")
-    
     result = {"success": True, "mpv": mpv_status, "ytdlp": ytdlp_status, "ffmpeg": ffmpeg_status, "node": node_status}
-    
-    # Update cache
     _DEPENDENCY_STATUS_CACHE["data"] = result
     _DEPENDENCY_STATUS_CACHE["timestamp"] = now
-    
     return result
 
-# --- MPV Command Construction ---
-
-def get_essential_ytdlp_flags():
+def get_essential_ytdlp_flags(settings=None, bypass=False):
     """Returns the baseline yt-dlp flags required for reliable streaming and security."""
-    flags = "ignore-config=,remote-components=ejs:github,js-runtimes=node"
+    config = settings if settings else file_io._safe_json_load(file_io.CONFIG_FILE)
     
-    config = file_io._safe_json_load(file_io.CONFIG_FILE)
+    # Base security and functionality flags
+    flags_list = [
+        "remote-components=ejs:github",
+        "js-runtimes=node"
+    ]
+    
+    if config.get('yt_ignore_config', True):
+        flags_list.insert(0, "ignore-config=")
+    
+    # Performance Injectors - SKIP IF BYPASS ACTIVE
+    if not bypass:
+        concurrent = config.get('ytdlp_concurrent_fragments', 4)
+        if concurrent > 1:
+            flags_list.append(f"concurrent-fragments={concurrent}")
+        
+        buf_size = config.get('stream_buffer_size', '10M')
+        if buf_size:
+            # Map MPV stream-buffer-size to yt-dlp buffer-size (approximate)
+            flags_list.append(f"buffer-size={buf_size}")
+
     ffmpeg_path = config.get("ffmpeg_path")
     if ffmpeg_path and os.path.exists(ffmpeg_path):
-        flags = f"{flags},ffmpeg-location={ffmpeg_path}"
+        flags_list.append(f"ffmpeg-location={ffmpeg_path}")
     
-    return flags
+    return ",".join(flags_list)
 
 # --- MPV Command Construction ---
 
 class MpvCommandBuilder:
-    def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False, is_youtube=False, settings=None, cookies_browser=None):
+    def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False, is_youtube=False, settings=None, cookies_browser=None, force_bypass=False):
         self.mpv_exe = mpv_exe
-        self.mpv_args = [mpv_exe]
-        self.settings = settings
-        self.cookies_browser = cookies_browser # Store browser name for direct access
+        self.settings = settings or {}
+        self.cookies_browser = cookies_browser
+        self.use_ytdl_mpv = use_ytdl_mpv
+        self.is_youtube_override = is_youtube_override
+        self.is_youtube = is_youtube
+        self.force_bypass_hint = force_bypass
         
-        if settings:
-            # Apply dynamic networking and buffering flags from settings
-            # Skip if user has requested to use MPV's native defaults
-            if not settings.get('disable_network_overrides', False):
-                cache_enabled = settings.get('enable_cache', True)
-                self.mpv_args.append(f"--cache={'yes' if cache_enabled else 'no'}")
-                
-                if cache_enabled:
-                    if settings.get('demuxer_max_bytes'):
-                        self.mpv_args.append(f"--demuxer-max-bytes={settings['demuxer_max_bytes']}")
-                    if settings.get('demuxer_max_back_bytes'):
-                        self.mpv_args.append(f"--demuxer-max-back-bytes={settings['demuxer_max_back_bytes']}")
-                    if settings.get('cache_secs'):
-                        self.mpv_args.append(f"--cache-secs={settings['cache_secs']}")
-                    if settings.get('demuxer_readahead_secs'):
-                        self.mpv_args.append(f"--demuxer-readahead-secs={settings['demuxer_readahead_secs']}")
-                    if settings.get('stream_buffer_size'):
-                        self.mpv_args.append(f"--stream-buffer-size={settings['stream_buffer_size']}")
-
-            # Apply Hardware Decoder
-            decoder = settings.get('mpv_decoder', 'auto')
-            if decoder:
-                self.mpv_args.append(f"--hwdec={decoder}")
-
-            # Apply Performance Profile
-            profile = settings.get('performance_profile', 'default')
-            if profile == 'low':
-                self.mpv_args.append("--profile=fast")
-            elif profile == 'medium':
-                # Balanced quality: Spline36 is a good middle ground scaler
-                self.mpv_args.append("--scale=spline36")
-                self.mpv_args.append("--cscale=spline36")
-                self.mpv_args.append("--vo=gpu")
-            elif profile == 'high':
-                self.mpv_args.append("--profile=gpu-hq")
-            elif profile == 'ultra':
-                # Enthusiast settings: Max quality scaling + Smooth Motion + High Precision
-                self.mpv_args.append("--profile=gpu-hq")
-                
-                # Granular toggles for Ultra features (default to True)
-                if settings.get('ultra_scalers', True):
-                    self.mpv_args.append("--scale=ewa_lanczossharp")
-                    self.mpv_args.append("--cscale=ewa_lanczossharp")
-                
-                if settings.get('ultra_video_sync', True):
-                    self.mpv_args.append("--video-sync=display-resample")
-
-                # Handle Interpolation Mode (String or Boolean legacy)
-                interp_mode = settings.get('ultra_interpolation', 'oversample')
-                
-                # Backwards compatibility: convert booleans to defaults
-                if interp_mode is True: interp_mode = 'oversample'
-                if interp_mode is False: interp_mode = 'off'
-
-                if interp_mode and interp_mode != 'off':
-                    self.mpv_args.append("--interpolation=yes")
-                    self.mpv_args.append(f"--tscale={interp_mode}")
-                
-                if settings.get('ultra_deband', True):
-                    self.mpv_args.append("--deband=yes")
-                    self.mpv_args.append("--deband-iterations=4")
-                    self.mpv_args.append("--deband-threshold=48")
-                    self.mpv_args.append("--deband-range=24")
-                
-                if settings.get('ultra_fbo', True):
-                    self.mpv_args.append("--fbo-format=rgba16f") # High bit-depth processing
-            # 'default' sends no flags, letting mpv.conf take over
-            
+        # State Storage
+        self.url = None
+        self.ipc_path = None
+        self.scripts = []
+        self.script_opts = []
+        self.title = None
+        self.geometry = None
+        self.headers = None
+        self.custom_flags = None
+        self.automatic_flags = None
+        self.playlist_start = None
+        self.idle_val = None
+        self.ytdl_raw_options = None
+        self.disable_http_persistent_override = False
+        self.input_terminal = None
         self.has_terminal_flag = False
         self.is_forced_terminal = False
-        self.url = None
-        self.headers_from_bypass = None # This is still kept for legacy/specific cases if needed
-        self.ytdl_raw_options_from_bypass = None # This is still kept for legacy/specific cases if needed
-        self.use_ytdl_mpv = use_ytdl_mpv # Now directly initialized
-        self.is_youtube_override = is_youtube_override # Now directly initialized
+
+    def _should_bypass_overrides(self):
+        # 1. Force Bypass Hint (From Launcher)
+        if self.force_bypass_hint: return True
+        
+        # 2. Global Kill-switch
+        if self.settings.get('disable_network_overrides', False): return True
+        
+        # 3. Targeted Logic
+        targeted = self.settings.get('targeted_defaults', 'none')
+        if targeted == 'none': return False
+        
+        if targeted == 'animepahe':
+            urls = self.url if isinstance(self.url, list) else [self.url]
+            if any(u and ("kwik.cx" in u or "owocdn.top" in u) for u in urls): return True
+            return False
+        elif targeted == 'all-none-yt':
+            return not self.is_youtube
+            
+        return False
 
     def with_ipc_path(self, ipc_path):
-        if ipc_path:
-            self.mpv_args.append(f'--input-ipc-server={ipc_path}')
+        self.ipc_path = ipc_path
         return self
 
     def with_url(self, url):
         if url:
             if isinstance(url, list):
-                # Filter unsafe protocols from list
-                safe_urls = []
-                for u in url:
-                    sanitized = sanitize_url(u)
-                    if sanitized.lower().startswith(ALLOWED_PROTOCOLS):
-                        safe_urls.append(sanitized)
-                    else:
-                        logging.warning(f"Security: Ignored URL with unsafe protocol: {sanitized}")
-                
-                self.url = safe_urls if safe_urls else None
+                self.url = [sanitize_url(u) for u in url if sanitize_url(u).lower().startswith(ALLOWED_PROTOCOLS)]
             else:
                 sanitized = sanitize_url(url)
-                if sanitized.lower().startswith(ALLOWED_PROTOCOLS):
-                    self.url = sanitized
-                else:
-                    logging.warning(f"Security: Ignored URL with unsafe protocol: {sanitized}")
-                    self.url = None
+                if sanitized.lower().startswith(ALLOWED_PROTOCOLS): self.url = sanitized
         return self
 
     def with_completion_script(self, script_dir, flag_dir=None):
         if script_dir:
-            lua_script_path = os.path.join(script_dir, "mpv_scripts", "on_completion.lua")
-            if os.path.exists(lua_script_path):
-                self.mpv_args.append(f'--script={lua_script_path}')
-                if flag_dir:
-                    self.mpv_args.append(f'--script-opts=on_completion-flag_dir={flag_dir}')
-                logging.info(f"MPV will load completion script: {lua_script_path}")
-            else:
-                logging.warning(f"Completion script not found at {lua_script_path}. MPV will not use it.")
+            p = os.path.join(script_dir, "mpv_scripts", "on_completion.lua")
+            if os.path.exists(p):
+                self.scripts.append(p)
+                if flag_dir: self.script_opts.append(f'on_completion-flag_dir={flag_dir}')
         return self
 
     def with_adaptive_headers_script(self, script_dir):
         if script_dir:
-            lua_script_path = os.path.join(script_dir, "mpv_scripts", "adaptive_headers.lua")
-            if os.path.exists(lua_script_path):
-                self.mpv_args.append(f'--script={lua_script_path}')
-                logging.info(f"MPV will load adaptive headers script: {lua_script_path}")
-        return self
-
-    def with_fix_thumbnailer_script(self, script_dir):
-        if script_dir:
-            lua_script_path = os.path.join(script_dir, "mpv_scripts", "fix_thumbnailer_playlist.lua")
-            if os.path.exists(lua_script_path):
-                self.mpv_args.append(f'--script={lua_script_path}')
-                logging.info(f"MPV will load thumbnailer fix script: {lua_script_path}")
-        return self
-
-    def with_reanimator_script(self, script_dir):
-        if script_dir:
-            lua_script_path = os.path.join(script_dir, "mpv_scripts", "stream_reanimator.lua")
-            if os.path.exists(lua_script_path):
-                self.mpv_args.append(f'--script={lua_script_path}')
-                logging.info(f"MPV will load stream reanimator script: {lua_script_path}")
+            p = os.path.join(script_dir, "mpv_scripts", "adaptive_headers.lua")
+            if os.path.exists(p): self.scripts.append(p)
         return self
 
     def with_python_interaction_script(self, script_dir):
         if script_dir:
-            lua_script_path = os.path.join(script_dir, "mpv_scripts", "python_loader.lua")
-            if os.path.exists(lua_script_path):
-                self.mpv_args.append(f'--script={lua_script_path}')
-                logging.info(f"MPV will load python interaction script: {lua_script_path}")
+            p = os.path.join(script_dir, "mpv_scripts", "python_loader.lua")
+            if os.path.exists(p): self.scripts.append(p)
+        return self
+
+    def with_reanimator_script(self, script_dir):
+        if script_dir:
+            p = os.path.join(script_dir, "mpv_scripts", "stream_reanimator.lua")
+            if os.path.exists(p): self.scripts.append(p)
+        return self
+
+    def with_fix_thumbnailer_script(self, script_dir):
+        if script_dir:
+            p = os.path.join(script_dir, "mpv_scripts", "fix_thumbnailer_playlist.lua")
+            if os.path.exists(p): self.scripts.append(p)
         return self
 
     def with_title(self, title):
-        if title:
-            # Use --title instead of --force-media-title.
-            # --title sets the window title, but doesn't override the per-file media title
-            # displayed in the seek bar/OSD like --force-media-title does.
-            clean_title = file_io.sanitize_string(title)
-            self.mpv_args.append(f'--title={clean_title}')
+        self.title = title
         return self
 
-    def with_automatic_flags(self, automatic_mpv_flags):
-        if automatic_mpv_flags:
-            for flag_info in automatic_mpv_flags:
-                if flag_info.get('enabled'):
-                    flag = flag_info.get('flag')
-                    if not flag:
-                        continue
-                        
-                    if flag == '--terminal':
-                        self.has_terminal_flag = True
-                    elif flag.startswith('--hwdec'):
-                        # Skip hwdec flags in automatic flags to avoid conflicts with 
-                        # the dedicated dropdown setting.
-                        logging.debug(f"MpvCommandBuilder: Ignoring redundant hwdec flag in automatic flags: {flag}")
-                        continue
-                    else:
-                        # --- SANITIZATION CHECK ---
-                        # Extract flag name (left of '=')
-                        flag_name = flag.split('=', 1)[0]
-                        if flag_name in SAFE_MPV_FLAGS_ALLOWLIST:
-                            self.mpv_args.append(flag)
-                        else:
-                            logging.warning(f"Security: Dropped automatic flag '{flag}' because '{flag_name}' is not in the allowlist.")
+    def with_automatic_flags(self, flags):
+        self.automatic_flags = flags
         return self
 
     def with_force_terminal(self, force):
@@ -605,307 +438,162 @@ class MpvCommandBuilder:
         return self
 
     def with_input_terminal(self, val):
-        if val:
-            self.mpv_args.append(f'--input-terminal={val}')
+        self.input_terminal = val
         return self
 
     def with_headers(self, headers):
-        effective_headers = self.headers_from_bypass if self.headers_from_bypass else headers
-        if effective_headers:
-            # We strictly limit what goes on the command line to prevent shell/terminal crashes.
-            # User-Agent and Referer are the most critical and have dedicated flags.
-            # Other complex headers (like Accept-Language with commas) are handled via IPC
-            # and applied by the adaptive_headers.lua script.
-            
-            if 'User-Agent' in effective_headers:
-                ua = str(effective_headers["User-Agent"])
-                self.mpv_args.append(f'--user-agent={file_io.sanitize_string(ua)}')
-            if 'Referer' in effective_headers:
-                ref = str(effective_headers["Referer"])
-                self.mpv_args.append(f'--referrer={file_io.sanitize_string(ref)}')
+        self.headers = headers
         return self
 
-    def with_disable_http_persistent(self, disable_http_persistent):
-        # Only apply if not overridden by global networking toggle
-        if not (hasattr(self, 'settings') and self.settings and self.settings.get('disable_network_overrides', False)):
-            mode = self.settings.get('http_persistence', 'auto') if self.settings else 'auto'
-            
-            if mode == 'on':
-                # Force persistence ON (do not add the disable flag)
-                pass 
-            elif mode == 'off':
-                # Force persistence OFF
-                self.mpv_args.append('--demuxer-lavf-o=http_persistent=0')
-            else:
-                # 'auto': follow site-specific recommendation
-                if disable_http_persistent:
-                    self.mpv_args.append('--demuxer-lavf-o=http_persistent=0')
+    def with_disable_http_persistent(self, val):
+        self.disable_http_persistent_override = val
         return self
 
-    def with_start_paused(self, start_paused):
-        if start_paused and '--pause' not in self.mpv_args:
-            self.mpv_args.append('--pause')
+    def with_start_paused(self, paused):
+        if paused:
+            if not self.automatic_flags: self.automatic_flags = []
+            self.automatic_flags.append({'flag': '--pause', 'enabled': True})
         return self
 
-    def with_custom_flags(self, custom_mpv_flags):
-        if custom_mpv_flags:
-            parsed_args = []
-            try:
-                # Handle new format: List of objects [{flag: "--x", enabled: true}, ...]
-                if isinstance(custom_mpv_flags, list):
-                    for flag_info in custom_mpv_flags:
-                        if isinstance(flag_info, dict) and flag_info.get('enabled', True):
-                            flag = flag_info.get('flag')
-                            if flag:
-                                parsed_args.extend(shlex.split(flag))
-                        elif isinstance(flag_info, str):
-                            parsed_args.extend(shlex.split(flag_info))
-                # Handle legacy format: Plain string
-                elif isinstance(custom_mpv_flags, str):
-                    parsed_args.extend(shlex.split(custom_mpv_flags))
-            except Exception as e:
-                logging.error(f"Could not parse custom MPV flags '{custom_mpv_flags}'. Error: {e}")
-                return self
-
-            # --- SANITIZATION STEP ---
-            for arg in parsed_args:
-                # 1. Enforce --flag=value syntax (no space-separated args)
-                if not arg.startswith('--'):
-                    logging.warning(f"Security: Dropped custom flag '{arg}' because it does not start with '--'. "
-                                    f"Space-separated arguments are not allowed; use '--flag=value'.")
-                    continue
-                
-                # 2. Extract flag name
-                flag_name = arg.split('=', 1)[0]
-                
-                # 3. Allowlist check
-                if flag_name in SAFE_MPV_FLAGS_ALLOWLIST:
-                    self.mpv_args.append(arg)
-                else:
-                    logging.warning(f"Security: Dropped custom flag '{arg}' because '{flag_name}' is not in the allowlist.")
-
+    def with_custom_flags(self, flags):
+        self.custom_flags = flags
         return self
 
-    def with_geometry(self, geometry, custom_width, custom_height):
-        # Strict regex for geometry: digits, x, +, -, %
-        # Prevents flag injection via geometry strings.
-        GEOM_PATTERN = re.compile(r'^[0-9x+%+-]+$')
-
-        if custom_width and custom_height:
-            w_str, h_str = str(custom_width), str(custom_height)
-            if GEOM_PATTERN.match(w_str) and GEOM_PATTERN.match(h_str):
-                self.mpv_args.append(f'--geometry={w_str}x{h_str}')
-        elif geometry:
-            geom_str = str(geometry)
-            if GEOM_PATTERN.match(geom_str):
-                self.mpv_args.append(f'--geometry={geom_str}')
-            else:
-                logging.warning(f"Security: Dropped invalid geometry string: '{geom_str}'")
+    def with_geometry(self, geometry, w, h):
+        self.geometry = (geometry, w, h)
         return self
-    
+
     def with_playlist_start(self, index):
-        if index is not None and index > 0:
-            self.mpv_args.append(f'--playlist-start={index}')
+        self.playlist_start = index
         return self
-    
-    def with_idle(self, idle=True):
-        if isinstance(idle, str):
-            self.mpv_args.append(f'--idle={idle}')
-        elif idle:
-            self.mpv_args.append('--idle=yes')
+
+    def with_idle(self, idle):
+        self.idle_val = idle
         return self
-    
-    def with_youtube_options(self, original_is_youtube, ytdl_raw_options):
-        # Determine format for both flows
-        ytdl_format = None
-        q = None
-        if self.settings and self.settings.get('ytdl_quality'):
-            q = str(self.settings['ytdl_quality'])
-            
-        logging.info(f"MpvCommandBuilder: Determined ytdl_quality is '{q}'")
 
-        # --- GLOBAL STREAMING DEFAULTS ---
-        # These improve stability and responsiveness for all streaming content
-        # regardless of whether ytdl is active for the current file.
-        self.mpv_args.append("--force-seekable=yes")
-        self.mpv_args.append("--demuxer-thread=yes")
-        self.mpv_args.append("--cache-pause-initial=no")
-
-        if q and q != 'best':
-            if q in ['2160', '1440', '1080', '720', '480']:
-                # For resolutions > 1080p, we MUST prefer VP9/AV1 as H264 stops at 1080p.
-                if int(q) > 1080:
-                    ytdl_format = f"bv*[height<=?{q}][vcodec~='^vp0?9|^av01']+ba/bv*[height<=?{q}]+ba/best"
-                else:
-                    ytdl_format = f"bv*[height<=?{q}]+ba/best"
-        else:
-            # Absolute best merged stream
-            ytdl_format = "bv*+ba/best"
-        
-        if ytdl_format:
-            self.mpv_args.append(f"--ytdl-format={ytdl_format}")
-        
-        logging.info(f"MpvCommandBuilder: Final ytdl_format string: '{ytdl_format}'")
-
-        # --- Centralized Flag Collection ---
-        essential_flags = get_essential_ytdlp_flags()
-        
-        # Always set essential flags as a baseline on the command line.
-        # This ensures that even in idle mode, the baseline is captured by adaptive_headers.lua
-        raw_opts = ytdl_raw_options or self.ytdl_raw_options_from_bypass or ""
-        
-        # Add cookies-from-browser if available
-        if self.cookies_browser:
-            browser_opt = f"cookies-from-browser={self.cookies_browser}"
-            raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
-
-        if self.settings and self.settings.get('ytdlp_concurrent_fragments', 1) > 1:
-            frag_opt = f"concurrent-fragments={self.settings['ytdlp_concurrent_fragments']}"
-            raw_opts = f"{raw_opts},{frag_opt}" if raw_opts else frag_opt
-        
-        final_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
-        if final_raw_opts:
-            self.mpv_args.append(f'--ytdl-raw-options={final_raw_opts}')
-
-        # Determine if we should enable ytdl by default
-        if self.use_ytdl_mpv or (original_is_youtube and not self.is_youtube_override):
-            self.mpv_args.append('--ytdl=yes')
-        
+    def with_youtube_options(self, is_yt, raw_opts):
+        self.ytdl_raw_options = raw_opts
         return self
 
     def build(self):
-        # Detect if --terminal was added via custom flags or automatic flags
-        if '--terminal' in self.mpv_args or 'terminal' in self.mpv_args:
-            self.has_terminal_flag = True
-            # Remove the literal flag from the args list as we'll use a wrapper instead
-            self.mpv_args = [arg for arg in self.mpv_args if arg != '--terminal' and arg != 'terminal']
+        args = [self.mpv_exe]
 
-        # Only add the separator and URL if a URL is actually provided
-        if self.url:
-            if isinstance(self.url, list):
-                full_command = self.mpv_args + ['--'] + self.url
-            else:
-                full_command = self.mpv_args + ['--'] + [self.url]
-        else:
-            full_command = self.mpv_args
-            
-        # Use configured platform for consistency
-        platform_name = self.settings.get('os_platform', platform.system()) if self.settings else platform.system()
+        # 1. Essential Plumbing (Always)
+        if self.ipc_path: args.append(f'--input-ipc-server={self.ipc_path}')
+        if self.idle_val: args.append(f'--idle={self.idle_val if isinstance(self.idle_val, str) else "yes"}')
+        if self.input_terminal: args.append(f'--input-terminal={self.input_terminal}')
+        for s in self.scripts: args.append(f'--script={s}')
+        if self.script_opts: args.append(f"--script-opts={','.join(self.script_opts)}")
+        if self.title: args.append(f'--title={file_io.sanitize_string(self.title)}')
+        if self.playlist_start and self.playlist_start > 0: args.append(f'--playlist-start={self.playlist_start}')
 
-        if platform_name != "Windows" and self.has_terminal_flag:
+        # 2. Authentication Headers (Always - Required for initial connection)
+        if self.headers:
+            if 'User-Agent' in self.headers: args.append(f'--user-agent={file_io.sanitize_string(str(self.headers["User-Agent"]))}')
+            if 'Referer' in self.headers: args.append(f'--referrer={file_io.sanitize_string(str(self.headers["Referer"]))}')
+
+        # 3. Hardware & Quality (Always - Local hardware, safe for native speed)
+        decoder = self.settings.get('mpv_decoder', 'auto')
+        if decoder: args.append(f"--hwdec={decoder}")
+        
+        profile = self.settings.get('performance_profile', 'default')
+        if profile == 'low': args.append("--profile=fast")
+        elif profile == 'medium': args.extend(["--scale=spline36", "--cscale=spline36", "--vo=gpu"])
+        elif profile == 'high': args.append("--profile=gpu-hq")
+        elif profile == 'ultra':
+            args.append("--profile=gpu-hq")
+            if self.settings.get('ultra_scalers', True): args.extend(["--scale=ewa_lanczossharp", "--cscale=ewa_lanczossharp"])
+            if self.settings.get('ultra_video_sync', True): args.append("--video-sync=display-resample")
+            interp = self.settings.get('ultra_interpolation', 'oversample')
+            if interp not in ('off', False):
+                args.append("--interpolation=yes")
+                args.append(f"--tscale={interp if isinstance(interp, str) else 'oversample'}")
+            if self.settings.get('ultra_deband', True): args.extend(["--deband=yes", "--deband-iterations=4", "--deband-threshold=48", "--deband-range=24"])
+            if self.settings.get('ultra_fbo', True): args.append("--fbo-format=rgba16f")
+
+        if self.geometry:
+            geom, w, h = self.geometry
+            GEOM_PATTERN = re.compile(r'^[0-9x+%+-]+$')
+            if w and h and GEOM_PATTERN.match(str(w)) and GEOM_PATTERN.match(str(h)): args.append(f'--geometry={w}x{h}')
+            elif geom and GEOM_PATTERN.match(str(geom)): args.append(f'--geometry={geom}')
+
+        # 4. Networking & Buffering (STRIPPED - Now handled per-video in Lua)
+        # This allows all videos to start at 100% native speed.
+        # We only keep the ytdl format/activation flags.
+        q = str(self.settings.get('ytdl_quality', 'best'))
+        ytdl_format = "bv*+ba/best"
+        if q != 'best' and q in ['2160', '1440', '1080', '720', '480']:
+            if int(q) > 1080: ytdl_format = f"bv*[height<=?{q}][vcodec~='^vp0?9|^av01']+ba/bv*[height<=?{q}]+ba/best"
+            else: ytdl_format = f"bv*[height<=?{q}]+ba/best"
+        args.append(f"--ytdl-format={ytdl_format}")
+        
+        if self.use_ytdl_mpv or (self.is_youtube and not self.is_youtube_override):
+            args.append('--ytdl=yes')
+
+        # 5. Flags (Applied at end to allow manual overrides)
+        if self.automatic_flags:
+            for f_info in self.automatic_flags:
+                if f_info.get('enabled'):
+                    f = f_info.get('flag')
+                    if f == '--terminal': self.has_terminal_flag = True
+                    elif not f or f.startswith('--hwdec'): continue
+                    elif f.split('=', 1)[0] in SAFE_MPV_FLAGS_ALLOWLIST: args.append(f)
+
+        if self.custom_flags:
+            try:
+                parsed = []
+                if isinstance(self.custom_flags, list):
+                    for f in self.custom_flags:
+                        if isinstance(f, dict) and f.get('enabled', True): parsed.extend(shlex.split(f.get('flag','')))
+                        elif isinstance(f, str): parsed.extend(shlex.split(f))
+                elif isinstance(self.custom_flags, str): parsed.extend(shlex.split(self.custom_flags))
+                for a in parsed:
+                    if a.startswith('--') and a.split('=', 1)[0] in SAFE_MPV_FLAGS_ALLOWLIST: args.append(a)
+            except: pass
+
+        # Terminal Wrapper Logic
+        if self.has_terminal_flag: args = [a for a in args if a != '--terminal' and a != 'terminal']
+        full_command = args + (['--'] + (self.url if isinstance(self.url, list) else [self.url]) if self.url else [])
+        
+        if self.settings.get('os_platform', platform.system()) != "Windows" and self.has_terminal_flag:
             term_cmd = []
-            modern_terminals = ['konsole', 'gnome-terminal', 'xfce4-terminal', 'kitty', 'alacritty', 'tilix', 'foot', 'wezterm']
-            
+            modern = ['konsole', 'gnome-terminal', 'xfce4-terminal', 'kitty', 'alacritty', 'tilix', 'foot', 'wezterm']
             if self.is_forced_terminal:
-                # FORCED MODE: Needs to stay open after MPV exits
-                inner_cmd_str = ' '.join(shlex.quote(arg) for arg in full_command)
-                
-                # Try Konsole specifically first because it has a nice native --hold
-                konsole_path = shutil.which('konsole')
-                if konsole_path:
-                    logging.info(f"Terminal Wrapper: Using Konsole native --hold at {konsole_path}")
-                    term_cmd = [konsole_path, '--hold', '-e'] + full_command
-                
-                if not term_cmd:
-                    # Fallback to sh -c "cmd; sleep" hack for other terminals
-                    wrapped_cmd_str = f"{inner_cmd_str}; echo ''; echo '--- MPV Finished. Closing in 10s... ---'; sleep 10"
-                    
-                    if shutil.which('xdg-terminal-exec'):
-                        term_cmd = ['xdg-terminal-exec', 'sh', '-c', wrapped_cmd_str]
-                    
-                    if not term_cmd:
-                        for t in modern_terminals:
-                            t_path = shutil.which(t)
-                            if t_path:
-                                term_cmd = [t_path, '--', 'sh', '-c', wrapped_cmd_str]
-                                break
+                inner = ' '.join(shlex.quote(a) for a in full_command)
+                kp = shutil.which('konsole')
+                if kp: term_cmd = [kp, '--hold', '-e'] + full_command
+                else:
+                    wrapped = f"{inner}; echo ''; echo '--- MPV Finished. Closing in 10s... ---'; sleep 10"
+                    if shutil.which('xdg-terminal-exec'): term_cmd = ['xdg-terminal-exec', 'sh', '-c', wrapped]
+                    else:
+                        for t in modern:
+                            tp = shutil.which(t)
+                            if tp: term_cmd = [tp, '--', 'sh', '-c', wrapped]; break
             else:
-                # REGULAR MODE: Just launch MPV inside a terminal
-                if shutil.which('xdg-terminal-exec'):
-                    term_cmd = ['xdg-terminal-exec'] + full_command
-                
-                if not term_cmd:
-                    # Prefer -e for general compatibility, as -- is handled differently
-                    # across various versions of Konsole and other terminals.
-                    for t in modern_terminals:
-                        t_path = shutil.which(t)
-                        if t_path:
-                            term_cmd = [t_path, '-e'] + full_command
-                            break
-                
-                if not term_cmd:
-                    # Final desperate fallback
-                    for t in ['x-terminal-emulator', 'xterm', 'urxvt']:
-                        t_path = shutil.which(t)
-                        if t_path:
-                            term_cmd = [t_path, '-e'] + full_command
-                            break
-            
-            if term_cmd:
-                full_command = term_cmd
-            else:
-                logging.warning("Terminal Wrapper: No supported terminal emulator found. Launching without terminal.")
+                if shutil.which('xdg-terminal-exec'): term_cmd = ['xdg-terminal-exec'] + full_command
+                else:
+                    for t in modern:
+                        tp = shutil.which(t)
+                        if tp: term_cmd = [tp, '-e'] + full_command; break
+            if term_cmd: full_command = term_cmd
 
-        logging.info(f"Constructed MPV command (Copy-Paste): {' '.join(shlex.quote(arg) for arg in full_command)}")
-        logging.info("MPV Command Arguments (Detailed):\n" + "\n".join(f"  [{i}] {arg}" for i, arg in enumerate(full_command)))
-
-        # Write to inspection file for easy user verification
+        logging.info(f"Constructed MPV command: {' '.join(shlex.quote(a) for a in full_command)}")
         try:
-            inspection_path = os.path.join(file_io.DATA_DIR, "last_mpv_command.txt")
-            with open(inspection_path, 'w', encoding='utf-8') as f:
-                f.write(f"Launch Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("="*60 + "\n")
-                f.write("SHELL-QUOTED COMMAND (Copy-Paste into terminal):\n")
-                f.write(" ".join(shlex.quote(arg) for arg in full_command) + "\n\n")
-                f.write("DETAILED ARGUMENT LIST:\n")
-                for i, arg in enumerate(full_command):
-                    f.write(f"[{i:02d}] {arg}\n")
+            p = os.path.join(file_io.DATA_DIR, "last_mpv_command.txt")
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write(f"Launch Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" + "="*60 + "\nSHELL-QUOTED COMMAND:\n" + " ".join(shlex.quote(a) for a in full_command) + "\n\nDETAILED ARGUMENT LIST:\n")
+                for i, a in enumerate(full_command): f.write(f"[{i:02d}] {a}\n")
         except: pass
-
         return full_command, self.has_terminal_flag
 
-def construct_mpv_command(
-    mpv_exe,
-    ipc_path=None,
-    url=None,
-    is_youtube=False,
-    ytdl_raw_options=None,
-    geometry=None,
-    custom_width=None,
-    custom_height=None,
-    custom_mpv_flags=None,
-    automatic_mpv_flags=None,
-    headers=None,
-    disable_http_persistent=False,
-    start_paused=False,
-    script_dir=None,
-    load_on_completion_script=False,
-    title=None,
-    use_ytdl_mpv=False,
-    is_youtube_override=False,
-    idle=False,
-    force_terminal=False,
-    input_terminal=None,
-    settings=None,
-    flag_dir=None,
-    playlist_start_index=None,
-    cookies_browser=None
-):
-    """Constructs the MPV command line arguments using MpvCommandBuilder."""
-    builder = MpvCommandBuilder(
-        mpv_exe=mpv_exe,
-        use_ytdl_mpv=use_ytdl_mpv,
-        is_youtube_override=is_youtube_override,
-        is_youtube=is_youtube,
-        settings=settings,
-        cookies_browser=cookies_browser
-    ) \
-        .with_ipc_path(ipc_path) \
+def construct_mpv_command(mpv_exe, ipc_path=None, url=None, is_youtube=False, ytdl_raw_options=None, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, headers=None, disable_http_persistent=False, start_paused=False, script_dir=None, load_on_completion_script=False, title=None, use_ytdl_mpv=False, is_youtube_override=False, idle=False, force_terminal=False, input_terminal=None, settings=None, flag_dir=None, playlist_start_index=None, cookies_browser=None, force_bypass=False):
+    b = MpvCommandBuilder(mpv_exe, use_ytdl_mpv, is_youtube_override, is_youtube, settings, cookies_browser, force_bypass=force_bypass)
+    return b.with_ipc_path(ipc_path) \
         .with_url(url) \
         .with_idle(idle) \
         .with_force_terminal(force_terminal) \
         .with_input_terminal(input_terminal) \
-        .with_completion_script(script_dir if load_on_completion_script else None, flag_dir=flag_dir) \
+        .with_completion_script(script_dir if load_on_completion_script else None, flag_dir) \
         .with_adaptive_headers_script(script_dir) \
         .with_python_interaction_script(script_dir) \
         .with_reanimator_script(script_dir) \
@@ -918,27 +606,17 @@ def construct_mpv_command(
         .with_custom_flags(custom_mpv_flags) \
         .with_geometry(geometry, custom_width, custom_height) \
         .with_playlist_start(playlist_start_index) \
-        .with_youtube_options(is_youtube, ytdl_raw_options)
-        
-    return builder.build()
+        .with_youtube_options(is_youtube, ytdl_raw_options) \
+        .build()
 
 def get_mpv_popen_kwargs(has_terminal_flag):
-    """Returns the subprocess arguments for launching MPV."""
-    popen_kwargs = {
-        'stdout': subprocess.PIPE if not has_terminal_flag else None,
-        'stderr': subprocess.STDOUT if not has_terminal_flag else None,
-        'universal_newlines': False
-    }
+    kwargs = {'stdout': subprocess.PIPE if not has_terminal_flag else None, 'stderr': subprocess.STDOUT if not has_terminal_flag else None, 'universal_newlines': False}
     if platform.system() == "Windows":
-        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
-        if not has_terminal_flag:
-            creation_flags |= subprocess.CREATE_NO_WINDOW
-        popen_kwargs['creationflags'] = creation_flags
-    else:
-        popen_kwargs['start_new_session'] = True
-    return popen_kwargs
-
-# --- Bypass Script Logic ---
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP
+        if not has_terminal_flag: flags |= subprocess.CREATE_NO_WINDOW
+        kwargs['creationflags'] = flags
+    else: kwargs['start_new_session'] = True
+    return kwargs
 
 def apply_bypass_script(url_item, send_message_func, settings=None):
     """
@@ -962,7 +640,7 @@ def apply_bypass_script(url_item, send_message_func, settings=None):
 
     # The default fallback return values
     is_youtube = "youtube.com/" in original_url or "youtu.be/" in original_url
-    default_return_tuple = (original_url, None, None, False, is_youtube, None, False, None, False, None)
+    default_return_tuple = (original_url, None, None, False, is_youtube, None, False, None, False, None, None)
 
     if not enable_url_analysis:
         return default_return_tuple
@@ -1019,7 +697,8 @@ def apply_bypass_script(url_item, send_message_func, settings=None):
     except Exception as e:
         logging.error(f"Error during URL analysis: {e}")
         send_message_func({"action": "log_from_native_host", "log": {"text": f"URL analysis failed with exception: {e}. Playing original URL.", "type": "error"}})
-        return (original_url, None, None, False, is_youtube, None, False, None, False, None, None) # Return 11-tuple here too
+        return (original_url, None, None, False, is_youtube, None, False, None, False, None, None)
+
 # --- AniList Service ---
 
 # Global variable to track the last time a "cache is fresh" message was sent to the UI

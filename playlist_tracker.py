@@ -10,7 +10,7 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
 from utils import ipc_utils
 from utils import url_analyzer
-from utils.youtube_history import mark_video_as_watched_threaded
+from utils.fallback_sync import mark_video_as_watched_threaded
 
 class PlaylistTracker:
     """
@@ -110,6 +110,9 @@ class PlaylistTracker:
         self.ipc_manager.send({"command": ["observe_property", 4, "pause"]})
         self.ipc_manager.send({"command": ["observe_property", 5, "idle-active"]})
 
+        # Immediate Heartbeat to register Python presence
+        self.ipc_manager.send({"command": ["script-message", "tracker_heartbeat"]})
+
         current_id = None
         current_time = 0
         last_heartbeat = 0
@@ -156,7 +159,7 @@ class PlaylistTracker:
 
                         if new_id != current_id:
                             # 1. If we were playing something else, do a FINAL save for it
-                            if current_id and current_id != -1 and current_id != "-1" and current_time > 2:
+                            if current_id and current_id != -1 and current_id != "-1" and current_time > 1:
                                 logging.info(f"[PY][Tracker] Saving final position for old item {current_id}: {int(current_time)}s")
                                 self._update_resume_time(current_id, current_time)
                                 self.played_item_ids.add(current_id)
@@ -241,7 +244,7 @@ class PlaylistTracker:
                             self._update_resume_time(current_id, 0)
                         elif reason == 'stop' or reason == 'quit':
                             # Manual stop/skip/quit: Save final position
-                            if current_time > 2:
+                            if current_time > 1:
                                 self._update_resume_time(current_id, current_time)
 
             except Exception as e:
@@ -429,7 +432,7 @@ class PlaylistTracker:
                         self._remote_log(f"AdaptiveHeaders: Mark watched failed for {title}: {msg}")
                         self.send_message({"log": {"text": f"[Tracker]: Failed to mark YouTube video as watched: {msg}", "type": "error"}})
 
-            mark_video_as_watched_threaded(watch_url, cookies, user_agent=ua, on_done=on_done)
+            mark_video_as_watched_threaded(watch_url, cookies, user_agent=ua, folder_id=self.folder_id, item_id=item_id, on_done=on_done)
         else:
             # Report why it was skipped
             reasons = []

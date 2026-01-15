@@ -191,16 +191,11 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 "User-Agent": effective_user_agent,
                 "Referer": "https://kwik.cx/",
                 "Origin": "https://kwik.cx",
-                "Accept": "*/*",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Sec-Fetch-Dest": "empty",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Site": "cross-site",
             },
             "ytdl_raw_options": None,
             "use_ytdl_mpv": True, # Force ytdl to use the native Kwik extractor
             "is_youtube": False,
-            "disable_http_persistent": True,
+            "disable_http_persistent": False,
             "cookies_file": None, # No more RAM files
             "cookies_browser": cookies_browser
         }
@@ -271,7 +266,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                             "original_url": webpage_url,
                             "is_youtube": True,
                             "use_ytdl_mpv": True, 
-                            "disable_http_persistent": True,
+                            "disable_http_persistent": False,
                             "headers": {"User-Agent": effective_user_agent},
                             "ytdl_raw_options": ",".join(ytdl_opts) if ytdl_opts else None,
                             "cookies_file": None, # Prefer browser name
@@ -302,7 +297,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 "headers": {"User-Agent": effective_user_agent},
                 "use_ytdl_mpv": True,
                 "is_youtube": True,
-                "disable_http_persistent": True
+                "disable_http_persistent": False
             }
 
         try:
@@ -324,7 +319,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 "ytdl_raw_options": None,
                 "use_ytdl_mpv": True,
                 "is_youtube": True,
-                "disable_http_persistent": True,
+                "disable_http_persistent": False,
                 "cookies_file": None, # We don't have a file yet!
                 "cookies_browser": cookies_browser, # Pass the browser name
                 "original_url": url,
@@ -339,7 +334,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 "headers": {"User-Agent": effective_user_agent},
                 "use_ytdl_mpv": True,
                 "is_youtube": True,
-                "disable_http_persistent": True
+                "disable_http_persistent": False
             }
 
     # --- Case 3: Other URLs (External resolution as fallback) ---
