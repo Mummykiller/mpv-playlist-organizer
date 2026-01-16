@@ -184,9 +184,50 @@ def get_user_data_dir():
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 DATA_DIR = get_user_data_dir()
+import tempfile
+TEMP_DIR = os.path.join(tempfile.gettempdir(), "mpv_playlist_organizer")
+try:
+    os.makedirs(TEMP_DIR, exist_ok=True)
+except: pass
+
 FOLDERS_FILE = os.path.join(DATA_DIR, "folders.json")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 EXPORT_DIR = os.path.join(DATA_DIR, "exported")
+
+def validate_safe_path(path, allow_user_content=False):
+    """
+    Validates that a path is safe for usage in flags (configuration/scripts).
+    Resolves symlinks (realpath) and ensures it resides in allowed directories.
+    
+    If allow_user_content is True, allows arbitrary paths (use for media files).
+    For flags, keep it False.
+    """
+    if not path: return None
+    
+    try:
+        resolved = os.path.realpath(os.path.abspath(path))
+        
+        # Allowed bases for configuration/flags
+        allowed_prefixes = [
+            os.path.realpath(DATA_DIR),
+            os.path.realpath(SCRIPT_DIR),
+            os.path.realpath(TEMP_DIR)
+        ]
+
+        if platform.system() == "Linux" and os.path.exists("/dev/shm"):
+            allowed_prefixes.append(os.path.realpath("/dev/shm"))
+        
+        # Check if path starts with any allowed prefix
+        is_allowed = any(resolved.startswith(prefix) for prefix in allowed_prefixes)
+        
+        if not is_allowed and not allow_user_content:
+            logging.warning(f"Security: Path validation failed. {resolved} is not in allowed directories.")
+            return None
+            
+        return resolved
+    except Exception as e:
+        logging.error(f"Path validation error: {e}")
+        return None
 
 # --- Atomic Write & Safe Load Helpers ---
 

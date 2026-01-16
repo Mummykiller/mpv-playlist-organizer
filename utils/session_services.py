@@ -12,6 +12,7 @@ from urllib.request import urlopen, Request
 from utils import ipc_utils
 from utils.m3u_parser import parse_m3u
 from services import apply_bypass_script
+from utils.url_analyzer import is_safe_url
 import services
 import file_io
 
@@ -127,6 +128,10 @@ class EnrichmentService:
                         with open(url_items_or_m3u, 'r', encoding='utf-8') as f:
                             m3u_content = f.read()
                     elif urlparse(url_items_or_m3u).scheme in ['http', 'https']:
+                        if not is_safe_url(url_items_or_m3u):
+                            logging.error(f"SSRF Protection: Blocked access to {url_items_or_m3u}")
+                            return None, False
+
                         try:
                             fetch_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
                             if headers: fetch_headers.update(headers)
@@ -422,14 +427,36 @@ class LauncherService:
             # (Resume logic moved to IPC loadfile command below)
 
             popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
-            env = os.environ.copy()
             
-            # Security/Compatibility: browser-injected libs can break MPV.
-            # However, we MUST NOT strip these if we are launching a terminal emulator (like Konsole)
-            # because it needs its own Qt environment to start.
+            # Environment Scrubbing (Zero-Trust)
             if not has_terminal_flag:
-                for key in ['LD_LIBRARY_PATH', 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH']:
-                    env.pop(key, None)
+                base_env = os.environ
+                env = {}
+                
+                # Platform-specific whitelist
+                if platform.system() == "Windows":
+                    ALLOWED_KEYS = {
+                        'ALLUSERSPROFILE', 'APPDATA', 'COMPUTERNAME', 'ComSpec', 'CommonProgramFiles',
+                        'CommonProgramFiles(x86)', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA', 'LOGONSERVER',
+                        'NUMBER_OF_PROCESSORS', 'OS', 'PATH', 'PATHEXT', 'PROCESSOR_ARCHITECTURE',
+                        'PROCESSOR_IDENTIFIER', 'PROCESSOR_LEVEL', 'PROCESSOR_REVISION', 'ProgramData',
+                        'ProgramFiles', 'ProgramFiles(x86)', 'Public', 'SystemDrive', 'SystemRoot',
+                        'TEMP', 'TMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'windir'
+                    }
+                else:
+                    ALLOWED_KEYS = {
+                        'HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'PWD', 'SHELL', 'TERM', 'USER',
+                        'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+                        'XDG_CACHE_HOME', 'DBUS_SESSION_BUS_ADDRESS'
+                    }
+                
+                for key, val in base_env.items():
+                    # Allow specific keys and safe prefixes (like LC_ for locale)
+                    if key in ALLOWED_KEYS or key.startswith("LC_") or (platform.system() != "Windows" and key.startswith("XDG_")):
+                        env[key] = val
+            else:
+                # Terminal emulators (Konsole, GNOME Terminal) require full environment (Qt/GTK libs)
+                env = os.environ.copy()
 
             process = subprocess.Popen(full_command, env=env, **popen_kwargs)
             self.session.process = process

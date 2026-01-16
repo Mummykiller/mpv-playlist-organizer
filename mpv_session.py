@@ -247,6 +247,13 @@ class MpvSessionManager:
                         logging.warning(f"Failed to remove session cookie {cookie_path}: {e}")
                 self.session_cookies.clear()
 
+            # Clean up the entire volatile directory if this was the last managed session
+            try:
+                from utils.url_analyzer import VolatileCookieManager
+                VolatileCookieManager.cleanup_volatile_dir()
+            except Exception as e:
+                logging.warning(f"Failed to cleanup volatile directory: {e}")
+
             if os.path.exists(self.session_file):
                 try:
                     os.remove(self.session_file)

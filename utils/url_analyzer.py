@@ -7,6 +7,9 @@ import platform
 import logging
 import file_io
 import uuid
+import socket
+import ipaddress
+from urllib.parse import urlparse
 
 # Constants for file patterns
 COOKIE_PREFIX = "mpv_cookies_"
@@ -29,6 +32,35 @@ _COOKIES_CACHE = {
     "browser": None,
     "timestamp": 0
 }
+
+def is_safe_url(url):
+    """
+    Validates a URL against SSRF attacks by resolving the hostname 
+    and checking against private IP ranges.
+    """
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return True # No hostname (e.g. file path), let protocol check handle it
+
+        # Resolve hostname to IP
+        try:
+            ip_str = socket.gethostbyname(hostname)
+        except socket.gaierror:
+            return False # DNS failure
+
+        ip = ipaddress.ip_address(ip_str)
+        
+        # Block Private IPs (10.x, 192.168.x, 172.16.x, 127.x)
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            logging.warning(f"SSRF Protection: Blocked access to private IP {ip_str} ({hostname})")
+            return False
+            
+        return True
+    except Exception as e:
+        logging.error(f"SSRF Check Failed: {e}")
+        return False
 
 class VolatileCookieManager:
     """Manages cookie extraction to volatile memory (RAM) to avoid disk writes."""
@@ -216,6 +248,13 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         return {
             "success": False,
             "error": "Invalid URL protocol. Only http, https, file, udp, rtmp, rtsp, and mms schemes are allowed."
+        }
+    
+    # --- SSRF Protection ---
+    if url.lower().startswith(('http://', 'https://')) and not is_safe_url(url):
+        return {
+            "success": False,
+            "error": "Security Block: Access to private/local networks is not allowed."
         }
     
     # Use provided UA or a reasonable Chrome-like default
