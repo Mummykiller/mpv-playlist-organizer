@@ -822,6 +822,15 @@ class HandlerManager:
                 # We use a "greedy" approach for ytdl: if ANY item needs it, enable it.
                 global_use_ytdl_mpv = any(item.get('use_ytdl_mpv', False) for item in enriched_url_items)
                 
+                # Calculate start index for the final launch
+                playlist_start_index = 0
+                last_played_id = all_folders.get(folder_id, {}).get("last_played_id")
+                if settings.get("enable_smart_resume", True) and last_played_id:
+                    for idx, item in enumerate(enriched_url_items):
+                        if item.get('id') == last_played_id:
+                            playlist_start_index = idx
+                            break
+
                 # --- FIXED: Only use first item's YouTube status for initial networking ---
                 # This prevents heavy YT settings from poisoning non-YT videos in a mixed folder.
                 first_item = enriched_url_items[playlist_start_index] if playlist_start_index < len(enriched_url_items) else (enriched_url_items[0] if enriched_url_items else {})
@@ -849,15 +858,6 @@ class HandlerManager:
                 if not local_server_url:
                     raise RuntimeError("Failed to start local M3U server for enriched content.")
                 
-                # Calculate start index for the final launch
-                playlist_start_index = 0
-                last_played_id = all_folders.get(folder_id, {}).get("last_played_id")
-                if settings.get("enable_smart_resume", True) and last_played_id:
-                    for idx, item in enumerate(enriched_url_items):
-                        if item.get('id') == last_played_id:
-                            playlist_start_index = idx
-                            break
-
                 # --- STEP 3: Launch MPV with the Local Server URL ---
                 logging.info(f"Step 3: Launching MPV with local server URL: {local_server_url} and playlist-start={playlist_start_index}.")
                 

@@ -64,8 +64,6 @@ try:
     import time
     import signal
     import threading
-    import shutil
-    import urllib.request
     import platform
     import re
     import uuid # Added for UUID generation

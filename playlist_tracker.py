@@ -114,6 +114,7 @@ class PlaylistTracker:
         self.ipc_manager.send({"command": ["script-message", "tracker_heartbeat"]})
 
         current_id = None
+        self.previous_id = None # Track previous ID to handle event race conditions
         current_time = 0
         last_heartbeat = 0
         
@@ -126,6 +127,7 @@ class PlaylistTracker:
                     logging.info("[PY][Tracker] Tracker reconnected. Re-observing properties.")
                     self.ipc_manager.send({"command": ["observe_property", 1, "user-data/id"]})
                     self.ipc_manager.send({"command": ["observe_property", 2, "time-pos"]})
+                    self.ipc_manager.send({"command": ["observe_property", 3, "path"]})
                     self.ipc_manager.send({"command": ["observe_property", 4, "pause"]})
                     self.ipc_manager.send({"command": ["observe_property", 5, "idle-active"]})
                 else:
@@ -163,6 +165,9 @@ class PlaylistTracker:
                                 logging.info(f"[PY][Tracker] Saving final position for old item {current_id}: {int(current_time)}s")
                                 self._update_resume_time(current_id, current_time)
                                 self.played_item_ids.add(current_id)
+
+                            # Store previous ID to handle late 'end-file' events
+                            self.previous_id = current_id
 
                             # 2. Update the active item ID and RESET session duration
                             current_id = new_id
@@ -235,17 +240,24 @@ class PlaylistTracker:
                     reason = event.get('reason')
                     logging.debug(f"[PY][Tracker] end-file event detected. Reason: {reason}, ID: {current_id}")
                     
-                    if current_id:
-                        if reason == 'eof':
-                            # Natural finish: Mark as watched immediately (even if < 30s)
-                            self._check_mark_watched(current_id)
-                            # Reset resume time to 0
-                            self.played_item_ids.add(current_id)
-                            self._update_resume_time(current_id, 0)
-                        elif reason == 'stop' or reason == 'quit':
-                            # Manual stop/skip/quit: Save final position
-                            if current_time > 1:
-                                self._update_resume_time(current_id, current_time)
+                    if reason == 'eof':
+                        # Heuristic: If 'eof' happens immediately after an ID change (session < 5s),
+                        # it almost certainly belongs to the PREVIOUS item, not the new one.
+                        # This fixes race conditions where property-change arrives before end-file.
+                        target_id_for_eof = current_id
+                        
+                        if self.current_session_duration < 5 and self.previous_id:
+                            logging.info(f"[PY][Tracker] Detected late EOF event. Attributing to previous item: {self.previous_id}")
+                            target_id_for_eof = self.previous_id
+                        
+                        if target_id_for_eof:
+                            self._check_mark_watched(target_id_for_eof)
+                            self.played_item_ids.add(target_id_for_eof)
+                            self._update_resume_time(target_id_for_eof, 0)
+                            
+                    elif reason == 'stop' or reason == 'quit':
+                        if current_id and current_time > 1:
+                            self._update_resume_time(current_id, current_time)
 
             except Exception as e:
                 logging.error(f"[PY][Tracker] Error in playlist tracker: {e}")
@@ -316,7 +328,7 @@ class PlaylistTracker:
         except Exception as e:
             logging.error(f"[PY][Tracker] Failed to update resume_time: {e}")
 
-    def _update_marked_as_watched(self, item_id, status):
+    def _update_marked_as_watched(self, item_id, status, persist=True):
         """Saves the marked_as_watched status for a specific item to the folder's playlist metadata."""
         if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
             return
@@ -330,23 +342,25 @@ class PlaylistTracker:
                         break
 
             # 2. Update the local folders.json file
-            all_folders = self.file_io.get_all_folders_from_file()
-            if self.folder_id in all_folders:
-                folder = all_folders[self.folder_id]
-                for item in folder.get("playlist", []):
-                    if item.get("id") == item_id:
-                        item["marked_as_watched"] = status
-                        self.file_io.write_folders_file(all_folders)
-                        logging.debug(f"[PY][Tracker] Updated marked_as_watched for item '{item_id}' to {status}.")
-                        
-                        # 3. Notify the extension
-                        self.send_message({
-                            "action": "update_item_marked_as_watched",
-                            "folderId": self.folder_id,
-                            "itemId": item_id,
-                            "markedAsWatched": status
-                        })
-                        break
+            if persist:
+                all_folders = self.file_io.get_all_folders_from_file()
+                if self.folder_id in all_folders:
+                    folder = all_folders[self.folder_id]
+                    for item in folder.get("playlist", []):
+                        if item.get("id") == item_id:
+                            item["marked_as_watched"] = status
+                            self.file_io.write_folders_file(all_folders)
+                            logging.debug(f"[PY][Tracker] Updated marked_as_watched for item '{item_id}' to {status}.")
+                            break
+            
+            # 3. Notify the extension (always notify to keep UI in sync)
+            self.send_message({
+                "action": "update_item_marked_as_watched",
+                "folderId": self.folder_id,
+                "itemId": item_id,
+                "markedAsWatched": status
+            })
+
         except Exception as e:
             logging.error(f"[PY][Tracker] Failed to update marked_as_watched: {e}")
 
@@ -424,7 +438,9 @@ class PlaylistTracker:
                         self.ipc_manager.send({"command": ["show-text", "YouTube: Video marked as watched", 2000]})
                         self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {title}")
                         self.send_message({"log": {"text": f"[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
-                        self._update_marked_as_watched(item_id, True)
+                        # We pass persist=False because mark_video_as_watched_threaded calls sync_state 
+                        # which already writes to disk upon success.
+                        self._update_marked_as_watched(item_id, True, persist=False)
                         # Sync property to MPV so Lua knows we've done it
                         self.ipc_manager.send({"command": ["set_property", "user-data/marked-as-watched", "yes"]})
                     else:

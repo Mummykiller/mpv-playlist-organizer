@@ -387,7 +387,12 @@ def is_process_alive(pid, ipc_path):
     return False
 
 
-IPC_DIR_LINUX = os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")
+IPC_DIR_LINUX = os.environ.get("XDG_RUNTIME_DIR")
+if not IPC_DIR_LINUX:
+    IPC_DIR_LINUX = os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")
+else:
+    IPC_DIR_LINUX = os.path.join(IPC_DIR_LINUX, "mpv_playlist_organizer_ipc")
+
 PIPE_NAME_WINDOWS = "mpv-playlist-organizer-ipc"
 
 def get_ipc_path():
@@ -403,4 +408,7 @@ def get_ipc_path():
     else: # Linux/macOS
         # Unix domain sockets are file-system based.
         os.makedirs(IPC_DIR_LINUX, exist_ok=True)
+        try:
+            os.chmod(IPC_DIR_LINUX, 0o700)
+        except OSError: pass
         return os.path.join(IPC_DIR_LINUX, f"mpv-socket-{pid}")

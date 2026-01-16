@@ -384,7 +384,7 @@ class MpvCommandBuilder:
         return False
 
     def with_ipc_path(self, ipc_path):
-        self.ipc_path = ipc_path
+        self.ipc_path = file_io.validate_safe_path(ipc_path)
         return self
 
     def with_url(self, url):
@@ -399,33 +399,27 @@ class MpvCommandBuilder:
     def with_completion_script(self, script_dir, flag_dir=None):
         if script_dir:
             p = os.path.join(script_dir, "mpv_scripts", "on_completion.lua")
-            if os.path.exists(p):
-                self.scripts.append(p)
-                if flag_dir: self.script_opts.append(f'on_completion-flag_dir={flag_dir}')
+            safe_p = file_io.validate_safe_path(p)
+            if safe_p and os.path.exists(safe_p):
+                self.scripts.append(safe_p)
+                if flag_dir: 
+                    safe_flag_dir = file_io.validate_safe_path(flag_dir)
+                    if safe_flag_dir:
+                         self.script_opts.append(f'on_completion-flag_dir={safe_flag_dir}')
         return self
 
     def with_adaptive_headers_script(self, script_dir):
         if script_dir:
             p = os.path.join(script_dir, "mpv_scripts", "adaptive_headers.lua")
-            if os.path.exists(p): self.scripts.append(p)
+            safe_p = file_io.validate_safe_path(p)
+            if safe_p and os.path.exists(safe_p): self.scripts.append(safe_p)
         return self
 
     def with_python_interaction_script(self, script_dir):
         if script_dir:
             p = os.path.join(script_dir, "mpv_scripts", "python_loader.lua")
-            if os.path.exists(p): self.scripts.append(p)
-        return self
-
-    def with_reanimator_script(self, script_dir):
-        if script_dir:
-            p = os.path.join(script_dir, "mpv_scripts", "stream_reanimator.lua")
-            if os.path.exists(p): self.scripts.append(p)
-        return self
-
-    def with_fix_thumbnailer_script(self, script_dir):
-        if script_dir:
-            p = os.path.join(script_dir, "mpv_scripts", "fix_thumbnailer_playlist.lua")
-            if os.path.exists(p): self.scripts.append(p)
+            safe_p = file_io.validate_safe_path(p)
+            if safe_p and os.path.exists(safe_p): self.scripts.append(safe_p)
         return self
 
     def with_title(self, title):
@@ -532,6 +526,17 @@ class MpvCommandBuilder:
             else: ytdl_format = f"bv*[height<=?{q}]+ba/best"
         args.append(f"--ytdl-format={ytdl_format}")
         
+        # Support Direct Browser Access
+        if self.cookies_browser:
+            browser_opt = f"cookies-from-browser={self.cookies_browser}"
+            if self.ytdl_raw_options:
+                self.ytdl_raw_options = f"{self.ytdl_raw_options},{browser_opt}"
+            else:
+                self.ytdl_raw_options = browser_opt
+        
+        if self.ytdl_raw_options:
+            args.append(f"--ytdl-raw-options={self.ytdl_raw_options}")
+
         if self.use_ytdl_mpv or (self.is_youtube and not self.is_youtube_override):
             args.append('--ytdl=yes')
 
@@ -607,8 +612,6 @@ def construct_mpv_command(mpv_exe, ipc_path=None, url=None, is_youtube=False, yt
         .with_completion_script(script_dir if load_on_completion_script else None, flag_dir) \
         .with_adaptive_headers_script(script_dir) \
         .with_python_interaction_script(script_dir) \
-        .with_reanimator_script(script_dir) \
-        .with_fix_thumbnailer_script(script_dir) \
         .with_title(title) \
         .with_automatic_flags(automatic_mpv_flags) \
         .with_headers(headers) \
