@@ -26,6 +26,7 @@ class PlaylistTracker:
         # New: Track playback duration in the current session
         self.current_session_duration = 0
         self.last_time_pos = None
+        self.last_disk_save_time = 0 # Throttle for disk writes
         
         self.file_io = file_io
         self.ipc_path = ipc_path # Store the IPC path to create a dedicated connection
@@ -241,9 +242,16 @@ class PlaylistTracker:
                             if self.current_session_duration >= 30:
                                 self._check_mark_watched(current_id)
 
-                            # 2. Periodic save every 5 seconds, but don't let it block the loop
+                            # 2. Throttled periodic save (Every 5s of video time, but NO MORE THAN once every 5s of real time)
                             if int(current_time) > 0 and int(current_time) % 5 == 0:
-                                self._update_resume_time(current_id, current_time)
+                                now = time.time()
+                                if now - getattr(self, 'last_disk_save_time', 0) >= 5:
+                                    self._update_resume_time(current_id, current_time)
+                                    self.last_disk_save_time = now
+                                else:
+                                    # Optional: still notify the UI so the progress bar moves, 
+                                    # but don't hit the disk.
+                                    pass
 
                 elif event.get('event') == 'end-file':
                     reason = event.get('reason')

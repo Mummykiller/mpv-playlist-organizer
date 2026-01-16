@@ -608,7 +608,32 @@ class LauncherService:
 
             def process_waiter(proc, f_id):
                 initial_pid = proc.pid
-                return_code = proc.wait()
+                # Retrieve the resolved MPV PID which might be different if a terminal wrapper is used.
+                actual_pid = getattr(self.session, 'pid', None)
+                
+                # If we have a separate MPV process (likely via terminal wrapper),
+                # we monitor both to avoid delays caused by shell 'sleep' or wrapper persistence.
+                if actual_pid and actual_pid != initial_pid:
+                    logging.info(f"[PY][Session] process_waiter: Parallel monitoring for Wrapper({initial_pid}) and MPV({actual_pid})")
+                    while proc.poll() is None:
+                        if not ipc_utils.is_pid_running(actual_pid):
+                            logging.info(f"[PY][Session] MPV({actual_pid}) exited early while wrapper is still running. Proceeding with exit logic.")
+                            break
+                        time.sleep(0.5)
+                
+                # Determine the return code. If the wrapper is still running but MPV is dead,
+                # we use a placeholder that will be overridden by the completion flag check if applicable.
+                return_code = proc.poll()
+                if return_code is None:
+                    # proc is still running, so we've broken out because MPV is dead.
+                    # We'll use 0 as a placeholder; the flag check below will set it to 99 if natural completion.
+                    return_code = 0
+                    # Ensure the wrapper process is eventually reaped in the background.
+                    threading.Thread(target=proc.wait, daemon=True).start()
+                else:
+                    # proc finished naturally
+                    pass
+                
                 exit_reason = None
                 
                 # Check for completion flags. We check multiple PIDs because if a terminal wrapper
