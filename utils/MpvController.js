@@ -76,8 +76,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 'preferences_changed': () => this.applyInitialState().then(() => this.refreshPlaylist()),
                 'show_confirmation': (req, send) => this._handleAsyncConfirmation(req, send),
                 'show_clear_confirmation': async (req) => {
-                    const confirmed = await this.showPageLevelConfirmation(`MPV finished naturally. Clear the playlist in "${req.folderId}"?`);
-                    this.bridge.send('confirm_clear_playlist', null, { confirmed, folderId: req.folderId });
+                    const scopeText = req.scope === 'played' ? 'played items' : (req.scope === 'session' ? 'session items' : 'all items');
+                    const confirmed = await this.showPageLevelConfirmation(`MPV finished naturally. Clear ${scopeText} in "${req.folderId}"?`);
+                    this.bridge.send('confirm_clear_playlist', null, { 
+                        confirmed, 
+                        folderId: req.folderId,
+                        played_ids: req.played_ids,
+                        session_ids: req.session_ids,
+                        scope: req.scope
+                    });
                 },
                 'scrape_and_get_details': (req, send) => {
                     // Prefer the URL passed in the request (from background scanner)

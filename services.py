@@ -309,9 +309,15 @@ def get_essential_ytdlp_flags(settings=None, bypass=False):
     
     # Base security and functionality flags
     flags_list = [
-        "remote-components=ejs:github",
-        "js-runtimes=node"
+        "remote-components=ejs:github"
     ]
+    
+    # Handle JS Runtimes (Critical for YouTube)
+    node_path = config.get("node_path")
+    if node_path and os.path.exists(node_path):
+        flags_list.append(f"js-runtimes=node:{node_path}")
+    else:
+        flags_list.append("js-runtimes=node")
     
     if config.get('yt_ignore_config', True):
         flags_list.insert(0, "ignore-config=")

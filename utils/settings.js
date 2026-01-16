@@ -31,6 +31,7 @@ export class OptionsManager {
             { key: 'confirm_play_new', elementId: 'confirm-play-new-checkbox', type: 'checkbox' },
             { key: 'confirm_folder_switch', elementId: 'confirm-folder-switch-checkbox', type: 'checkbox' },
             { key: 'clear_on_completion', elementId: 'clear-on-completion-select', type: 'select' },
+            { key: 'clear_scope', elementId: 'clear-scope-select', type: 'select' },
             { key: 'yt_use_cookies', elementId: 'yt-use-cookies-checkbox', type: 'checkbox' },
             { key: 'yt_mark_watched', elementId: 'yt-mark-watched-checkbox', type: 'checkbox' },
             { key: 'yt_ignore_config', elementId: 'yt-ignore-config-checkbox', type: 'checkbox' },

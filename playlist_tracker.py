@@ -51,15 +51,24 @@ class PlaylistTracker:
 
     def stop_tracking(self, mpv_return_code=None):
         """
-        Stops tracking and performs the final comparison and clearing logic if necessary.
+        Stops tracking and returns stats about what was played.
         """
         if not self.is_tracking:
-            return
+            return {}
 
         self.is_tracking = False
         logging.info(f"[PY][Tracker] Playlist tracker stopped for folder '{self.folder_id}'. Played item IDs: {self.played_item_ids}")
+        
+        # Capture stats before joining
+        stats = {
+            "played_ids": list(self.played_item_ids),
+            "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
+        }
+
         if self.tracking_thread:
             self.tracking_thread.join()
+        
+        return stats
 
     def add_item(self, item):
         """
