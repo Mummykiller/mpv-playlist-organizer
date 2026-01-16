@@ -136,7 +136,7 @@ export class StorageManager {
                         show_play_new_button: false, duplicate_url_behavior: 'ask', auto_append_on_add: true,
                         live_removal: true, confirm_remove_folder: true, confirm_clear_playlist: true,
                         confirm_close_mpv: true, confirm_play_new: true, confirm_folder_switch: true,
-                        clear_on_completion: 'no', anilistPanelVisible: false, enable_dblclick_copy: false,
+                        clear_on_completion: 'no', clear_scope: 'session', anilistPanelVisible: false, enable_dblclick_copy: false,
                         anilist_image_height: 126, lockAnilistPanel: false, forcePanelAttached: false,
                         anilistAttachOnOpen: true, popup_width: 600, yt_use_cookies: true,
                         yt_mark_watched: true, yt_ignore_config: true, other_sites_use_cookies: true,

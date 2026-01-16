@@ -6,6 +6,8 @@ local indexed_options = {}
 -- Store initial global states
 local initial_ua = mp.get_property("user-agent") or "libmpv"
 local initial_referrer = mp.get_property("referrer") or ""
+local initial_ytdl_raw = mp.get_property("ytdl-raw-options") or ""
+local initial_ytdl_format = mp.get_property("ytdl-format") or ""
 local initial_max_bytes = mp.get_property("demuxer-max-bytes")
 local initial_max_back_bytes = mp.get_property("demuxer-max-back-bytes")
 local initial_cache_secs = mp.get_property("cache-secs")
@@ -43,12 +45,11 @@ local function apply_adaptive_settings()
     if solid_id then mp.set_property_native("user-data/id", solid_id) end
 
     -- 2. Hot-Swap / Race Condition Recovery
-    -- If Python sent immediate options via user-data, use them first.
     local hs_json = mp.get_property("user-data/hot-swap-options")
-    if hs_json and hs_json ~= "" then
+    local is_first_load = (hs_json and hs_json ~= "")
+    if is_first_load then
         local ok, hs_opts = pcall(utils.parse_json, hs_json)
         if ok and hs_opts then
-            -- Inject into our tracking tables for future lookups
             if hs_opts.id then id_options[hs_opts.id] = hs_opts end
             url_options[path] = hs_opts
         end
@@ -60,9 +61,21 @@ local function apply_adaptive_settings()
     mp.set_property("referrer", initial_referrer)
     mp.set_property("http-header-fields", "")
     mp.set_property("cookies-file", "")
-    mp.set_property("ytdl-raw-options", "")
+    
+    -- Only reset ytdl settings if this is NOT the initial hot-swap load.
+    -- This prevents race conditions where the initial launch flags are cleared too early.
+    if not is_first_load then
+        mp.set_property("ytdl-raw-options", initial_ytdl_raw)
+        mp.set_property("ytdl-format", initial_ytdl_format)
+    end
+
     mp.set_property("demuxer-lavf-o", initial_lavf_opts)
     
+    -- Reset metadata strictly
+    mp.set_property_native("user-data/original-url", nil)
+    mp.set_property("user-data/is-youtube", "no")
+    mp.set_property("user-data/marked-as-watched", "no")
+
     -- Reset Buffering to Launch Defaults
     mp.set_property("demuxer-max-bytes", initial_max_bytes)
     mp.set_property("demuxer-max-back-bytes", initial_max_back_bytes)
@@ -79,6 +92,20 @@ local function apply_adaptive_settings()
     local opts = (item_id and id_options[item_id]) or 
                  (pos and indexed_options[pos]) or 
                  url_options[stripped_path] or url_options[path]
+
+    if not opts then
+        debug_log("No options found for path: " .. path .. " (ID: " .. tostring(item_id) .. ", Pos: " .. tostring(pos) .. ")")
+    else
+        debug_log("Resolved options for " .. (opts.title or path))
+    end
+
+    -- 4b. Explicit YouTube Check (Always useful)
+    local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
+    if is_yt then
+        debug_log("YouTube detected, enforcing ytdl=yes")
+        mp.set_property("ytdl", "yes")
+        mp.set_property("user-data/is-youtube", "yes")
+    end
 
     if not opts then return end
 
@@ -130,8 +157,27 @@ local function apply_adaptive_settings()
         mp.set_property("demuxer-lavf-o", lp)
     else
         -- 8. Apply "Turbo" Networking Overrides (Only if NOT bypassed)
-        if opts.cookies_file then mp.set_property("cookies-file", opts.cookies_file) end
-        if opts.ytdl_raw_options then mp.set_property("ytdl-raw-options", opts.ytdl_raw_options) end
+        local ytdl_opts = opts.ytdl_raw_options or initial_ytdl_raw
+        
+        -- If browser cookies are requested, append them to raw options
+        if opts.cookies_browser and opts.cookies_browser ~= "" and opts.cookies_browser ~= "None" then
+            local browser_flag = "cookies-from-browser=" .. opts.cookies_browser
+            if ytdl_opts == "" then
+                ytdl_opts = browser_flag
+            elseif not ytdl_opts:find("cookies%-from%-browser") then
+                ytdl_opts = ytdl_opts .. "," .. browser_flag
+            end
+        end
+
+        if opts.cookies_file and opts.cookies_file ~= "" then 
+            mp.set_property("cookies-file", opts.cookies_file) 
+        end
+        
+        if ytdl_opts ~= "" then
+            mp.set_property("ytdl-raw-options", ytdl_opts)
+        end
+
+        if opts.ytdl_format then mp.set_property("ytdl-format", opts.ytdl_format) end
 
         -- Apply Buffering & Cache
         if opts.enable_cache == false then
@@ -162,6 +208,6 @@ local function apply_adaptive_settings()
     if opts.original_url then mp.set_property_native("user-data/original-url", opts.original_url) end
 end
 
-mp.add_hook("on_load", 10, function()
+mp.add_hook("on_load", 0, function()
     pcall(apply_adaptive_settings)
 end)

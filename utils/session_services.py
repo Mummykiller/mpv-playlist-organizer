@@ -447,7 +447,9 @@ class LauncherService:
                     ALLOWED_KEYS = {
                         'HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'PWD', 'SHELL', 'TERM', 'USER',
                         'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
-                        'XDG_CACHE_HOME', 'DBUS_SESSION_BUS_ADDRESS'
+                        'XDG_CACHE_HOME', 'DBUS_SESSION_BUS_ADDRESS',
+                        'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP',
+                        'MPV_HOME', 'PULSE_SERVER', 'PIPEWIRE_RUNTIME_DIR'
                     }
                 
                 for key, val in base_env.items():
@@ -653,8 +655,15 @@ class LauncherService:
                             break
                     if flag_found: break
 
-                self.session.send_message({"action": "mpv_exited", "folderId": f_id, "returnCode": return_code, "reason": exit_reason})
-                self.session.clear(mpv_return_code=return_code)
+                stats = self.session.clear(mpv_return_code=return_code)
+                self.session.send_message({
+                    "action": "mpv_exited", 
+                    "folderId": f_id, 
+                    "returnCode": return_code, 
+                    "reason": exit_reason,
+                    "played_ids": stats.get("played_ids", []),
+                    "session_ids": stats.get("session_ids", [])
+                })
 
             threading.Thread(target=process_waiter, args=(process, folder_id), daemon=True).start()
             return {"success": True, "message": "MPV playback initiated."}

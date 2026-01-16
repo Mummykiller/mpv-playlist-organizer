@@ -215,6 +215,7 @@ class MpvSessionManager:
 
     def clear(self, mpv_return_code=None):
         """Clears the session state and removes the session file."""
+        stats = {}
         with self.sync_lock:
             self.is_alive = False
             pid_to_clear = self.pid
@@ -224,7 +225,7 @@ class MpvSessionManager:
                 logging.info(f"Clearing session state for PID: {pid_to_clear}")
 
             if self.playlist_tracker:
-                self.playlist_tracker.stop_tracking(mpv_return_code=mpv_return_code)
+                stats = self.playlist_tracker.stop_tracking(mpv_return_code=mpv_return_code)
             self.playlist_tracker = None
 
             if self.ipc_manager:
@@ -260,6 +261,7 @@ class MpvSessionManager:
                     logging.info(f"Cleaned up session file: {self.session_file}")
                 except OSError as e:
                     logging.warning(f"Failed to remove session file during cleanup: {e}")
+        return stats
 
     def get_pause_state(self):
         """Queries the current pause state from MPV via IPC."""

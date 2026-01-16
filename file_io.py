@@ -205,6 +205,10 @@ def validate_safe_path(path, allow_user_content=False):
     if not path: return None
     
     try:
+        # Special case for Windows named pipes used for IPC
+        if platform.system() == "Windows" and path.startswith("\\\\.\\pipe\\"):
+            return path
+
         resolved = os.path.realpath(os.path.abspath(path))
         
         # Allowed bases for configuration/flags
@@ -214,8 +218,16 @@ def validate_safe_path(path, allow_user_content=False):
             os.path.realpath(TEMP_DIR)
         ]
 
-        if platform.system() == "Linux" and os.path.exists("/dev/shm"):
-            allowed_prefixes.append(os.path.realpath("/dev/shm"))
+        if platform.system() == "Linux":
+            if os.path.exists("/dev/shm"):
+                allowed_prefixes.append(os.path.realpath("/dev/shm"))
+            
+            xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
+            if xdg_runtime:
+                allowed_prefixes.append(os.path.realpath(xdg_runtime))
+            
+            # Allow the fallback IPC directory in user home
+            allowed_prefixes.append(os.path.realpath(os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")))
         
         # Check if path starts with any allowed prefix
         is_allowed = any(resolved.startswith(prefix) for prefix in allowed_prefixes)

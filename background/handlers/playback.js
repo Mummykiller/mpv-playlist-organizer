@@ -218,7 +218,7 @@ export function isFolderActive(folderId) {
 }
 
 export async function handleMpvExited(data) {
-    const { folderId, returnCode, reason } = data;
+    const { folderId, returnCode, reason, played_ids, session_ids } = data;
     if (!folderId) return;
     
     // Mapping of common exit codes to human-readable explanations.
@@ -250,6 +250,7 @@ export async function handleMpvExited(data) {
     const storageData = await storage.get();
     const globalPrefs = storageData.settings.ui_preferences.global;
     const clearMode = globalPrefs.clear_on_completion || 'no';
+    const clearScope = globalPrefs.clear_scope || 'all';
 
     // MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion via custom script.
     const isNaturalCompletion = (returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE);
@@ -262,8 +263,8 @@ export async function handleMpvExited(data) {
     if (session && session.currentPlayingItem && session.currentPlayingItem.folderId === folderId && session.currentPlayingItem.isLastInFolder) {
         if (isNaturalCompletion) {
             if (clearMode === 'yes') {
-                broadcastLog({ text: `[Background]: Auto-clearing playlist for '${folderId}' as per settings.`, type: 'info' });
-                await clearFolderPlaylist(folderId);
+                broadcastLog({ text: `[Background]: Auto-clearing items for '${folderId}' (Scope: ${clearScope}).`, type: 'info' });
+                await clearFolderPlaylist(folderId, { played_ids, session_ids, scope: clearScope });
             } else if (clearMode === 'confirm') {
                 broadcastLog({ text: `[Background]: Requesting confirmation to clear playlist for '${folderId}'.`, type: 'info' });
                 // Send a message to the active tab to show a confirmation dialog
@@ -271,7 +272,10 @@ export async function handleMpvExited(data) {
                 if (activeTab) {
                     chrome.tabs.sendMessage(activeTab.id, { 
                         action: 'show_clear_confirmation', 
-                        folderId: folderId 
+                        folderId: folderId,
+                        played_ids,
+                        session_ids,
+                        scope: clearScope
                     }).catch(() => {});
                 }
             }
@@ -297,16 +301,36 @@ export async function handleMpvExited(data) {
     });
 }
 
-async function clearFolderPlaylist(folderId) {
+async function clearFolderPlaylist(folderId, options = {}) {
+    const { played_ids, session_ids, scope = 'all' } = options;
     const storageData = await storage.get();
+    
     if (storageData.folders[folderId]) {
-        storageData.folders[folderId].playlist = [];
+        const folder = storageData.folders[folderId];
+        let originalCount = folder.playlist.length;
+
+        if (scope === 'played' && played_ids && played_ids.length > 0) {
+            const playedSet = new Set(played_ids);
+            folder.playlist = folder.playlist.filter(item => !playedSet.has(item.id));
+        } else if (scope === 'session' && session_ids && session_ids.length > 0) {
+            const sessionSet = new Set(session_ids);
+            folder.playlist = folder.playlist.filter(item => !sessionSet.has(item.id));
+        } else {
+            // Default 'all' behavior (or fallback if IDs missing)
+            folder.playlist = [];
+        }
+
+        const removedCount = originalCount - folder.playlist.length;
+        if (removedCount > 0) {
+            broadcastLog({ text: `[Background]: Removed ${removedCount} item(s) from '${folderId}' based on clear scope '${scope}'.`, type: 'info' });
+        }
+
         await storage.set(storageData);
         debouncedSyncToNativeHostFile(true);
         broadcastToTabs({ 
             action: 'render_playlist', 
             folderId: folderId, 
-            playlist: [],
+            playlist: folder.playlist,
             isFolderActive: false
         });
         return true;
@@ -317,7 +341,11 @@ async function clearFolderPlaylist(folderId) {
 export async function handleClearPlaylistConfirmation(request) {
     if (request.confirmed && request.folderId) {
         broadcastLog({ text: `[Background]: User confirmed clearing playlist for '${request.folderId}'.`, type: 'info' });
-        await clearFolderPlaylist(request.folderId);
+        await clearFolderPlaylist(request.folderId, {
+            played_ids: request.played_ids,
+            session_ids: request.session_ids,
+            scope: request.scope
+        });
         return { success: true };
     }
     broadcastLog({ text: `[Background]: User declined clearing playlist for '${request.folderId}'.`, type: 'info' });

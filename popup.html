@@ -417,6 +417,18 @@
                             <option value="confirm">Ask First</option>
                         </select>
                     </div>
+                    <hr class="settings-compact-separator">
+                    <div class="settings-item">
+                        <label for="clear-scope-select" class="settings-label">Auto-clear Scope <span class="help-icon" title="Define WHICH items should be removed when 'Auto-clear' is triggered.
+• Everything: Clear the entire folder.
+• Session Items: Only clear items that were sent to MPV.
+• Played Items Only: Only clear items that actually finished playing.">?</span>:</label>
+                        <select id="clear-scope-select" class="settings-input">
+                            <option value="all">Everything in Folder</option>
+                            <option value="session">Session Items Only</option>
+                            <option value="played">Played Items Only</option>
+                        </select>
+                    </div>
 
                     <div class="settings-group-header" style="margin-top: 14px;">Advanced Player Options</div>
                     <div class="control-group stacked-control setting-item" data-setting-name="custom mpv flags command line">
