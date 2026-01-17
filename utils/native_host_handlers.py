@@ -326,8 +326,11 @@ class HandlerManager:
         if not folder_id or (not url_item and not url_items_list):
             return {"success": False, "error": "Missing folderId or items for append action."}
         
-        # Fetch all_folders once
-        all_folders = self.file_io.get_all_folders_from_file()
+        # Optimized: Only load the specific shard we are appending to
+        playlist = self.file_io.get_playlist_shard(folder_id)
+        # Wrap it in the structure _process_url_item expects for now, 
+        # or better, just pass the playlist.
+        all_folders_context = {folder_id: {"playlist": playlist}}
         
         # Normalize to a list of items to process
         items_to_process = url_items_list if url_items_list else [url_item]
@@ -337,9 +340,8 @@ class HandlerManager:
         
         # Use ThreadPoolExecutor for parallel enrichment
         with ThreadPoolExecutor(max_workers=5) as executor:
-            # Create a wrapper function to pass all required arguments
             def process_wrapper(item):
-                processed, _ = self._process_url_item(item, folder_id, all_folders)
+                processed, updated_context = self._process_url_item(item, folder_id, all_folders_context)
                 return processed
             
             results = list(executor.map(process_wrapper, items_to_process))
@@ -348,6 +350,10 @@ class HandlerManager:
 
         if not final_processed_items:
             return {"success": True, "message": "No new items to append."}
+
+        # The _process_url_item calls above already updated all_folders_context[folder_id]['playlist']
+        # We need to save that shard now.
+        self.file_io.save_playlist_shard(folder_id, all_folders_context[folder_id]['playlist'])
 
         # Use batch append logic to preserve titles and settings natively.
         return self.mpv_session.append_batch(final_processed_items)
@@ -441,9 +447,23 @@ class HandlerManager:
             
         if is_incremental:
             # Incremental update: merge incoming folder(s) with existing ones
-            existing_folders = self.file_io.get_all_folders_from_file()
-            existing_folders.update(data)
-            return self.file_io.write_folders_file(existing_folders)
+            # For sharding, we update individual shards/index entries efficiently
+            index = self.file_io.get_index()
+            for folder_id, folder_content in data.items():
+                playlist = folder_content.get("playlist", [])
+                
+                # Update Shard without updating index immediately
+                self.file_io.save_playlist_shard(folder_id, playlist, update_index=False)
+                
+                # Update Index Metadata in memory
+                meta = {k: v for k, v in folder_content.items() if k != "playlist"}
+                index[folder_id] = {
+                    **meta,
+                    "item_count": len(playlist)
+                }
+            # Save the index once after all shards are updated
+            self.file_io.save_index(index)
+            return {"success": True, "message": "Incremental sync complete."}
         else:
             # Full override
             return self.file_io.write_folders_file(data)
@@ -528,6 +548,7 @@ class HandlerManager:
         )
 
     def handle_get_all_folders(self, message):
+        # We use the wrapper here because the UI currently expects the full structure
         return {"success": True, "folders": self.file_io.get_all_folders_from_file()}
 
     def handle_get_ui_preferences(self, message):
@@ -708,12 +729,12 @@ class HandlerManager:
         m3u_source_value = m3u_data['value']
         m3u_type = m3u_data['type']
 
-        # Fetch all_folders once for the entire method
-        all_folders = self.file_io.get_all_folders_from_file()
-
         # Get common settings for both mpv_session.start calls
         settings = self.file_io.get_settings()
         
+        # Fetch target folder metadata (replaces get_all_folders_from_file)
+        target_folder = self.file_io.get_folder_data(folder_id) or {"playlist": []}
+
         # Merge extension-provided networking and performance overrides
         for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
                     'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
@@ -824,7 +845,7 @@ class HandlerManager:
                 
                 # Calculate start index for the final launch
                 playlist_start_index = 0
-                last_played_id = all_folders.get(folder_id, {}).get("last_played_id")
+                last_played_id = target_folder.get("last_played_id")
                 if settings.get("enable_smart_resume", True) and last_played_id:
                     for idx, item in enumerate(enriched_url_items):
                         if item.get('id') == last_played_id:

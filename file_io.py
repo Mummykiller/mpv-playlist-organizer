@@ -191,8 +191,104 @@ try:
 except: pass
 
 FOLDERS_FILE = os.path.join(DATA_DIR, "folders.json")
+INDEX_FILE = os.path.join(DATA_DIR, "index.json")
+PLAYLISTS_DIR = os.path.join(DATA_DIR, "playlists")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 EXPORT_DIR = os.path.join(DATA_DIR, "exported")
+
+try:
+    os.makedirs(PLAYLISTS_DIR, exist_ok=True)
+except: pass
+
+def migrate_to_shards():
+    """
+    Safely migrates from the monolithic folders.json to a sharded index/playlists structure.
+    """
+    if not os.path.exists(FOLDERS_FILE):
+        return
+
+    # 1. Safety Backup
+    bak_file = f"{FOLDERS_FILE}.bak_migration_{int(time.time())}"
+    try:
+        shutil.copy2(FOLDERS_FILE, bak_file)
+        logging.info(f"[PY][IO] Created migration backup: {bak_file}")
+    except Exception as e:
+        logging.error(f"[PY][IO] Migration failed: Could not create backup. {e}")
+        return
+
+    with FileLock(FOLDERS_FILE):
+        raw_folders = _safe_json_load(FOLDERS_FILE)
+        if not raw_folders:
+            return
+
+        index_data = {}
+        os.makedirs(PLAYLISTS_DIR, exist_ok=True)
+
+        for folder_id, folder_data in raw_folders.items():
+            playlist = folder_data.pop("playlist", [])
+            
+            # Index gets metadata
+            index_data[folder_id] = {
+                **folder_data,
+                "item_count": len(playlist)
+            }
+            
+            # Shard gets the content
+            shard_path = os.path.join(PLAYLISTS_DIR, f"{folder_id}.json")
+            _atomic_json_dump({"playlist": playlist}, shard_path)
+            logging.info(f"[PY][IO] Created shard for folder: {folder_id}")
+
+        # Save the new index
+        if _atomic_json_dump(index_data, INDEX_FILE):
+            logging.info("[PY][IO] Sharded migration complete. Index saved.")
+            # We keep the old folders.json for a short period or rename it
+            try:
+                os.rename(FOLDERS_FILE, f"{FOLDERS_FILE}.migrated")
+            except: pass
+
+def get_index():
+    """Loads the folder index (metadata only)."""
+    if not os.path.exists(INDEX_FILE):
+        # Fallback to migration if old file exists
+        if os.path.exists(FOLDERS_FILE):
+            migrate_to_shards()
+        else:
+            return {}
+            
+    with FileLock(INDEX_FILE):
+        return _safe_json_load(INDEX_FILE)
+
+def save_index(index_data):
+    """Saves the folder index atomically."""
+    with FileLock(INDEX_FILE):
+        return _atomic_json_dump(index_data, INDEX_FILE)
+
+def get_playlist_shard(folder_id):
+    """Loads a specific playlist shard (Lazy Loading)."""
+    shard_path = os.path.join(PLAYLISTS_DIR, f"{folder_id}.json")
+    if not os.path.exists(shard_path):
+        return []
+    
+    with FileLock(shard_path):
+        data = _safe_json_load(shard_path)
+        return data.get("playlist", [])
+
+def save_playlist_shard(folder_id, playlist, update_index=True):
+    """Saves a specific playlist shard and optionally updates the index count."""
+    shard_path = os.path.join(PLAYLISTS_DIR, f"{folder_id}.json")
+    
+    # 1. Save the Shard
+    with FileLock(shard_path):
+        success = _atomic_json_dump({"playlist": playlist}, shard_path)
+    
+    if success and update_index:
+        # 2. Update Index Metadata (Item Count)
+        index = get_index()
+        if folder_id in index:
+            index[folder_id]["item_count"] = len(playlist)
+            save_index(index)
+            
+    return success
 
 def validate_safe_path(path, allow_user_content=False):
     """
@@ -493,31 +589,52 @@ def _migrate_legacy_data(raw_folders):
     return converted_folders, needs_resave
 
 def get_all_folders_from_file():
-    """Reads all folders data from folders.json, ensuring new format."""
-    with FileLock(FOLDERS_FILE):
-        if not os.path.exists(FOLDERS_FILE):
-            source_folders_file = os.path.join(SCRIPT_DIR, "data", "folders.json")
-            if os.path.exists(source_folders_file):
-                try:
-                    logging.info(f"[PY][IO] No folders file found in {DATA_DIR}. Copying default from {source_folders_file}.")
-                    shutil.copy2(source_folders_file, FOLDERS_FILE)
-                except Exception as e:
-                    logging.error(f"[PY][IO] Failed to copy default folders.json: {e}")
-                    return {}
-            else:
-                return {}
+    """
+    Reconstructs the full folder structure for compatibility.
+    In performance-critical paths, use get_index() or get_playlist_shard() instead.
+    """
+    index = get_index()
+    if not index:
+        return {}
+    
+    full_data = {}
+    for folder_id, metadata in index.items():
+        playlist = get_playlist_shard(folder_id)
+        full_data[folder_id] = {**metadata, "playlist": playlist}
+    
+    return full_data
 
-        raw_folders = _safe_json_load(FOLDERS_FILE)
-        if not raw_folders:
-            return {}
-        
-        converted_folders, needs_resave = _migrate_legacy_data(raw_folders)
-        
-        if needs_resave:
-            logging.info("[PY][IO] Resaving folders file after converting old data formats.")
-            _atomic_json_dump(converted_folders, FOLDERS_FILE)
+def get_folder_data(folder_id):
+    """Retrieves metadata and playlist for a single folder efficiently."""
+    index = get_index()
+    meta = index.get(folder_id)
+    if not meta:
+        return None
+    
+    playlist = get_playlist_shard(folder_id)
+    return {**meta, "playlist": playlist}
 
-        return converted_folders
+def write_folders_file(data):
+    """
+    Distributes the provided full data structure back into shards and the index.
+    """
+    index_data = {}
+    for folder_id, folder_content in data.items():
+        # Use .get to avoid modifying the input dictionary
+        playlist = folder_content.get("playlist", [])
+        
+        # Update Shard without updating index (we'll do it once at the end)
+        save_playlist_shard(folder_id, playlist, update_index=False)
+        
+        # Prepare Index Metadata
+        # Create a copy of metadata without the playlist
+        meta = {k: v for k, v in folder_content.items() if k != "playlist"}
+        index_data[folder_id] = {
+            **meta,
+            "item_count": len(playlist)
+        }
+        
+    return {"success": save_index(index_data)}
 
 def write_export_file(filename, data, subfolder=None):
     """Helper to write data to a file in the export directory, optionally in a subfolder."""
@@ -557,17 +674,6 @@ def write_export_file(filename, data, subfolder=None):
         error_msg = f"[PY][IO] Failed to export data: {e}"
         logging.error(error_msg)
         return {"success": False, "error": error_msg}
-
-def write_folders_file(data):
-    """Writes the provided data to the main folders.json file."""
-    with FileLock(FOLDERS_FILE):
-        if _atomic_json_dump(data, FOLDERS_FILE):
-            logging.info(f"[PY][IO] Data synced to {FOLDERS_FILE}")
-            return {"success": True, "message": "Data successfully synced to file."}
-        else:
-            error_msg = f"[PY][IO] Failed to write to {FOLDERS_FILE}"
-            logging.error(error_msg)
-            return {"success": False, "error": error_msg}
 
 def list_import_files():
     """Lists all .json files in the export directory and its subdirectories."""

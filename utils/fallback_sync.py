@@ -45,59 +45,59 @@ def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
         return False, str(e)
 
 def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_last_played=False, url=None, cookies=None, ua=None):
-    """Updates the local folders.json database and optionally YouTube history."""
+    """Updates the local folders database using sharded I/O."""
     if not folder_id or not item_id:
         return False, "Missing IDs"
 
     settings = file_io.get_settings()
-    all_folders = file_io.get_all_folders_from_file()
     
-    if folder_id not in all_folders:
-        return False, f"Folder {folder_id} not found"
+    # 1. Load the specific shard
+    playlist = file_io.get_playlist_shard(folder_id)
+    if not playlist and not update_last_played:
+        return False, f"Playlist shard {folder_id} not found or empty"
 
-    folder = all_folders[folder_id]
     item_found = False
+    needs_shard_save = False
     
-    # 1. Find and update the specific item
-    for item in folder.get("playlist", []):
+    # 2. Update the specific item in the shard
+    for item in playlist:
         if item.get("id") == item_id:
             item_found = True
             
-            # Respect 'mark_watched' setting and logic
-            if mark_watched:
-                # Check if already marked locally to avoid redundant network calls
-                if not item.get("marked_as_watched"):
-                    # Only mark on YT if enabled in settings
-                    if settings.get('yt_mark_watched', True):
-                        success, msg = mark_video_as_watched(url, cookies, ua)
-                        if success:
-                            item["marked_as_watched"] = True
-                            print(f"YouTube: Marked as watched.")
-                        else:
-                            print(f"YouTube Error: {msg}")
+            if mark_watched and not item.get("marked_as_watched"):
+                if settings.get('yt_mark_watched', True):
+                    # Perform the slow YouTube network call OUTSIDE of any file locks
+                    success, msg = mark_video_as_watched(url, cookies, ua)
+                    if success:
+                        item["marked_as_watched"] = True
+                        needs_shard_save = True
+                        print(f"YouTube: Marked as watched.")
                     else:
-                        item["marked_as_watched"] = True # Still mark locally if user wants it gone
+                        print(f"YouTube Error: {msg}")
+                else:
+                    item["marked_as_watched"] = True
+                    needs_shard_save = True
             
-            # Respect 'smart_resume' setting
             if resume_time is not None and settings.get('enable_smart_resume', True):
                 time_val = int(float(resume_time))
-                # Only update if changed (matches PlaylistTracker logic)
                 if abs(item.get("resume_time", 0) - time_val) > 2 or time_val == 0:
                     item["resume_time"] = time_val
+                    needs_shard_save = True
                     print(f"Disk: Updated resume time to {time_val}s.")
-            
             break
 
-    # 2. Update folder-level 'last_played_id'
-    if update_last_played:
-        folder["last_played_id"] = item_id
-        print(f"Disk: Updated last played item to {item_id}.")
+    # 3. Handle Saves
+    if needs_shard_save:
+        file_io.save_playlist_shard(folder_id, playlist, update_index=False)
 
-    if item_found or update_last_played:
-        file_io.write_folders_file(all_folders)
-        return True, "Sync complete"
-    
-    return False, "Item not found in playlist"
+    if update_last_played:
+        index = file_io.get_index()
+        if folder_id in index:
+            index[folder_id]["last_played_id"] = item_id
+            file_io.save_index(index)
+            print(f"Disk: Updated last played item to {item_id}.")
+
+    return True, "Sync complete"
 
 # Legacy support for existing threaded calls in other parts of the app
 def mark_video_as_watched_threaded(url, cookies_info, user_agent=None, folder_id=None, item_id=None, on_done=None):

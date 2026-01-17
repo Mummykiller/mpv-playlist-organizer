@@ -8,6 +8,7 @@ export class StorageManager {
         this.initPromise = null;
         this.broadcastLog = broadcastLog;
         this.writeQueue = Promise.resolve();
+        this._cache = null;
     }
 
     async initialize() {
@@ -42,12 +43,15 @@ export class StorageManager {
         console.log("[Storage] Migration complete.");
     }
 
-    async get() {
+    async get(force = false) {
+        if (this._cache && !force) return this._cache;
+        
         try {
             const keys = await chrome.storage.local.get(['mpv_settings', 'mpv_folder_index']);
             if (!keys.mpv_settings) {
                 const legacy = await chrome.storage.local.get(this.STORAGE_KEY);
-                return legacy[this.STORAGE_KEY] || this._getDefaultData();
+                this._cache = legacy[this.STORAGE_KEY] || this._getDefaultData();
+                return this._cache;
             }
 
             const settings = keys.mpv_settings;
@@ -61,14 +65,18 @@ export class StorageManager {
                 folders[id] = foldersData[`mpv_folder_data_${id}`] || { playlist: [], last_played_id: null };
             });
 
-            return { settings, folderOrder, folders };
+            this._cache = { settings, folderOrder, folders };
+            return this._cache;
         } catch (e) {
             console.error("Storage get failed:", e);
             return this._getDefaultData();
         }
     }
 
-    async set(data) {
+    async set(data, folderId = null) {
+        // Update cache immediately to ensure subsequent 'get' calls see the change
+        this._cache = data;
+
         this.writeQueue = this.writeQueue.then(async () => {
             try {
                 this._validateData(data);
@@ -87,9 +95,17 @@ export class StorageManager {
                     'mpv_folder_index': folderOrder
                 };
 
-                for (const folderId of folderOrder) {
+                if (folderId) {
+                    // PARTIAL UPDATE: Only write the changed folder
                     if (data.folders[folderId]) {
                         update[`mpv_folder_data_${folderId}`] = data.folders[folderId];
+                    }
+                } else {
+                    // FULL UPDATE: Write all folders
+                    for (const fid of folderOrder) {
+                        if (data.folders[fid]) {
+                            update[`mpv_folder_data_${fid}`] = data.folders[fid];
+                        }
                     }
                 }
 

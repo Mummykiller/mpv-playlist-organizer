@@ -619,7 +619,7 @@ class LauncherService:
                         if not ipc_utils.is_pid_running(actual_pid):
                             logging.info(f"[PY][Session] MPV({actual_pid}) exited early while wrapper is still running. Proceeding with exit logic.")
                             break
-                        time.sleep(0.5)
+                        time.sleep(0.1)
                 
                 # Determine the return code. If the wrapper is still running but MPV is dead,
                 # we use a placeholder that will be overridden by the completion flag check if applicable.
