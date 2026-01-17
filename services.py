@@ -34,6 +34,10 @@ SAFE_MPV_FLAGS_ALLOWLIST = {
     '--terminal', '--input-terminal',
 }
 
+def sanitize_url(url):
+    """Sanitizes a URL by removing potentially dangerous characters."""
+    return file_io.sanitize_string(url, is_filename=False)
+
 def get_gpu_vendor():
     system = platform.system()
     try:
