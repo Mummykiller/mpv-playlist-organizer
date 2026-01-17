@@ -592,15 +592,24 @@ def get_all_folders_from_file():
     """
     Reconstructs the full folder structure for compatibility.
     In performance-critical paths, use get_index() or get_playlist_shard() instead.
+    Uses parallel reading for faster reconstruction of large libraries.
     """
     index = get_index()
     if not index:
         return {}
     
     full_data = {}
-    for folder_id, metadata in index.items():
-        playlist = get_playlist_shard(folder_id)
-        full_data[folder_id] = {**metadata, "playlist": playlist}
+    from concurrent.futures import ThreadPoolExecutor
+    
+    # Use ThreadPoolExecutor for parallel file reading
+    # Since this is I/O bound, more threads than cores can be beneficial.
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        def fetch_shard(f_id, metadata):
+            playlist = get_playlist_shard(f_id)
+            return f_id, {**metadata, "playlist": playlist}
+        
+        results = list(executor.map(lambda x: fetch_shard(x[0], x[1]), index.items()))
+        full_data = dict(results)
     
     return full_data
 
