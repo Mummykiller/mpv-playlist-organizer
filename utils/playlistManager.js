@@ -106,7 +106,7 @@ async function addUrlToFolder(folderId, url, title, originalTab = null, sender =
         data.folders[folderId].playlist.push(newItem);
         
         // Persist to storage
-        await storage.set(data);
+        await storage.set(data, folderId);
         
         // Immediate sync to native host file
         debouncedSyncToNativeHostFile(folderId, true);
@@ -242,7 +242,7 @@ export async function handleClear(request) {
     if (!data.folders[folderId]) return { success: false, error: "Folder not found." };
 
     data.folders[folderId].playlist = [];
-    await storage.set(data);
+    await storage.set(data, folderId);
     debouncedSyncToNativeHostFile(folderId, true);
 
     broadcastToTabs({ 
@@ -266,7 +266,7 @@ export async function handleRemoveItem(request) {
         if (indexToRemove >= 0 && indexToRemove < playlist.length) {
             const itemToRemove = playlist[indexToRemove];
             playlist.splice(indexToRemove, 1);
-            await storage.set(data);
+            await storage.set(data, folderId);
             debouncedSyncToNativeHostFile(folderId, true);
 
             broadcastToTabs({ 
@@ -292,7 +292,7 @@ export async function handleSetPlaylistOrder(request) {
     if (!storageData.folders[folderId]) return { success: false };
 
     storageData.folders[folderId].playlist = order;
-    await storage.set(storageData);
+    await storage.set(storageData, folderId);
     debouncedSyncToNativeHostFile(folderId, true);
 
     broadcastToTabs({ 

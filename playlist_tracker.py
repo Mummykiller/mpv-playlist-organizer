@@ -150,9 +150,9 @@ class PlaylistTracker:
                 last_heartbeat = time.time()
 
             try:
-                event = self.ipc_manager.receive_event(timeout=1.0)
+                event = self.ipc_manager.receive_event(timeout=0.1)
                 if not event:
-                    time.sleep(0.5)
+                    time.sleep(0.05) # Tiny timer for stability
                     continue
 
                 if event.get('event') == 'property-change':
@@ -299,11 +299,11 @@ class PlaylistTracker:
             return
         
         try:
-            # 1. Update the local folders.json file (for CLI and persistence)
-            all_folders = self.file_io.get_all_folders_from_file()
-            if self.folder_id in all_folders:
-                all_folders[self.folder_id]["last_played_id"] = item_id
-                self.file_io.write_folders_file(all_folders)
+            # 1. Update the local index file (lightweight metadata)
+            index = self.file_io.get_index()
+            if self.folder_id in index:
+                index[self.folder_id]["last_played_id"] = item_id
+                self.file_io.save_index(index)
                 logging.debug(f"[PY][Tracker] Updated last_played_id to '{item_id}' for folder '{self.folder_id}'.")
             
             # 2. Notify the extension so it can update its internal storage
@@ -321,17 +321,16 @@ class PlaylistTracker:
             return
         
         try:
-            # 1. Update the local folders.json file
-            all_folders = self.file_io.get_all_folders_from_file()
-            if self.folder_id in all_folders:
-                folder = all_folders[self.folder_id]
-                for item in folder.get("playlist", []):
+            # 1. Update the specific playlist shard
+            playlist = self.file_io.get_playlist_shard(self.folder_id)
+            if playlist:
+                for item in playlist:
                     if item.get("id") == item_id:
                         # Only update if the difference is significant or it's a reset
                         old_time = item.get("resume_time", 0)
                         if abs(resume_time - old_time) > 2 or resume_time == 0:
                             item["resume_time"] = int(resume_time)
-                            self.file_io.write_folders_file(all_folders)
+                            self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
                             logging.debug(f"[PY][Tracker] Updated resume_time for item '{item_id}' to {int(resume_time)}s.")
                             
                             # 2. Notify the extension
@@ -358,15 +357,14 @@ class PlaylistTracker:
                         item["marked_as_watched"] = status
                         break
 
-            # 2. Update the local folders.json file
+            # 2. Update the local playlist shard
             if persist:
-                all_folders = self.file_io.get_all_folders_from_file()
-                if self.folder_id in all_folders:
-                    folder = all_folders[self.folder_id]
-                    for item in folder.get("playlist", []):
+                playlist = self.file_io.get_playlist_shard(self.folder_id)
+                if playlist:
+                    for item in playlist:
                         if item.get("id") == item_id:
                             item["marked_as_watched"] = status
-                            self.file_io.write_folders_file(all_folders)
+                            self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
                             logging.debug(f"[PY][Tracker] Updated marked_as_watched for item '{item_id}' to {status}.")
                             break
             

@@ -325,7 +325,7 @@ async function clearFolderPlaylist(folderId, options = {}) {
             broadcastLog({ text: `[Background]: Removed ${removedCount} item(s) from '${folderId}' based on clear scope '${scope}'.`, type: 'info' });
         }
 
-        await storage.set(storageData);
+        await storage.set(storageData, folderId);
         debouncedSyncToNativeHostFile(true);
         broadcastToTabs({ 
             action: 'render_playlist', 
@@ -627,7 +627,7 @@ export async function handlePlayM3U(request) {
                 if (response.playlist_items.length > 0) {
                     storageData.folders[folderId].last_played_id = response.playlist_items[0].id;
                 }
-                await storage.set(storageData);
+                await storage.set(storageData, folderId);
                 broadcastToTabs({ action: 'render_playlist', folderId: folderId, playlist: response.playlist_items });
             }
         }
@@ -655,7 +655,7 @@ export async function handleUpdateLastPlayed(data) {
     const storageData = await storage.get();
     if (storageData.folders[folderId]) {
         storageData.folders[folderId].last_played_id = itemId;
-        await storage.set(storageData);
+        await storage.set(storageData, folderId);
 
         // Also update playback cache for instant render consistency
         const currentCache = (await chrome.storage.local.get('mpv_playback_cache')).mpv_playback_cache || {};
@@ -688,7 +688,7 @@ export async function handleUpdateItemResumeTime(data) {
         for (let item of folder.playlist) {
             if (item.id === itemId) {
                 item.resume_time = resumeTime;
-                await storage.set(storageData);
+                await storage.set(storageData, folderId);
                 break;
             }
         }
@@ -741,8 +741,9 @@ export async function handleUpdateItemMarkedAsWatched(data) {
         const folder = storageData.folders[folderId];
         for (let item of folder.playlist) {
             if (item.id === itemId) {
+                item.url = item.url; // No-op to trigger change detection if needed? No, just keep consistency.
                 item.marked_as_watched = markedAsWatched;
-                await storage.set(storageData);
+                await storage.set(storageData, folderId);
                 
                 // Broadcast update so all UI instances refresh (Tabs + Popup)
                 const playbackState = await getVisualPlaybackState(folderId, folder.playlist);
@@ -816,7 +817,7 @@ export function handleSessionRestored(request) {
                 // If the native host identified a different item, sync our storage
                 if (result.lastPlayedId && result.lastPlayedId !== folder.last_played_id) {
                     folder.last_played_id = result.lastPlayedId;
-                    storage.set(storageData); // Save async
+                    storage.set(storageData, result.folderId); // Save async
                 }
 
                 broadcastToTabs({ 

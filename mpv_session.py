@@ -337,8 +337,8 @@ class MpvSessionManager:
                         logging.info(f"[PY][Session] Restore: Terminal wrapper PID {pid} is gone, but MPV PID {actual_mpv_pid} is alive. Updating.")
                 
                 if is_alive:
-                    all_folders = self.get_all_folders_from_file()
-                    folder_data = all_folders.get(owner_folder_id)
+                    import file_io
+                    folder_data = file_io.get_folder_data(owner_folder_id)
                     if not folder_data:
                         raise RuntimeError(f"Could not find data for restored folder '{owner_folder_id}'.")
 
