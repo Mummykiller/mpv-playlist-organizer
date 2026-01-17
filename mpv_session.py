@@ -637,7 +637,8 @@ class MpvSessionManager:
         # Calculate Smart Resume Index EARLY
         playlist_start_index = 0
         if settings.get("enable_smart_resume", True):
-            last_id = file_io.get_all_folders_from_file().get(folder_id, {}).get("last_played_id")
+            # Optimization: Use get_index() instead of get_all_folders_from_file() to save I/O
+            last_id = file_io.get_index().get(folder_id, {}).get("last_played_id")
             for idx, item in enumerate(_url_items_list):
                 if item.get('id') == last_id:
                     playlist_start_index = idx

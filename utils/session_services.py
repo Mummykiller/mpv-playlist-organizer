@@ -245,13 +245,16 @@ class EnrichmentService:
                         }
                         session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
 
-                # 2. Sequential Enrichment
-                essential_flags = services.get_essential_ytdlp_flags()
-                for idx, item in enumerate(url_items):
-                    if idx == start_index or not session.is_alive: continue
+                # 2. Parallel Enrichment
+                logging.info(f"[PY][Session] Background: Starting parallel enrichment for {len(url_items)} items.")
+                from concurrent.futures import ThreadPoolExecutor
+                
+                def enrich_and_sync(idx_item_tuple):
+                    idx, item = idx_item_tuple
+                    if idx == start_index or not session.is_alive: return
                     
                     enriched_list = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings)
-                    if not enriched_list: continue
+                    if not enriched_list: return
                     enriched = enriched_list[0]
                     
                     target_url = sanitize_url(enriched['url'])
@@ -263,6 +266,7 @@ class EnrichmentService:
                         separator = "#" if "#" not in target_url else "&"
                         target_url = f"{target_url}{separator}mpv_organizer_id={enriched['id']}"
 
+                    essential_flags = services.get_essential_ytdlp_flags()
                     raw_opts = enriched.get('ytdl_raw_options')
                     if enriched.get('cookies_browser'):
                          browser_opt = f"cookies-from-browser={enriched['cookies_browser']}"
@@ -297,13 +301,19 @@ class EnrichmentService:
                         "marked_as_watched": enriched.get('marked_as_watched', False),
                         "targeted_defaults": settings.get('targeted_defaults', 'none')
                     }
-                    session.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options), str(idx)]})
-                    session.ipc_manager.send({"command": ["set_property", f"playlist/{idx}/url", target_url]})
+                    
+                    if session.ipc_manager and session.ipc_manager.is_connected():
+                        session.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options), str(idx)]})
+                        session.ipc_manager.send({"command": ["set_property", f"playlist/{idx}/url", target_url]})
                     
                     if idx < len(session.playlist): 
                         session.playlist[idx].update(enriched)
-                    
-                    time.sleep(0.05)
+
+                # Use 5 workers for background enrichment to balance speed and system load
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    list(executor.map(enrich_and_sync, enumerate(url_items)))
+                
+                logging.info("[PY][Session] Background: Parallel enrichment complete.")
             except Exception as e:
                 logging.error(f"[PY][Session] Background task error: {e}", exc_info=True)
 
