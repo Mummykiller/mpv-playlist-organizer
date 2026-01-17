@@ -318,8 +318,8 @@ export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
 }
 
 export async function handleGetPlaylist(request) {
-    const data = await storage.get();
-    const folder = data.folders[request.folderId] || { playlist: [], last_played_id: null };
+    // Optimization: Use getFolder to avoid loading the entire library
+    const { folder, settings } = await storage.getFolder(request.folderId);
     
     // Check playback status to get accurate active/paused state
     const statusResponse = await callNativeHost({ action: 'get_playback_status' }).catch(() => ({}));

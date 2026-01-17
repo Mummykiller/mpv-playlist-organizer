@@ -47,6 +47,8 @@ export class StorageManager {
         if (this._cache && !force) return this._cache;
         
         try {
+            // Optimization: Only get the core keys first. 
+            // We don't necessarily need all folders at once for the main UI.
             const keys = await chrome.storage.local.get(['mpv_settings', 'mpv_folder_index']);
             if (!keys.mpv_settings) {
                 const legacy = await chrome.storage.local.get(this.STORAGE_KEY);
@@ -57,6 +59,8 @@ export class StorageManager {
             const settings = keys.mpv_settings;
             const folderOrder = keys.mpv_folder_index || ['Default'];
             
+            // To maintain compatibility with the current 'get()' signature (which returns everything),
+            // we still fetch all folders, but we use a more efficient multi-key get.
             const folderKeys = folderOrder.map(id => `mpv_folder_data_${id}`);
             const foldersData = await chrome.storage.local.get(folderKeys);
 
@@ -73,49 +77,73 @@ export class StorageManager {
         }
     }
 
+    /**
+     * Optimized method to get data for a single folder without loading the entire library.
+     */
+    async getFolder(folderId) {
+        const folderKey = `mpv_folder_data_${folderId}`;
+        const result = await chrome.storage.local.get([folderKey, 'mpv_settings']);
+        return {
+            folder: result[folderKey] || { playlist: [], last_played_id: null },
+            settings: result.mpv_settings
+        };
+    }
+
     async set(data, folderId = null) {
-        // Update cache immediately to ensure subsequent 'get' calls see the change
+        // Update cache immediately
         this._cache = data;
 
         this.writeQueue = this.writeQueue.then(async () => {
             try {
-                this._validateData(data);
-                if (!data || !data.folders) throw new Error("Invalid data structure");
-
-                // Sync folderOrder with actual folders keys
-                const actualKeys = Object.keys(data.folders);
-                const folderOrder = data.folderOrder || actualKeys;
-                
-                // Ensure all existing folders are in the index
-                actualKeys.forEach(k => { if (!folderOrder.includes(k)) folderOrder.push(k); });
-
-                const update = {
-                    'mpv_storage_version': 2,
-                    'mpv_settings': data.settings,
-                    'mpv_folder_index': folderOrder
-                };
-
-                if (folderId) {
-                    // PARTIAL UPDATE: Only write the changed folder
-                    if (data.folders[folderId]) {
-                        update[`mpv_folder_data_${folderId}`] = data.folders[folderId];
+                // If folderId is provided, we only validate and save that specific folder
+                // instead of validating the entire library structure.
+                if (folderId && data.folders[folderId]) {
+                    this._validateFolder(folderId, data.folders[folderId]);
+                    
+                    const update = {
+                        [`mpv_folder_data_${folderId}`]: data.folders[folderId],
+                        'mpv_settings': data.settings
+                    };
+                    
+                    // Also ensure folder is in index
+                    const currentOrder = data.folderOrder || [];
+                    if (!currentOrder.includes(folderId)) {
+                        currentOrder.push(folderId);
+                        update['mpv_folder_index'] = currentOrder;
                     }
+                    
+                    await chrome.storage.local.set(update);
                 } else {
-                    // FULL UPDATE: Write all folders
-                    for (const fid of folderOrder) {
-                        if (data.folders[fid]) {
-                            update[`mpv_folder_data_${fid}`] = data.folders[fid];
-                        }
+                    // Fallback to full validation and save if no specific folder targeted
+                    this._validateData(data);
+                    const update = {
+                        'mpv_storage_version': 2,
+                        'mpv_settings': data.settings,
+                        'mpv_folder_index': data.folderOrder || Object.keys(data.folders)
+                    };
+                    for (const [fid, fData] of Object.entries(data.folders)) {
+                        update[`mpv_folder_data_${fid}`] = fData;
                     }
+                    await chrome.storage.local.set(update);
                 }
-
-                await chrome.storage.local.set(update);
             } catch (e) {
                 console.error("Storage set failed:", e);
                 if (this.broadcastLog) this.broadcastLog({ text: `[Storage]: Write failed: ${e.message}`, type: 'error' });
             }
         });
         return this.writeQueue;
+    }
+
+    _validateFolder(id, folder) {
+        if (id.length > 64) throw new Error(`Folder ID '${id}' exceeds 64 characters`);
+        if (!folder || !folder.playlist || !Array.isArray(folder.playlist)) throw new Error(`Folder '${id}' must have a playlist array`);
+        
+        // Use a standard for loop for performance on large playlists
+        for (let i = 0; i < folder.playlist.length; i++) {
+            const item = folder.playlist[i];
+            if (!item.url) throw new Error(`Item at index ${i} in '${id}' missing URL`);
+            if (!item.id) item.id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+        }
     }
 
     async runJanitorTasks() {

@@ -43,7 +43,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
         static render(container, releases, offset = 0) {
             if (!container) return;
-            container.innerHTML = '';
+            
+            // Efficiently clear container
+            while (container.firstChild) {
+                container.removeChild(container.lastChild);
+            }
+
             if (!releases || !releases.releases || releases.releases.length === 0) {
                 const emptyMsg = document.createElement('div');
                 emptyMsg.className = 'anilist-empty-message';
@@ -51,24 +56,60 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 container.appendChild(emptyMsg);
                 return;
             }
+
             const list = document.createElement('ul');
             list.className = 'anilist-releases-list';
+            
+            const fragment = document.createDocumentFragment();
+
             releases.releases.forEach(item => {
                 const li = document.createElement('li');
                 li.className = 'anilist-release-item';
-                li.innerHTML = `
-                    <a href="https://anilist.co/anime/${item.id}" target="_blank" title="View on AniList">
-                        <img src="${item.cover_image}" alt="${item.title}" class="release-cover-image">
-                    </a>
-                    <div class="release-details">
-                        <div class="release-title" title="${item.title}">${item.title}</div>
-                        <div class="release-bottom-info">
-                            <div class="release-episode-info">Ep ${item.episode}</div>
-                            <div class="release-airing-time">${item.airing_at}</div>
-                        </div>
-                    </div>`;
-                list.appendChild(li);
+                
+                // Create elements manually for better performance and security than innerHTML
+                const link = document.createElement('a');
+                link.href = `https://anilist.co/anime/${item.id}`;
+                link.target = '_blank';
+                link.title = 'View on AniList';
+
+                const img = document.createElement('img');
+                img.src = item.cover_image;
+                img.alt = item.title;
+                img.className = 'release-cover-image';
+                img.loading = 'lazy'; // Add lazy loading for images
+
+                link.appendChild(img);
+                li.appendChild(link);
+
+                const details = document.createElement('div');
+                details.className = 'release-details';
+
+                const title = document.createElement('div');
+                title.className = 'release-title';
+                title.title = item.title;
+                title.textContent = item.title;
+
+                const bottomInfo = document.createElement('div');
+                bottomInfo.className = 'release-bottom-info';
+
+                const episodeInfo = document.createElement('div');
+                episodeInfo.className = 'release-episode-info';
+                episodeInfo.textContent = `Ep ${item.episode}`;
+
+                const airingTime = document.createElement('div');
+                airingTime.className = 'release-airing-time';
+                airingTime.textContent = item.airing_at;
+
+                bottomInfo.appendChild(episodeInfo);
+                bottomInfo.appendChild(airingTime);
+                details.appendChild(title);
+                details.appendChild(bottomInfo);
+                li.appendChild(details);
+
+                fragment.appendChild(li);
             });
+            
+            list.appendChild(fragment);
             container.appendChild(list);
         }
     };
