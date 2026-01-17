@@ -500,7 +500,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     function renderPlaylist(playlist, lastPlayedId, isFolderActive = false, isPaused = false, needsAppend = false) {
         const oldItemCount = playlistContainer.querySelectorAll('.list-item').length;
         const scrollPosition = playlistContainer.scrollTop;
-        playlistContainer.innerHTML = ''; // Clear current content
+        
+        // Efficiently clear container
+        while (playlistContainer.firstChild) {
+            playlistContainer.removeChild(playlistContainer.lastChild);
+        }
 
         // Update the play button based on current playback state
         if (miniPlayBtn) {
@@ -519,6 +523,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const prefs = prefsResponse?.preferences || {};
                 const highlightEnabled = prefs.enable_active_item_highlight ?? true;
                 const showWatchedGUI = prefs.show_watched_status_gui ?? true;
+                
+                const fragment = document.createDocumentFragment();
 
                 playlist.forEach((item, index) => {
                     const itemDiv = document.createElement('div');
@@ -552,12 +558,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const indexSpan = document.createElement('span');
                     indexSpan.className = 'url-index';
                     indexSpan.textContent = `${index + 1}.`;
+                    itemDiv.appendChild(indexSpan);
 
                     const urlSpan = document.createElement('span');
                     urlSpan.className = 'url-text';
                     _formatTitle(urlSpan, item); // Use the title formatting function
-
-                    itemDiv.append(indexSpan);
 
                     // --- Watched Status Checkbox (Popup Controller) ---
                     if (showWatchedGUI && (item.url.includes('youtube.com/') || item.url.includes('youtu.be/'))) {
@@ -587,17 +592,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                         itemDiv.appendChild(watchedCheckbox);
                     }
 
-                    itemDiv.append(urlSpan);
+                    itemDiv.appendChild(urlSpan);
 
                     const removeBtn = document.createElement('button');
                     removeBtn.className = 'btn-remove-item';
                     removeBtn.dataset.index = index;
                     removeBtn.title = 'Remove Item';
-                    removeBtn.innerHTML = '&times;';
+                    removeBtn.textContent = '×';
                     itemDiv.appendChild(removeBtn);
 
-                    playlistContainer.appendChild(itemDiv);
+                    fragment.appendChild(itemDiv);
                 });
+                
+                playlistContainer.appendChild(fragment);
 
                 // Post-render scroll logic
                 const newItemCount = playlist.length;

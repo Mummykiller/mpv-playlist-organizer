@@ -35,12 +35,21 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                 this.minimizedPlayBtn.classList.add('with-counter');
             }
             if (!this.fullContainer) return;
+
             const oldItemCount = this.fullContainer.querySelectorAll('.list-item').length;
             const scrollPosition = this.fullContainer.scrollTop;
-            this.fullContainer.innerHTML = '';
+            
+            // Clear container efficiently
+            while (this.fullContainer.firstChild) {
+                this.fullContainer.removeChild(this.fullContainer.lastChild);
+            }
+
             if (playlist && playlist.length > 0) {
                 const highlightEnabled = this.controller.state.state.settings?.enable_active_item_highlight ?? true;
                 const showWatchedGUI = this.controller.state.state.settings?.show_watched_status_gui ?? true;
+                
+                // Use DocumentFragment to minimize reflows during bulk DOM updates
+                const fragment = document.createDocumentFragment();
 
                 playlist.forEach((item, index) => {
                     const itemDiv = document.createElement('div');
@@ -52,9 +61,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     itemDiv.title = item.url;
                     itemDiv.dataset.url = item.url;
                     itemDiv.dataset.title = item.title;
-                    itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
+                    itemDiv.dataset.id = item.id || "";
 
-                    // 1. Copy URL Button (Now at the start)
+                    // 1. Copy URL Button
                     if (this.controller.state.state.settings.show_copy_title_button) {
                         const copyBtn = document.createElement('button');
                         copyBtn.className = 'btn-copy-item';
@@ -67,12 +76,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     const indexSpan = document.createElement('span');
                     indexSpan.className = 'url-index';
                     indexSpan.textContent = `${index + 1}.`;
+                    itemDiv.appendChild(indexSpan);
 
                     const urlSpan = document.createElement('span');
                     urlSpan.className = 'url-text';
                     this._formatTitle(urlSpan, item);
-
-                    itemDiv.append(indexSpan);
 
                     // --- Watched Status Checkbox ---
                     if (showWatchedGUI && (item.url.includes('youtube.com/') || item.url.includes('youtu.be/'))) {
@@ -89,23 +97,26 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                         itemDiv.appendChild(watchedCheckbox);
                     }
 
-                    itemDiv.append(urlSpan);
+                    itemDiv.appendChild(urlSpan);
     
                     const removeBtn = document.createElement('button');
                     removeBtn.className = 'btn-remove-item';
                     removeBtn.dataset.index = index;
                     removeBtn.title = 'Remove Item';
-                    removeBtn.innerHTML = '&times;';
+                    removeBtn.textContent = '×';
                     itemDiv.appendChild(removeBtn);
 
-                    this.fullContainer.appendChild(itemDiv);
+                    fragment.appendChild(itemDiv);
                 });
+                
+                this.fullContainer.appendChild(fragment);
             } else {
                 const placeholder = document.createElement('p');
                 placeholder.id = 'playlist-placeholder';
                 placeholder.textContent = 'Playlist is empty.';
                 this.fullContainer.appendChild(placeholder);
             }
+            
             const newItemCount = playlist ? playlist.length : 0;
             if (newItemCount > oldItemCount && this.fullContainer.scrollHeight > this.fullContainer.clientHeight) {
                 this.fullContainer.scrollTop = this.fullContainer.scrollHeight;

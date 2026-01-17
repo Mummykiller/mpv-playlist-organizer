@@ -50,8 +50,65 @@ def get_gpu_vendor():
     except: pass
     return "unknown"
 
-def sanitize_url(url):
-    return file_io.sanitize_string(url, is_filename=False)
+def get_mark_watched(item, settings):
+    """Normalizes the mark_watched preference for an item."""
+    val = item.get('mark_watched')
+    if val is None:
+        val = settings.get('yt_mark_watched', True)
+    if isinstance(val, str):
+        return val.lower() in ("true", "yes", "1")
+    return bool(val)
+
+def construct_lua_options(item, settings, script_dir, index=None):
+    """
+    Centralized helper to construct the options dictionary passed to adaptive_headers.lua.
+    Ensures all metadata and networking overrides are consistent.
+    """
+    essential_flags = get_essential_ytdlp_flags(settings)
+    raw_opts = item.get('ytdl_raw_options')
+    
+    # Support Direct Browser Access
+    if item.get('cookies_browser'):
+         browser_opt = f"cookies-from-browser={item['cookies_browser']}"
+         raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
+
+    final_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
+    
+    item_url = sanitize_url(item.get('original_url') or item.get('url'))
+    
+    lua_options = {
+        "id": item.get('id'), 
+        "title": item.get('title'),
+        "headers": item.get('headers'),
+        "ytdl_raw_options": final_opts,
+        "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
+        "ytdl_format": item.get('ytdl_format'),
+        "ffmpeg_path": settings.get('ffmpeg_path'),
+        "original_url": item_url,
+        "cookies_file": item.get('cookies_file'),
+        "cookies_browser": item.get('cookies_browser'),
+        "disable_http_persistent": item.get('disable_http_persistent', False),
+        "disable_network_overrides": settings.get('disable_network_overrides', False),
+        "http_persistence": settings.get('http_persistence', 'auto'),
+        "enable_reconnect": settings.get('enable_reconnect', True),
+        "reconnect_delay": settings.get('reconnect_delay', 4),
+        "demuxer_max_bytes": settings.get('demuxer_max_bytes', '1G'),
+        "demuxer_max_back_bytes": settings.get('demuxer_max_back_bytes', '500M'),
+        "cache_secs": settings.get('cache_secs', 500),
+        "demuxer_readahead_secs": settings.get('demuxer_readahead_secs', 500),
+        "stream_buffer_size": settings.get('stream_buffer_size', '10M'),
+        "resume_time": item.get('resume_time'),
+        "project_root": script_dir,
+        "mark_watched": get_mark_watched(item, settings),
+        "marked_as_watched": item.get('marked_as_watched', False),
+        "targeted_defaults": settings.get('targeted_defaults', 'none')
+    }
+    
+    # If precise resume is disabled globally, don't pass it to Lua
+    if not settings.get('enable_precise_resume', True):
+        lua_options["resume_time"] = None
+        
+    return lua_options, item_url
 
 # --- Dependency Checking & Updating ---
 
