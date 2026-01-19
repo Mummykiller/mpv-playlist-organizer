@@ -1,595 +1,615 @@
 :root {
-    /* Default values for AniList image size */
-    /* This is now the base width of the item container, controlled by the slider */
-    --anilist-item-width: 50px;
-    --anilist-image-height: 70px;
-    /* Default values for AniList text size, adjusted by JS */
-    --anilist-title-font-size: 16px;
-    --anilist-info-font-size: 14px;
+	/* Default values for AniList image size */
+	/* This is now the base width of the item container, controlled by the slider */
+	--anilist-item-width: 50px;
+	--anilist-image-height: 70px;
+	/* Default values for AniList text size, adjusted by JS */
+	--anilist-title-font-size: 16px;
+	--anilist-info-font-size: 14px;
 
-    /* Slick, Modern & Dark Palette */
-    --bg-primary: #111214;
-    --bg-secondary: #1d1f23;
-    --bg-tertiary: #2c2e33;
-    --border-primary: #33363b;
-    --text-primary: #e1e1e1;
-    --text-secondary: #9e9e9e;
-    --accent-primary: #5865f2;
-    --accent-primary-hover: #4f5bda;
-    --accent-danger: #ed4245;
-    --accent-danger-hover: #da3739;
-    --accent-success: #57F287;
-    --accent-inactive: #64748b; /* A greyish blue for inactive states */
-    --accent-export: #3498db;
-    --accent-export-hover: #2980b9;
-    --accent-import: #1abc9c;
-    --accent-import-hover: #16a085;
-    --accent-folder: #44484e;
-    --accent-folder-hover: #565b63;
-    --border-hover: #5865f2;
-    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    --font-mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
-    --radius: 6px;
-    --transition-speed: 0.15s;
+	/* Slick, Modern & Dark Palette */
+	--bg-primary: #111214;
+	--bg-secondary: #1d1f23;
+	--bg-tertiary: #2c2e33;
+	--border-primary: #33363b;
+	--text-primary: #e1e1e1;
+	--text-secondary: #9e9e9e;
+	--accent-primary: #5865f2;
+	--accent-primary-hover: #4f5bda;
+	--accent-danger: #ed4245;
+	--accent-danger-hover: #da3739;
+	--accent-success: #57f287;
+	--accent-inactive: #64748b; /* A greyish blue for inactive states */
+	--accent-export: #3498db;
+	--accent-export-hover: #2980b9;
+	--accent-import: #1abc9c;
+	--accent-import-hover: #16a085;
+	--accent-folder: #44484e;
+	--accent-folder-hover: #565b63;
+	--border-hover: #5865f2;
+	--font-sans:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+		sans-serif;
+	--font-mono: "SF Mono", "Consolas", "Menlo", monospace;
+	--radius: 6px;
+	--transition-speed: 0.15s;
 }
 
 html {
-    background-color: transparent;
+	background-color: transparent;
 }
 
 body {
-    background-color: var(--bg-primary);
-    color: var(--text-primary);
-    font-family: var(--font-sans);
-    width: 600px;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    border-radius: var(--radius);
-    /* Removed overflow-y: auto to allow the popup to naturally expand and rely on browser's scrollbar if content exceeds screen height */
-    box-sizing: border-box;
+	background-color: var(--bg-primary);
+	color: var(--text-primary);
+	font-family: var(--font-sans);
+	width: 600px;
+	padding: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	border-radius: var(--radius);
+	/* Removed overflow-y: auto to allow the popup to naturally expand and rely on browser's scrollbar if content exceeds screen height */
+	box-sizing: border-box;
 }
 
 h1 {
-    font-size: 18px; /* Slightly larger for prominence */
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-    text-align: center;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--border-primary);
+	font-size: 18px; /* Slightly larger for prominence */
+	font-weight: 600;
+	color: var(--text-primary);
+	margin: 0;
+	text-align: center;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--border-primary);
 }
-h1 + .control-group { margin-top: 16px; } /* Add space after header */
+h1 + .control-group {
+	margin-top: 16px;
+} /* Add space after header */
 
 .control-group {
-    display: flex;
-    gap: 8px;
+	display: flex;
+	gap: 8px;
 }
 
-input, select {
-    flex-grow: 1;
-    box-sizing: border-box;
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-primary);
-    color: var(--text-primary);
-    border-radius: var(--radius);
-    padding: 10px;
-    font-size: 14px;
-    transition: all var(--transition-speed) ease;
-    min-width: 0; /* Allows the input to shrink below its default minimum size in a flex container */
+input,
+select {
+	flex-grow: 1;
+	box-sizing: border-box;
+	background-color: var(--bg-secondary);
+	border: 1px solid var(--border-primary);
+	color: var(--text-primary);
+	border-radius: var(--radius);
+	padding: 10px;
+	font-size: 14px;
+	transition: all var(--transition-speed) ease;
+	min-width: 0; /* Allows the input to shrink below its default minimum size in a flex container */
 }
 
 /* --- Remove arrows/spinners from number inputs --- */
 /* Chrome, Safari, Edge, Opera */
 input::-webkit-outer-spin-button,
 input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
+	-webkit-appearance: none;
+	margin: 0;
 }
 
 /* Firefox */
-input[type=number] {
-  -moz-appearance: textfield;
+input[type="number"] {
+	-moz-appearance: textfield;
 }
 
 select {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239e9e9e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    -webkit-appearance: none;
-    appearance: none;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239e9e9e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 12px center;
+	-webkit-appearance: none;
+	appearance: none;
 }
 
-input:hover, select:hover {
-    background-color: var(--bg-tertiary);
-    border-color: #555;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Subtle lift on hover */
+input:hover,
+select:hover {
+	background-color: var(--bg-tertiary);
+	border-color: #555;
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Subtle lift on hover */
 }
 
-input:focus-visible, select:focus-visible {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.3); /* Softer focus ring */
+input:focus-visible,
+select:focus-visible {
+	outline: none;
+	border-color: var(--accent-primary);
+	box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.3); /* Softer focus ring */
 }
 
 input::placeholder {
-    color: var(--text-secondary);
+	color: var(--text-secondary);
 }
 
 button {
-    color: #fff;
-    flex-shrink: 0;
-    border: none;
-    border-radius: var(--radius);
-    padding: 10px 14px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all var(--transition-speed) ease;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Subtle shadow for depth */
+	color: #fff;
+	flex-shrink: 0;
+	border: none;
+	border-radius: var(--radius);
+	padding: 10px 14px;
+	font-size: 14px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: all var(--transition-speed) ease;
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2); /* Subtle shadow for depth */
 }
 
 button:disabled {
-    background-color: #33363b;
-    cursor: not-allowed;
+	background-color: #33363b;
+	cursor: not-allowed;
 }
 #btn-create-folder,
 #btn-rename-folder,
 #mini-folder-management-controls #btn-mini-create-folder,
 #mini-folder-management-controls #btn-mini-rename-folder {
-    background-color: var(--accent-primary);
-    color: white; /* Ensure good contrast */
+	background-color: var(--accent-primary);
+	color: white; /* Ensure good contrast */
 }
 #btn-create-folder:hover,
 #btn-rename-folder:hover,
 #mini-folder-management-controls #btn-mini-create-folder:hover,
 #mini-folder-management-controls #btn-mini-rename-folder:hover {
-    background-color: var(--accent-primary-hover);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
+	background-color: var(--accent-primary-hover);
+	box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
 }
 
 #btn-remove-folder,
 #mini-folder-management-controls #btn-mini-remove-folder {
-    background-color: var(--accent-danger);
-    color: white; /* Ensure good contrast */
+	background-color: var(--accent-danger);
+	color: white; /* Ensure good contrast */
 }
 #btn-remove-folder:hover,
 #mini-folder-management-controls #btn-mini-remove-folder:hover {
-    background-color: var(--accent-danger-hover);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+	background-color: var(--accent-danger-hover);
+	box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
-#btn-rename-folder, #btn-remove-folder,
+#btn-rename-folder,
+#btn-remove-folder,
 #mini-folder-management-controls #btn-mini-rename-folder,
 #mini-folder-management-controls #btn-mini-remove-folder {
-    flex: 1; /* Make them fill the available space */
+	flex: 1; /* Make them fill the available space */
 }
 
 .custom-geometry-input {
-    width: 60px; /* Make them small */
-    text-align: center;
-    flex-grow: 0; /* Prevent these specific inputs from growing */
+	width: 60px; /* Make them small */
+	text-align: center;
+	flex-grow: 0; /* Prevent these specific inputs from growing */
 }
 
 .custom-geometry-container {
-    /* This group should appear below the main dropdown, so we adjust its top margin */
-    justify-content: flex-end; /* Align to the right side */
+	/* This group should appear below the main dropdown, so we adjust its top margin */
+	justify-content: flex-end; /* Align to the right side */
 }
 
 .custom-geometry-separator {
-    color: var(--text-secondary);
-    font-weight: 600;
-    align-self: center; /* Vertically center the 'x' */
+	color: var(--text-secondary);
+	font-weight: 600;
+	align-self: center; /* Vertically center the 'x' */
 }
 
 /* New styles for the image size slider */
 #anilist-image-height-slider {
-    flex-grow: 1;
-    -webkit-appearance: none;
-    appearance: none;
-    height: 8px;
-    background: var(--bg-secondary);
-    outline: none;
-    border-radius: 4px;
-    border: 1px solid var(--border-primary);
-    /* This makes the slider thumb appear to go all the way to the end */
-    margin: 0 -9px;
+	flex-grow: 1;
+	-webkit-appearance: none;
+	appearance: none;
+	height: 8px;
+	background: var(--bg-secondary);
+	outline: none;
+	border-radius: 4px;
+	border: 1px solid var(--border-primary);
+	/* This makes the slider thumb appear to go all the way to the end */
+	margin: 0 -9px;
 }
 #anilist-image-height-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 18px;
-    height: 18px;
-    background: var(--accent-primary);
-    cursor: pointer;
-    border-radius: 50%;
+	-webkit-appearance: none;
+	appearance: none;
+	width: 18px;
+	height: 18px;
+	background: var(--accent-primary);
+	cursor: pointer;
+	border-radius: 50%;
 }
 
 .current-value-display {
-    font-family: var(--font-mono);
-    font-size: 13px;
-    color: var(--text-secondary);
-    background-color: var(--bg-secondary);
-    padding: 0 8px;
-    border-radius: 4px;
-    align-self: center;
-    margin-left: 8px;
+	font-family: var(--font-mono);
+	font-size: 13px;
+	color: var(--text-secondary);
+	background-color: var(--bg-secondary);
+	padding: 0 8px;
+	border-radius: 4px;
+	align-self: center;
+	margin-left: 8px;
 }
 
 .icon-button {
-    padding: 6px;
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-primary);
-    color: var(--text-secondary);
+	padding: 6px;
+	background-color: var(--bg-secondary);
+	border: 1px solid var(--border-primary);
+	color: var(--text-secondary);
 }
 
 .icon-button.recording {
-    color: var(--accent-danger);
-    border-color: var(--accent-danger);
-    animation: pulse 1.5s infinite;
+	color: var(--accent-danger);
+	border-color: var(--accent-danger);
+	animation: pulse 1.5s infinite;
 }
 
 @keyframes pulse {
-    0% { opacity: 1; }
-    50% { opacity: 0.5; }
-    100% { opacity: 1; }
+	0% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.5;
+	}
+	100% {
+		opacity: 1;
+	}
 }
 
 .settings-input.recording-active {
-    border-color: var(--accent-danger);
-    color: var(--accent-danger);
-    font-weight: bold;
+	border-color: var(--accent-danger);
+	color: var(--accent-danger);
+	font-weight: bold;
 }
 
-.control-group, .setting-item {
-    transition: background-color 0.3s ease;
-    padding: 2px 4px;
-    border-radius: var(--radius);
+.control-group,
+.setting-item {
+	transition: background-color 0.3s ease;
+	padding: 2px 4px;
+	border-radius: var(--radius);
 }
 
 #status-message {
-    font-size: 13px;
-    text-align: left;
-    padding-bottom: 4px;
-    min-height: 1.2em;
-    transition: color 0.2s ease;
+	font-size: 13px;
+	text-align: left;
+	padding-bottom: 4px;
+	min-height: 1.2em;
+	transition: color 0.2s ease;
 }
 
 /* --- Styles for the Mini Controller View --- */
 #mini-controller-view {
-    /* This is set to flex in popup.js when active */
-    flex-direction: column;
-    gap: 12px; /* A bit less gap for a tighter look */
+	/* This is set to flex in popup.js when active */
+	flex-direction: column;
+	gap: 12px; /* A bit less gap for a tighter look */
 }
 
 #mini-controller-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: space-between; /* Distribute buttons evenly */
+	display: flex;
+	gap: 8px;
+	justify-content: space-between; /* Distribute buttons evenly */
 }
 
 #mini-controller-actions button {
-    flex-grow: 1; /* Make buttons take up equal space */
-    padding: 10px; /* Larger padding for better touch targets */
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-primary); /* Add a border for definition */
-    transition: all var(--transition-speed) ease; /* Add smooth transitions */
+	flex-grow: 1; /* Make buttons take up equal space */
+	padding: 10px; /* Larger padding for better touch targets */
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	background-color: var(--bg-secondary);
+	border: 1px solid var(--border-primary); /* Add a border for definition */
+	transition: all var(--transition-speed) ease; /* Add smooth transitions */
 }
 
 #mini-controller-actions button:hover {
-    background-color: var(--surface-hover-color);
-    border-color: var(--accent-inactive); /* Neutral highlight on hover */
+	background-color: var(--surface-hover-color);
+	border-color: var(--accent-inactive); /* Neutral highlight on hover */
 }
 
 #mini-controller-actions button:active {
-    transform: scale(0.96);
-    transition-duration: 0.05s;
+	transform: scale(0.96);
+	transition-duration: 0.05s;
 }
 
 /* Specific colors for key actions */
 /* Play button matches the main UI's primary action color */
 #mini-controller-actions #btn-mini-play {
-    background-color: var(--accent-inactive);
+	background-color: var(--accent-inactive);
 }
 #mini-controller-actions #btn-mini-play:hover {
-    background-color: #475569;
-    border-color: var(--accent-inactive);
-    box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6); /* Vibrant blue halo */
+	background-color: #475569;
+	border-color: var(--accent-inactive);
+	box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6); /* Vibrant blue halo */
 }
 
 /* State for when MPV is actually active (playing) */
 #mini-controller-actions #btn-mini-play.btn-playing {
-    background-color: var(--accent-primary) !important;
-    border-color: var(--accent-primary) !important;
-    box-shadow: 0 0 8px 0px var(--accent-primary) !important;
+	background-color: var(--accent-primary) !important;
+	border-color: var(--accent-primary) !important;
+	box-shadow: 0 0 8px 0px var(--accent-primary) !important;
 }
 
 #mini-controller-actions #btn-mini-play.btn-playing:hover {
-    background-color: var(--accent-primary-hover) !important;
-    box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6) !important; /* Vibrant blue glow */
+	background-color: var(--accent-primary-hover) !important;
+	box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6) !important; /* Vibrant blue glow */
 }
 
 /* Add button turns green when a URL is detected, providing clear feedback */
 #mini-controller-actions #btn-mini-add.stream-present {
-    background-color: var(--accent-success);
+	background-color: var(--accent-success);
 }
 #mini-controller-actions #btn-mini-add.stream-present:hover {
-    background-color: #45a062; /* A slightly darker green */
+	background-color: #45a062; /* A slightly darker green */
 }
 
 /* New: Style for when the URL is already in the playlist */
 #mini-controller-actions #btn-mini-add.url-in-playlist {
-    background-color: #f9a825; /* A noticeable yellow */
+	background-color: #f9a825; /* A noticeable yellow */
 }
 #mini-controller-actions #btn-mini-add.url-in-playlist:hover {
-    background-color: #f59f00; /* A slightly darker yellow */
+	background-color: #f59f00; /* A slightly darker yellow */
 }
 
 /* Clear and Close buttons use the danger color for destructive actions */
 #mini-controller-actions #btn-mini-clear,
 #mini-controller-actions #btn-mini-close-mpv {
-    background-color: var(--accent-danger);
+	background-color: var(--accent-danger);
 }
 #mini-controller-actions button:disabled {
-    cursor: default;
+	cursor: default;
 }
 
 #mini-item-count-container {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background-color: var(--bg-secondary);
-    padding: 10px; /* Symmetrical padding to align with select box */
-    border-radius: var(--radius);
-    border: 1px solid var(--border-primary);
-    color: var(--text-secondary);
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	background-color: var(--bg-secondary);
+	padding: 10px; /* Symmetrical padding to align with select box */
+	border-radius: var(--radius);
+	border: 1px solid var(--border-primary);
+	color: var(--text-secondary);
 }
 
 /* Style for the secondary action button (Base class) */
 .secondary-action {
-    background-color: var(--accent-primary);
-    border: none;
-    color: white; /* Ensure best contrast */
-    font-weight: 600;
-    /* Use flex: 1 to make buttons share space equally in their flex container. */
-    flex: 1;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-    transition: all var(--transition-speed) ease;
+	background-color: var(--accent-primary);
+	border: none;
+	color: white; /* Ensure best contrast */
+	font-weight: 600;
+	/* Use flex: 1 to make buttons share space equally in their flex container. */
+	flex: 1;
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+	transition: all var(--transition-speed) ease;
 }
 
 .secondary-action:hover {
-    background-color: var(--accent-primary-hover);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
-    transform: translateY(-1px);
+	background-color: var(--accent-primary-hover);
+	box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Lift on hover */
+	transform: translateY(-1px);
 }
 
 .secondary-action:active {
-    transform: translateY(0);
+	transform: translateY(0);
 }
 
 /* Semantic Overrides */
 .btn-export {
-    background-color: var(--accent-export) !important;
+	background-color: var(--accent-export) !important;
 }
 .btn-export:hover {
-    background-color: var(--accent-export-hover) !important;
+	background-color: var(--accent-export-hover) !important;
 }
 
 .btn-import {
-    background-color: var(--accent-import) !important;
+	background-color: var(--accent-import) !important;
 }
 .btn-import:hover {
-    background-color: var(--accent-import-hover) !important;
+	background-color: var(--accent-import-hover) !important;
 }
 
 .btn-open-folder {
-    background-color: var(--accent-folder) !important;
+	background-color: var(--accent-folder) !important;
 }
 .btn-open-folder:hover {
-    background-color: var(--accent-folder-hover) !important;
+	background-color: var(--accent-folder-hover) !important;
 }
 
 #btn-show-on-page-controller,
 #btn-hide-on-page-controller {
-    margin-top: 16px;
-    background: linear-gradient(135deg, var(--accent-primary) 0%, #434dbd 100%) !important;
-    color: white !important;
-    flex: initial;
-    padding: 12px;
-    font-size: 15px;
-    letter-spacing: 0.5px;
-    border: 1px solid rgba(0,0,0,0.1);
-    width: 100%;
-    box-sizing: border-box;
+	margin-top: 16px;
+	background: linear-gradient(
+		135deg,
+		var(--accent-primary) 0%,
+		#434dbd 100%
+	) !important;
+	color: white !important;
+	flex: initial;
+	padding: 12px;
+	font-size: 15px;
+	letter-spacing: 0.5px;
+	border: 1px solid rgba(0, 0, 0, 0.1);
+	width: 100%;
+	box-sizing: border-box;
 }
 
 #btn-show-on-page-controller:hover,
 #btn-hide-on-page-controller:hover {
-    background: linear-gradient(135deg, #6975f3 0%, #4f5bda 100%) !important;
-    box-shadow: 0 6px 16px rgba(88, 101, 242, 0.4);
-    transform: translateY(-2px);
+	background: linear-gradient(135deg, #6975f3 0%, #4f5bda 100%) !important;
+	box-shadow: 0 6px 16px rgba(88, 101, 242, 0.4);
+	transform: translateY(-2px);
 }
 
 /* Additional styles for folder management in mini-controller */
 #mini-folder-management-controls {
-    display: none; /* Hidden by default */
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px;
-    background-color: var(--bg-secondary);
-    border-radius: var(--radius);
-    border: 1px solid var(--border-primary);
+	display: none; /* Hidden by default */
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px;
+	background-color: var(--bg-secondary);
+	border-radius: var(--radius);
+	border: 1px solid var(--border-primary);
 }
 
-#mini-status-placeholder, #full-status-placeholder {
-    /* Reserve space for the status message to prevent layout shifts */
-    min-height: calc(1.2em + 8px);
+#mini-status-placeholder,
+#full-status-placeholder {
+	/* Reserve space for the status message to prevent layout shifts */
+	min-height: calc(1.2em + 8px);
 }
 
 /* --- Confirmation Modal --- */
 #popup-confirmation-modal {
-    position: fixed; /* Cover the entire popup viewport */
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: rgba(0, 0, 0, 0.8); /* Darker overlay for popups */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-    padding: 16px; /* Match body padding */
-    box-sizing: border-box;
+	position: fixed; /* Cover the entire popup viewport */
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background-color: rgba(0, 0, 0, 0.8); /* Darker overlay for popups */
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 100;
+	padding: 16px; /* Match body padding */
+	box-sizing: border-box;
 }
 
 #popup-confirmation-modal .modal-content {
-    background-color: var(--bg-secondary);
-    padding: 20px;
-    border-radius: var(--radius);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
-    text-align: center;
-    border: 1px solid var(--border-primary);
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    width: 100%; /* Take up available width within padding */
+	background-color: var(--bg-secondary);
+	padding: 20px;
+	border-radius: var(--radius);
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+	text-align: center;
+	border: 1px solid var(--border-primary);
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	width: 100%; /* Take up available width within padding */
 }
 
 #popup-confirmation-modal #popup-modal-message {
-    margin: 0;
-    font-size: 14px;
-    color: var(--text-primary);
-    line-height: 1.4;
+	margin: 0;
+	font-size: 14px;
+	color: var(--text-primary);
+	line-height: 1.4;
 }
 
 #popup-confirmation-modal .modal-actions {
-    display: flex;
-    justify-content: center;
-    gap: 12px;
+	display: flex;
+	justify-content: center;
+	gap: 12px;
 }
 
 #popup-confirmation-modal .modal-actions button {
-    background-color: var(--accent-danger);
+	background-color: var(--accent-danger);
 }
 #popup-confirmation-modal .modal-actions button:hover {
-    background-color: var(--accent-danger-hover);
+	background-color: var(--accent-danger-hover);
 }
 #popup-confirmation-modal .modal-actions #popup-modal-cancel-btn {
-    background-color: var(--bg-tertiary);
+	background-color: var(--bg-tertiary);
 }
 #popup-confirmation-modal .modal-actions #popup-modal-cancel-btn:hover {
-    background-color: var(--bg-tertiary);
+	background-color: var(--bg-tertiary);
 }
 
 /* --- Settings Search --- */
 .settings-search-container {
-    padding: 8px 0;
-    display: flex;
-    justify-content: center;
-    width: 100%;
+	padding: 8px 0;
+	display: flex;
+	justify-content: center;
+	width: 100%;
 }
 
 #settings-search-input {
-    width: 80%; /* Takes 80% width, leaving 10% on each side */
-    text-align: left;
-    padding-left: 35px;
-    background-image: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%239e9e9e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"%3E%3Ccircle cx="11" cy="11" r="8"/%3E%3Cline x1="21" y1="21" x2="16.65" y2="16.65"/%3E%3C/svg%3E');
-    background-repeat: no-repeat;
-    background-position: 10px center;
-    flex-grow: 0; /* Override flex-grow from .settings-input if any */
+	width: 80%; /* Takes 80% width, leaving 10% on each side */
+	text-align: left;
+	padding-left: 35px;
+	background-image: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%239e9e9e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"%3E%3Ccircle cx="11" cy="11" r="8"/%3E%3Cline x1="21" y1="21" x2="16.65" y2="16.65"/%3E%3C/svg%3E');
+	background-repeat: no-repeat;
+	background-position: 10px center;
+	flex-grow: 0; /* Override flex-grow from .settings-input if any */
 }
 
 /* --- Settings Controls --- */
 .settings-label {
-    white-space: normal; /* Allow text to wrap if it's too long */
-    align-self: center;
-    color: var(--text-secondary);
-    font-weight: 500;
-    font-size: 15px;
-    flex-basis: 150px;
-    flex-shrink: 1;
-    flex-grow: 1;
-    max-width: 75%; /* Ensure it doesn't collide with the 85% aligned controls */
-    line-height: 1.3;
-    padding-top: 2px;
-    padding-bottom: 2px;
+	white-space: normal; /* Allow text to wrap if it's too long */
+	align-self: center;
+	color: var(--text-secondary);
+	font-weight: 500;
+	font-size: 15px;
+	flex-basis: 150px;
+	flex-shrink: 1;
+	flex-grow: 1;
+	max-width: 75%; /* Ensure it doesn't collide with the 85% aligned controls */
+	line-height: 1.3;
+	padding-top: 2px;
+	padding-bottom: 2px;
 }
 
 /* New styles for stacked controls */
 .stacked-control {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px; /* A bit more space between label and inputs */
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px; /* A bit more space between label and inputs */
 }
 
 /* When a label is inside a stacked control, it shouldn't have a fixed width */
 .stacked-control > .settings-label {
-    flex-basis: auto;
+	flex-basis: auto;
 }
 
 .input-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%; /* Make the group take full width */
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%; /* Make the group take full width */
 }
 
 .settings-input {
-    text-align: center;
-    flex-grow: 1;
+	text-align: center;
+	flex-grow: 1;
 }
 
 /* --- Networking Section Adjustments --- */
 .networking-small-input {
-    max-width: 100px; /* Make inputs smaller */
-    margin-left: auto; /* Push to the right */
-    text-align: center; /* Center value text */
-    padding: 6px 10px; /* Tighter padding */
+	max-width: 100px; /* Make inputs smaller */
+	margin-left: auto; /* Push to the right */
+	text-align: center; /* Center value text */
+	padding: 6px 10px; /* Tighter padding */
 }
 
 .help-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    height: 16px;
-    background-color: var(--bg-tertiary);
-    color: var(--text-secondary);
-    border-radius: 50%;
-    font-size: 11px;
-    font-weight: 700;
-    margin-left: 4px;
-    cursor: help;
-    border: 1px solid var(--border-primary);
-    transition: all 0.2s ease;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	background-color: var(--bg-tertiary);
+	color: var(--text-secondary);
+	border-radius: 50%;
+	font-size: 11px;
+	font-weight: 700;
+	margin-left: 4px;
+	cursor: help;
+	border: 1px solid var(--border-primary);
+	transition: all 0.2s ease;
 }
 
 .help-icon:hover {
-    background-color: var(--accent-primary);
-    color: white;
-    border-color: var(--accent-primary);
+	background-color: var(--accent-primary);
+	color: white;
+	border-color: var(--accent-primary);
 }
 
 .control-group {
-    display: flex;
-    gap: 8px;
-    position: relative; /* For absolute positioning of children like checkboxes */
+	display: flex;
+	gap: 8px;
+	position: relative; /* For absolute positioning of children like checkboxes */
 }
 
 .settings-checkbox {
-    position: absolute;
-    left: 85%;
-    transform: translateX(-50%);
-    flex-grow: 0; /* Don't stretch */
-    align-self: center;
-    width: 18px;
-    height: 18px;
-    accent-color: var(--accent-primary); /* Style the checkbox color */
-    cursor: pointer;
+	position: absolute;
+	left: 85%;
+	transform: translateX(-50%);
+	flex-grow: 0; /* Don't stretch */
+	align-self: center;
+	width: 18px;
+	height: 18px;
+	accent-color: var(--accent-primary); /* Style the checkbox color */
+	cursor: pointer;
 }
 
 /* --- Generic Modals (Export, Import, Rename) --- */
@@ -597,876 +617,885 @@ button:disabled {
 #import-selection-modal,
 #export-all-modal,
 #rename-folder-modal {
-    position: fixed; /* Cover the entire popup viewport */
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: rgba(0, 0, 0, 0.8);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-    padding: 16px;
-    box-sizing: border-box;
+	position: fixed; /* Cover the entire popup viewport */
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background-color: rgba(0, 0, 0, 0.8);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 100;
+	padding: 16px;
+	box-sizing: border-box;
 }
 
 #export-filename-modal .modal-content,
 #import-selection-modal .modal-content,
 #export-all-modal .modal-content,
 #rename-folder-modal .modal-content {
-    background-color: var(--bg-secondary);
-    padding: 20px;
-    border-radius: var(--radius);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
-    text-align: center;
-    border: 1px solid var(--border-primary);
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    width: 100%; /* Take up available width within padding */
+	background-color: var(--bg-secondary);
+	padding: 20px;
+	border-radius: var(--radius);
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+	text-align: center;
+	border: 1px solid var(--border-primary);
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	width: 100%; /* Take up available width within padding */
 }
 
 #export-filename-modal .modal-content p,
 #import-selection-modal .modal-content p,
 #export-all-modal .modal-content p,
 #rename-folder-modal .modal-content p {
-    margin: 0;
-    font-size: 14px;
-    color: var(--text-primary);
-    line-height: 1.4;
+	margin: 0;
+	font-size: 14px;
+	color: var(--text-primary);
+	line-height: 1.4;
 }
 
 #export-filename-modal .modal-actions,
 #import-selection-modal .modal-actions,
 #export-all-modal .modal-actions,
 #rename-folder-modal .modal-actions {
-    display: flex;
-    justify-content: center;
-    gap: 12px;
+	display: flex;
+	justify-content: center;
+	gap: 12px;
 }
 
 #export-filename-modal #export-save-btn,
 #import-selection-modal #import-confirm-btn,
 #export-all-modal #export-all-confirm-btn,
 #rename-folder-modal #rename-save-btn {
-    background-color: var(--accent-primary);
+	background-color: var(--accent-primary);
 }
 #export-filename-modal #export-save-btn:hover,
 #import-selection-modal #import-confirm-btn:hover,
 #export-all-modal #export-all-confirm-btn:hover,
 #rename-folder-modal #rename-save-btn:hover {
-    background-color: var(--accent-primary-hover);
+	background-color: var(--accent-primary-hover);
 }
 #export-filename-modal #export-cancel-btn,
 #import-selection-modal #import-cancel-btn,
 #export-all-modal #export-all-cancel-btn,
 #rename-folder-modal #rename-cancel-btn {
-    background-color: var(--bg-tertiary);
+	background-color: var(--bg-tertiary);
 }
 #export-filename-modal #export-cancel-btn:hover,
 #import-selection-modal #import-cancel-btn:hover,
 #export-all-modal #export-all-cancel-btn:hover,
 #rename-folder-modal #rename-cancel-btn:hover {
-    background-color: #44484e; /* Slightly darker tertiary */
+	background-color: #44484e; /* Slightly darker tertiary */
 }
 
 /* --- Reorder Controls --- */
 .reorder-toggle-btn {
-    padding: 8px;
-    background-color: var(--surface-color);
-    flex-shrink: 0;
+	padding: 8px;
+	background-color: var(--surface-color);
+	flex-shrink: 0;
 }
 .reorder-toggle-btn:hover {
-    background-color: var(--bg-tertiary);
+	background-color: var(--bg-tertiary);
 }
 .reorder-toggle-btn.active {
-    background-color: var(--accent-primary);
-    color: white;
-    flex: 1; /* Make the button take full width when active */
+	background-color: var(--accent-primary);
+	color: white;
+	flex: 1; /* Make the button take full width when active */
 }
 .reorder-toggle-btn.active:hover {
-    background-color: var(--accent-primary-hover);
+	background-color: var(--accent-primary-hover);
 }
 
 .reorder-container {
-    border: 1px solid var(--border-primary);
-    border-radius: var(--radius);
-    padding: 8px;
-    background-color: var(--bg-secondary);
-    max-height: 150px;
-    overflow-y: auto;
-    margin-top: 8px;
+	border: 1px solid var(--border-primary);
+	border-radius: var(--radius);
+	padding: 8px;
+	background-color: var(--bg-secondary);
+	max-height: 150px;
+	overflow-y: auto;
+	margin-top: 8px;
 }
 
 .reorder-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+	list-style: none;
+	padding: 0;
+	margin: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
 }
 
 .reorder-item {
-    display: flex;
-    align-items: center;
-    padding: 8px;
-    background-color: var(--bg-tertiary);
-    border-radius: 4px;
-    border: 1px solid var(--border-primary);
-    color: var(--text-primary);
-    font-size: 14px;
+	display: flex;
+	align-items: center;
+	padding: 8px;
+	background-color: var(--bg-tertiary);
+	border-radius: 4px;
+	border: 1px solid var(--border-primary);
+	color: var(--text-primary);
+	font-size: 14px;
 }
 
-.reorder-item:active { cursor: grabbing; }
-.reorder-item.dragging { opacity: 0.5; background: #4f5bda; }
+.reorder-item:active {
+	cursor: grabbing;
+}
+.reorder-item.dragging {
+	opacity: 0.5;
+	background: #4f5bda;
+}
 
 /* New: Visual indicator for drop position */
 .reorder-item.drag-over {
-    border-top: 2px solid var(--accent-primary);
+	border-top: 2px solid var(--accent-primary);
 }
 
 .reorder-item .drag-handle {
-    margin-right: 8px;
-    color: var(--text-secondary);
-    pointer-events: none; /* Make sure the icon doesn't interfere with drag events */
+	margin-right: 8px;
+	color: var(--text-secondary);
+	pointer-events: none; /* Make sure the icon doesn't interfere with drag events */
 }
 
 /* --- Settings Sections (Collapsible) --- */
 .settings-section {
-    margin-top: 8px;
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-primary);
-    border-radius: var(--radius);
-    overflow: hidden; /* To keep border-radius on children */
-    transition: all var(--transition-speed) ease;
+	margin-top: 8px;
+	background-color: var(--bg-secondary);
+	border: 1px solid var(--border-primary);
+	border-radius: var(--radius);
+	overflow: hidden; /* To keep border-radius on children */
+	transition: all var(--transition-speed) ease;
 }
 
 .settings-section[open] {
-    background-color: var(--bg-primary);
-    border-color: var(--accent-primary);
+	background-color: var(--bg-primary);
+	border-color: var(--accent-primary);
 }
 
 .settings-section summary {
-    padding: 10px 12px;
-    font-weight: 600; /* Use medium weight instead of bold */
-    font-size: 16px; /* Make section headers slightly larger */
-    color: var(--text-primary);
-    cursor: pointer;
-    list-style: none; /* Remove default marker */
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    transition: background-color var(--transition-speed) ease;
-    position: relative;
+	padding: 10px 12px;
+	font-weight: 600; /* Use medium weight instead of bold */
+	font-size: 16px; /* Make section headers slightly larger */
+	color: var(--text-primary);
+	cursor: pointer;
+	list-style: none; /* Remove default marker */
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	transition: background-color var(--transition-speed) ease;
+	position: relative;
 }
 
 .settings-section summary span {
-    max-width: 75%;
-    white-space: normal;
-    line-height: 1.2;
-    padding-top: 2px;
-    padding-bottom: 2px;
+	max-width: 75%;
+	white-space: normal;
+	line-height: 1.2;
+	padding-top: 2px;
+	padding-bottom: 2px;
 }
 
 .settings-section summary::-webkit-details-marker {
-    display: none; /* Hide default marker in Webkit */
+	display: none; /* Hide default marker in Webkit */
 }
 
 .settings-section summary::after {
-    content: '';
-    width: 0;
-    height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 5px solid var(--text-secondary);
-    transition: transform var(--transition-speed) ease;
-    transform-origin: center;
+	content: "";
+	width: 0;
+	height: 0;
+	border-left: 5px solid transparent;
+	border-right: 5px solid transparent;
+	border-top: 5px solid var(--text-secondary);
+	transition: transform var(--transition-speed) ease;
+	transform-origin: center;
 }
 
 .settings-section[open] > summary::after {
-    transform: rotate(180deg);
+	transform: rotate(180deg);
 }
 
 .settings-section-content {
-    padding: 12px;
-    border-top: 1px solid var(--border-primary);
-    display: flex;
-    flex-direction: column;
-    gap: 4px; /* Reduced gap for more compactness */
+	padding: 12px;
+	border-top: 1px solid var(--border-primary);
+	display: flex;
+	flex-direction: column;
+	gap: 4px; /* Reduced gap for more compactness */
 }
 
 .settings-group-header {
-    margin: 20px 0 10px;
-    font-size: 0.9rem;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-    font-weight: 800;
-    color: var(--accent-primary);
-    background: linear-gradient(90deg, rgba(88, 101, 242, 0.12), transparent);
-    padding: 8px 16px;
-    border-left: 4px solid var(--accent-primary);
-    border-radius: 0 6px 6px 0;
-    display: block;
-    box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+	margin: 20px 0 10px;
+	font-size: 0.9rem;
+	text-transform: uppercase;
+	letter-spacing: 2px;
+	font-weight: 800;
+	color: var(--accent-primary);
+	background: linear-gradient(90deg, rgba(88, 101, 242, 0.12), transparent);
+	padding: 8px 16px;
+	border-left: 4px solid var(--accent-primary);
+	border-radius: 0 6px 6px 0;
+	display: block;
+	box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.1);
 }
 
 .settings-group-header:first-child {
-    margin-top: 4px;
+	margin-top: 4px;
 }
 
 .settings-compact-separator {
-    margin: 2px 0;
-    border: 0;
-    border-top: 1px solid var(--border-primary);
-    opacity: 0.15;
-    width: 100%;
+	margin: 2px 0;
+	border: 0;
+	border-top: 1px solid var(--border-primary);
+	opacity: 0.15;
+	width: 100%;
 }
 
 /* 2-Column Layout for wider popups */
 @media (min-width: 590px) {
-    .settings-section-content {
-        display: flex;
-        flex-direction: row;
-        flex-wrap: wrap;
-        gap: 0 20px;
-        padding: 16px;
-    }
+	.settings-section-content {
+		display: flex;
+		flex-direction: row;
+		flex-wrap: wrap;
+		gap: 0 20px;
+		padding: 16px;
+	}
 
-    /* Standard items take half width */
-    .settings-section-content > .control-group:not(.stacked-control),
-    .settings-section-content > .setting-item:not(.stacked-control) {
-        flex: 0 0 calc(50% - 10px);
-        box-sizing: border-box;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        padding: 6px 0;
-    }
+	/* Standard items take half width */
+	.settings-section-content > .control-group:not(.stacked-control),
+	.settings-section-content > .setting-item:not(.stacked-control) {
+		flex: 0 0 calc(50% - 10px);
+		box-sizing: border-box;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+		padding: 6px 0;
+	}
 
-    /* Stacked or complex items take full width */
-    .settings-section-content > .settings-group-header,
-    .settings-section-content > .settings-compact-separator,
-    .settings-section-content > .section-separator,
-    .settings-section-content > .stacked-control,
-    .settings-section-content > .setting-item.stacked-control,
-    .settings-section-content > small {
-        flex: 0 0 100%;
-        width: 100%;
-    }
+	/* Stacked or complex items take full width */
+	.settings-section-content > .settings-group-header,
+	.settings-section-content > .settings-compact-separator,
+	.settings-section-content > .section-separator,
+	.settings-section-content > .stacked-control,
+	.settings-section-content > .setting-item.stacked-control,
+	.settings-section-content > small {
+		flex: 0 0 100%;
+		width: 100%;
+	}
 
-    /* Hide the extra separator lines in 2-column mode to prevent clutter, 
+	/* Hide the extra separator lines in 2-column mode to prevent clutter, 
        as we use item borders instead */
-    .settings-section-content > .settings-compact-separator {
-        display: none;
-    }
+	.settings-section-content > .settings-compact-separator {
+		display: none;
+	}
 
-    /* Adjust checkbox position for better symmetry in 2-column mode */
-    .settings-section-content > .control-group .settings-checkbox {
-        left: 90%;
-    }
+	/* Adjust checkbox position for better symmetry in 2-column mode */
+	.settings-section-content > .control-group .settings-checkbox {
+		left: 90%;
+	}
 }
 
 .settings-placeholder {
-    display: flex;
-    flex-direction: column;
-    gap: 8px; /* Matches the gap between settings sections */
-    margin-top: 8px; /* Matches the margin-top of the first settings section */
+	display: flex;
+	flex-direction: column;
+	gap: 8px; /* Matches the gap between settings sections */
+	margin-top: 8px; /* Matches the margin-top of the first settings section */
 }
 
 /* --- AniList Releases Section --- */
 .anilist-releases-section {
-    margin-top: 12px; /* Add some space above */
+	margin-top: 12px; /* Add some space above */
 }
 
 .anilist-releases-section > summary {
-    /* Make it look like a full-width button */
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-primary);
-    color: var(--text-primary);
-    border-radius: var(--radius);
-    padding: 10px 14px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all var(--transition-speed) ease;
-    list-style: none; /* Remove default marker */
-    display: flex;
-    justify-content: center; /* Center text */
-    align-items: center; /* This will be overridden by space-between if the refresh button is present */
-    position: relative; /* For positioning the arrow */
+	/* Make it look like a full-width button */
+	background-color: var(--bg-secondary);
+	border: 1px solid var(--border-primary);
+	color: var(--text-primary);
+	border-radius: var(--radius);
+	padding: 10px 14px;
+	font-size: 14px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: all var(--transition-speed) ease;
+	list-style: none; /* Remove default marker */
+	display: flex;
+	justify-content: center; /* Center text */
+	align-items: center; /* This will be overridden by space-between if the refresh button is present */
+	position: relative; /* For positioning the arrow */
 }
 
 .anilist-releases-section > summary:hover {
-    background-color: var(--bg-tertiary);
-    border-color: var(--accent-primary);
+	background-color: var(--bg-tertiary);
+	border-color: var(--accent-primary);
 }
 
 .anilist-releases-section > summary {
-    /* This ensures the title and refresh button are spaced out */
-    justify-content: space-between;
+	/* This ensures the title and refresh button are spaced out */
+	justify-content: space-between;
 }
 
 .anilist-releases-section > summary::-webkit-details-marker {
-    display: none; /* Hide default marker in Webkit */
+	display: none; /* Hide default marker in Webkit */
 }
 
 /* Add an arrow indicator */
 .anilist-releases-section > summary::after {
-    content: '';
-    /* position: absolute; */ /* No longer needed with flexbox layout */
-    right: 16px;
-    transition: transform var(--transition-speed) ease;
-    transform-origin: center;
-    width: 0;
-    height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 5px solid var(--text-secondary);
+	content: "";
+	/* position: absolute; */ /* No longer needed with flexbox layout */
+	right: 16px;
+	transition: transform var(--transition-speed) ease;
+	transform-origin: center;
+	width: 0;
+	height: 0;
+	border-left: 5px solid transparent;
+	border-right: 5px solid transparent;
+	border-top: 5px solid var(--text-secondary);
 }
 
 .anilist-releases-section[open] > summary::after {
-    transform: rotate(180deg);
+	transform: rotate(180deg);
 }
 
 .anilist-releases-section[open] > summary {
-    /* When open, change the style slightly to connect to the content */
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-    background-color: var(--bg-tertiary);
-    border-color: var(--accent-primary);
+	/* When open, change the style slightly to connect to the content */
+	border-bottom-left-radius: 0;
+	border-bottom-right-radius: 0;
+	background-color: var(--bg-tertiary);
+	border-color: var(--accent-primary);
 }
 
 .anilist-nav-controls {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 0;
-    margin-bottom: 4px;
-    background-color: transparent; /* Subtle/Invisible background as requested */
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 0;
+	margin-bottom: 4px;
+	background-color: transparent; /* Subtle/Invisible background as requested */
 }
 
 .anilist-nav-btn {
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-primary);
-    color: var(--text-secondary);
-    padding: 4px 8px;
-    border-radius: 4px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-    min-width: 32px;
-    height: 28px;
-    box-shadow: none;
+	background-color: var(--bg-secondary);
+	border: 1px solid var(--border-primary);
+	color: var(--text-secondary);
+	padding: 4px 8px;
+	border-radius: 4px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all 0.2s ease;
+	min-width: 32px;
+	height: 28px;
+	box-shadow: none;
 }
 
 .anilist-nav-btn:hover:not(:disabled) {
-    background-color: var(--bg-tertiary);
-    color: var(--text-primary);
-    border-color: var(--accent-primary);
+	background-color: var(--bg-tertiary);
+	color: var(--text-primary);
+	border-color: var(--accent-primary);
 }
 
 .anilist-nav-btn:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
+	opacity: 0.3;
+	cursor: not-allowed;
 }
 
 .anilist-nav-btn.today-btn {
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    min-width: 80px;
+	font-size: 12px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	min-width: 80px;
 }
 
 .anilist-release-delay-info {
-    font-size: 13px;
-    color: var(--text-secondary);
-    text-align: center;
-    margin: 0 0 8px 0;
-    padding: 0 4px; /* Align with list items (container has 2px padding) */
+	font-size: 13px;
+	color: var(--text-secondary);
+	text-align: center;
+	margin: 0 0 8px 0;
+	padding: 0 4px; /* Align with list items (container has 2px padding) */
 }
 
 .anilist-releases-section > #anilist-releases-content {
-    /* This container holds the scrollable list */
-    max-height: 470px; /* Give it a max height to make it scrollable */
-    overflow-y: auto;
-    /* Add 2px horizontal padding. Items inside have 8px, matching the 10px on the note above. */
-    padding: 0 8px;
-    margin: 0 0 8px 0; /* Keep bottom margin for spacing, remove side margins. */
+	/* This container holds the scrollable list */
+	max-height: 470px; /* Give it a max height to make it scrollable */
+	overflow-y: auto;
+	/* Add 2px horizontal padding. Items inside have 8px, matching the 10px on the note above. */
+	padding: 0 8px;
+	margin: 0 0 8px 0; /* Keep bottom margin for spacing, remove side margins. */
 }
 
 /* --- Custom Scrollbar for AniList Section --- */
 .anilist-releases-section > #anilist-releases-content::-webkit-scrollbar {
-    width: 10px; /* Set the width of the scrollbar */
+	width: 10px; /* Set the width of the scrollbar */
 }
 
 .anilist-releases-section > #anilist-releases-content::-webkit-scrollbar-track {
-    /* This is the background of the scrollbar */
-    background: var(--bg-primary); /* Make it dark to match the main background */
-    border-radius: var(--radius);
+	/* This is the background of the scrollbar */
+	background: var(--bg-primary); /* Make it dark to match the main background */
+	border-radius: var(--radius);
 }
 
 .anilist-releases-section > #anilist-releases-content::-webkit-scrollbar-thumb {
-    /* This is the draggable handle */
-    background-color: var(--bg-tertiary); /* A visible but dark color */
-    border-radius: var(--radius);
-    border: 2px solid var(--bg-color); /* Creates padding around the thumb */
+	/* This is the draggable handle */
+	background-color: var(--bg-tertiary); /* A visible but dark color */
+	border-radius: var(--radius);
+	border: 2px solid var(--bg-color); /* Creates padding around the thumb */
 }
 
 .anilist-releases-list {
-    list-style: none;
-    padding: 0 0 8px 0; /* Reset left/right/top padding, keep bottom */
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+	list-style: none;
+	padding: 0 0 8px 0; /* Reset left/right/top padding, keep bottom */
+	margin: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
 }
 
 .anilist-release-item {
-    display: flex;
-    align-items: flex-start; /* Align items to the top */
-    gap: 8px;
-    padding: 6px;
-    background-color: var(--bg-tertiary);
-    border-radius: var(--radius);
-    text-decoration: none; /* Remove underline from the anchor tag */
+	display: flex;
+	align-items: flex-start; /* Align items to the top */
+	gap: 8px;
+	padding: 6px;
+	background-color: var(--bg-tertiary);
+	border-radius: var(--radius);
+	text-decoration: none; /* Remove underline from the anchor tag */
 }
 
 .anilist-release-item:hover {
-    background-color: var(--bg-secondary);
+	background-color: var(--bg-secondary);
 }
 
 .release-cover-image {
-    width: var(--anilist-item-width);
-    height: var(--anilist-image-height);
-    border-radius: 4px;
-    object-fit: cover;
+	width: var(--anilist-item-width);
+	height: var(--anilist-image-height);
+	border-radius: 4px;
+	object-fit: cover;
 }
 
 .release-details {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between; /* Push title to top, info to bottom */
-    overflow: hidden; /* Prevent long titles from breaking layout */
-    align-self: stretch; /* Make this container fill the item's height */
-    flex-grow: 1; /* Allow this container to fill the available space */
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between; /* Push title to top, info to bottom */
+	overflow: hidden; /* Prevent long titles from breaking layout */
+	align-self: stretch; /* Make this container fill the item's height */
+	flex-grow: 1; /* Allow this container to fill the available space */
 }
 
 .release-title {
-    font-size: var(--anilist-title-font-size);
-    font-weight: 500;
-    color: var(--text-primary);
-    white-space: normal; /* Allow wrapping */
-    overflow-wrap: break-word; /* Break long words if necessary */
-    line-height: 1.3; /* Add some line spacing for readability */
+	font-size: var(--anilist-title-font-size);
+	font-weight: 500;
+	color: var(--text-primary);
+	white-space: normal; /* Allow wrapping */
+	overflow-wrap: break-word; /* Break long words if necessary */
+	line-height: 1.3; /* Add some line spacing for readability */
 }
 
 .release-bottom-info {
-    display: flex;
-    flex-direction: column; /* Stack items vertically */
-    align-items: flex-start; /* Align items to the left */
-    gap: 2px; /* Reduce gap for stacked items */
+	display: flex;
+	flex-direction: column; /* Stack items vertically */
+	align-items: flex-start; /* Align items to the left */
+	gap: 2px; /* Reduce gap for stacked items */
 }
 
 .release-episode-info {
-    font-size: var(--anilist-info-font-size);
-    color: var(--text-secondary);
+	font-size: var(--anilist-info-font-size);
+	color: var(--text-secondary);
 }
 
 .release-airing-time {
-    font-size: var(--anilist-info-font-size);
-    font-weight: 600;
-    color: var(--accent-success);
+	font-size: var(--anilist-info-font-size);
+	font-weight: 600;
+	color: var(--accent-success);
 }
 
 .loading-spinner {
-    border: 4px solid var(--surface-hover-color);
-    border-top: 4px solid var(--accent-primary);
-    border-radius: 50%;
-    width: 30px;
-    height: 30px;
-    animation: spin 1s linear infinite;
-    margin: 20px auto;
+	border: 4px solid var(--surface-hover-color);
+	border-top: 4px solid var(--accent-primary);
+	border-radius: 50%;
+	width: 30px;
+	height: 30px;
+	animation: spin 1s linear infinite;
+	margin: 20px auto;
 }
 
 /* --- Styles for AniList Release Item Details --- */
 .release-bottom-info {
-    display: flex;
-    flex-direction: column; /* Stack items vertically */
-    align-items: flex-start; /* Align items to the left */
-    gap: 2px; /* Reduce gap for stacked items */
+	display: flex;
+	flex-direction: column; /* Stack items vertically */
+	align-items: flex-start; /* Align items to the left */
+	gap: 2px; /* Reduce gap for stacked items */
 }
 
 .release-episode-info {
-    font-size: var(--anilist-info-font-size);
-    color: var(--text-secondary);
+	font-size: var(--anilist-info-font-size);
+	color: var(--text-secondary);
 }
 
 .release-airing-time {
-    font-size: var(--anilist-info-font-size);
-    font-weight: 600;
-    color: var(--accent-success);
+	font-size: var(--anilist-info-font-size);
+	font-weight: 600;
+	color: var(--accent-success);
 }
 
 @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+	0% {
+		transform: rotate(0deg);
+	}
+	100% {
+		transform: rotate(360deg);
+	}
 }
 
 .spin-animation {
-    animation: spin 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+	animation: spin 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .section-reload-btn.reloading svg {
-    animation: spin 1s linear infinite;
-    color: var(--accent-success);
+	animation: spin 1s linear infinite;
+	color: var(--accent-success);
 }
 
 .section-reload-btn {
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    cursor: pointer;
-    padding: 4px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all var(--transition-speed) ease;
-    box-shadow: none;
-    margin-right: 8px; /* Space between icon and arrow */
-    opacity: 0.6;
+	background: none;
+	border: none;
+	color: var(--text-secondary);
+	cursor: pointer;
+	padding: 4px;
+	border-radius: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all var(--transition-speed) ease;
+	box-shadow: none;
+	margin-right: 8px; /* Space between icon and arrow */
+	opacity: 0.6;
 }
 
 .section-reload-btn:hover {
-    background-color: var(--bg-tertiary);
-    color: var(--accent-primary);
-    opacity: 1;
+	background-color: var(--bg-tertiary);
+	color: var(--accent-primary);
+	opacity: 1;
 }
 
 .header-actions {
-    position: absolute;
-    left: 85%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
+	position: absolute;
+	left: 85%;
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
 }
 
 /* --- AniList Refresh Button --- */
 .anilist-refresh-btn {
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    cursor: pointer;
-    padding: 4px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all var(--transition-speed) ease;
-    box-shadow: none;
+	background: none;
+	border: none;
+	color: var(--text-secondary);
+	cursor: pointer;
+	padding: 4px;
+	border-radius: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all var(--transition-speed) ease;
+	box-shadow: none;
 }
 
 .anilist-refresh-btn:hover {
-    background-color: var(--bg-tertiary);
-    color: var(--text-primary);
+	background-color: var(--bg-tertiary);
+	color: var(--text-primary);
 }
 
 /* --- Scraper Filter Settings --- */
 .filter-list-container {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 8px;
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-primary);
-    border-radius: var(--radius);
-    min-height: 34px;
-    margin-top: 4px;
-    width: 100%;
-    box-sizing: border-box;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 8px;
+	background-color: var(--bg-secondary);
+	border: 1px solid var(--border-primary);
+	border-radius: var(--radius);
+	min-height: 34px;
+	margin-top: 4px;
+	width: 100%;
+	box-sizing: border-box;
 }
 
 .filter-list-container.readonly {
-    background-color: var(--bg-primary);
-    border-style: dashed;
-    border-color: var(--border-primary);
+	background-color: var(--bg-primary);
+	border-style: dashed;
+	border-color: var(--border-primary);
 }
 
 .filter-pill {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background-color: var(--accent-primary);
-    color: white;
-    padding: 4px 10px;
-    border-radius: 16px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all var(--transition-speed) ease;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-    user-select: none; /* Prevent text selection on toggle */
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	background-color: var(--accent-primary);
+	color: white;
+	padding: 4px 10px;
+	border-radius: 16px;
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+	transition: all var(--transition-speed) ease;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+	user-select: none; /* Prevent text selection on toggle */
 }
 
 /* Custom Flags (Removable/Toggleable) - Using a distinct Blue/Cyan */
 #mpv-flags-list-container .filter-pill {
-    background-color: #00bcd4;
-    border: 1px solid #00acc1;
+	background-color: #00bcd4;
+	border: 1px solid #00acc1;
 }
 
 #mpv-flags-list-container .filter-pill:hover {
-    background-color: #26c6da;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+	background-color: #26c6da;
+	box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
 #mpv-flags-list-container .filter-pill.disabled {
-    background-color: var(--bg-tertiary);
-    color: var(--text-secondary);
-    text-decoration: line-through;
-    border-color: var(--border-primary);
-    opacity: 0.6;
+	background-color: var(--bg-tertiary);
+	color: var(--text-secondary);
+	text-decoration: line-through;
+	border-color: var(--border-primary);
+	opacity: 0.6;
 }
 
 /* Automatic Flags (Core Toggles) - Using Green */
 #automatic-mpv-flags-list-container .filter-pill {
-    background-color: #4caf50;
-    border: 1px solid #43a047;
+	background-color: #4caf50;
+	border: 1px solid #43a047;
 }
 
 #automatic-mpv-flags-list-container .filter-pill:hover {
-    background-color: #66bb6a;
+	background-color: #66bb6a;
 }
 
 #automatic-mpv-flags-list-container .filter-pill.disabled {
-    background-color: var(--bg-tertiary);
-    color: var(--text-secondary);
-    text-decoration: line-through;
-    border-color: var(--border-primary);
+	background-color: var(--bg-tertiary);
+	color: var(--text-secondary);
+	text-decoration: line-through;
+	border-color: var(--border-primary);
 }
 
 .filter-pill:active {
-    transform: translateY(0) scale(0.96);
-    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+	transform: translateY(0) scale(0.96);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 .filter-pill.readonly {
-    background-color: var(--bg-tertiary);
-    color: var(--text-secondary);
-    cursor: default;
-    box-shadow: none;
+	background-color: var(--bg-tertiary);
+	color: var(--text-secondary);
+	cursor: default;
+	box-shadow: none;
 }
 
 /* Networking Section Gray-out Effect */
 .settings-section-content.disabled-overlay {
-    opacity: 0.5;
-    pointer-events: none;
-    filter: grayscale(0.5);
+	opacity: 0.5;
+	pointer-events: none;
+	filter: grayscale(0.5);
 }
 
 .settings-section-content.disabled-overlay input,
 .settings-section-content.disabled-overlay select {
-    background-color: #1a1a1a !important;
+	background-color: #1a1a1a !important;
 }
 
 .setting-item > small {
-    font-size: 12px;
-    color: var(--text-secondary);
+	font-size: 12px;
+	color: var(--text-secondary);
 }
 
 .indent-setting {
-    margin-left: 20px;
-    border-left: 2px solid var(--border-primary);
-    padding-left: 12px;
+	margin-left: 20px;
+	border-left: 2px solid var(--border-primary);
+	padding-left: 12px;
 }
 
 /* --- New Playlist Styles for Popup --- */
 .playlist-container {
-    border: 1px solid var(--border-primary);
-    border-radius: var(--radius);
-    padding: 8px;
-    background-color: var(--bg-secondary);
-    max-height: 220px; /* Increased slightly */
-    overflow-y: auto;
-    margin-top: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+	border: 1px solid var(--border-primary);
+	border-radius: var(--radius);
+	padding: 8px;
+	background-color: var(--bg-secondary);
+	max-height: 220px; /* Increased slightly */
+	overflow-y: auto;
+	margin-top: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
 }
 
 .playlist-container .playlist-placeholder {
-    color: var(--text-secondary);
-    text-align: center;
-    margin: 8px 0;
-    font-size: 13px;
+	color: var(--text-secondary);
+	text-align: center;
+	margin: 8px 0;
+	font-size: 13px;
 }
 
 .playlist-container .list-item {
-    display: flex;
-    align-items: center;
-    padding: 8px;
-    background-color: var(--bg-tertiary);
-    border-radius: 4px;
-    border: 1px solid var(--border-primary);
-    color: var(--text-primary);
-    font-size: 13px;
-    cursor: grab;
-    transition: background-color var(--transition-speed) ease;
+	display: flex;
+	align-items: center;
+	padding: 8px;
+	background-color: var(--bg-tertiary);
+	border-radius: 4px;
+	border: 1px solid var(--border-primary);
+	color: var(--text-primary);
+	font-size: 13px;
+	cursor: grab;
+	transition: background-color var(--transition-speed) ease;
 }
 
 .playlist-container .list-item:hover {
-    background-color: #44484e;
-    border-color: var(--border-hover);
+	background-color: #44484e;
+	border-color: var(--border-hover);
 }
 
 .btn-copy-item {
-    width: 14px;
-    height: 14px;
-    padding: 0;
-    margin-right: 8px; /* Spacing before index */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    background-color: transparent;
-    border: none;
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: all 0.15s ease;
-    box-shadow: none;
+	width: 14px;
+	height: 14px;
+	padding: 0;
+	margin-right: 8px; /* Spacing before index */
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	background-color: transparent;
+	border: none;
+	color: var(--text-secondary);
+	cursor: pointer;
+	transition: all 0.15s ease;
+	box-shadow: none;
 }
 
 .btn-copy-item:hover {
-    color: var(--text-primary);
-    box-shadow: 0 0 6px 0 var(--accent-primary);
+	color: var(--text-primary);
+	box-shadow: 0 0 6px 0 var(--accent-primary);
 }
 
 /* --- Highlighting the active (last played) item --- */
 .playlist-container .list-item.active-item {
-    background-color: rgba(87, 242, 135, 0.1);
-    border-color: var(--accent-success);
-    box-shadow: inset 0 0 5px rgba(87, 242, 135, 0.2);
+	background-color: rgba(87, 242, 135, 0.1);
+	border-color: var(--accent-success);
+	box-shadow: inset 0 0 5px rgba(87, 242, 135, 0.2);
 }
 
 .playlist-container .list-item.active-item .url-index {
-    color: var(--accent-success);
-    font-weight: 700;
+	color: var(--accent-success);
+	font-weight: 700;
 }
 
 /* New style for last-played item when player is NOT active */
 .playlist-container .list-item.last-played-item .url-index {
-    color: var(--accent-primary);
-    font-weight: 700;
+	color: var(--accent-primary);
+	font-weight: 700;
 }
 
 .playlist-container .list-item.active-item:hover {
-    background-color: rgba(87, 242, 135, 0.2);
+	background-color: rgba(87, 242, 135, 0.2);
 }
 
 .playlist-container .list-item.dragging {
-    opacity: 0.5;
-    background: var(--accent-primary-hover);
+	opacity: 0.5;
+	background: var(--accent-primary-hover);
 }
 
 .playlist-container .list-item.drag-over {
-    border-top: 2px solid var(--accent-primary);
+	border-top: 2px solid var(--accent-primary);
 }
 
 .playlist-container .list-item .url-index {
-    color: var(--text-secondary);
-    margin-right: 8px;
-    font-family: var(--font-mono);
+	color: var(--text-secondary);
+	margin-right: 8px;
+	font-family: var(--font-mono);
 }
 
 .playlist-container .list-item .url-text {
-    flex-grow: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    text-align: left;
+	flex-grow: 1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	text-align: left;
 }
 
 .playlist-container .list-item .main-title-highlight {
-    color: var(--accent-success);
-    font-weight: 500;
+	color: var(--accent-success);
+	font-weight: 500;
 }
 
 .item-watched-checkbox {
-    margin: 0 8px 0 4px;
-    width: 14px;
-    height: 14px;
-    cursor: pointer;
-    flex-shrink: 0;
-    flex-grow: 0;
-    padding: 0;
+	margin: 0 8px 0 4px;
+	width: 14px;
+	height: 14px;
+	cursor: pointer;
+	flex-shrink: 0;
+	flex-grow: 0;
+	padding: 0;
 }
 
 .playlist-container .list-item .btn-remove-item {
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    font-size: 20px;
-    line-height: 1;
-    padding: 0 8px;
-    margin: -8px; /* Negative margin to increase click area */
-    cursor: pointer;
-    border-radius: 50%;
-    width: 30px;
-    height: 30px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all var(--transition-speed) ease;
-    box-shadow: none;
+	background: none;
+	border: none;
+	color: var(--text-secondary);
+	font-size: 20px;
+	line-height: 1;
+	padding: 0 8px;
+	margin: -8px; /* Negative margin to increase click area */
+	cursor: pointer;
+	border-radius: 50%;
+	width: 30px;
+	height: 30px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all var(--transition-speed) ease;
+	box-shadow: none;
 }
 
 .playlist-container .list-item .btn-remove-item:hover {
-    color: var(--text-primary);
-    background-color: var(--accent-danger);
+	color: var(--text-primary);
+	background-color: var(--accent-danger);
 }
 
 .import-options-container {
-    margin-top: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    border-top: 1px solid var(--border-color);
-    padding-top: 10px;
-    width: 100%;
+	margin-top: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	border-top: 1px solid var(--border-color);
+	padding-top: 10px;
+	width: 100%;
 }
 
 .import-options-container .settings-label {
-    margin: 0 !important;
-    padding: 4px 0 !important;
-    font-size: 14px !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important; /* CENTER THE TEXT */
-    font-weight: 500;
-    cursor: pointer;
-    width: 100% !important;
-    position: relative !important; /* ALLOW ABSOLUTE CHECKBOX */
-    flex: none !important;
-    color: var(--text-primary) !important;
+	margin: 0 !important;
+	padding: 4px 0 !important;
+	font-size: 14px !important;
+	display: flex !important;
+	align-items: center !important;
+	justify-content: center !important; /* CENTER THE TEXT */
+	font-weight: 500;
+	cursor: pointer;
+	width: 100% !important;
+	position: relative !important; /* ALLOW ABSOLUTE CHECKBOX */
+	flex: none !important;
+	color: var(--text-primary) !important;
 }
 
 .import-options-container input[type="checkbox"] {
-    position: absolute !important;
-    left: 20% !important; /* CHECKBOX AT 35% */
-    margin: 0 !important;
-    padding: 0 !important;
-    width: 15px !important;
-    height: 15px !important;
-    flex-grow: 0 !important;
-    cursor: pointer;
+	position: absolute !important;
+	left: 20% !important; /* CHECKBOX AT 35% */
+	margin: 0 !important;
+	padding: 0 !important;
+	width: 15px !important;
+	height: 15px !important;
+	flex-grow: 0 !important;
+	cursor: pointer;
 }
 
 .import-options-container p {
-    margin: 0 0 4px 0 !important;
-    font-size: 0.85em;
-    color: var(--text-secondary);
-    text-align: center !important; /* CENTER THE HEADER */
+	margin: 0 0 4px 0 !important;
+	font-size: 0.85em;
+	color: var(--text-secondary);
+	text-align: center !important; /* CENTER THE HEADER */
 }
