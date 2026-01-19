@@ -1,6 +1,5 @@
 import subprocess
 import shutil
-import logging
 import threading
 import sys
 import os
@@ -71,7 +70,7 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
                     if success:
                         item["marked_as_watched"] = True
                         needs_shard_save = True
-                        print(f"YouTube: Marked as watched.")
+                        print("YouTube: Marked as watched.")
                     else:
                         print(f"YouTube Error: {msg}")
                 else:

@@ -12,7 +12,6 @@ sys.dont_write_bytecode = True
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
 import time
-import urllib.request
 import shlex
 import re
 from utils import url_analyzer

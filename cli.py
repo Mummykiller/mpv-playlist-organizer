@@ -38,7 +38,7 @@ def _cli_play_folder(args):
     folder_info = folders_data.get(folder_id)
 
     if not folders_data:
-         print(f"Error: Data file not found or is empty. Please add an item in the extension first to create it.", file=sys.stderr)
+         print("Error: Data file not found or is empty. Please add an item in the extension first to create it.", file=sys.stderr)
          sys.exit(1)
 
     if folder_info is None:

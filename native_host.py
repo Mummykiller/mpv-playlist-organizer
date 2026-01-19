@@ -66,7 +66,6 @@ try:
     import threading
     import platform
     import re
-    import uuid # Added for UUID generation
     from logging.handlers import RotatingFileHandler
     import ctypes
 
@@ -151,7 +150,6 @@ try:
     root_logger.propagate = False
 
     from mpv_session import MpvSessionManager
-    from playlist_tracker import PlaylistTracker
     import cli
     import services
     from utils import ipc_utils
@@ -507,7 +505,7 @@ except Exception as e:
     if log_path_to_use:
         try:
             with open(log_path_to_use, "a", encoding="utf-8") as f:
-                f.write(f"---\n--- Native Host Crashed ---\n")
+                f.write("---\n--- Native Host Crashed ---\n")
                 f.write(f"Timestamp: {datetime.now().isoformat()}\n")
                 f.write(f"Error: {str(e)}\n\n")
                 f.write(traceback.format_exc())

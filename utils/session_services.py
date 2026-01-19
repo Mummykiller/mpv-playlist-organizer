@@ -17,7 +17,6 @@ import services
 import file_io
 
 def sanitize_url(url):
-    import file_io
     return file_io.sanitize_string(url, is_filename=False)
 
 class EnrichmentService:
@@ -345,7 +344,7 @@ class LauncherService:
                         for flag_file in flag_candidates:
                             if os.path.exists(flag_file):
                                 if getattr(self.session, 'manual_quit', False):
-                                    logging.info(f"Restored Watcher: Natural completion flag found, but manual_quit is TRUE. Ignoring flag.")
+                                    logging.info("Restored Watcher: Natural completion flag found, but manual_quit is TRUE. Ignoring flag.")
                                 else:
                                     try:
                                         with open(flag_file, 'r', encoding='utf-8') as f:

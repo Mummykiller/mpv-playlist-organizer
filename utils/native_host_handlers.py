@@ -4,7 +4,6 @@ import time
 import uuid
 import platform
 import subprocess
-import re 
 import sys 
 import threading
 import json
@@ -40,10 +39,10 @@ class HandlerManager:
         restored_data = self.mpv_session.restore()
         if restored_data and restored_data.get("token"):
             self.server_token = restored_data["token"]
-            logging.info(f"[PY] Restored existing session token.")
+            logging.info("[PY] Restored existing session token.")
         else:
             self.server_token = uuid.uuid4().hex # New random session token
-            logging.debug(f"[PY] Generated new session token.")
+            logging.debug("[PY] Generated new session token.")
 
     def _process_url_item(self, url_item, folder_id, all_folders):
         """
@@ -775,7 +774,7 @@ class HandlerManager:
 
                 # --- NEW: Check if playback was already handled directly (Standard Flow optimization) ---
                 if first_call_result.get("handled_directly"):
-                    logging.info(f"Step 1: Playback handled directly by Standard Flow. Skipping M3U server.")
+                    logging.info("Step 1: Playback handled directly by Standard Flow. Skipping M3U server.")
                     return first_call_result
 
                 enriched_m3u_content = first_call_result["enriched_m3u_content"]
