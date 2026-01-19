@@ -226,6 +226,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let folderToRename = null;
     let currentDetectedUrl = null;
+    let cachedPrefs = null;
 
     // Reorder Elements
     const reorderContainer = document.getElementById('reorder-container');
@@ -323,7 +324,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else {
             sendMessageAsync({ action: 'get_all_folder_ids' })
                 .then(processResponse)
-                .then(() => refreshPlaylist())
+                .then(() => {
+                    if (uiManager.isMiniView()) refreshPlaylist();
+                })
                 .catch(e => {
                     console.error("Failed to populate folder dropdowns:", e);
                     showStatus("Connection to background script lost.", true);
@@ -518,104 +521,101 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         if (playlist && playlist.length > 0) {
-            // Use storage directly or assume defaults for speed
-            sendMessageAsync({ action: 'get_ui_preferences' }).then(prefsResponse => {
-                const prefs = prefsResponse?.preferences || {};
-                const highlightEnabled = prefs.enable_active_item_highlight ?? true;
-                const showWatchedGUI = prefs.show_watched_status_gui ?? true;
+            const prefs = cachedPrefs || {};
+            const highlightEnabled = prefs.enable_active_item_highlight ?? true;
+            const showWatchedGUI = prefs.show_watched_status_gui ?? true;
+            
+            const fragment = document.createDocumentFragment();
+
+            playlist.forEach((item, index) => {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'list-item';
                 
-                const fragment = document.createDocumentFragment();
-
-                playlist.forEach((item, index) => {
-                    const itemDiv = document.createElement('div');
-                    itemDiv.className = 'list-item';
-                    
-                    if (highlightEnabled && lastPlayedId && item.id === lastPlayedId) {
-                        if (isFolderActive) {
-                            itemDiv.classList.add('active-item');
-                        } else {
-                            itemDiv.classList.add('last-played-item');
-                        }
+                if (highlightEnabled && lastPlayedId && item.id === lastPlayedId) {
+                    if (isFolderActive) {
+                        itemDiv.classList.add('active-item');
+                    } else {
+                        itemDiv.classList.add('last-played-item');
                     }
-
-                    itemDiv.draggable = true;
-                    itemDiv.title = item.url;
-                    itemDiv.dataset.url = item.url;
-                    itemDiv.dataset.title = item.title;
-                    itemDiv.dataset.index = index;
-                    itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
-
-                    // 1. Copy URL Button
-                    if (prefs.show_copy_title_button) {
-                        const copyBtn = document.createElement('button');
-                        copyBtn.className = 'btn-copy-item';
-                        copyBtn.dataset.url = item.url;
-                        copyBtn.title = 'Copy URL';
-                        copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-                        itemDiv.appendChild(copyBtn);
-                    }
-
-                    const indexSpan = document.createElement('span');
-                    indexSpan.className = 'url-index';
-                    indexSpan.textContent = `${index + 1}.`;
-                    itemDiv.appendChild(indexSpan);
-
-                    const urlSpan = document.createElement('span');
-                    urlSpan.className = 'url-text';
-                    _formatTitle(urlSpan, item); // Use the title formatting function
-
-                    // --- Watched Status Checkbox (Popup Controller) ---
-                    if (showWatchedGUI && (item.url.includes('youtube.com/') || item.url.includes('youtu.be/'))) {
-                        const watchedCheckbox = document.createElement('input');
-                        watchedCheckbox.type = 'checkbox';
-                        watchedCheckbox.className = 'item-watched-checkbox';
-                        watchedCheckbox.checked = !item.marked_as_watched;
-                        watchedCheckbox.title = watchedCheckbox.checked ? "Will mark as watched on YouTube" : "Already marked or skipped";
-                        
-                        watchedCheckbox.addEventListener('click', (e) => e.stopPropagation());
-                        watchedCheckbox.addEventListener('change', async (e) => {
-                            const isMarked = !watchedCheckbox.checked;
-                            const folderId = miniFolderSelect.value;
-                            try {
-                                await sendMessageAsync({
-                                    action: 'update_item_marked_as_watched',
-                                    folderId: folderId,
-                                    itemId: item.id,
-                                    markedAsWatched: isMarked
-                                });
-                                showStatus(`${isMarked ? 'Marked' : 'Unmarked'} item as watched.`);
-                            } catch (err) {
-                                console.error("Failed to update watched status:", err);
-                                showStatus("Failed to update watched status.", true);
-                            }
-                        });
-                        itemDiv.appendChild(watchedCheckbox);
-                    }
-
-                    itemDiv.appendChild(urlSpan);
-
-                    const removeBtn = document.createElement('button');
-                    removeBtn.className = 'btn-remove-item';
-                    removeBtn.dataset.index = index;
-                    removeBtn.title = 'Remove Item';
-                    removeBtn.textContent = '×';
-                    itemDiv.appendChild(removeBtn);
-
-                    fragment.appendChild(itemDiv);
-                });
-                
-                playlistContainer.appendChild(fragment);
-
-                // Post-render scroll logic
-                const newItemCount = playlist.length;
-                const wasItemAdded = newItemCount > oldItemCount;
-                if (wasItemAdded && playlistContainer.scrollHeight > playlistContainer.clientHeight) {
-                    playlistContainer.scrollTop = playlistContainer.scrollHeight;
-                } else if (isFolderActive && lastPlayedId) {
-                    const activeItem = playlistContainer.querySelector('.active-item');
-                    if (activeItem) activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
+
+                itemDiv.draggable = true;
+                itemDiv.title = item.url;
+                itemDiv.dataset.url = item.url;
+                itemDiv.dataset.title = item.title;
+                itemDiv.dataset.index = index;
+                itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
+
+                // 1. Copy URL Button
+                if (prefs.show_copy_title_button) {
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'btn-copy-item';
+                    copyBtn.dataset.url = item.url;
+                    copyBtn.title = 'Copy URL';
+                    copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+                    itemDiv.appendChild(copyBtn);
+                }
+
+                const indexSpan = document.createElement('span');
+                indexSpan.className = 'url-index';
+                indexSpan.textContent = `${index + 1}.`;
+                itemDiv.appendChild(indexSpan);
+
+                const urlSpan = document.createElement('span');
+                urlSpan.className = 'url-text';
+                _formatTitle(urlSpan, item); // Use the title formatting function
+
+                // --- Watched Status Checkbox (Popup Controller) ---
+                if (showWatchedGUI && (item.url.includes('youtube.com/') || item.url.includes('youtu.be/'))) {
+                    const watchedCheckbox = document.createElement('input');
+                    watchedCheckbox.type = 'checkbox';
+                    watchedCheckbox.className = 'item-watched-checkbox';
+                    watchedCheckbox.checked = !item.marked_as_watched;
+                    watchedCheckbox.title = watchedCheckbox.checked ? "Will mark as watched on YouTube" : "Already marked or skipped";
+                    
+                    watchedCheckbox.addEventListener('click', (e) => e.stopPropagation());
+                    watchedCheckbox.addEventListener('change', async (e) => {
+                        const isMarked = !watchedCheckbox.checked;
+                        const folderId = miniFolderSelect.value;
+                        try {
+                            await sendMessageAsync({
+                                action: 'update_item_marked_as_watched',
+                                folderId: folderId,
+                                itemId: item.id,
+                                markedAsWatched: isMarked
+                            });
+                            showStatus(`${isMarked ? 'Marked' : 'Unmarked'} item as watched.`);
+                        } catch (err) {
+                            console.error("Failed to update watched status:", err);
+                            showStatus("Failed to update watched status.", true);
+                        }
+                    });
+                    itemDiv.appendChild(watchedCheckbox);
+                }
+
+                itemDiv.appendChild(urlSpan);
+
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'btn-remove-item';
+                removeBtn.dataset.index = index;
+                removeBtn.title = 'Remove Item';
+                removeBtn.textContent = '×';
+                itemDiv.appendChild(removeBtn);
+
+                fragment.appendChild(itemDiv);
             });
+            
+            playlistContainer.appendChild(fragment);
+
+            // Post-render scroll logic
+            const newItemCount = playlist.length;
+            const wasItemAdded = newItemCount > oldItemCount;
+            if (wasItemAdded && playlistContainer.scrollHeight > playlistContainer.clientHeight) {
+                playlistContainer.scrollTop = playlistContainer.scrollHeight;
+            } else if (isFolderActive && lastPlayedId) {
+                const activeItem = playlistContainer.querySelector('.active-item');
+                if (activeItem) activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
         } else {
             const placeholder = document.createElement('p');
             placeholder.className = 'playlist-placeholder';
@@ -1462,6 +1462,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             // Reconstruct minimal baseline data for instant render
             const prefs = initialStorage.mpv_settings?.ui_preferences?.global;
+            cachedPrefs = prefs;
             const folderIds = initialStorage.mpv_folder_index || ['Default'];
             const lastUsedFolderId = initialStorage.mpv_settings?.last_used_folder_id || folderIds[0];
             const playbackCache = initialStorage.mpv_playback_cache || {};
@@ -1601,10 +1602,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Handle folder data changes (e.g. IDs assigned after playback starts)
         if (request.foldersChanged) {
             populateFolderDropdowns();
-            // If we are in the mini view, refresh the playlist to ensure we have the latest IDs
-            if (uiManager.isMiniView()) {
-                refreshPlaylist();
-            }
         }
 
         // Handle live changes to the detected URL to update the "Add" button's state
@@ -1633,7 +1630,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         // If preferences changed in another context (e.g., dragging the anilist panel), update our UI.
         if (request.action === 'preferences_changed') {
             sendMessageAsync({ action: 'get_ui_preferences' }).then(response => {
-                if (response?.success && response.preferences) optionsManager.updateAllPreferencesUI(response.preferences);
+                if (response?.success && response.preferences) {
+                    cachedPrefs = response.preferences;
+                    optionsManager.updateAllPreferencesUI(response.preferences);
+                }
                 if (btnMiniToggleStub && response?.preferences) {
                     const isStubEnabled = response.preferences.show_minimized_stub ?? true;
                     btnMiniToggleStub.style.opacity = isStubEnabled ? '1' : '0.5';
