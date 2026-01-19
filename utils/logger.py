@@ -1,6 +1,5 @@
 import logging
 import datetime
-import os
 
 class StandardLogger:
     """

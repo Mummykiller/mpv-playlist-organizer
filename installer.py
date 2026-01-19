@@ -78,11 +78,11 @@ class CommandLineApp:
                     current_id = data.get("allowed_origins", [""])[0].replace("chrome-extension://", "").replace("/", "")
             except: pass
 
-        print(f"Step 1: Enter your Extension ID")
+        print("Step 1: Enter your Extension ID")
         if current_id:
             print(f"(Current: {current_id})")
 
-        ext_id = input(f"ID: ").strip() or current_id
+        ext_id = input("ID: ").strip() or current_id
         if not ext_id:
             print("Error: Extension ID is required.")
             return
@@ -126,7 +126,7 @@ class CommandLineApp:
                 print("✅ mpv-cli installed.")
 
             if platform.system() != "Windows":
-                print(f"\nManual Step: To use 'mpv-cli', add this to your PATH:")
+                print("\nManual Step: To use 'mpv-cli', add this to your PATH:")
                 print(f'export PATH=\"$PATH:{INSTALL_DIR}\"')
 
         except Exception as e:
@@ -164,13 +164,13 @@ def _generate_user_agent(browser_name, os_name):
         "opera": "Opera/100.0.0.0"
     }
     # Attempt to get a more specific browser part, or use a generic Chrome-like if not found
-    browser_part = browser_map.get(browser_name, f"Chrome/120.0.0.0")
+    browser_part = browser_map.get(browser_name, "Chrome/120.0.0.0")
     if browser_name == "brave": # Brave's UA typically also includes Chrome
-        browser_part = f"Brave Chrome/120.0.0.0"
+        browser_part = "Brave Chrome/120.0.0.0"
     elif browser_name == "vivaldi":
-        browser_part = f"Vivaldi/6.5.3206.50 Chrome/120.0.0.0" # Vivaldi also includes Chrome
+        browser_part = "Vivaldi/6.5.3206.50 Chrome/120.0.0.0" # Vivaldi also includes Chrome
     elif browser_name == "edge":
-        browser_part = f"Edg/120.0.0.0 Chrome/120.0.0.0" # Edge also includes Chrome
+        browser_part = "Edg/120.0.0.0 Chrome/120.0.0.0" # Edge also includes Chrome
 
     return f"{base_ua.format(os_part=os_part)} {browser_part} Safari/537.36"
 
@@ -276,7 +276,7 @@ class InstallerLogic:
                             if norm_path == norm_install:
                                 self.log(f"✅ Found ID '{ext_id}' in browser profile: '{profile}'")
                                 return ext_id
-                except Exception as e:
+                except Exception:
                     continue
 
         self.log(f"❌ Could not find an unpacked extension pointing to {INSTALL_DIR}")
@@ -295,14 +295,14 @@ class InstallerLogic:
             ver = status['ytdlp'].get('version', 'Unknown')
             results.append(f"✅ yt-dlp found: {ver}")
         else:
-            results.append(f"❌ yt-dlp NOT found in PATH")
+            results.append("❌ yt-dlp NOT found in PATH")
             has_critical_error = True
 
         # 2. Check mpv
         if status['mpv']['found']:
             results.append(f"✅ mpv found at: {status['mpv']['path']}")
         else:
-            results.append(f"❌ mpv NOT found in PATH")
+            results.append("❌ mpv NOT found in PATH")
             has_critical_error = True
 
         # 3. Check ffmpeg
@@ -310,8 +310,8 @@ class InstallerLogic:
             ver = status['ffmpeg'].get('version', 'Found')
             results.append(f"✅ FFmpeg: {ver} at {status['ffmpeg']['path']}")
         else:
-            results.append(f"❌ FFmpeg NOT found")
-            results.append(f"   (Required for 1440p/4K YouTube)")
+            results.append("❌ FFmpeg NOT found")
+            results.append("   (Required for 1440p/4K YouTube)")
             has_critical_error = True
 
         # 4. Check Node.js
@@ -319,8 +319,8 @@ class InstallerLogic:
             ver = status['node'].get('version', 'Found')
             results.append(f"✅ Node.js: {ver} at {status['node']['path']}")
         else:
-            results.append(f"⚠️ Node.js NOT found")
-            results.append(f"   (Recommended for 1440p+ YouTube)")
+            results.append("⚠️ Node.js NOT found")
+            results.append("   (Recommended for 1440p+ YouTube)")
 
         # 5. Check Cookies
         if status['ytdlp']['found'] and browser:
@@ -362,7 +362,7 @@ class InstallerLogic:
                 results.append(f"❌ Cookie test error: {e}")
                 has_critical_error = True
         elif not browser:
-            results.append(f"⚠️ No browser selected for cookie test")
+            results.append("⚠️ No browser selected for cookie test")
 
         return "\n".join(results), has_critical_error
 
@@ -462,7 +462,7 @@ class WindowsLogic(InstallerLogic):
         wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.bat")
         with open(wrapper_path, 'w') as f:
             f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\n"{python_executable}" "%~dp0{SCRIPT_NAME}" %*')
-        self.log(f"Created wrapper script: run_native_host.bat")
+        self.log("Created wrapper script: run_native_host.bat")
 
         # 5. Create Manifest
         manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
@@ -533,7 +533,7 @@ class WindowsLogic(InstallerLogic):
             f.write('@echo off\n')
             f.write('set PYTHONDONTWRITEBYTECODE=1\n')
             f.write(f'python3 "{script_path}" %*\n')
-        self.log(f"Created Windows CLI wrapper: mpv-cli.bat")
+        self.log("Created Windows CLI wrapper: mpv-cli.bat")
 
     def add_to_path(self):
         try:
@@ -699,7 +699,7 @@ class UnixLogic(InstallerLogic):
             f.write("export PYTHONDONTWRITEBYTECODE=1\n")
             f.write(f'"{sys.executable}" "{script_path}" "$@"\n')
         os.chmod(wrapper_path, 0o755)
-        self.log(f"Created executable Unix CLI wrapper: mpv-cli")
+        self.log("Created executable Unix CLI wrapper: mpv-cli")
 
     def add_to_path(self):
         return "Manual"

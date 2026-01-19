@@ -421,7 +421,7 @@ class PlaylistTracker:
             browser = target_item['cookies_browser']
             watch_url = target_item['original_url']
             logging.info(f"[PY][Tracker] Lazy-extracting cookies from {browser} for history update...")
-            self._remote_log(f"AdaptiveHeaders: Extracting cookies for history...")
+            self._remote_log("AdaptiveHeaders: Extracting cookies for history...")
             
             # Use volatile storage (RAM)
             extracted_path = url_analyzer.get_cookies_file(browser, watch_url, force_refresh=False)
@@ -432,7 +432,7 @@ class PlaylistTracker:
                 has_cookies = True
                 logging.info(f"[PY][Tracker] Cookies extracted to {extracted_path}")
             else:
-                logging.warning(f"[PY][Tracker] Failed to lazy-extract cookies for history.")
+                logging.warning("[PY][Tracker] Failed to lazy-extract cookies for history.")
 
         if is_enabled and not already_marked and has_cookies and has_url:
             self.watched_this_session.add(item_id)
@@ -443,7 +443,7 @@ class PlaylistTracker:
             ua = headers.get('User-Agent')
             
             logging.info(f"[PY][Tracker] Triggering watch history update for: {watch_url}")
-            self.send_message({"log": {"text": f"[Tracker]: Mark-as-watched triggered for YouTube video.", "type": "info"}})
+            self.send_message({"log": {"text": "[Tracker]: Mark-as-watched triggered for YouTube video.", "type": "info"}})
             self._remote_log(f"AdaptiveHeaders: Threshold met or EOF reached. Marking {title} as watched.")
             self.ipc_manager.send({"command": ["show-text", "YouTube: Marking as watched...", 2000]})
 
@@ -452,7 +452,7 @@ class PlaylistTracker:
                     if success:
                         self.ipc_manager.send({"command": ["show-text", "YouTube: Video marked as watched", 2000]})
                         self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {title}")
-                        self.send_message({"log": {"text": f"[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
+                        self.send_message({"log": {"text": "[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
                         # We pass persist=False because mark_video_as_watched_threaded calls sync_state 
                         # which already writes to disk upon success.
                         self._update_marked_as_watched(item_id, True, persist=False)

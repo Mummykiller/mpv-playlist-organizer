@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 import services
-from utils import ipc_utils, session_services, url_analyzer
+from utils import ipc_utils, url_analyzer
 from utils.session_services import EnrichmentService, LauncherService, IPCService
 
 # Prevent __pycache__ generation
@@ -523,7 +523,7 @@ class MpvSessionManager:
                 res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True)
                 
                 if res and res.get("error") == "success":
-                    logging.info(f"[PY][Session] MPV successfully processed loadlist.")
+                    logging.info("[PY][Session] MPV successfully processed loadlist.")
                     idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]}, expect_response=True)
                     if idle_resp and idle_resp.get("data") == True:
                         logging.info("MPV is idle. Forcing playback to start after append.")
@@ -646,7 +646,7 @@ class MpvSessionManager:
 
         # Handle Enrichment for Raw Inputs
         if input_was_raw:
-            is_m3u_flow = isinstance(url_items_or_m3u, str) and not ("youtube.com" in url_items_or_m3u)
+            is_m3u_flow = isinstance(url_items_or_m3u, str) and "youtube.com" not in url_items_or_m3u
             if is_m3u_flow:
                 from concurrent.futures import ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=10) as executor:
