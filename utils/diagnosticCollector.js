@@ -3,47 +3,48 @@
  * Mimics the Python DiagnosticCollector for unified troubleshooting.
  */
 export class DiagnosticCollector {
-    constructor() {
-        this.errors = [];
-        this.MAX_ERRORS = 50;
-    }
+	constructor() {
+		this.errors = [];
+		this.MAX_ERRORS = 50;
+	}
 
-    /**
-     * Records an error with context and timestamp.
-     * @param {string} context - Where the error occurred (e.g., 'Storage Migration').
-     * @param {Error|string} error - The error object or message.
-     */
-    addError(context, error) {
-        const timestamp = new Date().toISOString();
-        const errorMsg = error instanceof Error ? error.stack || error.message : String(error);
-        
-        console.error(`[Diagnostic] [${context}]`, error);
-        
-        this.errors.push({
-            timestamp,
-            context,
-            error: errorMsg
-        });
+	/**
+	 * Records an error with context and timestamp.
+	 * @param {string} context - Where the error occurred (e.g., 'Storage Migration').
+	 * @param {Error|string} error - The error object or message.
+	 */
+	addError(context, error) {
+		const timestamp = new Date().toISOString();
+		const errorMsg =
+			error instanceof Error ? error.stack || error.message : String(error);
 
-        if (this.errors.length > this.MAX_ERRORS) {
-            this.errors.shift();
-        }
-    }
+		console.error(`[Diagnostic] [${context}]`, error);
 
-    /**
-     * Returns all collected errors.
-     * @returns {Array}
-     */
-    getErrors() {
-        return [...this.errors];
-    }
+		this.errors.push({
+			timestamp,
+			context,
+			error: errorMsg,
+		});
 
-    /**
-     * Clears the error log.
-     */
-    clear() {
-        this.errors = [];
-    }
+		if (this.errors.length > this.MAX_ERRORS) {
+			this.errors.shift();
+		}
+	}
+
+	/**
+	 * Returns all collected errors.
+	 * @returns {Array}
+	 */
+	getErrors() {
+		return [...this.errors];
+	}
+
+	/**
+	 * Clears the error log.
+	 */
+	clear() {
+		this.errors = [];
+	}
 }
 
 export const diagnosticCollector = new DiagnosticCollector();
