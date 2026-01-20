@@ -125,6 +125,7 @@ class PlaylistTracker:
 
         current_id = None
         self.previous_id = None # Track previous ID to handle event race conditions
+        self.pending_last_played_id = None # NEW: Only commit to disk if it actually plays
         current_time = 0
         last_heartbeat = 0
         
