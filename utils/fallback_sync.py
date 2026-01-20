@@ -48,6 +48,12 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
     if not folder_id or not item_id:
         return False, "Missing IDs"
 
+    # Security Check: Ensure the folder is officially registered in index.json
+    # This prevents 'ghost' folders (like lowercase 'default') from being updated/created.
+    index = file_io.get_index()
+    if folder_id not in index:
+        return False, f"Aborted: Folder '{folder_id}' not found in index.json"
+
     settings = file_io.get_settings()
     
     # 1. Load the specific shard

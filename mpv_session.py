@@ -387,7 +387,13 @@ class MpvSessionManager:
                     self.launcher.start_restored_process_watcher(self.pid, ipc_path, owner_folder_id)
 
                     logging.info(f"[PY][Session] Successfully restored session for folder '{owner_folder_id}'.")
-                    return {"was_stale": False, "folderId": owner_folder_id, "lastPlayedId": last_played_id, "token": token}
+                    return {
+                        "was_stale": False, 
+                        "folderId": owner_folder_id, 
+                        "lastPlayedId": last_played_id, 
+                        "token": token,
+                        "playlist": self.playlist # Send full playlist for deep sync
+                    }
                 else:
                     logging.warning(f"[PY][Session] Stale session for PID {pid} found. Cleaning up.")
                     try:
@@ -629,6 +635,7 @@ class MpvSessionManager:
 
     def start(self, url_items_or_m3u, folder_id, settings, file_io, **kwargs):
         """Starts a new mpv process with a playlist of URLs or an M3U."""
+        launch_result = {"success": False, "error": "Initialization failed"}
         _url_items_list, input_was_raw = self.enricher.resolve_input_items(url_items_or_m3u, kwargs.get('enriched_items_list'), kwargs.get('headers'))
         
         if not _url_items_list:
@@ -758,7 +765,14 @@ class MpvSessionManager:
                             if ua: self.ipc_manager.send({"command": ["set_property", "user-agent", ua]})
                             if ref: self.ipc_manager.send({"command": ["set_property", "referrer", ref]})
 
-                        self.ipc_manager.send({"command": ["loadfile", target_url, "replace"]})
+                        # --- Atomic Load with Script Message Priming ---
+                        if lua_options.get('resume_time') and float(lua_options['resume_time']) > 0:
+                            start_time = int(float(lua_options['resume_time']))
+                            # Send a scripted message that Lua will catch during the on_load hook
+                            self.ipc_manager.send({"command": ["script-message", "primed_resume_time", str(start_time)]})
+                            self.ipc_manager.send({"command": ["loadfile", target_url, "replace"]})
+                        else:
+                            self.ipc_manager.send({"command": ["loadfile", target_url, "replace"]})
                         
                         # If the item isn't in our internal playlist, add it so tracking works
                         item_id = launch_item.get('id')
@@ -766,10 +780,11 @@ class MpvSessionManager:
                              self.playlist.append(launch_item)
                              if self.playlist_tracker: self.playlist_tracker.add_item(launch_item)
 
+                        resume_msg = f" at {int(float(lua_options['resume_time']))}s" if lua_options.get('resume_time') else ""
                         return {
                             "success": True, 
                             "handled_directly": True,
-                            "message": "Switched to new item.",
+                            "message": f"Switched to new item{resume_msg}.",
                             "enriched_url_items": _url_items_list
                         }
 
@@ -779,22 +794,23 @@ class MpvSessionManager:
                         "enriched_url_items": _url_items_list,
                         "enriched_m3u_content": self._generate_m3u_content(_url_items_list)
                     }
-            else:
-                self.close()
+                else:
+                    self.close()
 
-        # Determine indices for the staggered launch
-        # If we are background-loading, the initial MPV instance only sees ONE item, so it starts at 0.
-        staggered_initial_index = 0 if len(_url_items_list) > 1 else playlist_start_index
+            # --- LAUNCH LOGIC (Outside of self.pid check, inside sync_lock) ---
+            # Determine indices for the staggered launch
+            # If we are background-loading, the initial MPV instance only sees ONE item, so it starts at 0.
+            staggered_initial_index = 0 if len(_url_items_list) > 1 else playlist_start_index
 
-        launch_result = self.launcher.launch(
-            launch_item, folder_id, settings, file_io,
-            full_playlist=_url_items_list if len(_url_items_list) == 1 else [_url_items_list[playlist_start_index]],
-            playlist_start_index=staggered_initial_index,
-            **kwargs
-        )
-        
-        if launch_result.get("success"):
-            self.register_ipc_callbacks()
+            launch_result = self.launcher.launch(
+                launch_item, folder_id, settings, file_io,
+                full_playlist=_url_items_list if len(_url_items_list) == 1 else [_url_items_list[playlist_start_index]],
+                playlist_start_index=staggered_initial_index,
+                **kwargs
+            )
+            
+            if launch_result.get("success"):
+                self.register_ipc_callbacks()
 
         if launch_result.get("success") and len(_url_items_list) > 1:
             self.enricher.handle_standard_flow_launch(self, _url_items_list, playlist_start_index, folder_id, settings, file_io)
@@ -810,3 +826,5 @@ class MpvSessionManager:
         """Closes the current mpv session gracefully via IPC, then forcefully if needed."""
         with self.sync_lock:
             return self.launcher.close()
+
+        

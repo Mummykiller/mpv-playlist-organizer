@@ -1026,33 +1026,63 @@ export function handleSessionRestored(request) {
 
 		// Notify UI to show active highlight and provide feedback
 		storage.get().then((storageData) => {
-			const folder = storageData.folders[result.folderId];
-			if (folder) {
-				const folderName = folder.name || result.folderId;
+			const folderId = result.folderId;
+			const folder = storageData.folders[folderId];
+
+			if (!folder) {
 				broadcastLog({
-					text: `Reconnected to mpv playlist (${folderName})`,
-					type: "info",
+					text: `[Background]: Restoration rejected. Folder '${folderId}' not found in browser storage.`,
+					type: "warning",
 				});
+				return;
+			}
 
-				const lastPlayedId = result.lastPlayedId || folder.last_played_id;
+			const folderName = folder.name || folderId;
+			broadcastLog({
+				text: `Reconnected to mpv playlist (${folderName})`,
+				type: "info",
+			});
 
-				// If the native host identified a different item, sync our storage
-				if (
-					result.lastPlayedId &&
-					result.lastPlayedId !== folder.last_played_id
-				) {
-					folder.last_played_id = result.lastPlayedId;
-					storage.set(storageData, result.folderId); // Save async
-				}
+			const lastPlayedId = result.lastPlayedId || folder.last_played_id;
+			let needsSave = false;
 
-				broadcastToTabs({
-					action: "render_playlist",
-					folderId: result.folderId,
-					playlist: folder.playlist,
-					last_played_id: lastPlayedId,
-					isFolderActive: true,
+			// 1. Sync Last Played ID
+			if (
+				result.lastPlayedId &&
+				result.lastPlayedId !== folder.last_played_id
+			) {
+				folder.last_played_id = result.lastPlayedId;
+				needsSave = true;
+			}
+
+			// 2. Deep Sync Resume Times for all items
+			if (result.playlist && Array.isArray(result.playlist)) {
+				const diskPlaylistMap = new Map(
+					result.playlist.map((item) => [item.id, item]),
+				);
+
+				folder.playlist.forEach((item) => {
+					const diskItem = diskPlaylistMap.get(item.id);
+					if (diskItem && diskItem.resume_time !== undefined) {
+						if (item.resume_time !== diskItem.resume_time) {
+							item.resume_time = diskItem.resume_time;
+							needsSave = true;
+						}
+					}
 				});
 			}
+
+			if (needsSave) {
+				storage.set(storageData, folderId); // Save async
+			}
+
+			broadcastToTabs({
+				action: "render_playlist",
+				folderId: folderId,
+				playlist: folder.playlist,
+				last_played_id: lastPlayedId,
+				isFolderActive: true,
+			});
 		});
 	}
 }

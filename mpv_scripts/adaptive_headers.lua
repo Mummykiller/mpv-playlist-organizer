@@ -2,6 +2,7 @@ local utils = require 'mp.utils'
 local url_options = {}
 local id_options = {}
 local indexed_options = {}
+local primed_resume_time = nil
 
 -- Store initial global states
 local initial_ua = mp.get_property("user-agent") or "libmpv"
@@ -34,6 +35,11 @@ mp.register_script_message("set_url_options", function(url, options_json, index)
         if options.id then id_options[options.id] = options end
         if index and index ~= "" then indexed_options[tonumber(index)] = options end
     end
+end)
+
+mp.register_script_message("primed_resume_time", function(time)
+    primed_resume_time = tonumber(time)
+    debug_log("Primed resume time received: " .. tostring(primed_resume_time))
 end)
 
 local function apply_adaptive_settings()
@@ -107,18 +113,24 @@ local function apply_adaptive_settings()
         mp.set_property("user-data/is-youtube", "yes")
     end
 
-    if not opts then return end
+    if not opts and not primed_resume_time then return end
 
     -- 5. Always apply UI/State features (Titles & Resume)
-    if opts.title and opts.title ~= "" then
+    if opts and opts.title and opts.title ~= "" then
         mp.set_property("title", opts.title)
         mp.set_property("force-media-title", opts.title)
     end
 
-    if opts.resume_time and tonumber(opts.resume_time) > 0 then
-        mp.set_property_number("file-local-options/start", tonumber(opts.resume_time))
+    -- Priority: 1. Primed time from Python message, 2. Item-specific resume_time
+    local effective_resume = primed_resume_time or (opts and tonumber(opts.resume_time))
+    if effective_resume and effective_resume > 0 then
+        mp.set_property_number("file-local-options/start", effective_resume)
         mp.set_property("file-local-options/resume-playback", "no")
+        debug_log("Applied resume time: " .. tostring(effective_resume))
+        primed_resume_time = nil -- Consume it
     end
+
+    if not opts then return end
 
     -- 6. ALWAYS apply Authentication Headers (Essential for connection)
     if opts.headers then

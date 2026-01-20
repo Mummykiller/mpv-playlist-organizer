@@ -425,7 +425,7 @@ class LauncherService:
                 stderr_thread.start()
 
             self.session.ipc_manager = ipc_utils.IPCSocketManager()
-            if not self.session.ipc_manager.connect(self.session.ipc_path, timeout=15.0):
+            if not self.session.ipc_manager.connect(self.session.ipc_path, timeout=5.0):
                 raise RuntimeError(f"Failed to connect to MPV IPC at {self.session.ipc_path}")
 
             # --- PID Resolution & Persistence ---
@@ -553,9 +553,14 @@ class LauncherService:
             ytdl_val = "yes" if url_item.get('is_youtube') or url_item.get('use_ytdl_mpv') else "no"
             self.session.ipc_manager.send({"command": ["set_property", "ytdl", ytdl_val]})
 
-            # --- Trigger Load via IPC (After Options Set) ---
-            # We use standard loadfile without options, as resume_time is now handled by adaptive_headers.lua
-            self.session.ipc_manager.send({"command": ["loadfile", launch_url, "replace"]})
+            # --- Trigger Atomic Load via Script Message Priming ---
+            if launch_lua_options.get('resume_time') and float(launch_lua_options['resume_time']) > 0:
+                start_time = int(float(launch_lua_options['resume_time']))
+                # Send a scripted message that Lua will catch during the on_load hook
+                self.session.ipc_manager.send({"command": ["script-message", "primed_resume_time", str(start_time)]})
+                self.session.ipc_manager.send({"command": ["loadfile", launch_url, "replace"]})
+            else:
+                self.session.ipc_manager.send({"command": ["loadfile", launch_url, "replace"]})
 
             from playlist_tracker import PlaylistTracker
             self.session.playlist_tracker = PlaylistTracker(folder_id, self.session.playlist, file_io, settings, self.session.ipc_path, self.session.send_message)
@@ -646,7 +651,9 @@ class LauncherService:
                 })
 
             threading.Thread(target=process_waiter, args=(process, folder_id), daemon=True).start()
-            return {"success": True, "message": "MPV playback initiated."}
+            
+            resume_msg = f" at {int(float(launch_lua_options['resume_time']))}s" if launch_lua_options.get('resume_time') else ""
+            return {"success": True, "message": f"MPV playback initiated{resume_msg}."}
         except Exception as e:
             logging.error(f"Launcher Error: {e}")
             return {"success": False, "error": f"Error launching mpv: {e}"}
@@ -667,20 +674,20 @@ class LauncherService:
             if not self.session.ipc_manager.is_connected():
                 logging.info(f"IPC not connected. Attempting reconnection to {self.session.ipc_path} for graceful quit...")
                 # Use a short timeout as we'll fall back to signals anyway
-                self.session.ipc_manager.connect(self.session.ipc_path, timeout=2.0)
+                self.session.ipc_manager.connect(self.session.ipc_path, timeout=0.5)
 
         # 2. Try graceful exit via IPC
         if self.session.ipc_manager and self.session.ipc_manager.is_connected():
             try:
-                self.session.ipc_manager.send({"command": ["quit"]}, timeout=1.0)
-                time.sleep(0.2) # Give it a moment to react
+                self.session.ipc_manager.send({"command": ["quit"]}, timeout=0.5)
+                time.sleep(0.1) # Give it a moment to react
             except Exception as e:
                 logging.warning(f"Failed to send quit command via IPC: {e}")
 
         # 3. Wait for process to exit
         if self.session.process:
             try:
-                self.session.process.wait(timeout=2.0)
+                self.session.process.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 logging.warning(f"MPV process {self.session.pid} did not exit gracefully. Terminating.")
                 self.session.process.terminate()
