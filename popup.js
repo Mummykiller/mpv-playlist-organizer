@@ -279,6 +279,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		let folderToRename = null;
 		let currentDetectedUrl = null;
 		let isPlaybackLoading = false;
+		let isPlaybackClosing = false;
 		let cachedPrefs = null;
 
 		// Reorder Elements
@@ -547,6 +548,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 		async function refreshPlaylist(data = null) {
 			const processResponse = (response) => {
 				if (response?.success) {
+					// Guard: Do not update button classes if we are closing
+					if (isPlaybackClosing) return;
+
 					// Update play button state
 					miniPlayBtn.classList.toggle(
 						"btn-playing",
@@ -584,19 +588,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 		function setPlaybackLoading(isLoading) {
 			isPlaybackLoading = isLoading;
 			if (!miniPlayBtn) return;
-			miniPlayBtn.classList.toggle("btn-loading", isLoading);
-			if (isLoading) miniPlayBtn.classList.remove("btn-playing");
+			requestAnimationFrame(() => {
+				miniPlayBtn.classList.toggle("btn-loading", isLoading);
+				if (isLoading) miniPlayBtn.classList.remove("btn-playing");
+			});
 		}
 
 		function setPlaybackClosing(isClosing) {
 			if (!miniPlayBtn) return;
-			miniPlayBtn.classList.toggle("btn-closing", isClosing);
-			if (isClosing) {
-				miniPlayBtn.classList.remove("btn-playing");
-				miniPlayBtn.classList.remove("btn-loading");
-				miniPlayBtn.title = "MPV is closing...";
-				miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`;
-			}
+			isPlaybackClosing = isClosing;
+			if (isClosing) isPlaybackLoading = false;
+			requestAnimationFrame(() => {
+				miniPlayBtn.classList.toggle("btn-closing", isClosing);
+				if (isClosing) {
+					miniPlayBtn.classList.remove("btn-playing");
+					miniPlayBtn.classList.remove("btn-loading");
+					miniPlayBtn.title = "MPV is closing...";
+					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`;
+				}
+			});
 		}
 
 		/**
@@ -614,6 +624,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 			isPaused = false,
 			needsAppend = false,
 		) {
+			// Guard: If we are in the closing state, do not update UI button icons
+			// or state as 'isPlaybackClosing' has higher visual priority.
+			if (isPlaybackClosing) return;
+
 			const oldItemCount =
 				playlistContainer.querySelectorAll(".list-item").length;
 			const scrollPosition = playlistContainer.scrollTop;
@@ -1360,6 +1374,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		});
 		miniFolderSelect.addEventListener("change", async () => {
 			const newFolderId = miniFolderSelect.value;
+			setPlaybackLoading(false);
+			setPlaybackClosing(false);
 			refreshPlaylist();
 			try {
 				await sendMessageAsync({
@@ -1583,6 +1599,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				return showStatus("Please select a folder.", true);
 			}
 			setPlaybackLoading(true);
+			setPlaybackClosing(false);
 			try {
 				// Send the 'play_m3u' action with m3u_data type 'folderId'.
 				// The background script will then fetch the playlist for this folder and construct the M3U.

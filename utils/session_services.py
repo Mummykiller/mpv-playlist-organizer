@@ -587,6 +587,9 @@ class LauncherService:
                             logging.info(f"[PY][Session] MPV({actual_pid}) exited early while wrapper is still running. Proceeding with exit logic.")
                             break
                         time.sleep(0.1)
+                else:
+                    # NO WRAPPER: Wait for the process to exit naturally
+                    proc.wait()
                 
                 # Determine the return code. If the wrapper is still running but MPV is dead,
                 # we use a placeholder that will be overridden by the completion flag check if applicable.
@@ -667,54 +670,61 @@ class LauncherService:
 
     def close(self):
         """Closes the current mpv session gracefully via IPC, then forcefully if needed."""
-        if not self.session.is_alive or not self.session.pid:
-            return {"success": True, "message": "No active session to close."}
+        with self.session.sync_lock:
+            if not self.session.is_alive or not self.session.pid:
+                return {"success": True, "message": "No active session to close."}
 
-        logging.info(f"Closing MPV session for PID: {self.session.pid}")
-        self.session.manual_quit = True
-
-        # 1. Try to reconnect if needed to ensure graceful quit
-        if self.session.ipc_path:
-            if not self.session.ipc_manager:
-                self.session.ipc_manager = ipc_utils.IPCSocketManager()
+            logging.info(f"Closing MPV session for PID: {self.session.pid}")
+            self.session.manual_quit = True
             
-            if not self.session.ipc_manager.is_connected():
-                logging.info(f"IPC not connected. Attempting reconnection to {self.session.ipc_path} for graceful quit...")
-                # Use a short timeout as we'll fall back to signals anyway
-                self.session.ipc_manager.connect(self.session.ipc_path, timeout=0.5)
+            # Local copies for use outside the lock
+            proc = self.session.process
+            pid = self.session.pid
+            ipc_path = self.session.ipc_path
+            ipc_manager = self.session.ipc_manager
+
+        # 1. Try to reconnect if needed to ensure graceful quit (OUTSIDE LOCK)
+        if ipc_path:
+            if not ipc_manager:
+                with self.session.sync_lock:
+                    self.session.ipc_manager = ipc_utils.IPCSocketManager()
+                    ipc_manager = self.session.ipc_manager
+            
+            if not ipc_manager.is_connected():
+                logging.info(f"IPC not connected. Attempting reconnection to {ipc_path} for graceful quit...")
+                ipc_manager.connect(ipc_path, timeout=0.5)
 
         # 2. Try graceful exit via IPC
-        if self.session.ipc_manager and self.session.ipc_manager.is_connected():
+        if ipc_manager and ipc_manager.is_connected():
             try:
-                self.session.ipc_manager.send({"command": ["quit"]}, timeout=0.5)
+                ipc_manager.send({"command": ["quit"]}, timeout=0.5)
                 time.sleep(0.1) # Give it a moment to react
             except Exception as e:
                 logging.warning(f"Failed to send quit command via IPC: {e}")
 
         # 3. Wait for process to exit
-        if self.session.process:
+        if proc:
             try:
-                self.session.process.wait(timeout=1.0)
+                proc.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
-                logging.warning(f"MPV process {self.session.pid} did not exit gracefully. Terminating.")
-                self.session.process.terminate()
+                logging.warning(f"MPV process {pid} did not exit gracefully. Terminating.")
+                proc.terminate()
                 try:
-                    self.session.process.wait(timeout=1.0)
+                    proc.wait(timeout=1.0)
                 except subprocess.TimeoutExpired:
-                    logging.warning(f"MPV process {self.session.pid} did not terminate. Killing.")
-                    self.session.process.kill()
-        elif self.session.pid:
+                    logging.warning(f"MPV process {pid} did not terminate. Killing.")
+                    proc.kill()
+        elif pid:
             # Fallback if we only have the PID (e.g. after restore)
             try:
                 if platform.system() == "Windows":
-                    # Simple taskkill fallback for Windows if process object is missing
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.session.pid)], 
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], 
                                  capture_output=True, check=False)
                 else:
-                    os.kill(self.session.pid, signal.SIGTERM)
+                    os.kill(pid, signal.SIGTERM)
                     time.sleep(0.5)
-                    if ipc_utils.is_pid_running(self.session.pid):
-                        os.kill(self.session.pid, signal.SIGKILL)
+                    if ipc_utils.is_pid_running(pid):
+                        os.kill(pid, signal.SIGKILL)
             except OSError:
                 pass # Process already gone
 

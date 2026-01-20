@@ -51,19 +51,39 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				ping: (req, send) => send({ success: true }),
 				init_ui_state: (req) => this._handleInitState(req),
 				render_playlist: (req) => {
-					if (req.isClosing) {
+					const currentFolderId =
+						this.ui.shadowRoot?.getElementById("folder-select")?.value;
+
+					// If folderId is provided, ensure it matches the current UI view
+					if (req.folderId && req.folderId !== currentFolderId) return;
+
+					if (req.isClosing === true) {
 						this.setPlaybackClosing(true);
 						return;
 					}
-					if (req.playlist) {
+					if (req.isClosing === false) {
 						this.setPlaybackClosing(false);
+					}
+
+					// Immediate Playback State Update:
+					// Apply this BEFORE rendering the playlist so the button reacts instantly
+					// to messages like "MPV Exited" which might not carry the full playlist payload.
+					if (req.isFolderActive !== undefined) {
+						this.setPlaybackActive(req.isFolderActive, req.needsAppend);
+					}
+
+					if (req.playlist) {
 						this.playlistUI?.render(
 							req.playlist,
 							req.last_played_id,
 							req.isFolderActive,
 						);
-						this.setPlaybackActive(req.isFolderActive, req.needsAppend);
-					} else {
+					} else if (
+						req.isClosing === undefined &&
+						req.isFolderActive === undefined
+					) {
+						// Only trigger a full refresh if we received a generic "render" signal
+						// with no state data attached.
 						this.refreshPlaylist();
 					}
 				},
@@ -807,6 +827,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		setPlaybackLoading(isLoading) {
 			if (!this.ui.shadowRoot) return;
+
+			// Guard: Do not show loading state if we are already closing.
+			if (this.state.state.isClosing) return;
+
 			const playBtns = [
 				this.ui.shadowRoot.getElementById("btn-play"),
 				this.ui.shadowRoot.getElementById("btn-compact-play"),
@@ -824,6 +848,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		setPlaybackClosing(isClosing) {
 			if (!this.ui.shadowRoot) return;
+			this.state.update({ isClosing: isClosing });
+
 			const playBtn = this.ui.shadowRoot.getElementById("btn-play");
 			const compactPlayBtn =
 				this.ui.shadowRoot.getElementById("btn-compact-play");
@@ -858,6 +884,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (!this.ui.shadowRoot) return;
 			this.state.update({ isFolderActive: isActive });
 
+			// Guard: If we are in the closing state, do not update UI button text
+			// as 'isClosing' has higher visual priority.
+			if (this.state.state.isClosing) return;
+
 			const playBtn = this.ui.shadowRoot.getElementById("btn-play");
 			const compactPlayBtn =
 				this.ui.shadowRoot.getElementById("btn-compact-play");
@@ -881,15 +911,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			});
 
 			// Update text/icons for the different play button variants
-			if (playBtn) {
-				playBtn.innerHTML = isActive
-					? '<span class="emoji">⏸️</span> Play/Pause'
-					: '<span class="emoji">▶️</span> Play';
-			}
-			if (compactPlayBtn) {
-				compactPlayBtn.innerHTML = isActive
-					? '<span class="emoji">⏸️</span>'
-					: '<span class="emoji">▶️</span>';
+			// Only if NOT currently in the closing state
+			if (!this.state.state.isClosing) {
+				if (playBtn) {
+					playBtn.innerHTML = isActive
+						? '<span class="emoji">⏸️</span> Play/Pause'
+						: '<span class="emoji">▶️</span> Play';
+				}
+				if (compactPlayBtn) {
+					compactPlayBtn.innerHTML = isActive
+						? '<span class="emoji">⏸️</span>'
+						: '<span class="emoji">▶️</span>';
+				}
 			}
 		}
 
@@ -903,6 +936,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				!data.play_new_instance;
 
 			if (action === "play" && !isToggle) {
+				this.setPlaybackClosing(false);
 				this.setPlaybackLoading(true);
 			}
 
@@ -929,6 +963,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					// If the action is known to modify the playlist, ensure we refresh our local view.
 					const stateModifyingActions = [
 						"add",
+						"append",
 						"clear",
 						"remove_item",
 						"set_playlist_order",

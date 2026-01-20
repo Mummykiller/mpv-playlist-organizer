@@ -11,11 +11,15 @@ export async function broadcastToTabs(message) {
 	// 2. Only target active tabs in each window
 	try {
 		const activeTabs = await chrome.tabs.query({ active: true });
-		for (const tab of activeTabs) {
-			if (tab.id) {
-				chrome.tabs.sendMessage(tab.id, message).catch(() => {});
-			}
-		}
+		// Parallel broadcast to all active tabs
+		await Promise.all(
+			activeTabs.map((tab) => {
+				if (tab.id) {
+					return chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+				}
+				return Promise.resolve();
+			}),
+		);
 	} catch (e) {
 		console.error("[Messaging] Failed to query active tabs:", e);
 	}

@@ -826,7 +826,6 @@ class MpvSessionManager:
 
     def close(self):
         """Closes the current mpv session gracefully via IPC, then forcefully if needed."""
-        with self.sync_lock:
-            return self.launcher.close()
+        return self.launcher.close()
 
         

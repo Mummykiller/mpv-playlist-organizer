@@ -8,6 +8,10 @@ import { storage } from "../storage_instance.js";
 
 const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;
 
+// Track folders that are already in the process of being cleared/confirmed 
+// during the quitting phase to avoid redundant triggers when the process finally exits.
+const earlyClearsInProgress = new Set();
+
 // Register listeners for unsolicited native host events
 addNativeListener("mpv_exited", (data) => handleMpvExited(data));
 addNativeListener("update_last_played", (data) => handleUpdateLastPlayed(data));
@@ -20,6 +24,7 @@ addNativeListener("update_item_marked_as_watched", (data) =>
 addNativeListener("playback_status_changed", (data) =>
 	handlePlaybackStatusChanged(data),
 );
+addNativeListener("mpv_quitting", (data) => handleMpvQuitting(data));
 addNativeListener("session_restored", (data) => handleSessionRestored(data));
 
 class PlaybackSession {
@@ -261,9 +266,74 @@ export function isFolderActive(folderId) {
 	return !!(session && session.isPlaying);
 }
 
+export async function handleMpvQuitting(data) {
+	const { folderId, is_natural_completion, played_ids, session_ids } = data;
+	broadcastLog({
+		text: `[Background]: MPV shutdown sequence started for '${folderId}'.`,
+		type: "info",
+	});
+	broadcastToTabs({
+		action: "render_playlist",
+		folderId: folderId,
+		isClosing: true,
+	});
+
+	// --- Early Clear/Confirm Logic ---
+	if (is_natural_completion && folderId) {
+		const storageData = await storage.get();
+		const globalPrefs = storageData.settings.ui_preferences.global;
+		const clearMode = globalPrefs.clear_on_completion || "no";
+		const clearScope = globalPrefs.clear_scope || "all";
+
+		if (clearMode !== "no") {
+			broadcastLog({
+				text: `[Background]: Early completion detected for '${folderId}'. Triggering ${clearMode} logic.`,
+				type: "info",
+			});
+			earlyClearsInProgress.add(folderId);
+
+			if (clearMode === "yes") {
+				await clearFolderPlaylist(folderId, {
+					played_ids,
+					session_ids,
+					scope: clearScope,
+				});
+			} else if (clearMode === "confirm") {
+				const [activeTab] = await chrome.tabs.query({
+					active: true,
+					currentWindow: true,
+				});
+				if (activeTab) {
+					chrome.tabs
+						.sendMessage(activeTab.id, {
+							action: "show_clear_confirmation",
+							folderId: folderId,
+							played_ids,
+							session_ids,
+							scope: clearScope,
+						})
+						.catch(() => {});
+				}
+			}
+		}
+	}
+}
+
 export async function handleMpvExited(data) {
 	const { folderId, returnCode, reason, played_ids, session_ids } = data;
 	if (!folderId) return;
+
+	// Check if this folder was already handled by the early quitting logic
+	const wasEarlyHandled = earlyClearsInProgress.has(folderId);
+	earlyClearsInProgress.delete(folderId); // Cleanup for next session
+
+	// 1. Immediate UI Reset
+	broadcastToTabs({
+		action: "render_playlist",
+		folderId: folderId,
+		isFolderActive: false,
+		isClosing: false,
+	});
 
 	// Mapping of common exit codes to human-readable explanations.
 	const exitCodeExplanations = {
@@ -297,62 +367,66 @@ export async function handleMpvExited(data) {
 	const clearMode = globalPrefs.clear_on_completion || "no";
 	const clearScope = globalPrefs.clear_scope || "all";
 
-	// MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion via custom script.
-	const isNaturalCompletion = returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE;
+	// Only attempt to clear if it wasn't already handled early AND it looks like a natural completion
+	if (!wasEarlyHandled) {
+		// MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion via custom script.
+		const isNaturalCompletion = returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE;
 
-	if (isNaturalCompletion) {
-		broadcastLog({
-			text: `[Background]: Playlist for folder '${folderId}' finished naturally.`,
-			type: "info",
-		});
-	}
-
-	// Only attempt to clear if the item that just finished was the last one in its folder/batch
-	if (
-		session &&
-		session.currentPlayingItem &&
-		session.currentPlayingItem.folderId === folderId &&
-		session.currentPlayingItem.isLastInFolder
-	) {
 		if (isNaturalCompletion) {
-			if (clearMode === "yes") {
-				broadcastLog({
-					text: `[Background]: Auto-clearing items for '${folderId}' (Scope: ${clearScope}).`,
-					type: "info",
-				});
-				await clearFolderPlaylist(folderId, {
-					played_ids,
-					session_ids,
-					scope: clearScope,
-				});
-			} else if (clearMode === "confirm") {
-				broadcastLog({
-					text: `[Background]: Requesting confirmation to clear playlist for '${folderId}'.`,
-					type: "info",
-				});
-				// Send a message to the active tab to show a confirmation dialog
-				const [activeTab] = await chrome.tabs.query({
-					active: true,
-					currentWindow: true,
-				});
-				if (activeTab) {
-					chrome.tabs
-						.sendMessage(activeTab.id, {
-							action: "show_clear_confirmation",
-							folderId: folderId,
-							played_ids,
-							session_ids,
-							scope: clearScope,
-						})
-						.catch(() => {});
-				}
-			}
-		} else if (clearMode !== "no") {
 			broadcastLog({
-				text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion code 99).`,
+				text: `[Background]: Playlist for folder '${folderId}' finished naturally (Exit Code 99).`,
 				type: "info",
 			});
 		}
+
+		if (
+			session &&
+			session.currentPlayingItem &&
+			session.currentPlayingItem.folderId === folderId &&
+			session.currentPlayingItem.isLastInFolder
+		) {
+			if (isNaturalCompletion) {
+				if (clearMode === "yes") {
+					broadcastLog({
+						text: `[Background]: Auto-clearing items for '${folderId}' (Scope: ${clearScope}).`,
+						type: "info",
+					});
+					await clearFolderPlaylist(folderId, {
+						played_ids,
+						session_ids,
+						scope: clearScope,
+					});
+				} else if (clearMode === "confirm") {
+					broadcastLog({
+						text: `[Background]: Requesting confirmation to clear playlist for '${folderId}'.`,
+						type: "info",
+					});
+					// Send a message to the active tab to show a confirmation dialog
+					const [activeTab] = await chrome.tabs.query({
+						active: true,
+						currentWindow: true,
+					});
+					if (activeTab) {
+						chrome.tabs
+							.sendMessage(activeTab.id, {
+								action: "show_clear_confirmation",
+								folderId: folderId,
+								played_ids,
+								session_ids,
+								scope: clearScope,
+							})
+							.catch(() => {});
+					}
+				}
+			} else if (clearMode !== "no") {
+				broadcastLog({
+					text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion).`,
+					type: "info",
+				});
+			}
+		}
+	} else {
+		console.debug(`[Background]: Cleanup for '${folderId}' already triggered during quitting phase.`);
 	}
 
 	// Cleanup the session from manager if it's finished
@@ -836,33 +910,38 @@ export async function handlePlayM3U(request) {
  * Handles the 'update_last_played' message from the native host tracker.
  */
 export async function handleUpdateLastPlayed(data) {
-	const { folderId, itemId } = data;
+	const { folderId, itemId, is_pending } = data;
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
-	broadcastLog({
-		text: `[Background]: Tracker reported last_played_id update for folder '${folderId}': ${itemId}`,
-		type: "info",
-	});
+	if (!is_pending) {
+		broadcastLog({
+			text: `[Background]: Tracker reported last_played_id update for folder '${folderId}': ${itemId}`,
+			type: "info",
+		});
 
-	const storageData = await storage.get();
-	if (storageData.folders[folderId]) {
-		storageData.folders[folderId].last_played_id = itemId;
-		await storage.set(storageData, folderId);
+		const storageData = await storage.get();
+		if (storageData.folders[folderId]) {
+			storageData.folders[folderId].last_played_id = itemId;
+			await storage.set(storageData, folderId);
 
-		// Also update playback cache for instant render consistency
-		const currentCache =
-			(await chrome.storage.local.get("mpv_playback_cache"))
-				.mpv_playback_cache || {};
-		if (currentCache.folderId === folderId) {
-			currentCache.isIdle = false;
-			await chrome.storage.local.set({ mpv_playback_cache: currentCache });
+			// Also update playback cache for instant render consistency
+			const currentCache =
+				(await chrome.storage.local.get("mpv_playback_cache"))
+					.mpv_playback_cache || {};
+			if (currentCache.folderId === folderId) {
+				currentCache.isIdle = false;
+				await chrome.storage.local.set({ mpv_playback_cache: currentCache });
+			}
 		}
+	}
 
+	const finalData = await storage.get();
+	if (finalData.folders[folderId]) {
 		// Broadcast the update so the UI highlights the new item immediately
 		broadcastToTabs({
 			action: "render_playlist",
 			folderId: folderId,
-			playlist: storageData.folders[folderId].playlist,
+			playlist: finalData.folders[folderId].playlist,
 			last_played_id: itemId,
 			isFolderActive: true,
 		});
@@ -984,13 +1063,15 @@ export async function handleAppend(request) {
 	};
 }
 
-export async function handleCloseMpv() {
+export async function handleCloseMpv(request) {
+	const folderId = request?.folderId;
 	// Immediate UI feedback
 	broadcastToTabs({
 		action: "render_playlist",
+		folderId: folderId,
 		isClosing: true,
 	});
-	return callNativeHost({ action: "close_mpv" });
+	return callNativeHost({ action: "close_mpv", folderId: folderId });
 }
 
 export function getMpvPlaylistCompletedExitCode() {
@@ -1087,6 +1168,7 @@ export function handleSessionRestored(request) {
 				playlist: folder.playlist,
 				last_played_id: lastPlayedId,
 				isFolderActive: true,
+				isClosing: false,
 			});
 		});
 	}
