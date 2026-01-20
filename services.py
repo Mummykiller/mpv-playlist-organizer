@@ -442,7 +442,7 @@ class MpvCommandBuilder:
         
         if targeted == 'animepahe':
             urls = self.url if isinstance(self.url, list) else [self.url]
-            if any(u and ("kwik.cx" in u or "owocdn.top" in u) for u in urls): return True
+            if any(u and ("kwik.cx" in u or "owocdn.top" in u or "uwucdn.top" in u) for u in urls): return True
             return False
         elif targeted == 'all-none-yt':
             return not self.is_youtube

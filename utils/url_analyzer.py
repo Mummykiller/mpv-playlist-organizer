@@ -21,7 +21,7 @@ sys.dont_write_bytecode = True
 # Regular Expressions for URL detection
 YOUTUBE_RE = re.compile(r"(youtube\.com|youtu\.be)")
 # Flexible regex for Animepahe/owocdn vault links (allows query params)
-VAULT_RE = re.compile(r"(vault-\d+|na-\d+|cdn-\d+)\.owocdn\.top/stream/.*uwu\.m3u8")
+VAULT_RE = re.compile(r"(vault-\d+|na-\d+|cdn-\d+)\.(owocdn|uwucdn)\.top/stream/.*uwu\.m3u8")
 # Common direct stream extensions
 DIRECT_STREAM_RE = re.compile(r"\.(m3u8|mp4|mkv|webm|avi|mov)(\?.*)?$", re.IGNORECASE)
 KWIK_RE = re.compile(r"kwik\.cx/(f|e)/[a-zA-Z0-9]+")
@@ -279,7 +279,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
             logging.warning(f"URL Analyzer Sanitization: Ignored invalid quality '{q}'")
 
     # --- Case 1: Animepahe-like URLs (VAULT_RE) ---
-    if "owocdn" in url or "kwik.cx" in url or VAULT_RE.search(url) or KWIK_RE.search(url):
+    if "owocdn" in url or "uwucdn" in url or "kwik.cx" in url or VAULT_RE.search(url) or KWIK_RE.search(url):
         # Header-First Direct: Stop extracting cookie files to RAM for Animepahe.
         # Instead, we pass the browser name to MPV and force ytdl=yes.
         # This allows MPV to handle the Kwik.cx decryption natively and faster.

@@ -643,6 +643,7 @@ class MpvSessionManager:
                 if item.get('id') == last_id:
                     playlist_start_index = idx
                     break
+            logging.info(f"[PY][Session] Smart Resume: folder='{folder_id}', last_id='{last_id}', found_at_index={playlist_start_index}")
 
         # Handle Enrichment for Raw Inputs
         if input_was_raw:
@@ -778,18 +779,22 @@ class MpvSessionManager:
                         "enriched_url_items": _url_items_list,
                         "enriched_m3u_content": self._generate_m3u_content(_url_items_list)
                     }
-                else:
-                    self.close()
+            else:
+                self.close()
 
-            launch_result = self.launcher.launch(
-                launch_item, folder_id, settings, file_io,
-                full_playlist=_url_items_list if len(_url_items_list) == 1 else [_url_items_list[playlist_start_index]],
-                playlist_start_index=playlist_start_index,
-                **kwargs
-            )
-            
-            if launch_result.get("success"):
-                self.register_ipc_callbacks()
+        # Determine indices for the staggered launch
+        # If we are background-loading, the initial MPV instance only sees ONE item, so it starts at 0.
+        staggered_initial_index = 0 if len(_url_items_list) > 1 else playlist_start_index
+
+        launch_result = self.launcher.launch(
+            launch_item, folder_id, settings, file_io,
+            full_playlist=_url_items_list if len(_url_items_list) == 1 else [_url_items_list[playlist_start_index]],
+            playlist_start_index=staggered_initial_index,
+            **kwargs
+        )
+        
+        if launch_result.get("success"):
+            self.register_ipc_callbacks()
 
         if launch_result.get("success") and len(_url_items_list) > 1:
             self.enricher.handle_standard_flow_launch(self, _url_items_list, playlist_start_index, folder_id, settings, file_io)

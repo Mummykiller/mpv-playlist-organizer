@@ -745,6 +745,28 @@ class HandlerManager:
             if key in message:
                 settings[key] = message[key]
         
+        # --- NEW: Standard Flow for Item Lists ---
+        # If we have a list of items and are NOT forced to use a new instance, 
+        # use the high-performance staggered flow.
+        if m3u_type == 'items' and not message.get('play_new_instance'):
+            logging.info(f"Step 1: Using high-performance staggered flow for folder '{folder_id}'.")
+            
+            # This call will handle enrichment, immediate launch of the start item, 
+            # and background loading of the rest.
+            return self.mpv_session.start(
+                m3u_source_value, 
+                folder_id, 
+                settings, 
+                self.file_io,
+                geometry=message.get('geometry'), 
+                custom_width=message.get('custom_width'), 
+                custom_height=message.get('custom_height'), 
+                custom_mpv_flags=message.get('custom_mpv_flags'), 
+                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+                start_paused=message.get('start_paused', False),
+                force_terminal=message.get('force_terminal', False)
+            )
+
         try:
             # Acquire lock to ensure the M3U file content and server state match the launched MPV session
             with self.server_lock:

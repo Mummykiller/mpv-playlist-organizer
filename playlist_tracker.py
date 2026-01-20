@@ -511,14 +511,6 @@ class PlaylistTracker:
         except Exception as e:
             logging.debug(f"[PY][Tracker] Failed to update playback status: {e}")
 
-    def _update_last_played(self, item_id):
-        """Notifies the host about which item is currently playing."""
-        self.send_message({
-            "action": "update_last_played",
-            "folderId": self.folder_id,
-            "itemId": item_id
-        })
-
     def _remote_log(self, message):
         """Sends a message to MPV to be printed in its terminal."""
         if self.ipc_manager and self.ipc_manager.is_connected():
