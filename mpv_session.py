@@ -36,6 +36,7 @@ class MpvSessionManager:
         self.playlist_tracker = None
         self.manual_quit = False
         self.session_cookies = set()
+        self.launch_cancelled = False
 
         # --- Injected Dependencies ---
         self.get_all_folders_from_file = dependencies['get_all_folders_from_file']
@@ -635,6 +636,7 @@ class MpvSessionManager:
 
     def start(self, url_items_or_m3u, folder_id, settings, file_io, **kwargs):
         """Starts a new mpv process with a playlist of URLs or an M3U."""
+        self.launch_cancelled = False
         launch_result = {"success": False, "error": "Initialization failed"}
         _url_items_list, input_was_raw = self.enricher.resolve_input_items(url_items_or_m3u, kwargs.get('enriched_items_list'), kwargs.get('headers'))
         
@@ -659,7 +661,7 @@ class MpvSessionManager:
                 from concurrent.futures import ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     # Pass context for cookie management
-                    results = list(executor.map(lambda x: self.enricher.enrich_single_item(x, folder_id, self.session_cookies, self.sync_lock, settings=settings), _url_items_list))
+                    results = list(executor.map(lambda x: self.enricher.enrich_single_item(x, folder_id, self.session_cookies, self.sync_lock, settings=settings, session=self), _url_items_list))
                 _url_items_list = [i for r in results for i in r]
                 return {
                     "success": True, 
@@ -671,7 +673,7 @@ class MpvSessionManager:
                 # Standard Flow: Enrich only the STARTING item immediately
                 # This ensures the item we actually launch with has headers/cookies
                 logging.info(f"Enriching start item at index {playlist_start_index} for immediate launch.")
-                start_item_enriched = self.enricher.enrich_single_item(_url_items_list[playlist_start_index], folder_id, self.session_cookies, self.sync_lock, settings=settings)
+                start_item_enriched = self.enricher.enrich_single_item(_url_items_list[playlist_start_index], folder_id, self.session_cookies, self.sync_lock, settings=settings, session=self)
                 
                 # Replace the raw item with the enriched one in the list
                 # Note: enrich_single_item returns a list (usually of length 1)

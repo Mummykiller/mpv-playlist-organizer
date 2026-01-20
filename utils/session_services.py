@@ -23,9 +23,12 @@ class EnrichmentService:
     def __init__(self, send_message_func):
         self.send_message = send_message_func
 
-    def enrich_single_item(self, item, folder_id=None, session_cookies_ref=None, sync_lock=None, settings=None):
+    def enrich_single_item(self, item, folder_id=None, session_cookies_ref=None, sync_lock=None, settings=None, session=None):
         if item.get('enriched'):
             return [item]
+        
+        if session and getattr(session, 'launch_cancelled', False):
+            raise RuntimeError("Launch cancelled by user.")
 
         if not item.get('id'):
             item['id'] = str(uuid.uuid4())
@@ -47,7 +50,7 @@ class EnrichmentService:
             mark_watched_flag,
             ytdl_format_from_script,
             cookies_browser
-        ) = apply_bypass_script(url_dict_for_analysis, self.send_message, settings=settings)
+        ) = apply_bypass_script(url_dict_for_analysis, self.send_message, settings=settings, session=session)
         
         if entries:
             processed_entries = []
@@ -185,7 +188,7 @@ class EnrichmentService:
                     enriched_future = []
                     for item in future_items:
                         if not session.is_alive: return
-                        res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings)
+                        res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session)
                         if res: enriched_future.extend(res)
                     
                     if enriched_future and session.is_alive:
@@ -198,7 +201,7 @@ class EnrichmentService:
                     enriched_history = []
                     for item in history_items:
                         if not session.is_alive: return
-                        res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings)
+                        res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session)
                         if res: enriched_history.extend(res)
                     
                     if enriched_history and session.is_alive:
@@ -345,6 +348,10 @@ class LauncherService:
                 force_bypass = True
         elif targeted == 'all-none-yt' and not is_youtube:
             force_bypass = True
+
+        if getattr(self.session, 'launch_cancelled', False):
+            logging.info("[PY] Launch aborted before process start.")
+            return {"success": False, "error": "Launch cancelled by user."}
 
         try:
             # IDLE LAUNCH: Start MPV empty, then load file via IPC. 

@@ -59,7 +59,7 @@ class HandlerManager:
         
         # New return signature from apply_bypass_script (11 values)
         processed_url, script_headers, ytdl_options, use_ytdl_mpv_flag, is_youtube_flag, entries, disable_http_persistent_flag, cookies_file, mark_watched_flag, ytdl_format_from_script, cookies_browser = self.services.apply_bypass_script(
-            url_item, self.send_message
+            url_item, self.send_message, session=self.mpv_session
         )
 
         if entries:
@@ -154,72 +154,79 @@ class HandlerManager:
         if not folder_id or not url_item:
             return {"success": False, "error": "Missing folderId or url_item for play action."}
 
-        logging.debug(f"handle_play: Original url_item from extension: {url_item}")
-        
-        # Get settings from config file
-        settings = self.file_io.get_settings()
-        
-        # Merge extension-provided networking and performance overrides
-        for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
-                    'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
-                    'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
-                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
-                    'performance_profile', 'ultra_scalers', 'ultra_video_sync',
-                    'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
-                    'enable_precise_resume']:
-            if key in message:
-                settings[key] = message[key]
+        try:
+            logging.debug(f"handle_play: Original url_item from extension: {url_item}")
+            
+            # Get settings from config file
+            settings = self.file_io.get_settings()
+            
+            # Merge extension-provided networking and performance overrides
+            for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
+                        'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
+                        'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
+                        'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
+                        'performance_profile', 'ultra_scalers', 'ultra_video_sync',
+                        'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
+                        'enable_precise_resume']:
+                if key in message:
+                    settings[key] = message[key]
 
-        # --- STEP 1: Process and Enrich ---
-        # Call mpv_session.start() with the raw item to trigger enrichment.
-        first_call_result = self.mpv_session.start(
-            url_item, 
-            folder_id, 
-            settings, 
-            self.file_io,
-            geometry=message.get('geometry'), 
-            custom_width=message.get('custom_width'), 
-            custom_height=message.get('custom_height'), 
-            custom_mpv_flags=message.get('custom_mpv_flags'), 
-            automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-            start_paused=message.get('start_paused', False),
-            force_terminal=message.get('force_terminal', False)
-        )
-        
-        if not first_call_result["success"]:
-            return first_call_result
+            # --- STEP 1: Process and Enrich ---
+            # Call mpv_session.start() with the raw item to trigger enrichment.
+            first_call_result = self.mpv_session.start(
+                url_item, 
+                folder_id, 
+                settings, 
+                self.file_io,
+                geometry=message.get('geometry'), 
+                custom_width=message.get('custom_width'), 
+                custom_height=message.get('custom_height'), 
+                custom_mpv_flags=message.get('custom_mpv_flags'), 
+                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+                start_paused=message.get('start_paused', False),
+                force_terminal=message.get('force_terminal', False)
+            )
+            
+            if not first_call_result["success"]:
+                return first_call_result
 
-        if first_call_result.get("handled_directly"):
-            return first_call_result
+            if first_call_result.get("handled_directly"):
+                return first_call_result
 
-        enriched_url_items = first_call_result["enriched_url_items"]
-        enriched_item = enriched_url_items[0]
+            enriched_url_items = first_call_result["enriched_url_items"]
+            enriched_item = enriched_url_items[0]
 
-        # --- STEP 2: Direct Launch ---
-        # Launch MPV with the enriched item's direct URL.
-        # This avoids the M3U HTTP server and thus avoids protocol restrictions for EDL.
-        result = self.mpv_session.start(
-            enriched_item, # Launch with the single enriched item
-            folder_id, 
-            settings, 
-            self.file_io,
-            geometry=message.get('geometry'), 
-            custom_width=message.get('custom_width'), 
-            custom_height=message.get('custom_height'), 
-            custom_mpv_flags=message.get('custom_mpv_flags'), 
-            automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-            start_paused=message.get('start_paused', False),
-            enriched_items_list=enriched_url_items,
-            headers=enriched_item.get('headers'),
-            ytdl_raw_options=enriched_item.get('ytdl_raw_options'),
-            use_ytdl_mpv=enriched_item.get('use_ytdl_mpv', False),
-            is_youtube=enriched_item.get('is_youtube', False),
-            disable_http_persistent=enriched_item.get('disable_http_persistent', False),
-            force_terminal=message.get('force_terminal', False)
-        )
-        
+            # --- STEP 2: Direct Launch ---
+            # Launch MPV with the enriched item's direct URL.
+            # This avoids the M3U HTTP server and thus avoids protocol restrictions for EDL.
+            result = self.mpv_session.start(
+                enriched_item, # Launch with the single enriched item
+                folder_id, 
+                settings, 
+                self.file_io,
+                geometry=message.get('geometry'), 
+                custom_width=message.get('custom_width'), 
+                custom_height=message.get('custom_height'), 
+                custom_mpv_flags=message.get('custom_mpv_flags'), 
+                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+                start_paused=message.get('start_paused', False),
+                enriched_items_list=enriched_url_items,
+                headers=enriched_item.get('headers'),
+                ytdl_raw_options=enriched_item.get('ytdl_raw_options'),
+                use_ytdl_mpv=enriched_item.get('use_ytdl_mpv', False),
+                is_youtube=enriched_item.get('is_youtube', False),
+                disable_http_persistent=enriched_item.get('disable_http_persistent', False),
+                force_terminal=message.get('force_terminal', False)
+            )
+            
+            return result if result else {"success": False, "error": "Failed to start MPV session."}
 
-        return result if result else {"success": False, "error": "Failed to start MPV session."}
+        except Exception as e:
+            if "Launch cancelled" in str(e):
+                logging.info("[PY] Play task caught cancellation signal.")
+                self.mpv_session.clear()
+                return {"success": False, "error": "Cancelled"}
+            raise e
 
     def handle_play_batch(self, message):
         playlist = message.get('playlist')
@@ -227,75 +234,82 @@ class HandlerManager:
         if not folder_id or not playlist:
             return {"success": False, "error": "Missing folderId or playlist for play_batch action."}
 
-        logging.info(f"Processing play_batch request for folder '{folder_id}' with {len(playlist)} items.")
-        
-        settings = self.file_io.get_settings()
-        
-        # Merge extension-provided networking and performance overrides
-        for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
-                    'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
-                    'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
-                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
-                    'performance_profile', 'ultra_scalers', 'ultra_video_sync',
-                    'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
-                    'enable_precise_resume']:
-            if key in message:
-                settings[key] = message[key]
+        try:
+            logging.info(f"Processing play_batch request for folder '{folder_id}' with {len(playlist)} items.")
+            
+            settings = self.file_io.get_settings()
+            
+            # Merge extension-provided networking and performance overrides
+            for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
+                        'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
+                        'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
+                        'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
+                        'performance_profile', 'ultra_scalers', 'ultra_video_sync',
+                        'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
+                        'enable_precise_resume']:
+                if key in message:
+                    settings[key] = message[key]
 
-        # --- STEP 1: Process and Enrich ---
-        # Call mpv_session.start() with the list to trigger parallel enrichment.
-        first_call_result = self.mpv_session.start(
-            playlist, 
-            folder_id, 
-            settings, 
-            self.file_io,
-            geometry=message.get('geometry'), 
-            custom_width=message.get('custom_width'), 
-            custom_height=message.get('custom_height'), 
-            custom_mpv_flags=message.get('custom_mpv_flags'), 
-            automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-            start_paused=message.get('start_paused', False),
-            force_terminal=message.get('force_terminal', False)
-        )
-        
-        if not first_call_result["success"]:
-            return first_call_result
+            # --- STEP 1: Process and Enrich ---
+            # Call mpv_session.start() with the list to trigger parallel enrichment.
+            first_call_result = self.mpv_session.start(
+                playlist, 
+                folder_id, 
+                settings, 
+                self.file_io,
+                geometry=message.get('geometry'), 
+                custom_width=message.get('custom_width'), 
+                custom_height=message.get('custom_height'), 
+                custom_mpv_flags=message.get('custom_mpv_flags'), 
+                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+                start_paused=message.get('start_paused', False),
+                force_terminal=message.get('force_terminal', False)
+            )
+            
+            if not first_call_result["success"]:
+                return first_call_result
 
-        enriched_url_items = first_call_result["enriched_url_items"]
+            enriched_url_items = first_call_result["enriched_url_items"]
 
-        # Baseline flags from first item
-        first_item = enriched_url_items[0] if enriched_url_items else {}
-        global_headers = first_item.get('headers')
-        global_ytdl_raw_options = first_item.get('ytdl_raw_options')
-        global_use_ytdl_mpv = any(item.get('use_ytdl_mpv', False) for item in enriched_url_items)
-        global_is_youtube = any(item.get('is_youtube', False) for item in enriched_url_items)
-        global_disable_http_persistent = first_item.get('disable_http_persistent', False)
+            # Baseline flags from first item
+            first_item = enriched_url_items[0] if enriched_url_items else {}
+            global_headers = first_item.get('headers')
+            global_ytdl_raw_options = first_item.get('ytdl_raw_options')
+            global_use_ytdl_mpv = any(item.get('use_ytdl_mpv', False) for item in enriched_url_items)
+            global_is_youtube = any(item.get('is_youtube', False) for item in enriched_url_items)
+            global_disable_http_persistent = first_item.get('disable_http_persistent', False)
 
-        # --- STEP 2: Direct Launch ---
-        # Launch MPV with the first item's direct URL, others will be appended via IPC.
-        # This avoids the M3U HTTP server.
-        result = self.mpv_session.start(
-            enriched_url_items, # Launch with the full enriched list
-            folder_id, 
-            settings, 
-            self.file_io,
-            geometry=message.get('geometry'), 
-            custom_width=message.get('custom_width'), 
-            custom_height=message.get('custom_height'), 
-            custom_mpv_flags=message.get('custom_mpv_flags'), 
-            automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-            start_paused=message.get('start_paused', False),
-            enriched_items_list=enriched_url_items,
-            headers=global_headers,
-            ytdl_raw_options=global_ytdl_raw_options,
-            use_ytdl_mpv=global_use_ytdl_mpv,
-            is_youtube=global_is_youtube,
-            disable_http_persistent=global_disable_http_persistent,
-            force_terminal=message.get('force_terminal', False)
-        )
-        
+            # --- STEP 2: Direct Launch ---
+            # Launch MPV with the first item's direct URL, others will be appended via IPC.
+            # This avoids the M3U HTTP server.
+            result = self.mpv_session.start(
+                enriched_url_items, # Launch with the full enriched list
+                folder_id, 
+                settings, 
+                self.file_io,
+                geometry=message.get('geometry'), 
+                custom_width=message.get('custom_width'), 
+                custom_height=message.get('custom_height'), 
+                custom_mpv_flags=message.get('custom_mpv_flags'), 
+                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
+                start_paused=message.get('start_paused', False),
+                enriched_items_list=enriched_url_items,
+                headers=global_headers,
+                ytdl_raw_options=global_ytdl_raw_options,
+                use_ytdl_mpv=global_use_ytdl_mpv,
+                is_youtube=global_is_youtube,
+                disable_http_persistent=global_disable_http_persistent,
+                force_terminal=message.get('force_terminal', False)
+            )
+            
+            return result
 
-        return result
+        except Exception as e:
+            if "Launch cancelled" in str(e):
+                logging.info("[PY] Play batch task caught cancellation signal.")
+                self.mpv_session.clear()
+                return {"success": False, "error": "Cancelled"}
+            raise e
 
     def handle_remove_item_live(self, message):
         folder_id = message.get('folderId')
@@ -402,6 +416,10 @@ class HandlerManager:
         )
 
     def handle_close_mpv(self, message):
+        if not self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path):
+            self.mpv_session.launch_cancelled = True
+            logging.info("[PY] Close requested while MPV not running. Signalling launch cancellation.")
+        
         response = self.mpv_session.close()
         self._stop_local_m3u_server() # Also stop the M3U server when MPV is closed
         return response
@@ -932,6 +950,10 @@ class HandlerManager:
                 return final_launch_result if final_launch_result else {"success": False, "error": "Failed to start MPV session with M3U."}
 
         except Exception as e:
+            if "Launch cancelled" in str(e):
+                logging.info("[PY] Play M3U task caught cancellation signal.")
+                self.mpv_session.clear()
+                return {"success": False, "error": "Cancelled"}
             logging.error(f"Error handling play_m3u: {e}", exc_info=True)
             self._stop_local_m3u_server() # Ensure cleanup on failure
             return {"success": False, "error": f"Error playing M3U: {str(e)}"}

@@ -278,6 +278,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		let folderToRename = null;
 		let currentDetectedUrl = null;
+		let isPlaybackLoading = false;
 		let cachedPrefs = null;
 
 		// Reorder Elements
@@ -577,6 +578,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 				processResponse(response);
 			} catch (e) {
 				console.error("Failed to refresh playlist:", e);
+			}
+		}
+
+		function setPlaybackLoading(isLoading) {
+			isPlaybackLoading = isLoading;
+			if (!miniPlayBtn) return;
+			miniPlayBtn.classList.toggle("btn-loading", isLoading);
+			if (isLoading) miniPlayBtn.classList.remove("btn-playing");
+		}
+
+		function setPlaybackClosing(isClosing) {
+			if (!miniPlayBtn) return;
+			miniPlayBtn.classList.toggle("btn-closing", isClosing);
+			if (isClosing) {
+				miniPlayBtn.classList.remove("btn-playing");
+				miniPlayBtn.classList.remove("btn-loading");
+				miniPlayBtn.title = "MPV is closing...";
+				miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`;
 			}
 		}
 
@@ -1498,7 +1517,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 				if (!statusResponse?.success)
 					return showStatus("Could not check MPV status.", true);
-				if (!statusResponse.is_running)
+				
+				if (!statusResponse.is_running && !isPlaybackLoading)
 					return showStatus("MPV is not running.", false);
 
 				if (prefsResponse?.preferences?.confirm_close_mpv ?? true) {
@@ -1562,6 +1582,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (!folderId) {
 				return showStatus("Please select a folder.", true);
 			}
+			setPlaybackLoading(true);
 			try {
 				// Send the 'play_m3u' action with m3u_data type 'folderId'.
 				// The background script will then fetch the playlist for this folder and construct the M3U.
@@ -1571,12 +1592,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 					// m3u_data parameter is removed; handlePlay will resolve folderId into M3U content.
 				});
 
+				setPlaybackLoading(false);
 				if (response.success) {
 					showStatus(response.message);
 				} else {
+					setPlaybackLoading(false); // Force double-check
 					showStatus(response.error || "Failed to start playback.", true);
 				}
 			} catch (error) {
+				setPlaybackLoading(false);
 				showStatus(
 					`An error occurred while playing playlist: ${error.message}`,
 					true,
@@ -1891,7 +1915,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (request.action === "render_playlist") {
 				const isMiniView = miniControllerView.style.display === "flex";
 				const currentFolderId = miniFolderSelect.value;
+
+				if (request.isClosing) {
+					setPlaybackClosing(true);
+					return;
+				}
+
 				if (isMiniView && currentFolderId === request.folderId) {
+					setPlaybackClosing(false);
 					renderPlaylist(
 						request.playlist,
 						request.last_played_id,

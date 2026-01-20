@@ -698,11 +698,14 @@ def get_mpv_popen_kwargs(has_terminal_flag):
     else: kwargs['start_new_session'] = True
     return kwargs
 
-def apply_bypass_script(url_item, send_message_func, settings=None):
+def apply_bypass_script(url_item, send_message_func, settings=None, session=None):
     """
     Applies URL analysis logic if enabled in settings.
     Returns a tuple of (processed_url, headers_dict, ytdl_raw_options, use_ytdl_mpv_flag, is_youtube_flag).
     """
+    if session and getattr(session, 'launch_cancelled', False):
+        raise RuntimeError("Launch cancelled by user.")
+
     if not isinstance(url_item, dict):
         url_item = {'url': url_item if url_item else "", 'settings': {}}
 
@@ -749,7 +752,8 @@ def apply_bypass_script(url_item, send_message_func, settings=None):
             yt_mark_watched=yt_mark_watched,
             yt_ignore_config=yt_ignore_config,
             other_sites_use_cookies=other_sites_use_cookies,
-            ytdl_quality=ytdl_quality
+            ytdl_quality=ytdl_quality,
+            check_cancelled=lambda: session and getattr(session, 'launch_cancelled', False)
         )
 
         if not result.get("success", False):
