@@ -985,6 +985,11 @@ export async function handleAppend(request) {
 }
 
 export async function handleCloseMpv() {
+	// Immediate UI feedback
+	broadcastToTabs({
+		action: "render_playlist",
+		isClosing: true,
+	});
 	return callNativeHost({ action: "close_mpv" });
 }
 

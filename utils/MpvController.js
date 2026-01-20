@@ -51,7 +51,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				ping: (req, send) => send({ success: true }),
 				init_ui_state: (req) => this._handleInitState(req),
 				render_playlist: (req) => {
+					if (req.isClosing) {
+						this.setPlaybackClosing(true);
+						return;
+					}
 					if (req.playlist) {
+						this.setPlaybackClosing(false);
 						this.playlistUI?.render(
 							req.playlist,
 							req.last_played_id,
@@ -817,6 +822,38 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			});
 		}
 
+		setPlaybackClosing(isClosing) {
+			if (!this.ui.shadowRoot) return;
+			const playBtn = this.ui.shadowRoot.getElementById("btn-play");
+			const compactPlayBtn =
+				this.ui.shadowRoot.getElementById("btn-compact-play");
+			const minimizedPlayBtn =
+				this.ui.minimizedHost?.shadowRoot?.getElementById(
+					"m3u8-minimized-play-btn",
+				);
+
+			const playBtns = [playBtn, compactPlayBtn, minimizedPlayBtn];
+
+			playBtns.forEach((btn) => {
+				if (btn) {
+					btn.classList.toggle("btn-closing", isClosing);
+					if (isClosing) {
+						btn.classList.remove("btn-playing");
+						btn.classList.remove("btn-loading");
+						btn.title = "MPV is closing...";
+					}
+				}
+			});
+
+			if (playBtn) {
+				if (isClosing) {
+					playBtn.innerHTML = '<span class="emoji">⏳</span> Closing...';
+				} else if (!this.state.state.isFolderActive) {
+					playBtn.innerHTML = '<span class="emoji">▶️</span> Play';
+				}
+			}
+		}
+
 		setPlaybackActive(isActive, needsAppend = false) {
 			if (!this.ui.shadowRoot) return;
 			this.state.update({ isFolderActive: isActive });
@@ -882,6 +919,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						this.setPlaybackLoading(false);
 						if (response?.success) {
 							this.setPlaybackActive(true, response.needsAppend);
+						} else {
+							// Reset state on failure/cancellation
+							this.setPlaybackActive(this.state.state.isFolderActive);
 						}
 					}
 
@@ -914,7 +954,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				})
 				.catch((err) => {
 					console.error(`[Controller] Command '${action}' failed:`, err);
-					if (action === "play") this.setPlaybackLoading(false);
+					if (action === "play") {
+						this.setPlaybackLoading(false);
+						this.setPlaybackActive(this.state.state.isFolderActive);
+					}
 				});
 		}
 
@@ -1100,6 +1143,20 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				?.addEventListener("click", async () => {
 					const fid = root.getElementById("compact-folder-select")?.value;
 					if (!fid) return;
+
+					const isLaunching = root
+						.getElementById("btn-compact-play")
+						?.classList.contains("btn-loading");
+
+					const status = await this.bridge.send("is_mpv_running");
+					if (!status?.is_running && !isLaunching) {
+						this.addLogEntry({
+							text: "[Content]: Close command ignored, MPV is not running.",
+							type: "info",
+						});
+						return;
+					}
+
 					const confirmed =
 						!this.state.state.settings.confirm_close_mpv ||
 						(await this.showPageLevelConfirmation(

@@ -322,6 +322,8 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     if is_yt:
         # 2a. Handle Playlist Expansion (REQUIRES COOKIES FILE for Python to read)
         if "list=" in url:
+            if check_cancelled and check_cancelled():
+                raise RuntimeError("Launch cancelled by user.")
             try:
                 logging.info(f"Expanding YouTube playlist: {url}")
                 cmd = [
