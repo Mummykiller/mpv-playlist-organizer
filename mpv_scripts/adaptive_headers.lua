@@ -58,6 +58,8 @@ local function apply_adaptive_settings()
         if ok and hs_opts then
             if hs_opts.id then id_options[hs_opts.id] = hs_opts end
             url_options[path] = hs_opts
+        else
+            mp.msg.error("AdaptiveHeaders: Failed to parse hot-swap-options: " .. tostring(hs_opts))
         end
         mp.set_property_native("user-data/hot-swap-options", nil)
     end
@@ -221,5 +223,8 @@ local function apply_adaptive_settings()
 end
 
 mp.add_hook("on_load", 0, function()
-    pcall(apply_adaptive_settings)
+    local ok, err = pcall(apply_adaptive_settings)
+    if not ok then
+        mp.msg.error("AdaptiveHeaders: Error in on_load hook: " .. tostring(err))
+    end
 end)

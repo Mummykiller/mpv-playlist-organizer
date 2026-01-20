@@ -232,7 +232,7 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
         logging.warning(f"Failed to extract cookies for MPV: {e}")
         return None
 
-def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cookies=True, yt_mark_watched=True, yt_ignore_config=True, other_sites_use_cookies=True, ytdl_quality='best'):
+def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cookies=True, yt_mark_watched=True, yt_ignore_config=True, other_sites_use_cookies=True, ytdl_quality='best', check_cancelled=None):
     """
     Runs bypass logic. Returns 'cookies_browser' string for direct MPV usage, 
     or 'cookies_file' path if extraction was forced (e.g. for Python-side expansion).
