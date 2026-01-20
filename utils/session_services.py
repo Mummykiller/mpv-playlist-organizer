@@ -179,34 +179,48 @@ class EnrichmentService:
                 
                 logging.info(f"[PY][Session] Background Flow: start_index={start_index}, history={len(history_items)}, future={len(future_items)}")
                 
-                # 1. Restore Order
+                # 1. Enrich and Batch Append Future Items
                 if future_items:
-                    logging.info(f"[PY][Session] Background: Appending {len(future_items)} future items.")
-                    res = session.append_batch(future_items, mode="append")
-                    logging.info(f"[PY][Session] Background: Future append result: {res}")
-                    time.sleep(0.5)
-
-                if history_items:
-                    logging.info(f"[PY][Session] Background: Appending {len(history_items)} history items.")
-                    res = session.append_batch(history_items, mode="append")
-                    logging.info(f"[PY][Session] Background: History append result: {res}")
-                    time.sleep(0.5)
+                    logging.info(f"[PY][Session] Background: Enriching {len(future_items)} future items sequentially.")
+                    enriched_future = []
+                    for item in future_items:
+                        if not session.is_alive: return
+                        res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings)
+                        if res: enriched_future.extend(res)
                     
-                    total_len = len(url_items)
-                    history_count = len(history_items)
-                    for i in range(history_count):
-                        source_idx = (total_len - history_count) + i
-                        session.ipc_manager.send({"command": ["playlist-move", source_idx, i]})
-                        if session.playlist and source_idx < len(session.playlist):
-                            item = session.playlist.pop(source_idx)
-                            session.playlist.insert(i, item)
+                    if enriched_future and session.is_alive:
+                        logging.info(f"[PY][Session] Background: Appending batch of {len(enriched_future)} future items.")
+                        session.append_batch(enriched_future, mode="append")
+
+                # 2. Enrich and Batch Append History Items
+                if history_items:
+                    logging.info(f"[PY][Session] Background: Enriching {len(history_items)} history items sequentially.")
+                    enriched_history = []
+                    for item in history_items:
+                        if not session.is_alive: return
+                        res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings)
+                        if res: enriched_history.extend(res)
+                    
+                    if enriched_history and session.is_alive:
+                        logging.info(f"[PY][Session] Background: Appending and moving {len(enriched_history)} history items.")
+                        # Append them to the end first
+                        session.append_batch(enriched_history, mode="append")
+                        
+                        # Move them to the front (0, 1, 2...)
+                        total_len = len(session.playlist)
+                        history_count = len(enriched_history)
+                        for i in range(history_count):
+                            source_idx = (total_len - history_count) + i
+                            session.ipc_manager.send({"command": ["playlist-move", source_idx, i]})
+                            if session.playlist and source_idx < len(session.playlist):
+                                item = session.playlist.pop(source_idx)
+                                session.playlist.insert(i, item)
 
                 if session.playlist_tracker:
                     session.playlist_tracker.update_playlist_order(session.playlist)
                 
                 # --- REFRESH LUA INDICES AFTER MOVE ---
-                # Since we moved history items to the front, we must update Lua's index mapping
-                # so it can promote them to sticky IDs correctly when they load.
+                # Since we moved items, we must update Lua's index mapping.
                 if session.ipc_manager and session.ipc_manager.is_connected():
                     essential_flags = services.get_essential_ytdlp_flags()
                     for idx, item in enumerate(session.playlist):
@@ -220,14 +234,11 @@ class EnrichmentService:
                              raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
                         final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
 
-                        # Helper to get mark_watched with proper fallbacks and normalization
+                        # Helper to get mark_watched
                         def get_mark_watched(it):
                             val = it.get('mark_watched')
-                            if val is None:
-                                val = it.get('settings', {}).get('yt_mark_watched', True)
-                            if isinstance(val, str):
-                                return val.lower() in ("true", "yes", "1")
-                            return bool(val)
+                            if val is None: val = it.get('settings', {}).get('yt_mark_watched', True)
+                            return val.lower() in ("true", "yes", "1") if isinstance(val, str) else bool(val)
 
                         lua_options = {
                             "id": item.get('id'), "title": item.get('title'),
@@ -240,79 +251,14 @@ class EnrichmentService:
                             "resume_time": item.get('resume_time'),
                             "project_root": session.SCRIPT_DIR,
                             "mark_watched": get_mark_watched(item),
-                            "marked_as_watched": item.get('marked_as_watched', False)
+                            "marked_as_watched": item.get('marked_as_watched', False),
+                            "targeted_defaults": settings.get('targeted_defaults', 'none')
                         }
                         session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
 
-                # 2. Parallel Enrichment
-                logging.info(f"[PY][Session] Background: Starting parallel enrichment for {len(url_items)} items.")
-                from concurrent.futures import ThreadPoolExecutor
-                
-                def enrich_and_sync(idx_item_tuple):
-                    idx, item = idx_item_tuple
-                    if idx == start_index or not session.is_alive: return
-                    
-                    enriched_list = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings)
-                    if not enriched_list: return
-                    enriched = enriched_list[0]
-                    
-                    target_url = sanitize_url(enriched['url'])
-                    if enriched.get('is_youtube') and enriched.get('original_url'):
-                        target_url = sanitize_url(enriched['original_url'])
-                    
-                    # --- Solid ID Injection ---
-                    if enriched.get('id'):
-                        separator = "#" if "#" not in target_url else "&"
-                        target_url = f"{target_url}{separator}mpv_organizer_id={enriched['id']}"
-
-                    essential_flags = services.get_essential_ytdlp_flags()
-                    raw_opts = enriched.get('ytdl_raw_options')
-                    if enriched.get('cookies_browser'):
-                         browser_opt = f"cookies-from-browser={enriched['cookies_browser']}"
-                         raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
-                    final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
-
-                    # Helper to get mark_watched
-                    val = enriched.get('mark_watched')
-                    if val is None: val = enriched.get('settings', {}).get('yt_mark_watched', True)
-                    mark_watched = val.lower() in ("true", "yes", "1") if isinstance(val, str) else bool(val)
-
-                    lua_options = {
-                        "id": enriched.get('id'), "title": enriched.get('title'),
-                        "headers": enriched.get('headers'),
-                        "ytdl_raw_options": final_item_raw_opts,
-                        "use_ytdl_mpv": enriched.get('use_ytdl_mpv', False),
-                        "ytdl_format": enriched.get('ytdl_format'),
-                        "ffmpeg_path": settings.get('ffmpeg_path'),
-                        "original_url": sanitize_url(enriched.get('original_url') or enriched.get('url')),
-                        "disable_http_persistent": enriched.get('disable_http_persistent', False),
-                        "cookies_file": enriched.get('cookies_file'),
-                        "cookies_browser": enriched.get('cookies_browser'),
-                        "disable_network_overrides": settings.get('disable_network_overrides', False),
-                        "http_persistence": settings.get('http_persistence', 'auto'),
-                        "enable_reconnect": settings.get('enable_reconnect', True),
-                        "reconnect_delay": settings.get('reconnect_delay', 4),
-                        "demuxer_max_bytes": settings.get('demuxer_max_bytes'),
-                        "cache_secs": settings.get('cache_secs'),
-                        "resume_time": enriched.get('resume_time') if settings.get('enable_precise_resume') else None,
-                        "project_root": session.SCRIPT_DIR,
-                        "mark_watched": mark_watched,
-                        "marked_as_watched": enriched.get('marked_as_watched', False),
-                        "targeted_defaults": settings.get('targeted_defaults', 'none')
-                    }
-                    
-                    if session.ipc_manager and session.ipc_manager.is_connected():
-                        session.ipc_manager.send({"command": ["script-message", "set_url_options", target_url, json.dumps(lua_options), str(idx)]})
-                        session.ipc_manager.send({"command": ["set_property", f"playlist/{idx}/url", target_url]})
-                    
-                    if idx < len(session.playlist): 
-                        session.playlist[idx].update(enriched)
-
-                # Use 5 workers for background enrichment to balance speed and system load
-                with ThreadPoolExecutor(max_workers=5) as executor:
-                    list(executor.map(enrich_and_sync, enumerate(url_items)))
-                
-                logging.info("[PY][Session] Background: Parallel enrichment complete.")
+                logging.info("[PY][Session] Background: Batched restoration complete.")
+            except Exception as e:
+                logging.error(f"[PY][Session] Background task error: {e}", exc_info=True)
             except Exception as e:
                 logging.error(f"[PY][Session] Background task error: {e}", exc_info=True)
 
