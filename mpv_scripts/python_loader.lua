@@ -30,6 +30,11 @@ mp.register_script_message("tracker_heartbeat", function()
     last_heartbeat = mp.get_time()
 end)
 
+-- Logging from Python tracker
+mp.register_script_message("python_log", function(msg)
+    if msg then debug_log(msg) end
+end)
+
 -- Central Sync Trigger (Dumb Trigger, Smart Python)
 local function run_fallback_sync(params)
     -- Check if Python manager is active (within last 12 seconds)

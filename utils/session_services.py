@@ -395,7 +395,7 @@ class LauncherService:
         force_bypass = False
         targeted = settings.get('targeted_defaults', 'none')
         if targeted == 'animepahe' and launch_url:
-            if "kwik.cx" in launch_url or "owocdn.top" in launch_url:
+            if "kwik.cx" in launch_url or "owocdn.top" in launch_url or "uwucdn.top" in launch_url:
                 force_bypass = True
         elif targeted == 'all-none-yt' and not is_youtube:
             force_bypass = True

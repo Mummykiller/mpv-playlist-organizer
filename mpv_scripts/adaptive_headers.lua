@@ -137,7 +137,7 @@ local function apply_adaptive_settings()
     local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
     local bypass_active = false
 
-    if targeted == 'animepahe' and (path:find("kwik%.cx") or path:find("owocdn%.top")) then
+    if targeted == 'animepahe' and (path:find("kwik%.cx") or path:find("owocdn%.top") or path:find("uwucdn%.top")) then
         bypass_active = true
     elseif targeted == 'all-none-yt' and not is_yt then
         bypass_active = true
