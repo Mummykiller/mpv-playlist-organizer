@@ -1098,6 +1098,15 @@ button.btn-playing {
 	box-shadow: 0 0 8px 0px var(--accent-primary) !important;
 }
 
+/* State for when MPV is closing */
+button.btn-closing {
+	background-color: var(--accent-inactive) !important;
+	border-color: var(--border-primary) !important;
+	cursor: wait !important;
+	pointer-events: none;
+	box-shadow: none !important;
+}
+
 /* --- Minimized Stub --- */
 /* New wrapper to contain the two sibling buttons */
 #m3u8-minimized-wrapper {

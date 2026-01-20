@@ -719,6 +719,9 @@ class HandlerManager:
         if not m3u_data or 'type' not in m3u_data or 'value' not in m3u_data:
             return {"success": False, "error": "Missing or malformed 'm3u_data' for play_m3u action."}
 
+        # Get settings early so they are available for optimizations
+        settings = self.file_io.get_settings()
+
         # --- OPTIMIZATION: Quick toggle for already active session ---
         # If this is a simple folder play request (likely from the big Play button)
         # and the session is already alive for this folder, toggle IMMEDIATELY
@@ -739,6 +742,7 @@ class HandlerManager:
                 if self.mpv_session.ipc_manager:
                     logging.info(f"Fast Toggle: No new items, toggling pause for folder '{folder_id}'")
                     self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
+                        
                     return {"success": True, "already_active": True}
             else:
                 logging.info(f"Fast Toggle: New items detected in folder '{folder_id}'. Proceeding to sync.")
@@ -746,9 +750,6 @@ class HandlerManager:
         m3u_source_value = m3u_data['value']
         m3u_type = m3u_data['type']
 
-        # Get common settings for both mpv_session.start calls
-        settings = self.file_io.get_settings()
-        
         # Fetch target folder metadata (replaces get_all_folders_from_file)
         target_folder = self.file_io.get_folder_data(folder_id) or {"playlist": []}
 

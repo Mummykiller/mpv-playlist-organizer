@@ -20,6 +20,7 @@ const eventListeners = {
 	update_last_played: [],
 	update_item_resume_time: [],
 	update_item_marked_as_watched: [],
+	mpv_quitting: [],
 	session_restored: [],
 	log: [],
 };

@@ -52,16 +52,17 @@ local function apply_adaptive_settings()
 
     -- 2. Hot-Swap / Race Condition Recovery
     local hs_json = mp.get_property("user-data/hot-swap-options")
-    local is_first_load = (hs_json and hs_json ~= "")
+    local is_first_load = (hs_json and hs_json ~= "" and hs_json ~= "nil" and hs_json ~= "null" and hs_json ~= "undefined")
+    
     if is_first_load then
         local ok, hs_opts = pcall(utils.parse_json, hs_json)
         if ok and hs_opts then
             if hs_opts.id then id_options[hs_opts.id] = hs_opts end
             url_options[path] = hs_opts
         else
-            mp.msg.error("AdaptiveHeaders: Failed to parse hot-swap-options: " .. tostring(hs_opts))
+            mp.msg.error("AdaptiveHeaders: Failed to parse hot-swap-options. Raw value: '" .. tostring(hs_json) .. "'. Error: " .. tostring(hs_opts))
         end
-        mp.set_property_native("user-data/hot-swap-options", nil)
+        mp.set_property("user-data/hot-swap-options", "")
     end
 
     -- 3. Clean up previous state (Full Reset to Initial Defaults)

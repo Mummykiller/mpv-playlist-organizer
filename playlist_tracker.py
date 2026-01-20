@@ -35,6 +35,7 @@ class PlaylistTracker:
         self.tracking_thread = None
         self.is_tracking = False
         self.clear_behavior = settings.get('playlist_clear_behavior', 'full_on_completion') # 'full_on_completion' or 'on_item_finish'
+        self.is_naturally_completed = False
         self.lock = threading.Lock()
 
         for item in initial_playlist:
@@ -153,6 +154,16 @@ class PlaylistTracker:
             try:
                 event = self.ipc_manager.receive_event(timeout=0.1)
                 if not event:
+                    # Connection lost but no event? (EOF)
+                    if not self.ipc_manager.is_connected() and self.is_tracking:
+                        logging.info(f"[PY][Tracker] IPC connection lost unexpectedly for folder '{self.folder_id}'. Signaling shutdown.")
+                        self.send_message({
+                            "action": "mpv_quitting",
+                            "folderId": self.folder_id
+                        })
+                        self.is_tracking = False
+                        break
+                    
                     time.sleep(0.05) # Tiny timer for stability
                     continue
 
@@ -182,6 +193,7 @@ class PlaylistTracker:
 
                             # 2. Update the active item ID and RESET session duration
                             current_id = new_id
+                            self.pending_last_played_id = new_id # Mark as pending
                             self.current_session_duration = 0
                             self.last_time_pos = None
 
@@ -214,9 +226,14 @@ class PlaylistTracker:
                             if self.ipc_manager and self.ipc_manager.is_connected():
                                 self.ipc_manager.send({"command": ["show-text", f"Tracking: {display_name}{status_info}", 2000]})
 
-                            # 5. Immediately notify the extension to update the UI highlight
-                            logging.info(f"[PY][Tracker] Active episode changed to ID {current_id}. Notifying UI.")
-                            self._update_last_played(current_id)
+                            # 5. Immediately notify the extension to update the UI highlight (Visual only)
+                            logging.info(f"[PY][Tracker] Active episode changed to ID {current_id}. Notifying UI (Visual).")
+                            self.send_message({
+                                "action": "update_last_played",
+                                "folderId": self.folder_id,
+                                "itemId": current_id,
+                                "is_pending": True # Hint to UI that this isn't committed yet
+                            })
                             # Also update general status
                             self._update_playback_status()
                     
@@ -238,7 +255,13 @@ class PlaylistTracker:
                             
                             self.last_time_pos = data
                             current_time = data
-                            
+
+                            # 0. Commit 'pending' last_played_id after 2 seconds of playback
+                            if self.pending_last_played_id == current_id and self.current_session_duration >= 2:
+                                logging.info(f"[PY][Tracker] Playback confirmed for {current_id}. Committing last_played_id to disk.")
+                                self._update_last_played(current_id)
+                                self.pending_last_played_id = None
+
                             # 1. Check for mark-as-watched threshold (30s of SESSION playback)
                             if self.current_session_duration >= 30:
                                 self._check_mark_watched(current_id)
@@ -258,6 +281,11 @@ class PlaylistTracker:
                     reason = event.get('reason')
                     logging.debug(f"[PY][Tracker] end-file event detected. Reason: {reason}, ID: {current_id}")
                     
+                    if reason == 'error':
+                        if self.pending_last_played_id == current_id:
+                            logging.warning(f"[PY][Tracker] Item {current_id} failed with error. Aborting state commit.")
+                            self.pending_last_played_id = None
+                    
                     if reason == 'eof':
                         # Heuristic: If 'eof' happens immediately after an ID change (session < 5s),
                         # it almost certainly belongs to the PREVIOUS item, not the new one.
@@ -272,23 +300,47 @@ class PlaylistTracker:
                             self._check_mark_watched(target_id_for_eof)
                             self.played_item_ids.add(target_id_for_eof)
                             self._update_resume_time(target_id_for_eof, 0)
+
+                            # --- Early Clear Hint Logic ---
+                            # Check if this item is the last in our tracked playlist
+                            with self.lock:
+                                if self.playlist and self.playlist[-1].get('id') == target_id_for_eof:
+                                    logging.info(f"[PY][Tracker] Last item in playlist finished naturally ({target_id_for_eof}). Setting completion flag.")
+                                    self.is_naturally_completed = True
                             
                     elif reason == 'stop' or reason == 'quit':
                         if current_id and current_time > 1:
                             self._update_resume_time(current_id, current_time)
 
+                elif event.get('event') == 'shutdown':
+                    logging.info(f"[PY][Tracker] MPV shutdown detected for folder '{self.folder_id}'. Notifying UI.")
+                    # 1. IMMEDIATE notification with early clear hint
+                    self.send_message({
+                        "action": "mpv_quitting",
+                        "folderId": self.folder_id,
+                        "is_natural_completion": self.is_naturally_completed,
+                        "played_ids": list(self.played_item_ids),
+                        "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
+                    })
+                    # 2. Stop loop
+                    self.is_tracking = False 
+                    break
+
             except Exception as e:
                 logging.error(f"[PY][Tracker] Error in playlist tracker: {e}")
-
-            except Exception as e: # Catch all for connection errors now handled by ipc_manager
-                # IPCSocketManager handles FileNotFoundError, ConnectionRefusedError internally now.
-                # If its send/receive methods return None, it means the connection might be dead.
-                # If we get an exception here, it's something unexpected.
-                logging.error(f"[PY][Tracker] Error in playlist tracker: {e}")
-                if not self.ipc_manager._sock: # If socket is explicitly closed by manager
-                    logging.info("[PY][Tracker] MPV IPC socket closed. Stopping tracker.")
-                    self.is_alive = False
-                time.sleep(1) # Original sleep
+                # If the socket is explicitly closed or we get a connection error, stop tracking
+                if self.ipc_manager and not self.ipc_manager.is_connected():
+                    logging.info("[PY][Tracker] MPV IPC connection lost. Signaling shutdown.")
+                    self.send_message({
+                        "action": "mpv_quitting",
+                        "folderId": self.folder_id,
+                        "is_natural_completion": self.is_naturally_completed,
+                        "played_ids": list(self.played_item_ids),
+                        "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
+                    })
+                    self.is_tracking = False
+                    break
+                time.sleep(0.1) # Small backoff
 
         # Clean up the local manager when loop exits
         if self.ipc_manager:

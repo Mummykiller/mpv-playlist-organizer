@@ -171,6 +171,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				if (!this.controller.checkContext()) return;
 				this.folderSelect.value = newFolderId;
 				this.compactFolderSelect.value = newFolderId;
+
+				// Reset UI state for the new folder
+				this.controller.setPlaybackLoading(false);
+				this.controller.setPlaybackClosing(false);
+
 				chrome.runtime.sendMessage({
 					action: "set_last_folder_id",
 					folderId: newFolderId,

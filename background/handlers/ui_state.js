@@ -342,12 +342,25 @@ export async function handleSetUiPreferences(request, sender) {
 				"yt_mark_watched",
 				"yt_ignore_config",
 				"other_sites_use_cookies",
+				"targeted_defaults",
+				"enable_per_item_mark_watched",
+				"clear_on_completion",
+				"clear_scope",
+				"force_terminal",
+				"launch_geometry",
+				"custom_geometry_width",
+				"custom_geometry_height",
+				"custom_mpv_flags",
 			];
 
 			const syncPrefs = {};
 			nativeSyncKeys.forEach((key) => {
-				if (newPreferences[key] !== undefined)
+				// Prioritize the incoming change, fallback to existing global storage
+				if (newPreferences[key] !== undefined) {
 					syncPrefs[key] = newPreferences[key];
+				} else if (data.settings.ui_preferences.global[key] !== undefined) {
+					syncPrefs[key] = data.settings.ui_preferences.global[key];
+				}
 			});
 
 			if (Object.keys(syncPrefs).length > 0) {
