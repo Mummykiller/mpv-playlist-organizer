@@ -155,6 +155,7 @@ try:
     from utils import ipc_utils
     from utils.native_host_handlers import HandlerManager
     from utils.janitor import Janitor
+    from utils import native_link
 
     SESSION_FILE = os.path.join(DATA_DIR, "session.json")
     ANILIST_CACHE_FILE = os.path.join(DATA_DIR, "anilist_cache.json")
@@ -213,7 +214,7 @@ try:
                     # Send a message to the extension to check if auto-update is enabled
                     send_message({
                         "action": "ytdlp_update_check", 
-                        "folderId": owner_folder_id,
+                        "folder_id": owner_folder_id,
                         "log": {
                             "text": "[Native Host]: YouTube playback failed. This may be due to an outdated yt-dlp. Checking for auto-update...",
                             "type": "error"
@@ -237,7 +238,9 @@ try:
         """Encodes and sends a message to stdout."""
         try:
             with print_lock:
-                encoded_content = json.dumps(message_content).encode('utf-8')
+                # Standardize output for JS bridge
+                translated_content = native_link.responder._translate_keys(message_content)
+                encoded_content = json.dumps(translated_content).encode('utf-8')
                 message_length = struct.pack('@I', len(encoded_content))
                 sys.stdout.buffer.write(message_length)
                 sys.stdout.buffer.write(encoded_content)
@@ -354,7 +357,7 @@ try:
                                 logging.warning(f"[PY][IPC] YTDL Failure signaled from Lua: {error_msg}")
                                 send_message({
                                     "action": "ytdlp_update_check", 
-                                    "folderId": mpv_session.owner_folder_id,
+                                    "folder_id": mpv_session.owner_folder_id,
                                     "log": {
                                         "text": f"[Native Host]: YTDL Failure detected ({error_msg}). Checking for updates...",
                                         "type": "error"
@@ -376,21 +379,20 @@ try:
         # The delegation system: One receptionist (main loop), many workers (threads)
         executor = ThreadPoolExecutor(max_workers=10)
 
-        def handle_restore_session(message):
+        def handle_restore_session(request: native_link.BaseRequest):
             """Manual trigger for session restoration from the extension."""
             res = mpv_session.restore()
             if res:
-                return {"success": True, "action": "session_restored", "result": res}
-            return {"success": True, "action": "session_restored", "result": None}
+                return native_link.success(res, action="session_restored")
+            return native_link.success(None, action="session_restored")
 
-        def handle_ping(message):
+        def handle_ping(request: native_link.BaseRequest):
             """Returns basic system info to verify connectivity."""
-            return {
-                "success": True, 
+            return native_link.success({
                 "python_version": sys.version,
                 "platform": platform.platform(),
                 "status": "online"
-            }
+            })
 
         COMMAND_HANDLERS = {
             'ping': handle_ping,
@@ -425,25 +427,25 @@ try:
         def task_wrapper(message):
             """Worker thread task to execute handler and send response."""
             try:
-                command = message.get('action')
+                request = native_link.translate(message)
+                command = request.action
                 handler = COMMAND_HANDLERS.get(command)
                 
                 if handler:
-                    response = handler(message)
+                    response = handler(request)
                 else:
-                    response = {"success": False, "error": "Unknown command"}
+                    response = native_link.failure("Unknown command")
 
                 # Add the request_id to the response so the extension can match it
-                request_id = message.get('request_id')
-                if request_id:
-                    response['request_id'] = request_id
+                if request.request_id:
+                    response['request_id'] = request.request_id
                 send_message(response)
 
             except Exception as e:
                 diagnostic_collector.add_error(f"Task: {message.get('action')}", e)
                 logging.error(f"[PY][TASK] Error processing {message.get('action')}: {e}", exc_info=True)
                 try:
-                    error_resp = {"success": False, "error": f"Task error: {str(e)}"}
+                    error_resp = native_link.failure(f"Task error: {str(e)}")
                     if message.get('request_id'):
                         error_resp['request_id'] = message.get('request_id')
                     send_message(error_resp)

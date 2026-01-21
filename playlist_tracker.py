@@ -160,7 +160,7 @@ class PlaylistTracker:
                         logging.info(f"[PY][Tracker] IPC connection lost unexpectedly for folder '{self.folder_id}'. Signaling shutdown.")
                         self.send_message({
                             "action": "mpv_quitting",
-                            "folderId": self.folder_id
+                            "folder_id": self.folder_id
                         })
                         self.is_tracking = False
                         break
@@ -232,8 +232,8 @@ class PlaylistTracker:
                             logging.info(f"[PY][Tracker] Active episode changed to ID {current_id}. Notifying UI (Visual).")
                             self.send_message({
                                 "action": "update_last_played",
-                                "folderId": self.folder_id,
-                                "itemId": current_id,
+                                "folder_id": self.folder_id,
+                                "item_id": current_id,
                                 "is_pending": True # Hint to UI that this isn't committed yet
                             })
                             # Also update general status
@@ -320,7 +320,7 @@ class PlaylistTracker:
                     # 1. IMMEDIATE notification with early clear hint
                     self.send_message({
                         "action": "mpv_quitting",
-                        "folderId": self.folder_id,
+                        "folder_id": self.folder_id,
                         "is_natural_completion": self.is_naturally_completed,
                         "played_ids": list(self.played_item_ids),
                         "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
@@ -336,7 +336,7 @@ class PlaylistTracker:
                     logging.info("[PY][Tracker] MPV IPC connection lost. Signaling shutdown.")
                     self.send_message({
                         "action": "mpv_quitting",
-                        "folderId": self.folder_id,
+                        "folder_id": self.folder_id,
                         "is_natural_completion": self.is_naturally_completed,
                         "played_ids": list(self.played_item_ids),
                         "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
@@ -365,8 +365,8 @@ class PlaylistTracker:
             # 2. Notify the extension so it can update its internal storage
             self.send_message({
                 "action": "update_last_played",
-                "folderId": self.folder_id,
-                "itemId": item_id
+                "folder_id": self.folder_id,
+                "item_id": item_id
             })
         except Exception as e:
             logging.error(f"[PY][Tracker] Failed to update last_played_id: {e}")
@@ -392,9 +392,9 @@ class PlaylistTracker:
                             # 2. Notify the extension
                             self.send_message({
                                 "action": "update_item_resume_time",
-                                "folderId": self.folder_id,
-                                "itemId": item_id,
-                                "resumeTime": int(resume_time)
+                                "folder_id": self.folder_id,
+                                "item_id": item_id,
+                                "resume_time": int(resume_time)
                             })
                         break
         except Exception as e:
@@ -427,8 +427,8 @@ class PlaylistTracker:
             # 3. Notify the extension (always notify to keep UI in sync)
             self.send_message({
                 "action": "update_item_marked_as_watched",
-                "folderId": self.folder_id,
-                "itemId": item_id,
+                "folder_id": self.folder_id,
+                "item_id": item_id,
                 "markedAsWatched": status
             })
 
@@ -564,7 +564,7 @@ class PlaylistTracker:
             # Send status update back to Python Host
             self.send_message({
                 "action": "playback_status_changed",
-                "folderId": self.folder_id,
+                "folder_id": self.folder_id,
                 "is_paused": is_paused,
                 "is_idle": is_idle,
                 "session_ids": [item.get('id') for item in self.playlist if item.get('id')]

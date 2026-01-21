@@ -8,6 +8,7 @@ import sys
 import threading
 import json
 from urllib.request import urlopen
+from . import native_link
 
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
@@ -152,11 +153,11 @@ class HandlerManager:
             logging.debug(f"ResolveOrAssignId: Added item to folder '{folder_id}'. Item ID: {item_id}")
             return url_item, all_folders
 
-    def handle_play(self, message):
-        url_item = message.get('url_item')
-        folder_id = message.get('folderId')
+    def handle_play(self, request: native_link.PlaybackRequest):
+        url_item = request.url_item
+        folder_id = request.folder_id
         if not folder_id or not url_item:
-            return {"success": False, "error": "Missing folderId or url_item for play action."}
+            return native_link.failure("Missing folder_id or url_item for play action.")
 
         try:
             logging.debug(f"handle_play: Original url_item from extension: {url_item}")
@@ -165,15 +166,10 @@ class HandlerManager:
             settings = self.file_io.get_settings()
             
             # Merge extension-provided networking and performance overrides
-            for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
-                        'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
-                        'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
-                        'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
-                        'performance_profile', 'ultra_scalers', 'ultra_video_sync',
-                        'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
-                        'enable_precise_resume']:
-                if key in message:
-                    settings[key] = message[key]
+            # Using the pre-validated settings from the request model
+            for key, value in request.settings.__dict__.items():
+                if value is not None:
+                    settings[key] = value
 
             # --- STEP 1: Process and Enrich ---
             # Call mpv_session.start() with the raw item to trigger enrichment.
@@ -182,13 +178,13 @@ class HandlerManager:
                 folder_id, 
                 settings, 
                 self.file_io,
-                geometry=message.get('geometry'), 
-                custom_width=message.get('custom_width'), 
-                custom_height=message.get('custom_height'), 
-                custom_mpv_flags=message.get('custom_mpv_flags'), 
-                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-                start_paused=message.get('start_paused', False),
-                force_terminal=message.get('force_terminal', False)
+                geometry=request.geometry, 
+                custom_width=request.custom_width, 
+                custom_height=request.custom_height, 
+                custom_mpv_flags=request.custom_mpv_flags, 
+                automatic_mpv_flags=request.automatic_mpv_flags, 
+                start_paused=request.start_paused,
+                force_terminal=request.force_terminal
             )
             
             if not first_call_result["success"]:
@@ -208,35 +204,35 @@ class HandlerManager:
                 folder_id, 
                 settings, 
                 self.file_io,
-                geometry=message.get('geometry'), 
-                custom_width=message.get('custom_width'), 
-                custom_height=message.get('custom_height'), 
-                custom_mpv_flags=message.get('custom_mpv_flags'), 
-                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-                start_paused=message.get('start_paused', False),
+                geometry=request.geometry, 
+                custom_width=request.custom_width, 
+                custom_height=request.custom_height, 
+                custom_mpv_flags=request.custom_mpv_flags, 
+                automatic_mpv_flags=request.automatic_mpv_flags, 
+                start_paused=request.start_paused,
                 enriched_items_list=enriched_url_items,
                 headers=enriched_item.get('headers'),
                 ytdl_raw_options=enriched_item.get('ytdl_raw_options'),
                 use_ytdl_mpv=enriched_item.get('use_ytdl_mpv', False),
                 is_youtube=enriched_item.get('is_youtube', False),
                 disable_http_persistent=enriched_item.get('disable_http_persistent', False),
-                force_terminal=message.get('force_terminal', False)
+                force_terminal=request.force_terminal
             )
             
-            return result if result else {"success": False, "error": "Failed to start MPV session."}
+            return result if result else native_link.failure("Failed to start MPV session.")
 
         except Exception as e:
             if "Launch cancelled" in str(e):
                 logging.info("[PY] Play task caught cancellation signal.")
                 self.mpv_session.clear()
-                return {"success": False, "error": "Cancelled"}
+                return native_link.failure("Cancelled")
             raise e
 
-    def handle_play_batch(self, message):
-        playlist = message.get('playlist')
-        folder_id = message.get('folderId')
+    def handle_play_batch(self, request: native_link.PlaybackRequest):
+        playlist = request.playlist
+        folder_id = request.folder_id
         if not folder_id or not playlist:
-            return {"success": False, "error": "Missing folderId or playlist for play_batch action."}
+            return native_link.failure("Missing folder_id or playlist for play_batch action.")
 
         try:
             logging.info(f"Processing play_batch request for folder '{folder_id}' with {len(playlist)} items.")
@@ -244,15 +240,9 @@ class HandlerManager:
             settings = self.file_io.get_settings()
             
             # Merge extension-provided networking and performance overrides
-            for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
-                        'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
-                        'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
-                        'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
-                        'performance_profile', 'ultra_scalers', 'ultra_video_sync',
-                        'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
-                        'enable_precise_resume']:
-                if key in message:
-                    settings[key] = message[key]
+            for key, value in request.settings.__dict__.items():
+                if value is not None:
+                    settings[key] = value
 
             # --- STEP 1: Process and Enrich ---
             # Call mpv_session.start() with the list to trigger parallel enrichment.
@@ -261,13 +251,13 @@ class HandlerManager:
                 folder_id, 
                 settings, 
                 self.file_io,
-                geometry=message.get('geometry'), 
-                custom_width=message.get('custom_width'), 
-                custom_height=message.get('custom_height'), 
-                custom_mpv_flags=message.get('custom_mpv_flags'), 
-                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-                start_paused=message.get('start_paused', False),
-                force_terminal=message.get('force_terminal', False)
+                geometry=request.geometry, 
+                custom_width=request.custom_width, 
+                custom_height=request.custom_height, 
+                custom_mpv_flags=request.custom_mpv_flags, 
+                automatic_mpv_flags=request.automatic_mpv_flags, 
+                start_paused=request.start_paused,
+                force_terminal=request.force_terminal
             )
             
             if not first_call_result["success"]:
@@ -291,19 +281,19 @@ class HandlerManager:
                 folder_id, 
                 settings, 
                 self.file_io,
-                geometry=message.get('geometry'), 
-                custom_width=message.get('custom_width'), 
-                custom_height=message.get('custom_height'), 
-                custom_mpv_flags=message.get('custom_mpv_flags'), 
-                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-                start_paused=message.get('start_paused', False),
+                geometry=request.geometry, 
+                custom_width=request.custom_width, 
+                custom_height=request.custom_height, 
+                custom_mpv_flags=request.custom_mpv_flags, 
+                automatic_mpv_flags=request.automatic_mpv_flags, 
+                start_paused=request.start_paused,
                 enriched_items_list=enriched_url_items,
                 headers=global_headers,
                 ytdl_raw_options=global_ytdl_raw_options,
                 use_ytdl_mpv=global_use_ytdl_mpv,
                 is_youtube=global_is_youtube,
                 disable_http_persistent=global_disable_http_persistent,
-                force_terminal=message.get('force_terminal', False)
+                force_terminal=request.force_terminal
             )
             
             return result
@@ -312,36 +302,36 @@ class HandlerManager:
             if "Launch cancelled" in str(e):
                 logging.info("[PY] Play batch task caught cancellation signal.")
                 self.mpv_session.clear()
-                return {"success": False, "error": "Cancelled"}
+                return native_link.failure("Cancelled")
             raise e
 
-    def handle_remove_item_live(self, message):
-        folder_id = message.get('folderId')
-        item_id = message.get('item_id')
+    def handle_remove_item_live(self, request: native_link.LiveUpdateRequest):
+        folder_id = request.folder_id
+        item_id = request.item_id
         if not folder_id or not item_id:
-            return {"success": False, "error": "Missing folderId or item_id."}
+            return native_link.failure("Missing folder_id or item_id.")
         return self.mpv_session.remove(item_id, folder_id)
 
-    def handle_reorder_live(self, message):
-        folder_id = message.get('folderId')
-        new_order = message.get('new_order')
+    def handle_reorder_live(self, request: native_link.LiveUpdateRequest):
+        folder_id = request.folder_id
+        new_order = request.new_order
         if not folder_id or not new_order:
-            return {"success": False, "error": "Missing folderId or new_order."}
+            return native_link.failure("Missing folder_id or new_order.")
         return self.mpv_session.reorder(folder_id, new_order)
 
-    def handle_clear_live(self, message):
-        folder_id = message.get('folderId')
+    def handle_clear_live(self, request: native_link.LiveUpdateRequest):
+        folder_id = request.folder_id
         if not folder_id:
-            return {"success": False, "error": "Missing folderId."}
+            return native_link.failure("Missing folder_id.")
         return self.mpv_session.clear_live(folder_id)
 
-    def handle_append(self, message):
-        url_item = message.get('url_item')
-        url_items_list = message.get('url_items')
-        folder_id = message.get('folderId') 
+    def handle_append(self, request: native_link.PlaybackRequest):
+        url_item = request.url_item
+        url_items_list = request.url_items
+        folder_id = request.folder_id 
         
         if not folder_id or (not url_item and not url_items_list):
-            return {"success": False, "error": "Missing folderId or items for append action."}
+            return native_link.failure("Missing folder_id or items for append action.")
         
         # Optimized: Only load the specific shard we are appending to
         playlist = self.file_io.get_playlist_shard(folder_id)
@@ -366,7 +356,7 @@ class HandlerManager:
                 final_processed_items.extend(processed_list)
 
         if not final_processed_items:
-            return {"success": True, "message": "No new items to append."}
+            return native_link.success(message="No new items to append.")
 
         # The _process_url_item calls above already updated all_folders_context[folder_id]['playlist']
         # We need to save that shard now.
@@ -409,17 +399,17 @@ class HandlerManager:
             logging.error(f"An error occurred while trying to launch unmanaged mpv: {e}")
             return {"success": False, "error": f"Error launching new mpv instance: {e}"}
 
-    def handle_play_new_instance(self, message):
+    def handle_play_new_instance(self, request: native_link.PlaybackRequest):
         return self._launch_unmanaged_mpv(
-            message.get('playlist', []),
-            message.get('geometry'),
-            message.get('custom_width'),
-            message.get('custom_height'),
-            message.get('custom_mpv_flags'),
-            message.get('automatic_mpv_flags')
+            request.playlist or [],
+            request.geometry,
+            request.custom_width,
+            request.custom_height,
+            request.custom_mpv_flags,
+            request.automatic_mpv_flags
         )
 
-    def handle_close_mpv(self, message):
+    def handle_close_mpv(self, request: native_link.LiveUpdateRequest):
         if not self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path):
             self.mpv_session.launch_cancelled = True
             logging.info("[PY] Close requested while MPV not running. Signalling launch cancellation.")
@@ -428,43 +418,41 @@ class HandlerManager:
         self._stop_local_m3u_server() # Also stop the M3U server when MPV is closed
         return response
 
-    def handle_is_mpv_running(self, message):
+    def handle_is_mpv_running(self, request: native_link.LiveUpdateRequest):
         is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
         if not is_running and self.mpv_session.pid:
             self.mpv_session.clear()
         logging.info(f"MPV running status check: {is_running} (Path: {self.mpv_session.ipc_path})")
-        return {
-            "success": True, 
+        return native_link.success({
             "is_running": is_running,
-            "folderId": self.mpv_session.owner_folder_id if is_running else None
-        }
+            "folder_id": self.mpv_session.owner_folder_id if is_running else None
+        })
 
-    def handle_get_playback_status(self, message):
+    def handle_get_playback_status(self, request: native_link.LiveUpdateRequest):
         is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
         if not is_running:
             if self.mpv_session.pid:
                 self.mpv_session.clear()
-            return {"success": True, "is_running": False, "is_paused": False}
+            return native_link.success({"is_running": False, "is_paused": False})
         
         is_paused = self.mpv_session.get_pause_state()
         is_idle = self.mpv_session.get_idle_state()
         session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
         
-        return {
-            "success": True,
+        return native_link.success({
             "is_running": True,
             "is_paused": is_paused if is_paused is not None else False,
             "is_idle": is_idle if is_idle is not None else False,
-            "folderId": self.mpv_session.owner_folder_id,
+            "folder_id": self.mpv_session.owner_folder_id,
             "session_ids": session_ids
-        }
+        })
 
-    def handle_export_data(self, message):
-        data = message.get('data')
-        is_incremental = message.get('is_incremental', False)
+    def handle_export_data(self, request: native_link.DataSyncRequest):
+        data = request.data
+        is_incremental = request.is_incremental
         
         if data is None:
-            return {"success": False, "error": "No data provided."}
+            return native_link.failure("No data provided.")
             
         if is_incremental:
             # Incremental update: merge incoming folder(s) with existing ones
@@ -484,24 +472,24 @@ class HandlerManager:
                 }
             # Save the index once after all shards are updated
             self.file_io.save_index(index)
-            return {"success": True, "message": "Incremental sync complete."}
+            return native_link.success(message="Incremental sync complete.")
         else:
             # Full override
             return self.file_io.write_folders_file(data)
 
-    def handle_export_playlists(self, message):
-        data = message.get('data')
-        filename = message.get('filename')
-        subfolder = message.get('subfolder')
+    def handle_export_playlists(self, request: native_link.DataSyncRequest):
+        data = request.data
+        filename = request.filename
+        subfolder = request.subfolder
         if not data or not filename:
-            return {"success": False, "error": "Missing data or filename."}
+            return native_link.failure("Missing data or filename.")
         return self.file_io.write_export_file(filename, data, subfolder=subfolder)
 
-    def handle_export_all_separately(self, message):
-        folders = message.get('data')
-        custom_names = message.get('customNames', {})
+    def handle_export_all_separately(self, request: native_link.DataSyncRequest):
+        folders = request.data
+        custom_names = request.custom_names or {}
         if not folders:
-            return {"success": False, "error": "No folder data provided."}
+            return native_link.failure("No folder data provided.")
         count = 0
         for f_id, f_data in folders.items():
             if 'playlist' in f_data:
@@ -512,15 +500,15 @@ class HandlerManager:
                 # Export the full folder object (f_data) to preserve metadata
                 if self.file_io.write_export_file(safe_name, f_data)["success"]:
                     count += 1
-        return {"success": True, "message": f"Successfully exported {count} playlists."}
+        return native_link.success(message=f"Successfully exported {count} playlists.")
 
-    def handle_list_import_files(self, message):
+    def handle_list_import_files(self, request: native_link.BaseRequest):
         return self.file_io.list_import_files()
 
-    def handle_import_from_file(self, message):
-        filename = message.get('filename')
+    def handle_import_from_file(self, request: native_link.DataSyncRequest):
+        filename = request.filename
         if not filename:
-            return {"success": False, "error": "No filename provided."}
+            return native_link.failure("No filename provided.")
         try:
             # Join and then normalize to handle relative paths like 'settings/file.json'
             target_path = os.path.join(self.file_io.EXPORT_DIR, filename)
@@ -529,14 +517,14 @@ class HandlerManager:
             # Security: Ensure the resolved path is still within EXPORT_DIR
             export_dir_abs = os.path.abspath(self.file_io.EXPORT_DIR)
             if not filepath.startswith(export_dir_abs):
-                return {"success": False, "error": "Access denied: Path outside export directory."}
+                return native_link.failure("Access denied: Path outside export directory.")
                 
             with open(filepath, 'r', encoding='utf-8') as f:
-                return {"success": True, "data": f.read()}
+                return native_link.success(f.read())
         except Exception as e:
-            return {"success": False, "error": f"Failed to read file: {e}"}
+            return native_link.failure(f"Failed to read file: {e}")
 
-    def handle_open_export_folder(self, message):
+    def handle_open_export_folder(self, request: native_link.BaseRequest):
         try:
             os.makedirs(self.file_io.EXPORT_DIR, exist_ok=True)
             path = os.path.abspath(self.file_io.EXPORT_DIR)
@@ -550,53 +538,53 @@ class HandlerManager:
                 subprocess.run(['open', path], check=True)
             else:
                 subprocess.run(['xdg-open', path], check=True)
-            return {"success": True, "message": "Opening export folder."}
+            return native_link.success(message="Opening export folder.")
         except Exception as e:
-            return {"success": False, "error": f"Failed to open folder: {e}"}
+            return native_link.failure(f"Failed to open folder: {e}")
             
-    def handle_get_anilist_releases(self, message):
+    def handle_get_anilist_releases(self, request: native_link.ServiceRequest):
         return self.services.get_anilist_releases_with_cache(
-            message.get('force', False), 
-            message.get('delete_cache', False), 
-            message.get('is_cache_disabled', False), 
-            message.get('days', 0),
+            request.force, 
+            request.delete_cache, 
+            request.is_cache_disabled, 
+            request.days,
             self.anilist_cache_file, 
             self.script_dir, 
             self.send_message
         )
 
-    def handle_run_ytdlp_update(self, message):
+    def handle_run_ytdlp_update(self, request: native_link.BaseRequest):
         return self.services.update_ytdlp(self.send_message)
 
-    def handle_check_dependencies(self, message):
+    def handle_check_dependencies(self, request: native_link.ServiceRequest):
         return self.services.check_mpv_and_ytdlp_status(
             self.file_io.get_mpv_executable, 
             self.send_message, 
-            force_refresh=message.get('force_refresh', False)
+            force_refresh=request.force_refresh
         )
 
-    def handle_get_all_folders(self, message):
+    def handle_get_all_folders(self, request: native_link.BaseRequest):
         # We use the wrapper here because the UI currently expects the full structure
-        return {"success": True, "folders": self.file_io.get_all_folders_from_file()}
+        return native_link.success({"folders": self.file_io.get_all_folders_from_file()})
 
-    def handle_get_ui_preferences(self, message):
-        return {"success": True, "preferences": self.file_io.get_settings()}
+    def handle_get_ui_preferences(self, request: native_link.BaseRequest):
+        return native_link.success({"preferences": self.file_io.get_settings()})
 
-    def handle_set_ui_preferences(self, message):
-        preferences = message.get('preferences')
+    def handle_set_ui_preferences(self, request: native_link.DataSyncRequest):
+        preferences = request.preferences
         if preferences is None:
-            return {"success": False, "error": "No preferences provided."}
+            return native_link.failure("No preferences provided.")
         return self.file_io.set_settings(preferences)
 
-    def handle_get_default_automatic_flags(self, message):
-        return {"success": True, "flags": [
+    def handle_get_default_automatic_flags(self, request: native_link.BaseRequest):
+        return native_link.success({"flags": [
             {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
             {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
             {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True},
             {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
             {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
             {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
-        ]}
+        ]})
 
     def _start_local_m3u_server(self, m3u_content):
         """
@@ -719,18 +707,15 @@ class HandlerManager:
                 logging.warning(f"Failed to remove temporary M3U file {self.temp_m3u_file_for_server}: {e}")
             self.temp_m3u_file_for_server = None
 
-    def handle_play_m3u(self, message):
+    def handle_play_m3u(self, request: native_link.PlaybackRequest):
         """
         Handles a request to play an M3U playlist.
-        The message should contain 'm3u_data':
-        {'type': 'url', 'value': 'http://remote.com/playlist.m3u'}
-        {'type': 'path', 'value': '/local/path/to/playlist.m3u'}
-        {'type': 'content', 'value': '#EXTM3U\n...'}
+        The request should contain 'm3u_data'.
         """
-        m3u_data = message.get('m3u_data')
-        folder_id = message.get('folderId', str(uuid.uuid4())) # Use a new UUID for folder if not provided
+        m3u_data = request.m3u_data
+        folder_id = request.folder_id or str(uuid.uuid4()) # Use a new UUID for folder if not provided
         if not m3u_data or 'type' not in m3u_data or 'value' not in m3u_data:
-            return {"success": False, "error": "Missing or malformed 'm3u_data' for play_m3u action."}
+            return native_link.failure("Missing or malformed 'm3u_data' for play_m3u action.")
 
         # Get settings early so they are available for optimizations
         settings = self.file_io.get_settings()
@@ -739,7 +724,7 @@ class HandlerManager:
         # If this is a simple folder play request (likely from the big Play button)
         # and the session is already alive for this folder, toggle IMMEDIATELY
         # ONLY if there are no new items to add.
-        is_simple_play = m3u_data.get('type') == 'items' and not message.get('play_new_instance')
+        is_simple_play = m3u_data.get('type') == 'items' and not request.play_new_instance
         if is_simple_play and self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id:
             # Check if there are ANY new items by ID
             new_item_found = False
@@ -756,7 +741,7 @@ class HandlerManager:
                     logging.info(f"Fast Toggle: No new items, toggling pause for folder '{folder_id}'")
                     self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
                         
-                    return {"success": True, "already_active": True}
+                    return native_link.success(already_active=True)
             else:
                 logging.info(f"Fast Toggle: New items detected in folder '{folder_id}'. Proceeding to sync.")
 
@@ -767,20 +752,14 @@ class HandlerManager:
         target_folder = self.file_io.get_folder_data(folder_id) or {"playlist": []}
 
         # Merge extension-provided networking and performance overrides
-        for key in ['disable_network_overrides', 'enable_cache', 'http_persistence',
-                    'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
-                    'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
-                    'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
-                    'performance_profile', 'ultra_scalers', 'ultra_video_sync',
-                    'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
-                    'enable_precise_resume']:
-            if key in message:
-                settings[key] = message[key]
+        for key, value in request.settings.__dict__.items():
+            if value is not None:
+                settings[key] = value
         
         # --- NEW: Standard Flow for Item Lists ---
         # If we have a list of items and are NOT forced to use a new instance, 
         # use the high-performance staggered flow.
-        if m3u_type == 'items' and not message.get('play_new_instance'):
+        if m3u_type == 'items' and not request.play_new_instance:
             logging.info(f"Step 1: Using high-performance staggered flow for folder '{folder_id}'.")
             
             # This call will handle enrichment, immediate launch of the start item, 
@@ -790,13 +769,13 @@ class HandlerManager:
                 folder_id, 
                 settings, 
                 self.file_io,
-                geometry=message.get('geometry'), 
-                custom_width=message.get('custom_width'), 
-                custom_height=message.get('custom_height'), 
-                custom_mpv_flags=message.get('custom_mpv_flags'), 
-                automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-                start_paused=message.get('start_paused', False),
-                force_terminal=message.get('force_terminal', False)
+                geometry=request.geometry, 
+                custom_width=request.custom_width, 
+                custom_height=request.custom_height, 
+                custom_mpv_flags=request.custom_mpv_flags, 
+                automatic_mpv_flags=request.automatic_mpv_flags, 
+                start_paused=request.start_paused,
+                force_terminal=request.force_terminal
             )
 
         try:
@@ -811,14 +790,15 @@ class HandlerManager:
                     folder_id, 
                     settings, 
                     self.file_io,
-                    geometry=message.get('geometry'), 
-                    custom_width=message.get('custom_width'), 
-                    custom_height=message.get('custom_height'), 
-                    custom_mpv_flags=message.get('custom_mpv_flags'), 
-                    automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-                    start_paused=message.get('start_paused', False),
-                    headers=message.get('headers'), # Pass headers for initial M3U fetch
-                    force_terminal=message.get('force_terminal', False)
+                    geometry=request.geometry, 
+                    custom_width=request.custom_width, 
+                    custom_height=request.custom_height, 
+                    custom_mpv_flags=request.custom_mpv_flags, 
+                    automatic_mpv_flags=request.automatic_mpv_flags, 
+                    start_paused=request.start_paused,
+                    # Note: PlaybackRequest doesn't have headers field yet, 
+                    # but if needed it would be in m3u_data or similar.
+                    force_terminal=request.force_terminal
                 )
                 
                 if not first_call_result["success"]:
@@ -885,7 +865,7 @@ class HandlerManager:
                         if self.mpv_session.ipc_manager:
                             logging.info("Linked Playlist: No new items found. Toggling pause state.")
                             self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
-                        return {"success": True, "already_active": True}
+                        return native_link.success(already_active=True)
 
                 # --- ALWAYS write the M3U file for debugging/logging as requested ---
                 if not self.temp_m3u_file_for_server:
@@ -941,32 +921,32 @@ class HandlerManager:
                     folder_id, 
                     settings, 
                     self.file_io,
-                    geometry=message.get('geometry'), 
-                    custom_width=message.get('custom_width'), 
-                    custom_height=message.get('custom_height'), 
-                    custom_mpv_flags=message.get('custom_mpv_flags'), 
-                    automatic_mpv_flags=message.get('automatic_mpv_flags'), 
-                    start_paused=message.get('start_paused', False),
+                    geometry=request.geometry, 
+                    custom_width=request.custom_width, 
+                    custom_height=request.custom_height, 
+                    custom_mpv_flags=request.custom_mpv_flags, 
+                    automatic_mpv_flags=request.automatic_mpv_flags, 
+                    start_paused=request.start_paused,
                     enriched_items_list=enriched_url_items,
                     headers=global_headers, # Adaptive: Baseline headers for the first item
                     ytdl_raw_options=global_ytdl_raw_options,
                     use_ytdl_mpv=global_use_ytdl_mpv,
                     is_youtube=global_is_youtube,
                     disable_http_persistent=global_disable_http_persistent,
-                    force_terminal=message.get('force_terminal', False),
+                    force_terminal=request.force_terminal,
                     playlist_start_index=playlist_start_index
                 )
                 
                 if final_launch_result and final_launch_result.get("success"):
                     pass
                     
-                return final_launch_result if final_launch_result else {"success": False, "error": "Failed to start MPV session with M3U."}
+                return final_launch_result if final_launch_result else native_link.failure("Failed to start MPV session with M3U.")
 
         except Exception as e:
             if "Launch cancelled" in str(e):
                 logging.info("[PY] Play M3U task caught cancellation signal.")
                 self.mpv_session.clear()
-                return {"success": False, "error": "Cancelled"}
+                return native_link.failure("Cancelled")
             logging.error(f"Error handling play_m3u: {e}", exc_info=True)
             self._stop_local_m3u_server() # Ensure cleanup on failure
-            return {"success": False, "error": f"Error playing M3U: {str(e)}"}
+            return native_link.failure(f"Error playing M3U: {str(e)}")
