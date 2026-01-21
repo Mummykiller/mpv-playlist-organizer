@@ -3,7 +3,7 @@ import sys
 import platform
 import json
 import file_io
-from installer_logic import (
+from installer_src.installer_logic import (
     HOST_NAME, INSTALL_DIR, WindowsLogic, LinuxLogic, MacOSLogic, UnixLogic
 )
 

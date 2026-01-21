@@ -5,15 +5,8 @@ This document outlines the architectural technical debt and refactoring prioriti
 ---
 
 ## 1. Massive File Bloat: `installer.py` (~1,350 lines)
-**Status:** High Risk / High Complexity
-The installer is currently a "monolith" that violates the Single Responsibility Principle. It mixes three distinct domains:
-*   **UI Layer:** Tkinter GUI management.
-*   **CLI Layer:** Terminal-based guided installation.
-*   **Logic Layer:** Platform-specific registry/config manipulation (Windows vs. Linux/Mac).
-
-**Proposed Action:**
-*   Split into `installer_ui.py`, `installer_cli.py`, and `installer_logic.py`.
-*   The logic layer should be a standalone engine that can be driven by either the GUI or CLI.
+**Status:** ✅ COMPLETED
+The installer is now decomposed into a tiny entry point, a logic engine in `installer_src/`, and a terminal interface.
 
 ---
 

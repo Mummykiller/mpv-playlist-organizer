@@ -19,7 +19,8 @@ if platform.system() == "Windows":
 HOST_NAME = "com.mpv_playlist_organizer.handler"
 HOST_DESCRIPTION = "MPV Playlist Organizer Native Host"
 SCRIPT_NAME = "native_host.py"
-INSTALL_DIR = os.path.dirname(os.path.abspath(__file__))
+# Point to parent directory since we are now in installer_src/
+INSTALL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = file_io.DATA_DIR
 CONFIG_FILE = file_io.CONFIG_FILE
 
