@@ -23,6 +23,10 @@ class SettingsOverrides:
     ultra_deband: Optional[bool] = None
     ultra_fbo: Optional[bool] = None
     enable_precise_resume: Optional[bool] = None
+    yt_mark_watched: Optional[bool] = None
+    os_platform: Optional[str] = None
+    ffmpeg_path: Optional[str] = None
+    ytdlp_path: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SettingsOverrides':
@@ -33,7 +37,8 @@ class SettingsOverrides:
             'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
             'performance_profile', 'ultra_scalers', 'ultra_video_sync',
             'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
-            'enable_precise_resume'
+            'enable_precise_resume', 'yt_mark_watched', 'os_platform',
+            'ffmpeg_path', 'ytdlp_path'
         }
         return cls(**{k: data.get(k) for k in fields if k in data})
 

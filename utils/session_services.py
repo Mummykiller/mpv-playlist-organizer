@@ -318,7 +318,12 @@ class LauncherService:
                                     pass
                                 break
 
-                    self.session.send_message({"action": "mpv_exited", "folderId": folder_id, "returnCode": return_code, "reason": exit_reason})
+                    self.session.send_message({
+            "action": "mpv_exited", 
+            "folder_id": folder_id, 
+            "return_code": return_code, 
+            "reason": exit_reason
+        })
                     self.session.clear(mpv_return_code=return_code)
                     break
                 
@@ -668,8 +673,8 @@ class LauncherService:
                 stats = self.session.clear(mpv_return_code=return_code)
                 self.session.send_message({
                     "action": "mpv_exited", 
-                    "folderId": f_id, 
-                    "returnCode": return_code, 
+                    "folder_id": f_id, 
+                    "return_code": return_code, 
                     "reason": exit_reason,
                     "played_ids": stats.get("played_ids", []),
                     "session_ids": stats.get("session_ids", [])

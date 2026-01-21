@@ -296,7 +296,7 @@ class MpvSessionManager:
         """Checks for a persisted session file and restores state if the process is still alive."""
         with self.sync_lock:
             if self.is_alive and self.pid and ipc_utils.is_pid_running(self.pid):
-                return {"was_stale": False, "folderId": self.owner_folder_id, "lastPlayedId": getattr(self, 'last_played_id_cache', None)}
+                return {"was_stale": False, "folder_id": self.owner_folder_id, "last_played_id": getattr(self, 'last_played_id_cache', None)}
 
             if not os.path.exists(self.session_file):
                 return None
@@ -393,8 +393,8 @@ class MpvSessionManager:
                     logging.info(f"[PY][Session] Successfully restored session for folder '{owner_folder_id}'.")
                     return {
                         "was_stale": False, 
-                        "folderId": owner_folder_id, 
-                        "lastPlayedId": last_played_id, 
+                        "folder_id": owner_folder_id, 
+                        "last_played_id": last_played_id, 
                         "token": token,
                         "playlist": self.playlist # Send full playlist for deep sync
                     }
@@ -404,7 +404,7 @@ class MpvSessionManager:
                         os.remove(self.session_file)
                     except OSError:
                         pass
-                    return {"was_stale": True, "folderId": owner_folder_id, "returnCode": -1}
+                    return {"was_stale": True, "folder_id": owner_folder_id, "return_code": -1}
 
             except Exception as e:
                 logging.warning(f"[PY][Session] Could not restore session: {e}. Cleaning up.")
