@@ -64,8 +64,10 @@ class EnrichmentService:
                     entry['use_ytdl_mpv'] = False 
                 
                 # Propagate cookies browser if available
-                if cookies_browser: entry['cookies_browser'] = cookies_browser
-                if cookies_file: entry['cookies_file'] = cookies_file
+                if cookies_browser:
+                    entry['cookies_browser'] = cookies_browser
+                if cookies_file:
+                    entry['cookies_file'] = cookies_file
 
                 processed_entries.append(entry)
             return processed_entries
@@ -136,7 +138,8 @@ class EnrichmentService:
 
                         try:
                             fetch_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
-                            if headers: fetch_headers.update(headers)
+                            if headers:
+                                fetch_headers.update(headers)
                             req = Request(url_items_or_m3u, headers=fetch_headers)
                             with urlopen(req, timeout=10) as response:
                                 m3u_content = response.read().decode('utf-8')
@@ -153,10 +156,12 @@ class EnrichmentService:
 
         elif isinstance(url_items_or_m3u, list):
             _url_items_list = url_items_or_m3u
-            if enriched_items_list is None: input_was_raw = True
+            if enriched_items_list is None:
+                input_was_raw = True
         elif isinstance(url_items_or_m3u, dict):
             _url_items_list = [url_items_or_m3u]
-            if enriched_items_list is None: input_was_raw = True
+            if enriched_items_list is None:
+                input_was_raw = True
 
         return _url_items_list, input_was_raw
 
@@ -167,7 +172,8 @@ class EnrichmentService:
                 # Poll for readiness instead of hard sleep
                 start_wait = time.time()
                 while time.time() - start_wait < 10.0:
-                    if not session.is_alive: return
+                    if not session.is_alive:
+                        return
                     if session.ipc_manager and session.ipc_manager.is_connected():
                         # Optional: Ping to ensure responsiveness
                         ping = session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
@@ -175,7 +181,8 @@ class EnrichmentService:
                             break
                     time.sleep(0.2)
                 
-                if not session.is_alive: return
+                if not session.is_alive:
+                    return
                 
                 history_items = url_items[:start_index]
                 future_items = url_items[start_index + 1:]
@@ -187,9 +194,11 @@ class EnrichmentService:
                     logging.info(f"[PY][Session] Background: Enriching {len(future_items)} future items sequentially.")
                     enriched_future = []
                     for item in future_items:
-                        if not session.is_alive: return
+                        if not session.is_alive:
+                            return
                         res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session)
-                        if res: enriched_future.extend(res)
+                        if res:
+                            enriched_future.extend(res)
                     
                     if enriched_future and session.is_alive:
                         logging.info(f"[PY][Session] Background: Appending batch of {len(enriched_future)} future items.")
@@ -200,9 +209,11 @@ class EnrichmentService:
                     logging.info(f"[PY][Session] Background: Enriching {len(history_items)} history items sequentially.")
                     enriched_history = []
                     for item in history_items:
-                        if not session.is_alive: return
+                        if not session.is_alive:
+                            return
                         res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session)
-                        if res: enriched_history.extend(res)
+                        if res:
+                            enriched_history.extend(res)
                     
                     if enriched_history and session.is_alive:
                         logging.info(f"[PY][Session] Background: Appending and moving {len(enriched_history)} history items.")
@@ -240,7 +251,8 @@ class EnrichmentService:
                         # Helper to get mark_watched
                         def get_mark_watched(it):
                             val = it.get('mark_watched')
-                            if val is None: val = it.get('settings', {}).get('yt_mark_watched', True)
+                            if val is None:
+                                val = it.get('settings', {}).get('yt_mark_watched', True)
                             return val.lower() in ("true", "yes", "1") if isinstance(val, str) else bool(val)
 
                         lua_options = {
@@ -260,8 +272,6 @@ class EnrichmentService:
                         session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
 
                 logging.info("[PY][Session] Background: Batched restoration complete.")
-            except Exception as e:
-                logging.error(f"[PY][Session] Background task error: {e}", exc_info=True)
             except Exception as e:
                 logging.error(f"[PY][Session] Background task error: {e}", exc_info=True)
 
@@ -298,12 +308,14 @@ class LauncherService:
                                     try:
                                         with open(flag_file, 'r', encoding='utf-8') as f:
                                             exit_reason = f.read().strip()
-                                    except:
+                                    except Exception:
                                         exit_reason = "completed"
                                     logging.info(f"Restored Watcher: Natural completion flag FOUND (Reason: {exit_reason}). Overriding return code to 99.")
                                     return_code = 99
-                                try: os.remove(flag_file)
-                                except: pass
+                                try:
+                                    os.remove(flag_file)
+                                except Exception:
+                                    pass
                                 break
 
                     self.session.send_message({"action": "mpv_exited", "folderId": folder_id, "returnCode": return_code, "reason": exit_reason})
@@ -639,16 +651,19 @@ class LauncherService:
                                 try:
                                     with open(flag_file, 'r', encoding='utf-8') as f:
                                         exit_reason = f.read().strip()
-                                except:
+                                except Exception:
                                     exit_reason = "completed"
                                 logging.info(f"[PY][Session] Natural completion detected for PID {pid} (Reason: {exit_reason}). Overriding return code to 99.")
                                 return_code = 99
                             
-                            try: os.remove(flag_file)
-                            except: pass
+                            try:
+                                os.remove(flag_file)
+                            except Exception:
+                                pass
                             flag_found = True
                             break
-                    if flag_found: break
+                    if flag_found:
+                        break
 
                 stats = self.session.clear(mpv_return_code=return_code)
                 self.session.send_message({

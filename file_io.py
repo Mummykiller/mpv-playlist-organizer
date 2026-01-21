@@ -59,7 +59,8 @@ class FileLock:
 
     def _is_pid_running(self, pid):
         """Checks if a process ID is currently running on the system."""
-        if pid <= 0: return False
+        if pid <= 0:
+            return False
         try:
             if platform.system() == "Windows":
                 import ctypes
@@ -118,8 +119,10 @@ class FileLock:
                                 # Since we hold thread_lock, no other thread in this process owns the file lock.
                                 if locked_pid == int(my_pid) or not self._is_pid_running(locked_pid):
                                     logging.warning(f"[PY][IO] Removing stale lock for {self.filepath} (PID {locked_pid} {'matches current' if locked_pid == int(my_pid) else 'dead'})")
-                                    try: os.remove(self.lockfile)
-                                    except: pass
+                                    try:
+                                        os.remove(self.lockfile)
+                                    except Exception:
+                                        pass
                                     continue # Try acquiring again immediately
                             else:
                                 # Lock file is empty. Check if it's old enough to be considered stale/crashed.
@@ -130,7 +133,7 @@ class FileLock:
                                         continue
                                 except OSError:
                                     pass # File might have been removed by another process
-                except:
+                except Exception:
                     pass
                 
                 # Still locked, wait and retry
@@ -142,7 +145,8 @@ class FileLock:
         try:
              with open(self.lockfile, 'r') as f:
                 holder_pid = f.read().strip()
-        except: pass
+        except Exception:
+            pass
         raise RuntimeError(f"Could not acquire lock for {self.filepath} after {self.timeout}s. Held by PID: {holder_pid}")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -159,7 +163,7 @@ class FileLock:
                             with open(self.lockfile, 'r') as f:
                                 if f.read().strip() == str(os.getpid()):
                                     os.remove(self.lockfile)
-                    except:
+                    except Exception:
                         pass
                     self.is_file_locked = False
                 FileLock._held_locks.counters[self.filepath] = 0
@@ -188,7 +192,8 @@ import tempfile
 TEMP_DIR = os.path.join(tempfile.gettempdir(), "mpv_playlist_organizer")
 try:
     os.makedirs(TEMP_DIR, exist_ok=True)
-except: pass
+except Exception:
+    pass
 
 FOLDERS_FILE = os.path.join(DATA_DIR, "folders.json")
 INDEX_FILE = os.path.join(DATA_DIR, "index.json")
@@ -198,7 +203,8 @@ EXPORT_DIR = os.path.join(DATA_DIR, "exported")
 
 try:
     os.makedirs(PLAYLISTS_DIR, exist_ok=True)
-except: pass
+except Exception:
+    pass
 
 def migrate_to_shards():
     """
@@ -244,7 +250,8 @@ def migrate_to_shards():
             # We keep the old folders.json for a short period or rename it
             try:
                 os.rename(FOLDERS_FILE, f"{FOLDERS_FILE}.migrated")
-            except: pass
+            except Exception:
+                pass
 
 def get_index():
     """Loads the folder index (metadata only)."""
@@ -298,7 +305,8 @@ def validate_safe_path(path, allow_user_content=False):
     If allow_user_content is True, allows arbitrary paths (use for media files).
     For flags, keep it False.
     """
-    if not path: return None
+    if not path:
+        return None
     
     try:
         # Special case for Windows named pipes used for IPC
@@ -363,8 +371,10 @@ def _atomic_json_dump(data, filepath):
     except Exception as e:
         logging.error(f"[PY][IO] Atomic write failed for {filepath}: {e}")
         if os.path.exists(tmp_file):
-            try: os.remove(tmp_file)
-            except: pass
+            try:
+                os.remove(tmp_file)
+            except Exception:
+                pass
         return False
 
 def _safe_json_load(filepath, default_factory=dict):
@@ -449,18 +459,22 @@ def sanitize_folder_name(name):
 
 def is_youtube_url(url):
     """Returns True if the URL is a recognized YouTube video or playlist URL."""
-    if not url or not isinstance(url, str): return False
+    if not url or not isinstance(url, str):
+        return False
     return "youtube.com/" in url or "youtu.be/" in url
 
 def get_youtube_id(url):
     """Extracts the video or playlist ID from a YouTube URL."""
-    if not url: return None
+    if not url:
+        return None
     # Video ID
     video_match = re.search(r"(?:v=|\/v\/|embed\/|youtu\.be\/|\/shorts\/)([a-zA-Z0-9_-]{11})", url)
-    if video_match: return video_match.group(1)
+    if video_match:
+        return video_match.group(1)
     # Playlist ID
     list_match = re.search(r"list=([a-zA-Z0-9_-]+)", url)
-    if list_match: return list_match.group(1)
+    if list_match:
+        return list_match.group(1)
     return None
 
 def sanitize_ytdlp_options(options_str):
@@ -478,7 +492,8 @@ def sanitize_ytdlp_options(options_str):
     
     for part in parts:
         part = part.strip()
-        if not part: continue
+        if not part:
+            continue
         
         if '=' in part:
             key, value = part.split('=', 1)
@@ -505,12 +520,14 @@ def merge_ytdlp_options(*args):
     """Merges multiple ytdl-raw-options strings into one, deduplicating keys. Handles escaped commas."""
     merged_map = {}
     for options_str in args:
-        if not options_str: continue
+        if not options_str:
+            continue
         # Split by comma NOT preceded by backslash
         parts = re.split(r'(?<!\\),', options_str)
         for part in parts:
             part = part.strip()
-            if not part: continue
+            if not part:
+                continue
             if '=' in part:
                 key, value = part.split('=', 1)
                 merged_map[key.strip().lower()] = value

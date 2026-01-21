@@ -113,7 +113,8 @@ def start_playlist_server(start_port=8000, max_port_attempts=5, m3u_file_to_serv
         return httpd, server_thread, actual_port
     except Exception as e:
         logging.error(f"Unexpected error during server startup: {e}")
-        if httpd: httpd.server_close()
+        if httpd:
+            httpd.server_close()
         return None, None, None
 
 def suicide_watch():

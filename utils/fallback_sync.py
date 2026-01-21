@@ -61,14 +61,11 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
     if not playlist and not update_last_played:
         return False, f"Playlist shard {folder_id} not found or empty"
 
-    item_found = False
     needs_shard_save = False
     
     # 2. Update the specific item in the shard
     for item in playlist:
         if item.get("id") == item_id:
-            item_found = True
-            
             if mark_watched and not item.get("marked_as_watched"):
                 if settings.get('yt_mark_watched', True):
                     # Perform the slow YouTube network call OUTSIDE of any file locks
@@ -108,7 +105,8 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
 def mark_video_as_watched_threaded(url, cookies_info, user_agent=None, folder_id=None, item_id=None, on_done=None):
     def run():
         success, msg = sync_state(folder_id, item_id, mark_watched=True, url=url, cookies=cookies_info, ua=user_agent)
-        if on_done: on_done(success, msg)
+        if on_done:
+            on_done(success, msg)
     t = threading.Thread(target=run, daemon=True)
     t.start()
     return t

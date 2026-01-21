@@ -145,7 +145,8 @@ class VolatileCookieManager:
                 '--cookies', target_path,
                 '--skip-download', '--quiet', '--no-warnings', url
             ]
-            if ignore_config: cmd.insert(1, '--ignore-config')
+            if ignore_config:
+                cmd.insert(1, '--ignore-config')
             
             subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=20)
             
@@ -155,8 +156,10 @@ class VolatileCookieManager:
             return False
         finally:
             if os.path.exists(shadow_path):
-                try: os.remove(shadow_path)
-                except: pass
+                try:
+                    os.remove(shadow_path)
+                except Exception:
+                    pass
 
 def sanitize_url(url):
     """Sanitizes a URL by removing potentially dangerous characters for shell commands."""
@@ -206,7 +209,7 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
             cookie_cmd.insert(1, '--ignore-config')
         
         logging.info(f"Extracting cookies to RAM ({temp_path}) for {browser}...")
-        result = subprocess.run(cookie_cmd, capture_output=True, text=True, check=False, timeout=30)
+        subprocess.run(cookie_cmd, capture_output=True, text=True, check=False, timeout=30)
         
         # --- Check for success or trigger Shadow Copy Fallback ---
         success = os.path.exists(temp_path) and os.path.getsize(temp_path) > 0
@@ -218,7 +221,8 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
         if success:
             try:
                 os.chmod(temp_path, 0o600) # Read/Write for owner only
-            except Exception: pass
+            except Exception:
+                pass
 
             _COOKIES_CACHE["path"] = temp_path
             _COOKIES_CACHE["browser"] = browser

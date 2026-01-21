@@ -18,12 +18,14 @@ ipc_logger = logging.getLogger("ipc_events")
 
 def is_pid_running(pid):
     """Checks if a process ID is currently running on the system using native APIs."""
-    if pid is None: return False
+    if pid is None:
+        return False
     try:
         pid = int(pid)
     except (ValueError, TypeError):
         return False
-    if pid <= 0: return False
+    if pid <= 0:
+        return False
     system = platform.system()
     
     if system == "Windows":
@@ -154,7 +156,8 @@ class IPCSocketManager:
 
                 if response_line:
                     line_str = response_line.decode('utf-8').strip()
-                    if not line_str: continue # Skip empty lines
+                    if not line_str:
+                        continue # Skip empty lines
                     
                     try:
                         event = json.loads(line_str)
@@ -248,7 +251,8 @@ class IPCSocketManager:
                         try:
                             # Direct read from file handle
                             line = self._sock_file.readline()
-                            if not line: break
+                            if not line:
+                                break
                             resp = json.loads(line.decode('utf-8'))
                             # Check if this is the response we want
                             if resp.get("request_id") == req_id or ("event" not in resp and "request_id" not in resp):
@@ -330,14 +334,17 @@ class IPCSocketManager:
             if self._sock_file:
                 try:
                     self._sock_file.close()
-                except Exception: pass
+                except Exception:
+                    pass
                 self._sock_file = None
             try:
                 if self._system == "Windows":
                     self._sock.close()
                 else:
-                    try: self._sock.shutdown(socket.AF_UNIX)
-                    except: pass
+                    try:
+                        self._sock.shutdown(socket.AF_UNIX)
+                    except Exception:
+                        pass
                     self._sock.close()
                 logging.info(f"Closed MPV IPC connection to {self._ipc_path}")
             except Exception as e:
@@ -410,5 +417,6 @@ def get_ipc_path():
         os.makedirs(IPC_DIR_LINUX, exist_ok=True)
         try:
             os.chmod(IPC_DIR_LINUX, 0o700)
-        except OSError: pass
+        except OSError:
+            pass
         return os.path.join(IPC_DIR_LINUX, f"mpv-socket-{pid}")

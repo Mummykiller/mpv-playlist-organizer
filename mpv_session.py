@@ -78,7 +78,8 @@ class MpvSessionManager:
         # Reader thread calls _handle_ytdl_error -> spawns thread -> calls this.
         # So we are in a fresh thread. sync_lock is safe.
         with self.sync_lock:
-            if not self.is_alive or not self.ipc_manager: return
+            if not self.is_alive or not self.ipc_manager:
+                return
             
             try:
                 # 1. Identify current item via user-data/id (set by adaptive_headers.lua)
@@ -121,6 +122,7 @@ class MpvSessionManager:
                     # to prefer the file if we re-send options.
                     
                     import file_io
+                    settings = file_io.get_settings()
                     essential_flags = services.get_essential_ytdlp_flags()
                     raw_opts = target_item.get('ytdl_raw_options')
                     # Note: We do NOT append cookies-from-browser string here.
@@ -273,7 +275,7 @@ class MpvSessionManager:
                 res = self.ipc_manager.send({"command": ["get_property", "pause"]}, expect_response=True, timeout=0.5)
                 if res and res.get("error") == "success":
                     return res.get("data")
-            except:
+            except Exception:
                 pass
             return None
 
@@ -286,7 +288,7 @@ class MpvSessionManager:
                 res = self.ipc_manager.send({"command": ["get_property", "idle-active"]}, expect_response=True, timeout=0.5)
                 if res and res.get("error") == "success":
                     return res.get("data")
-            except:
+            except Exception:
                 pass
             return None
 
@@ -320,7 +322,8 @@ class MpvSessionManager:
                         pid_resp = temp_manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=1.0)
                         if pid_resp and pid_resp.get("error") == "success":
                             actual_mpv_pid = pid_resp.get("data")
-                    except: pass
+                    except Exception:
+                        pass
                     temp_manager.close()
 
                 # Validation: Success if PID matches OR if IPC is alive (handles terminal wrappers)
@@ -399,13 +402,16 @@ class MpvSessionManager:
                     logging.warning(f"[PY][Session] Stale session for PID {pid} found. Cleaning up.")
                     try:
                         os.remove(self.session_file)
-                    except OSError: pass
+                    except OSError:
+                        pass
                     return {"was_stale": True, "folderId": owner_folder_id, "returnCode": -1}
 
             except Exception as e:
                 logging.warning(f"[PY][Session] Could not restore session: {e}. Cleaning up.")
-                try: os.remove(self.session_file)
-                except OSError: pass
+                try:
+                    os.remove(self.session_file)
+                except OSError:
+                    pass
                 return None
 
     def append_batch(self, items, mode="append"):
@@ -424,7 +430,8 @@ class MpvSessionManager:
             if not self.is_alive or not self.ipc_manager:
                 return {"success": False, "error": "No active session for append."}
 
-            if self.playlist is None: self.playlist = []
+            if self.playlist is None:
+                self.playlist = []
             
             # We need to know the starting index for these new items in MPV
             # playlist-count property is the most reliable way to know current size
@@ -433,7 +440,7 @@ class MpvSessionManager:
                 res = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True, timeout=0.5)
                 if res and res.get("error") == "success":
                     mpv_playlist_count = int(res.get("data", 0))
-            except:
+            except Exception:
                 mpv_playlist_count = len(self.playlist)
 
             for item in items:
@@ -505,7 +512,8 @@ class MpvSessionManager:
                     
                     item['url'] = item_url 
                     self.playlist.append(item)
-                    if self.playlist_tracker: self.playlist_tracker.add_item(item)
+                    if self.playlist_tracker:
+                        self.playlist_tracker.add_item(item)
                     mpv_playlist_count += 1
                 else:
                     # For duplicates, we still update metadata by URL as a fallback
@@ -532,7 +540,7 @@ class MpvSessionManager:
                 if res and res.get("error") == "success":
                     logging.info("[PY][Session] MPV successfully processed loadlist.")
                     idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]}, expect_response=True)
-                    if idle_resp and idle_resp.get("data") == True:
+                    if idle_resp and idle_resp.get("data"):
                         logging.info("MPV is idle. Forcing playback to start after append.")
                         self.ipc_manager.send({"command": ["set_property", "pause", False]})
                         self.ipc_manager.send({"command": ["playlist-next", "weak"]})
@@ -554,7 +562,8 @@ class MpvSessionManager:
                         # Small sleep to ensure MPV has finished reading the file
                         time.sleep(0.1)
                         os.remove(temp_path)
-                    except: pass
+                    except Exception:
+                        pass
 
     def remove(self, item_id, folder_id):
         """Removes an item from the active MPV playlist by ID."""
@@ -579,7 +588,8 @@ class MpvSessionManager:
                     self.playlist_tracker.remove_item_internal(item_id)
                 
                 title = sanitize_url(removed_item.get('title') or "Item")
-                if len(title) > 60: title = title[:57] + "..."
+                if len(title) > 60:
+                    title = title[:57] + "..."
                 self.ipc_manager.send({"command": ["show-text", f"Removed: {title}", 2000]}, expect_response=True)
                 
                 return {"success": True, "message": "Item removed from live session."}
@@ -764,8 +774,10 @@ class MpvSessionManager:
                         if lua_options.get('headers'):
                             ua = lua_options['headers'].get('User-Agent')
                             ref = lua_options['headers'].get('Referer')
-                            if ua: self.ipc_manager.send({"command": ["set_property", "user-agent", ua]})
-                            if ref: self.ipc_manager.send({"command": ["set_property", "referrer", ref]})
+                            if ua:
+                                self.ipc_manager.send({"command": ["set_property", "user-agent", ua]})
+                            if ref:
+                                self.ipc_manager.send({"command": ["set_property", "referrer", ref]})
 
                         # --- Atomic Load with Script Message Priming ---
                         if lua_options.get('resume_time') and float(lua_options['resume_time']) > 0:
@@ -780,7 +792,8 @@ class MpvSessionManager:
                         item_id = launch_item.get('id')
                         if self.playlist and not any(i.get('id') == item_id for i in self.playlist):
                              self.playlist.append(launch_item)
-                             if self.playlist_tracker: self.playlist_tracker.add_item(launch_item)
+                             if self.playlist_tracker:
+                                 self.playlist_tracker.add_item(launch_item)
 
                         resume_msg = f" at {int(float(lua_options['resume_time']))}s" if lua_options.get('resume_time') else ""
                         return {

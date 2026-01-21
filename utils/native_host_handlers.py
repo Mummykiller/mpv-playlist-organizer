@@ -80,8 +80,10 @@ class HandlerManager:
                     entry['disable_http_persistent'] = True
                 
                 # Pass browser cookie info to children
-                if cookies_browser: entry['cookies_browser'] = cookies_browser
-                if cookies_file: entry['cookies_file'] = cookies_file
+                if cookies_browser:
+                    entry['cookies_browser'] = cookies_browser
+                if cookies_file:
+                    entry['cookies_file'] = cookies_file
 
                 processed_entries.append(entry)
             
@@ -94,8 +96,10 @@ class HandlerManager:
         # Single item processing
         url_item['url'] = processed_url # Update URL with processed one
         url_item['original_url'] = url_item.get('original_url') or url_item.get('url')
-        if script_headers: url_item['headers'] = script_headers
-        if ytdl_options: url_item['ytdl_raw_options'] = ytdl_options
+        if script_headers:
+            url_item['headers'] = script_headers
+        if ytdl_options:
+            url_item['ytdl_raw_options'] = ytdl_options
         url_item['use_ytdl_mpv'] = use_ytdl_mpv_flag
         url_item['is_youtube'] = is_youtube_flag
         url_item['cookies_file'] = cookies_file # Store cookie path
@@ -489,13 +493,15 @@ class HandlerManager:
         data = message.get('data')
         filename = message.get('filename')
         subfolder = message.get('subfolder')
-        if not data or not filename: return {"success": False, "error": "Missing data or filename."}
+        if not data or not filename:
+            return {"success": False, "error": "Missing data or filename."}
         return self.file_io.write_export_file(filename, data, subfolder=subfolder)
 
     def handle_export_all_separately(self, message):
         folders = message.get('data')
         custom_names = message.get('customNames', {})
-        if not folders: return {"success": False, "error": "No folder data provided."}
+        if not folders:
+            return {"success": False, "error": "No folder data provided."}
         count = 0
         for f_id, f_data in folders.items():
             if 'playlist' in f_data:
@@ -504,7 +510,8 @@ class HandlerManager:
                 # Ensure the filename is safe for the filesystem
                 safe_name = "".join(c if c.isalnum() or c in ('-', '_', ' ') else '_' for c in target_filename).rstrip()
                 # Export the full folder object (f_data) to preserve metadata
-                if self.file_io.write_export_file(safe_name, f_data)["success"]: count += 1
+                if self.file_io.write_export_file(safe_name, f_data)["success"]:
+                    count += 1
         return {"success": True, "message": f"Successfully exported {count} playlists."}
 
     def handle_list_import_files(self, message):
@@ -512,7 +519,8 @@ class HandlerManager:
 
     def handle_import_from_file(self, message):
         filename = message.get('filename')
-        if not filename: return {"success": False, "error": "No filename provided."}
+        if not filename:
+            return {"success": False, "error": "No filename provided."}
         try:
             # Join and then normalize to handle relative paths like 'settings/file.json'
             target_path = os.path.join(self.file_io.EXPORT_DIR, filename)
@@ -536,9 +544,12 @@ class HandlerManager:
             # Use configured platform for consistency
             platform_name = self.file_io.get_settings().get('os_platform', platform.system())
 
-            if platform_name == "Windows": subprocess.Popen(['explorer', os.path.normpath(path)])
-            elif platform_name == "Darwin": subprocess.run(['open', path], check=True)
-            else: subprocess.run(['xdg-open', path], check=True)
+            if platform_name == "Windows":
+                subprocess.Popen(['explorer', os.path.normpath(path)])
+            elif platform_name == "Darwin":
+                subprocess.run(['open', path], check=True)
+            else:
+                subprocess.run(['xdg-open', path], check=True)
             return {"success": True, "message": "Opening export folder."}
         except Exception as e:
             return {"success": False, "error": f"Failed to open folder: {e}"}
@@ -636,7 +647,8 @@ class HandlerManager:
                 start_time = time.time()
                 while time.time() - start_time < port_found_timeout:
                     line = self.playlist_server_process.stdout.readline()
-                    if not line: break
+                    if not line:
+                        break
                     try:
                         data = json.loads(line.strip())
                         if data.get("status") == "running" and data.get("port"):
@@ -648,8 +660,8 @@ class HandlerManager:
                 
                 # Start a thread to consume stderr to prevent blocking
                 def consume_stderr(proc):
-                    for l in iter(proc.stderr.readline, ''):
-                        logging.info(f"Server stderr: {l.strip()}")
+                    for line_err in iter(proc.stderr.readline, ''):
+                        logging.info(f"Server stderr: {line_err.strip()}")
                     proc.stderr.close()
                 threading.Thread(target=consume_stderr, args=(self.playlist_server_process,), daemon=True).start()
 
@@ -661,8 +673,9 @@ class HandlerManager:
                 for _ in range(30):
                     try:
                         with urlopen(fetch_url, timeout=0.2) as r:
-                            if r.getcode() == 200: return fetch_url
-                    except:
+                            if r.getcode() == 200:
+                                return fetch_url
+                    except Exception:
                         pass
                     time.sleep(0.2)
                 
@@ -850,10 +863,14 @@ class HandlerManager:
                         # ENRICH NEW ITEMS: Ensure they have titles, YouTube flags, etc.
                         from concurrent.futures import ThreadPoolExecutor
                         processed_new_items = []
+                        
+                        # Use a local context for enrichment
+                        all_folders_context = {folder_id: {"playlist": target_folder.get('playlist', [])}}
+                        
                         with ThreadPoolExecutor(max_workers=5) as executor:
                             def process_wrapper(item):
                                 # We use the existing _process_url_item which handles expansion and enrichment
-                                processed, _ = self._process_url_item(item, folder_id, all_folders)
+                                processed, _ = self._process_url_item(item, folder_id, all_folders_context)
                                 return processed
                             
                             results = list(executor.map(process_wrapper, new_items))
@@ -903,11 +920,6 @@ class HandlerManager:
                 
                 # Reformat headers for MPV command line
                 global_headers = first_item.get('headers')
-                if global_headers:
-                    header_list = [f"{k}: {v.replace(',', '')}" for k, v in global_headers.items()]
-                    global_headers_str = ",".join(header_list)
-                else:
-                    global_headers_str = None
 
                 global_ytdl_raw_options = first_item.get('ytdl_raw_options')
                 global_disable_http_persistent = first_item.get('disable_http_persistent', False)
