@@ -104,7 +104,8 @@ class PlaylistTracker:
             if self.ipc_manager.connect(self.ipc_path, timeout=0.2):
                 connected = True
                 break
-            if not self.is_tracking: return
+            if not self.is_tracking:
+                return
             time.sleep(0.2)
 
         if not connected:
@@ -206,7 +207,8 @@ class PlaylistTracker:
                                 for item in self.playlist:
                                     if item.get('id') == current_id:
                                         display_name = item.get('title') or item.get('url')
-                                        if len(display_name) > 50: display_name = display_name[:47] + "..."
+                                        if len(display_name) > 50:
+                                            display_name = display_name[:47] + "..."
                                         is_yt = item.get('is_youtube', False)
                                         is_enabled = item.get('mark_watched', True)
                                         already_marked = item.get('marked_as_watched', False)
@@ -244,7 +246,8 @@ class PlaylistTracker:
                     elif prop_name == 'time-pos':
                         if current_id and current_id != -1 and current_id != "-1" and data is not None:
                             # Ignore negative or invalid timestamps
-                            if data < 0: continue
+                            if data < 0:
+                                continue
                             
                             # Update session duration
                             if self.last_time_pos is not None:
@@ -466,7 +469,8 @@ class PlaylistTracker:
         logging.debug(f"[PY][Tracker] Mark-watched check for {item_id}: enabled={is_enabled}, already_marked={already_marked}, cookies={has_cookies}, url={has_url}")
         
         title = target_item.get('title') or target_item.get('original_url') or item_id
-        if len(title) > 50: title = title[:47] + "..."
+        if len(title) > 50:
+            title = title[:47] + "..."
 
         # Lazy Extraction: If we are using direct browser access, we won't have a file yet.
         # Extract it now solely for the purpose of marking as watched.
@@ -520,10 +524,14 @@ class PlaylistTracker:
         else:
             # Report why it was skipped
             reasons = []
-            if not is_enabled: reasons.append("setting disabled")
-            if already_marked: reasons.append("already marked as watched")
-            if not has_cookies: reasons.append("missing cookies (is 'Use Cookies' ON?)")
-            if not has_url: reasons.append("missing original URL")
+            if not is_enabled:
+                reasons.append("setting disabled")
+            if already_marked:
+                reasons.append("already marked as watched")
+            if not has_cookies:
+                reasons.append("missing cookies (is 'Use Cookies' ON?)")
+            if not has_url:
+                reasons.append("missing original URL")
             
             reason_str = ", ".join(reasons)
             logging.warning(f"[PY][Tracker] Mark-as-watched skipped for {item_id}: {reason_str}")
@@ -569,5 +577,7 @@ class PlaylistTracker:
         if self.ipc_manager and self.ipc_manager.is_connected():
             try:
                 self.ipc_manager.send({"command": ["script-message", "python_log", message]})
-            except:
+            except Exception:
                 pass
+
+    

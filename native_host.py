@@ -31,7 +31,7 @@ def _get_emergency_log_path():
     try:
         os.makedirs(path, exist_ok=True)
         return os.path.join(path, "native_host_crash.log")
-    except:
+    except Exception:
         return "native_host_crash.log" # Current directory fallback
 
 # --- Failsafe Crash Handler ---
@@ -176,10 +176,12 @@ try:
             with self.lock:
                 timestamp = datetime.now().isoformat()
                 self.errors.append({"timestamp": timestamp, "context": context, "error": str(error)})
-                if len(self.errors) > 50: self.errors.pop(0)
+                if len(self.errors) > 50:
+                    self.errors.pop(0)
 
         def get_errors(self):
-            with self.lock: return list(self.errors)
+            with self.lock:
+                return list(self.errors)
 
     diagnostic_collector = DiagnosticCollector()
 
@@ -442,9 +444,11 @@ try:
                 logging.error(f"[PY][TASK] Error processing {message.get('action')}: {e}", exc_info=True)
                 try:
                     error_resp = {"success": False, "error": f"Task error: {str(e)}"}
-                    if message.get('request_id'): error_resp['request_id'] = message.get('request_id')
+                    if message.get('request_id'):
+                        error_resp['request_id'] = message.get('request_id')
                     send_message(error_resp)
-                except: pass
+                except Exception:
+                    pass
 
         while True:
             try:
@@ -457,7 +461,8 @@ try:
             except Exception as e:
                 logging.error(f"[PY][MAIN] Error in main loop: {e}", exc_info=True)
                 # If get_message fails critically, the loop might need to break
-                if not sys.stdin or sys.stdin.closed: break
+                if not sys.stdin or sys.stdin.closed:
+                    break
 
     if __name__ == '__main__':
         logging.info(f"[PY][START] Args: {sys.argv}, TTY: {sys.stdin.isatty() if sys.stdin else 'None'}")

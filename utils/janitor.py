@@ -55,7 +55,8 @@ class Janitor:
                 matched = False
                 
                 for pattern, ext in PATTERNS:
-                    if not filename.lower().endswith(ext): continue
+                    if not filename.lower().endswith(ext):
+                        continue
                     
                     match = pattern.match(filename)
                     if match:
@@ -74,7 +75,8 @@ class Janitor:
                                 else:
                                     logging.debug(f"Janitor: Preserving old {ext} file because PID {pid} is still alive: {filename}")
 
-                        except FileNotFoundError: pass
+                        except FileNotFoundError:
+                            pass
                         except (ValueError, OSError) as e:
                             logging.warning(f"Janitor: Error removing stale file {filename}: {e}")
                         break
@@ -85,7 +87,8 @@ class Janitor:
                         if os.path.getmtime(file_path) < three_days_ago:
                             logging.info(f"Janitor: Removing old temporary file (no PID match/older than 72h): {filename}")
                             os.remove(file_path)
-                    except FileNotFoundError: pass
+                    except FileNotFoundError:
+                        pass
                     except OSError as e:
                         logging.warning(f"Janitor: Error removing old file {filename}: {e}")
 
@@ -132,12 +135,14 @@ class Janitor:
                                         mpv_pid = resp.get("data")
                                         if mpv_pid and is_pid_running(mpv_pid):
                                             is_socket_responsive = True
-                            except Exception: pass
+                            except Exception:
+                                pass
 
                             if not is_socket_responsive:
                                 logging.info(f"Janitor: Removing stale socket older than 72h: {item}")
                                 os.remove(item_path)
-                    except FileNotFoundError: pass
+                    except FileNotFoundError:
+                        pass
                     except OSError as e:
                         logging.warning(f"Janitor: Error removing stale socket {item}: {e}")
                     continue
@@ -151,7 +156,8 @@ class Janitor:
                             if not is_pid_running(pid):
                                 logging.info(f"Janitor: Removing stale flag older than 72h: {item}")
                                 os.remove(item_path)
-                    except FileNotFoundError: pass
+                    except FileNotFoundError:
+                        pass
                     except OSError as e:
                         logging.warning(f"Janitor: Error removing stale flag {item}: {e}")
                     continue
@@ -208,7 +214,8 @@ class Janitor:
                             if not is_pid_running(pid):
                                 logging.info(f"Janitor: Removing stale flag file older than 72h: {item}")
                                 os.remove(item_path)
-                    except FileNotFoundError: pass
+                    except FileNotFoundError:
+                        pass
                     except OSError as e:
                         logging.warning(f"Janitor: Error removing stale flag {item}: {e}")
         except Exception as e:
