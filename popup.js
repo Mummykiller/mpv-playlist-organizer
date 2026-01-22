@@ -1729,14 +1729,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const copyBtn = e.target.closest(".btn-copy-item");
 
 			if (removeBtn) {
+				const listItem = removeBtn.closest(".list-item");
 				const index = parseInt(removeBtn.dataset.index, 10);
+				const itemId = listItem?.dataset.id;
 				const folderId = miniFolderSelect.value;
-				if (!isNaN(index)) {
+
+				if (!isNaN(index) && listItem) {
+					// Optimistic UI update: fade out immediately
+					listItem.classList.add("removing");
+
 					sendMessageAsync({
 						action: "remove_item",
 						folderId,
-						data: { index },
+						data: { index, id: itemId },
 					}).catch((err) => {
+						listItem.classList.remove("removing"); // Rollback on error
 						showStatus("Failed to remove item: " + err.message, true);
 					});
 				}

@@ -1046,11 +1046,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// Fire and forget for toggles
 			if (isToggle) {
-				this.bridge.send(action, folderId, data);
-				return;
+				return this.bridge.send(action, folderId, data);
 			}
 
-			this.bridge
+			return this.bridge
 				.send(action, folderId, data)
 				.then((response) => {
 					// UI Refresh Logic for State-Modifying Actions:

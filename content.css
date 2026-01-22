@@ -680,6 +680,13 @@ select:focus-visible {
 	border-width: 0;
 }
 
+.list-item.removing {
+	opacity: 0;
+	transform: translateX(20px);
+	pointer-events: none;
+	transition: all 0.3s ease;
+}
+
 /* --- Placeholders --- */
 #playlist-placeholder,
 #log-placeholder {

@@ -331,12 +331,21 @@ export async function handleRemoveItem(request) {
 	const data = await storage.get();
 	const { folderId } = request;
 	const indexToRemove = request.data?.index;
+	const idToRemove = request.data?.id;
 
-	if (data.folders[folderId] && typeof indexToRemove === "number") {
+	if (data.folders[folderId]) {
 		const playlist = data.folders[folderId].playlist;
-		if (indexToRemove >= 0 && indexToRemove < playlist.length) {
-			const itemToRemove = playlist[indexToRemove];
-			playlist.splice(indexToRemove, 1);
+		let finalIndex = -1;
+
+		if (idToRemove) {
+			finalIndex = playlist.findIndex((item) => item.id === idToRemove);
+		} else if (typeof indexToRemove === "number") {
+			finalIndex = indexToRemove;
+		}
+
+		if (finalIndex >= 0 && finalIndex < playlist.length) {
+			const itemToRemove = playlist[finalIndex];
+			playlist.splice(finalIndex, 1);
 			await storage.set(data, folderId);
 			debouncedSyncToNativeHostFile(folderId, true);
 
@@ -365,7 +374,7 @@ export async function handleRemoveItem(request) {
 			return { success: true, message: "Item removed." };
 		}
 	}
-	return { success: false, error: "Invalid item index." };
+	return { success: false, error: "Invalid item index or ID." };
 }
 
 export async function handleSetPlaylistOrder(request) {
