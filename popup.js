@@ -281,6 +281,42 @@ document.addEventListener("DOMContentLoaded", async () => {
 		let isPlaybackLoading = false;
 		let isPlaybackClosing = false;
 		let cachedPrefs = null;
+		let loadingTimeout = null;
+
+		// Persistent state for UI consistency
+		const popupState = {
+			isFolderActive: false,
+			lastPlayedId: null,
+			isPaused: false,
+			needsAppend: false,
+			currentPlaylist: [],
+		};
+
+		// Unified Playback State Subscription
+		const MPV = window.MPV_INTERNAL;
+		const playbackUnsubscribe = MPV.playbackStateManager.subscribe((pbState) => {
+			// Update local persistent state
+			popupState.isFolderActive = pbState.status !== "stopped";
+			popupState.lastPlayedId = pbState.lastPlayedId;
+			popupState.isPaused = pbState.status === "paused";
+			popupState.needsAppend = pbState.needsAppend;
+
+			// Only update UI if we are looking at the relevant folder
+			const currentFolderId = miniFolderSelect?.value;
+			if (pbState.folderId === currentFolderId) {
+				setPlaybackLoading(pbState.status === "loading");
+				setPlaybackClosing(pbState.isClosing);
+				
+				// Ensure the play button and list highlights are correct
+				renderPlaylist(
+					null, // Use cached playlist
+					pbState.lastPlayedId,
+					pbState.status !== "stopped",
+					pbState.status === "paused",
+					pbState.needsAppend
+				);
+			}
+		});
 
 		// Reorder Elements
 		const reorderContainer = document.getElementById("reorder-container");
@@ -548,18 +584,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 		async function refreshPlaylist(data = null) {
 			const processResponse = (response) => {
 				if (response?.success) {
-					// Guard: Do not update button classes if we are closing
-					if (isPlaybackClosing) return;
+					// 1. Update unified manager first
+					MPV.playbackStateManager.update({
+						folderId: miniFolderSelect.value,
+						isRunning: response.isRunning,
+						isPaused: response.isPaused,
+						isIdle: response.isIdle,
+						lastPlayedId: response.lastPlayedId,
+						needsAppend: response.needsAppend
+					});
 
-					// Update play button state
-					miniPlayBtn.classList.toggle(
-						"btn-playing",
-						!!response.isFolderActive,
-					);
+					// 2. Heavy data sync
 					renderPlaylist(
 						response.list,
-						response.last_played_id,
-						response.isFolderActive,
+						response.lastPlayedId,
+						response.isRunning,
 						response.isPaused,
 						response.needsAppend,
 					);
@@ -588,25 +627,35 @@ document.addEventListener("DOMContentLoaded", async () => {
 		function setPlaybackLoading(isLoading) {
 			isPlaybackLoading = isLoading;
 			if (!miniPlayBtn) return;
-			requestAnimationFrame(() => {
-				miniPlayBtn.classList.toggle("btn-loading", isLoading);
-				if (isLoading) miniPlayBtn.classList.remove("btn-playing");
-			});
+			
+			miniPlayBtn.classList.toggle("btn-loading", isLoading);
+			if (isLoading) {
+				miniPlayBtn.classList.remove("btn-playing");
+				// Safety Timeout: Prevent infinite loading
+				if (loadingTimeout) clearTimeout(loadingTimeout);
+				loadingTimeout = setTimeout(() => {
+					if (isPlaybackLoading) {
+						setPlaybackLoading(false);
+						showStatus("Playback sync timed out.", true);
+					}
+				}, 30000);
+			} else {
+				if (loadingTimeout) clearTimeout(loadingTimeout);
+			}
 		}
 
 		function setPlaybackClosing(isClosing) {
 			if (!miniPlayBtn) return;
 			isPlaybackClosing = isClosing;
 			if (isClosing) isPlaybackLoading = false;
-			requestAnimationFrame(() => {
-				miniPlayBtn.classList.toggle("btn-closing", isClosing);
-				if (isClosing) {
-					miniPlayBtn.classList.remove("btn-playing");
-					miniPlayBtn.classList.remove("btn-loading");
-					miniPlayBtn.title = "MPV is closing...";
-					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`;
-				}
-			});
+			
+			miniPlayBtn.classList.toggle("btn-closing", isClosing);
+			if (isClosing) {
+				miniPlayBtn.classList.remove("btn-playing");
+				miniPlayBtn.classList.remove("btn-loading");
+				miniPlayBtn.title = "MPV is closing...";
+				miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`;
+			}
 		}
 
 		/**
@@ -620,10 +669,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 		function renderPlaylist(
 			playlist,
 			lastPlayedId,
-			isFolderActive = false,
-			isPaused = false,
-			needsAppend = false,
+			isFolderActive = null,
+			isPaused = null,
+			needsAppend = null,
 		) {
+			// Update persistent state with whatever was provided
+			if (playlist) popupState.currentPlaylist = playlist;
+			if (lastPlayedId) popupState.lastPlayedId = lastPlayedId;
+			if (typeof isFolderActive === "boolean") popupState.isFolderActive = isFolderActive;
+			if (typeof isPaused === "boolean") popupState.isPaused = isPaused;
+			if (typeof needsAppend === "boolean") popupState.needsAppend = needsAppend;
+
+			// Use fallbacks from persistent state
+			const effectivePlaylist = playlist || popupState.currentPlaylist;
+			const effectiveLastPlayedId = lastPlayedId || popupState.lastPlayedId;
+			const effectiveIsFolderActive =
+				typeof isFolderActive === "boolean" ? isFolderActive : popupState.isFolderActive;
+			const effectiveIsPaused = 
+				typeof isPaused === "boolean" ? isPaused : (popupState.isPaused || false);
+			const effectiveNeedsAppend = 
+				typeof needsAppend === "boolean" ? needsAppend : (popupState.needsAppend || false);
+
 			// Guard: If we are in the closing state, do not update UI button icons
 			// or state as 'isPlaybackClosing' has higher visual priority.
 			if (isPlaybackClosing) return;
@@ -639,30 +705,46 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			// Update the play button based on current playback state
 			if (miniPlayBtn) {
-				if (isFolderActive && !isPaused) {
+				miniPlayBtn.classList.toggle(
+					"btn-playing",
+					!!effectiveIsFolderActive,
+				);
+				
+				// Clear loading state if we have a definitive render, 
+				// unless we are currently awaiting a 'play' command response.
+				if (!isPlaybackLoading || effectiveIsFolderActive || effectiveNeedsAppend) {
+					setPlaybackLoading(false);
+				}
+
+				if (effectiveNeedsAppend) {
+					miniPlayBtn.title = "Queue to Playlist";
+					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
+				} else if (effectiveIsFolderActive) {
 					miniPlayBtn.title = "Play/Pause Playlist";
 					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
 				} else {
-					miniPlayBtn.title = needsAppend
-						? "Append to Playlist"
-						: "Play Playlist";
+					miniPlayBtn.title = "Play Playlist";
 					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
 				}
 			}
 
-			if (playlist && playlist.length > 0) {
+			if (effectivePlaylist && effectivePlaylist.length > 0) {
 				const prefs = cachedPrefs || {};
 				const highlightEnabled = prefs.enable_active_item_highlight ?? true;
 				const showWatchedGUI = prefs.show_watched_status_gui ?? true;
 
 				const fragment = document.createDocumentFragment();
 
-				playlist.forEach((item, index) => {
+				effectivePlaylist.forEach((item, index) => {
 					const itemDiv = document.createElement("div");
 					itemDiv.className = "list-item";
 
-					if (highlightEnabled && lastPlayedId && item.id === lastPlayedId) {
-						if (isFolderActive) {
+					if (
+						highlightEnabled &&
+						effectiveLastPlayedId &&
+						item.id === effectiveLastPlayedId
+					) {
+						if (effectiveIsFolderActive) {
 							itemDiv.classList.add("active-item");
 						} else {
 							itemDiv.classList.add("last-played-item");
@@ -749,7 +831,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				playlistContainer.appendChild(fragment);
 
 				// Post-render scroll logic
-				const newItemCount = playlist.length;
+				const newItemCount = effectivePlaylist.length;
 				const wasItemAdded = newItemCount > oldItemCount;
 				if (
 					wasItemAdded &&
@@ -1502,7 +1584,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					miniAddBtn.classList.add("url-in-playlist");
 					miniAddBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
 
-					refreshPlaylist();
+					setTimeout(() => refreshPlaylist(), 50);
 
 					setTimeout(() => {
 						miniAddBtn.innerHTML = originalIcon;
@@ -1598,23 +1680,37 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (!folderId) {
 				return showStatus("Please select a folder.", true);
 			}
-			setPlaybackLoading(true);
+			
+			// Get current 'needsAppend' state from the button
+			const needsAppend = miniPlayBtn?.title.includes("Queue");
+
+			// Optimistic Toggle check
+			const isToggle = popupState.isFolderActive && !needsAppend && !isPlaybackClosing;
+			if (!isToggle) {
+				MPV.playbackStateManager.setLoading(folderId);
+			}
 			setPlaybackClosing(false);
 			try {
-				// Send the 'play_m3u' action with m3u_data type 'folderId'.
-				// The background script will then fetch the playlist for this folder and construct the M3U.
 				const response = await sendMessageAsync({
-					action: "play", // Changed back to 'play'
+					action: "play",
 					folderId: folderId,
-					// m3u_data parameter is removed; handlePlay will resolve folderId into M3U content.
 				});
 
-				setPlaybackLoading(false);
 				if (response.success) {
-					showStatus(response.message);
+					if (response.message) showStatus(response.message);
+					
+					MPV.playbackStateManager.update({
+						folderId: folderId,
+						isRunning: response.isRunning || true, // Play succeeded
+						isPaused: response.isPaused,
+						needsAppend: response.needsAppend
+					});
+					
+					refreshPlaylist();
 				} else {
 					setPlaybackLoading(false); // Force double-check
 					showStatus(response.error || "Failed to start playback.", true);
+					MPV.playbackStateManager.update({ isRunning: popupState.isFolderActive });
 				}
 			} catch (error) {
 				setPlaybackLoading(false);
@@ -1622,6 +1718,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					`An error occurred while playing playlist: ${error.message}`,
 					true,
 				);
+				MPV.playbackStateManager.update({ isRunning: popupState.isFolderActive });
 			}
 		}
 
@@ -1759,11 +1856,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 				const prefs = initialStorage.mpv_settings?.ui_preferences?.global;
 				cachedPrefs = prefs;
 				const folderIds = initialStorage.mpv_folder_index || ["Default"];
-				const lastUsedFolderId =
-					initialStorage.mpv_settings?.last_used_folder_id || folderIds[0];
 				const playbackCache = initialStorage.mpv_playback_cache || {};
+				
+				// Priority for initial folder:
+				// 1. If MPV is running (active/not idle), show THAT folder instantly.
+				// 2. Otherwise use last used folder.
+				const isCacheActive = playbackCache.folderId && (playbackCache.is_running || !playbackCache.isIdle);
+				const lastUsedFolderId = (isCacheActive ? playbackCache.folderId : (initialStorage.mpv_settings?.last_used_folder_id || folderIds[0]));
 
-				// Get initial playlist for the last used folder instantly
+				// Get initial playlist for the target folder instantly
 				const initialPlaylistData = await chrome.storage.local.get(
 					`mpv_folder_data_${lastUsedFolderId}`,
 				);
@@ -1791,17 +1892,33 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 				populateFolderDropdowns({ success: true, folderIds, lastUsedFolderId });
 
+				// Seed the playback manager with the cache instantly
+				MPV.playbackStateManager.update({
+					folderId: playbackCache.folderId,
+					isRunning: playbackCache.is_running || !playbackCache.isIdle,
+					isPaused: playbackCache.isPaused,
+					isIdle: playbackCache.isIdle,
+					lastPlayedId: playbackCache.lastPlayedId
+				});
+
 				if (uiManager.isMiniView()) {
 					// Render playlist instantly from storage (Static state + Playback cache)
 					const isFolderActive =
 						playbackCache.folderId === lastUsedFolderId &&
-						!playbackCache.isIdle;
-					const isPaused = playbackCache.isPaused || false;
+						(playbackCache.is_running || !playbackCache.isIdle);
+					const isPaused = (playbackCache.isPaused || playbackCache.isIdle) || false;
+
+					// Priority for lastPlayedId: Cache (real-time) > Storage (backup)
+					const effectiveLastPlayedId =
+						playbackCache.folderId === lastUsedFolderId &&
+						playbackCache.lastPlayedId
+							? playbackCache.lastPlayedId
+							: lastPlayedId;
 
 					// Determine if we need append based on session IDs in cache vs current playlist
 					let needsAppend = false;
-					if (playbackCache.session_ids && initialPlaylist.length > 0) {
-						const sessionIds = new Set(playbackCache.session_ids);
+					if (playbackCache.sessionIds && initialPlaylist.length > 0) {
+						const sessionIds = new Set(playbackCache.sessionIds);
 						needsAppend = initialPlaylist.some(
 							(item) => !sessionIds.has(item.id),
 						);
@@ -1809,24 +1926,33 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 					renderPlaylist(
 						initialPlaylist,
-						lastPlayedId,
+						effectiveLastPlayedId,
 						isFolderActive,
 						isPaused,
 						needsAppend,
 					);
-					if (miniPlayBtn)
-						miniPlayBtn.classList.toggle("btn-playing", isFolderActive);
+
+					// Show loading state instantly if cache says we are launching
+					if (
+						playbackCache.isLaunching &&
+						playbackCache.folderId === lastUsedFolderId
+					) {
+						MPV.playbackStateManager.setLoading(lastUsedFolderId);
+					}
 
 					if (miniAddBtn) miniAddBtn.focus();
 				} else {
 					if (prefs?.autofocus_new_folder) newFolderNameInput.focus();
 				}
 
-				// 2. BACKGROUND SYNC: Now fetch live/contextual data (Can be slow)
+				// 2. DEEP SYNC: Now fetch live/contextual data (Can be slow)
 				(async () => {
 					try {
 						// Update native host status (Async)
 						updateNativeHostStatusUI();
+						
+						// Request deep sync from manager
+						MPV.playbackStateManager.requestSync();
 
 						const tabs = await chrome.tabs
 							.query({ active: true, currentWindow: true })
@@ -1834,6 +1960,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 						const activeTab = tabs && tabs.length > 0 ? tabs[0] : null;
 						const isHttp = activeTab?.url?.startsWith("http") ?? false;
 						const tabId = activeTab?.id;
+
+						// Attempt to 'steal' state from the on-page controller (Ultra Fast Sync)
+						if (tabId && uiManager.isMiniView()) {
+							try {
+								const tabState = await new Promise((resolve) => {
+									chrome.tabs.sendMessage(tabId, { action: "get_controller_state" }, (res) => {
+										if (chrome.runtime.lastError) resolve(null);
+										else resolve(res);
+									});
+								});
+
+								if (tabState && tabState.success && tabState.folderId === lastUsedFolderId) {
+									renderPlaylist(
+										tabState.playlist,
+										tabState.lastPlayedId,
+										tabState.isFolderActive,
+										false, // Pause state unknown
+										false, // Append state unknown
+									);
+									if (tabState.isClosing) setPlaybackClosing(true);
+									console.log("[Popup] Synced state from active tab controller.");
+								}
+							} catch (e) {}
+						}
 
 						// Sync Mode: Correct initial mode if tab-specific state differs
 						let uiState = null;
@@ -1868,27 +2018,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 								: isYouTube
 									? "YouTube Video detected"
 									: "Stream/video detected";
-						}
-
-						// Live Playback Sync: Get current MPV status to update Play/Pause/Append icons
-						if (uiManager.isMiniView() && lastUsedFolderId) {
-							const liveResponse = await sendMessageAsync({
-								action: "get_playlist",
-								folderId: lastUsedFolderId,
-							});
-							if (liveResponse?.success) {
-								renderPlaylist(
-									liveResponse.list,
-									liveResponse.last_played_id,
-									liveResponse.isFolderActive,
-									liveResponse.isPaused,
-									liveResponse.needsAppend,
-								);
-								miniPlayBtn.classList.toggle(
-									"btn-playing",
-									!!liveResponse.isFolderActive,
-								);
-							}
 						}
 					} catch (bgError) {
 						console.warn("[Popup] Background sync failed:", bgError);
@@ -1930,23 +2059,39 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			// Handle live playlist updates to keep the item count and playlist view in sync
 			if (request.action === "render_playlist") {
-				const isMiniView = miniControllerView.style.display === "flex";
+				const isMiniView = uiManager.isMiniView();
 				const currentFolderId = miniFolderSelect.value;
 
-				if (request.isClosing) {
-					setPlaybackClosing(true);
-					return;
-				}
+				// 1. Update unified manager first
+				MPV.playbackStateManager.update({
+					folderId: request.folderId,
+					isRunning: request.isFolderActive,
+					isPaused: request.isPaused,
+					isIdle: request.isIdle,
+					isClosing: request.isClosing,
+					lastPlayedId: request.lastPlayedId || request.last_played_id,
+					needsAppend: request.needsAppend
+				});
 
-				if (isMiniView && currentFolderId === request.folderId) {
-					setPlaybackClosing(false);
-					renderPlaylist(
-						request.playlist,
-						request.last_played_id,
-						request.isFolderActive,
-						request.isPaused,
-						request.needsAppend,
-					);
+				// 2. Heavy data sync (If looking at the right folder)
+				if (currentFolderId === request.folderId) {
+					if (isMiniView) {
+						renderPlaylist(
+							request.playlist,
+							request.lastPlayedId || request.last_played_id,
+							request.isFolderActive,
+							request.isPaused,
+							request.needsAppend,
+						);
+					}
+				}
+			}
+
+			// Sync folder selection if it changed in another context (e.g. on page)
+			if (request.action === "last_folder_changed") {
+				if (miniFolderSelect.value !== request.folderId) {
+					miniFolderSelect.value = request.folderId;
+					refreshPlaylist();
 				}
 			}
 
@@ -2178,6 +2323,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 		// Start the initialization process
 		optionsManager.initializeEventListeners();
 		initializePopup();
+
+		// Periodic Sync: Ensure the popup stays in sync with background state while open.
+		// This recovers from missed broadcasts and handles Service Worker wakeup lag.
+		setInterval(() => {
+			if (uiManager.isMiniView()) {
+				refreshPlaylist();
+			}
+		}, 5000);
 	} catch (e) {
 		console.error("Error in DOMContentLoaded handler:", e);
 		showStatus(`Critical error: ${e.message}`, true);

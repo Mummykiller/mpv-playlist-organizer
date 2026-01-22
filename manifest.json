@@ -23,6 +23,7 @@
 				"utils/commUtils.js",
 				"utils/MessageBridge.js",
 				"utils/ContentState.js",
+				"utils/PlaybackStateManager.js",
 				"utils/NavigationObserver.js",
 				"utils/UIManager.js",
 				"utils/PlaylistUI.js",

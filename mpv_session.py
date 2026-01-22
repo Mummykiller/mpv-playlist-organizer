@@ -404,10 +404,15 @@ class MpvSessionManager:
                     except OSError: pass
                 return None
 
-    def append_batch(self, items, mode="append"):
+    def append_batch(self, items, mode="append", folder_id=None):
         """Appends multiple items using a temporary M3U to preserve titles and options natively."""
         if not items:
             return {"success": True, "message": "No items to append."}
+
+        # Security/Consistency check: Only append if it's the same folder or generic
+        if folder_id and self.owner_folder_id and folder_id != self.owner_folder_id:
+            logging.warning(f"[PY][Session] Append rejected: folder mismatch (active: '{self.owner_folder_id}', req: '{folder_id}')")
+            return {"success": False, "error": f"Folder mismatch. Session is active for '{self.owner_folder_id}'."}
 
         logging.info(f"Linked Playlist: Preparing to append {len(items)} items. Mode: {mode}")
         for idx, item in enumerate(items):
@@ -427,10 +432,15 @@ class MpvSessionManager:
             # playlist-count property is the most reliable way to know current size
             mpv_playlist_count = 0
             try:
-                res = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True, timeout=0.5)
+                # Increased timeout to 2.0s for busy MPV instances
+                res = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True, timeout=2.0)
                 if res and res.get("error") == "success":
                     mpv_playlist_count = int(res.get("data", 0))
-            except Exception:
+                else:
+                    logging.warning(f"Append: Failed to get playlist-count, falling back to internal list size ({len(self.playlist)})")
+                    mpv_playlist_count = len(self.playlist)
+            except Exception as e:
+                logging.warning(f"Append: IPC Error getting playlist-count: {e}. Falling back to {len(self.playlist)}")
                 mpv_playlist_count = len(self.playlist)
 
             for item in items:

@@ -37,6 +37,7 @@ class PlaylistTracker:
         self.clear_behavior = settings.get('playlist_clear_behavior', 'full_on_completion') # 'full_on_completion' or 'on_item_finish'
         self.is_naturally_completed = False
         self.lock = threading.Lock()
+        self.current_id = None
 
         for item in initial_playlist:
             self.add_item(item)
@@ -100,13 +101,13 @@ class PlaylistTracker:
         # Optimized: Poll for connection instead of fixed sleep
         self.ipc_manager = ipc_utils.IPCSocketManager()
         connected = False
-        for attempt in range(20): # Try for up to 4 seconds (20 * 0.2s)
-            if self.ipc_manager.connect(self.ipc_path, timeout=0.2):
+        for attempt in range(40): # Try for up to 2 seconds (40 * 0.05s)
+            if self.ipc_manager.connect(self.ipc_path, timeout=0.1):
                 connected = True
                 break
             if not self.is_tracking:
                 return
-            time.sleep(0.2)
+            time.sleep(0.05)
 
         if not connected:
             logging.error(f"[PY][Tracker] Tracker failed to connect to IPC at {self.ipc_path} after multiple attempts.")
@@ -124,14 +125,17 @@ class PlaylistTracker:
 
         # Immediate Heartbeat to register Python presence
         self.ipc_manager.send({"command": ["script-message", "tracker_heartbeat"]})
+        
+        # Proactive Status Push: Notify the UI immediately upon connection
+        # This clears the 'isLaunching' state in the background cache instantly.
+        self._update_playback_status()
 
-        current_id = None
         self.previous_id = None # Track previous ID to handle event race conditions
         self.pending_last_played_id = None # NEW: Only commit to disk if it actually plays
         current_time = 0
         last_heartbeat = 0
         
-        logging.info(f"[PY][Tracker] Starting event loop. Initial current_id: {current_id}")
+        logging.info(f"[PY][Tracker] Starting event loop. Initial current_id: {self.current_id}")
 
         while self.is_tracking:
             if not self.ipc_manager.is_connected():
@@ -180,32 +184,32 @@ class PlaylistTracker:
                             logging.debug(f"[PY][Tracker] Ignoring invalid ID from MPV: {new_id}")
                             continue
 
-                        logging.debug(f"[PY][Tracker] property-change 'user-data/id' detected. Old: {current_id}, New: {new_id}")
+                        logging.debug(f"[PY][Tracker] property-change 'user-data/id' detected. Old: {self.current_id}, New: {new_id}")
 
-                        if new_id != current_id:
+                        if new_id != self.current_id:
                             # 1. If we were playing something else, do a FINAL save for it
-                            if current_id and current_id != -1 and current_id != "-1" and current_time > 1:
-                                logging.info(f"[PY][Tracker] Saving final position for old item {current_id}: {int(current_time)}s")
-                                self._update_resume_time(current_id, current_time)
-                                self.played_item_ids.add(current_id)
+                            if self.current_id and self.current_id != -1 and self.current_id != "-1" and current_time > 1:
+                                logging.info(f"[PY][Tracker] Saving final position for old item {self.current_id}: {int(current_time)}s")
+                                self._update_resume_time(self.current_id, current_time)
+                                self.played_item_ids.add(self.current_id)
 
                             # Store previous ID to handle late 'end-file' events
-                            self.previous_id = current_id
+                            self.previous_id = self.current_id
 
                             # 2. Update the active item ID and RESET session duration
-                            current_id = new_id
+                            self.current_id = new_id
                             self.pending_last_played_id = new_id # Mark as pending
                             self.current_session_duration = 0
                             self.last_time_pos = None
 
                             # Try to find title for better logs/OSD
-                            display_name = current_id
+                            display_name = self.current_id
                             is_yt = False
                             is_enabled = True
                             already_marked = False
                             with self.lock:
                                 for item in self.playlist:
-                                    if item.get('id') == current_id:
+                                    if item.get('id') == self.current_id:
                                         display_name = item.get('title') or item.get('url')
                                         if len(display_name) > 50:
                                             display_name = display_name[:47] + "..."
@@ -229,11 +233,11 @@ class PlaylistTracker:
                                 self.ipc_manager.send({"command": ["show-text", f"Tracking: {display_name}{status_info}", 2000]})
 
                             # 5. Immediately notify the extension to update the UI highlight (Visual only)
-                            logging.info(f"[PY][Tracker] Active episode changed to ID {current_id}. Notifying UI (Visual).")
+                            logging.info(f"[PY][Tracker] Active episode changed to ID {self.current_id}. Notifying UI (Visual).")
                             self.send_message({
                                 "action": "update_last_played",
                                 "folder_id": self.folder_id,
-                                "item_id": current_id,
+                                "item_id": self.current_id,
                                 "is_pending": True # Hint to UI that this isn't committed yet
                             })
                             # Also update general status
@@ -244,7 +248,7 @@ class PlaylistTracker:
                         self._update_playback_status()
 
                     elif prop_name == 'time-pos':
-                        if current_id and current_id != -1 and current_id != "-1" and data is not None:
+                        if self.current_id and self.current_id != -1 and self.current_id != "-1" and data is not None:
                             # Ignore negative or invalid timestamps
                             if data < 0:
                                 continue
@@ -260,20 +264,20 @@ class PlaylistTracker:
                             current_time = data
 
                             # 0. Commit 'pending' last_played_id after 2 seconds of playback
-                            if self.pending_last_played_id == current_id and self.current_session_duration >= 2:
-                                logging.info(f"[PY][Tracker] Playback confirmed for {current_id}. Committing last_played_id to disk.")
-                                self._update_last_played(current_id)
+                            if self.pending_last_played_id == self.current_id and self.current_session_duration >= 2:
+                                logging.info(f"[PY][Tracker] Playback confirmed for {self.current_id}. Committing last_played_id to disk.")
+                                self._update_last_played(self.current_id)
                                 self.pending_last_played_id = None
 
                             # 1. Check for mark-as-watched threshold (30s of SESSION playback)
                             if self.current_session_duration >= 30:
-                                self._check_mark_watched(current_id)
+                                self._check_mark_watched(self.current_id)
 
                             # 2. Throttled periodic save (Every 5s of video time, but NO MORE THAN once every 5s of real time)
                             if int(current_time) > 0 and int(current_time) % 5 == 0:
                                 now = time.time()
                                 if now - getattr(self, 'last_disk_save_time', 0) >= 5:
-                                    self._update_resume_time(current_id, current_time)
+                                    self._update_resume_time(self.current_id, current_time)
                                     self.last_disk_save_time = now
                                 else:
                                     # Optional: still notify the UI so the progress bar moves, 
@@ -282,18 +286,18 @@ class PlaylistTracker:
 
                 elif event.get('event') == 'end-file':
                     reason = event.get('reason')
-                    logging.debug(f"[PY][Tracker] end-file event detected. Reason: {reason}, ID: {current_id}")
+                    logging.debug(f"[PY][Tracker] end-file event detected. Reason: {reason}, ID: {self.current_id}")
                     
                     if reason == 'error':
-                        if self.pending_last_played_id == current_id:
-                            logging.warning(f"[PY][Tracker] Item {current_id} failed with error. Aborting state commit.")
+                        if self.pending_last_played_id == self.current_id:
+                            logging.warning(f"[PY][Tracker] Item {self.current_id} failed with error. Aborting state commit.")
                             self.pending_last_played_id = None
                     
                     if reason == 'eof':
                         # Heuristic: If 'eof' happens immediately after an ID change (session < 5s),
                         # it almost certainly belongs to the PREVIOUS item, not the new one.
                         # This fixes race conditions where property-change arrives before end-file.
-                        target_id_for_eof = current_id
+                        target_id_for_eof = self.current_id
                         
                         if self.current_session_duration < 5 and self.previous_id:
                             logging.info(f"[PY][Tracker] Detected late EOF event. Attributing to previous item: {self.previous_id}")
@@ -312,8 +316,8 @@ class PlaylistTracker:
                                     self.is_naturally_completed = True
                             
                     elif reason == 'stop' or reason == 'quit':
-                        if current_id and current_time > 1:
-                            self._update_resume_time(current_id, current_time)
+                        if self.current_id and current_time > 1:
+                            self._update_resume_time(self.current_id, current_time)
 
                 elif event.get('event') == 'shutdown':
                     logging.info(f"[PY][Tracker] MPV shutdown detected for folder '{self.folder_id}'. Notifying UI.")
@@ -564,10 +568,11 @@ class PlaylistTracker:
             # Send status update back to Python Host
             self.send_message({
                 "action": "playback_status_changed",
-                "folder_id": self.folder_id,
-                "is_paused": is_paused,
-                "is_idle": is_idle,
-                "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
+                "folderId": self.folder_id,
+                "isPaused": is_paused,
+                "isIdle": is_idle,
+                "lastPlayedId": self.current_id,
+                "sessionIds": [item.get('id') for item in self.playlist if item.get('id')]
             })
         except Exception as e:
             logging.debug(f"[PY][Tracker] Failed to update playback status: {e}")

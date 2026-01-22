@@ -46,6 +46,32 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.anilistUI = new MPV.AniListUI(this, this.ui);
 			this.pageScraper = new MPV.PageScraper();
 
+			// Unified Playback State Subscription (Must happen AFTER UI initialization)
+			this.playbackUnsubscribe = MPV.playbackStateManager.subscribe((pbState) => {
+				// Map the playback status to internal ContentState
+				this.state.update({
+					isFolderActive: pbState.status !== "stopped",
+					lastPlayedId: pbState.lastPlayedId,
+					isClosing: pbState.isClosing
+				}, true);
+
+				// Only update UI if we are looking at the relevant folder
+				const currentFolderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
+				if (pbState.folderId && pbState.folderId === currentFolderId) {
+					this.setPlaybackActive(
+						pbState.status !== "stopped", 
+						pbState.needsAppend, 
+						pbState.status === "paused"
+					);
+					this.setPlaybackLoading(pbState.status === "loading");
+					this.setPlaybackClosing(pbState.isClosing);
+					
+					if (pbState.lastPlayedId) {
+						this.playlistUI?.syncActiveHighlight(pbState.lastPlayedId, pbState.status !== "stopped");
+					}
+				}
+			});
+
 			// --- Message Dispatcher ---
 			this.actionMap = {
 				ping: (req, send) => send({ success: true }),
@@ -54,36 +80,30 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const currentFolderId =
 						this.ui.shadowRoot?.getElementById("folder-select")?.value;
 
-					// If folderId is provided, ensure it matches the current UI view
+					// 1. Update Playback Status (Normalization handled by manager)
+					MPV.playbackStateManager.update({
+						folderId: req.folderId,
+						isRunning: req.isFolderActive,
+						isPaused: req.isPaused,
+						isIdle: req.isIdle,
+						isClosing: req.isClosing,
+						lastPlayedId: req.lastPlayedId || req.last_played_id,
+						needsAppend: req.needsAppend
+					});
+
+					// 2. Folder Guard for rendering
 					if (req.folderId && req.folderId !== currentFolderId) return;
 
-					if (req.isClosing === true) {
-						this.setPlaybackClosing(true);
-						return;
-					}
-					if (req.isClosing === false) {
-						this.setPlaybackClosing(false);
-					}
-
-					// Immediate Playback State Update:
-					// Apply this BEFORE rendering the playlist so the button reacts instantly
-					// to messages like "MPV Exited" which might not carry the full playlist payload.
-					if (req.isFolderActive !== undefined) {
-						this.setPlaybackActive(req.isFolderActive, req.needsAppend);
-					}
-
-					if (req.playlist) {
+					// 3. Render Playlist
+					const playlistToRender = req.playlist || this.playlistUI?.currentPlaylist;
+					if (playlistToRender && playlistToRender.length > 0) {
 						this.playlistUI?.render(
-							req.playlist,
-							req.last_played_id,
-							req.isFolderActive,
+							playlistToRender,
+							req.lastPlayedId || req.last_played_id || this.state.state.lastPlayedId,
+							req.isFolderActive ?? this.state.state.isFolderActive,
 						);
-					} else if (
-						req.isClosing === undefined &&
-						req.isFolderActive === undefined
-					) {
-						// Only trigger a full refresh if we received a generic "render" signal
-						// with no state data attached.
+					} else if (req.playlist === null) {
+						// Explicit empty playlist signal
 						this.refreshPlaylist();
 					}
 				},
@@ -99,6 +119,17 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						this.bridge.send("report_detected_url", null, { url: null });
 					}
 					this.updateAddButtonState();
+				},
+				get_controller_state: (req, send) => {
+					const folderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
+					send({
+						success: true,
+						folderId: folderId,
+						isFolderActive: this.state.state.isFolderActive,
+						lastPlayedId: this.state.state.lastPlayedId,
+						isClosing: this.state.state.isClosing,
+						playlist: this.playlistUI?.currentPlaylist,
+					});
 				},
 				foldersChanged: (req) =>
 					this.updateFolderDropdowns(
@@ -143,6 +174,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				set_minimized_state: (req, send) => {
 					this.setMinimizedState(req.minimized);
 					send({ success: true });
+				},
+				get_controller_state: (req, send) => {
+					send({
+						success: true,
+						isFolderActive: this.state.state.isFolderActive,
+						lastPlayedId: this.state.state.lastPlayedId,
+						isClosing: this.state.state.isClosing,
+						playlist: this.playlistUI?.currentPlaylist,
+					});
 				},
 				get_details_for_last_right_click: (req, send) =>
 					this._handleRightClickScrape(send),
@@ -276,6 +316,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				pinned: state.pinned,
 				logVisible: state.logVisible,
 				uiMode: state.uiMode,
+				isFolderActive: state.isFolderActive,
+				lastPlayedId: state.lastPlayedId,
+				isClosing: state.isClosing,
 				anilistVisible: state.anilistVisible,
 				anilistHeight: state.anilistImageHeight,
 				detected: !!state.detectedUrl,
@@ -285,6 +328,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const currentHash = JSON.stringify(relevantState);
 			if (currentHash === this._lastUpdateHash) return;
 			this._lastUpdateHash = currentHash;
+
+			// 0. Update Playlist Highlight (Glow)
+			if (this.playlistUI) {
+				this.playlistUI.syncActiveHighlight(state.lastPlayedId, state.isFolderActive);
+			}
 
 			// 1. Visibility
 			if (state.minimized) {
@@ -511,10 +559,21 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					this.state.update({ detectedUrl: req.detectedUrl });
 				}
 				if (req.folderId) {
+					// Proactively seed the state
+					MPV.playbackStateManager.update({
+						folderId: req.folderId,
+						lastPlayedId: req.lastPlayedId,
+						isRunning: req.isFolderActive,
+						isPaused: req.isPaused,
+						needsAppend: req.needsAppend
+					});
+
 					this.updateFolderDropdowns(
 						req.folderId,
 						req.lastPlayedId,
 						req.isFolderActive,
+						req.isPaused,
+						req.needsAppend
 					);
 				}
 			});
@@ -760,7 +819,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			});
 		}
 
-		async updateFolderDropdowns(targetId, targetLastPlayed, targetIsActive) {
+		async updateFolderDropdowns(targetId, targetLastPlayed, targetIsActive, targetIsPaused, targetNeedsAppend) {
 			const response = await this.bridge.send("get_all_folder_ids");
 			if (!response?.success) return;
 
@@ -789,23 +848,37 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				compactSelect.value = selectedId;
 			}
 
-			this.refreshPlaylist(targetLastPlayed, targetIsActive);
+			this.refreshPlaylist(targetLastPlayed, targetIsActive, targetIsPaused, targetNeedsAppend);
 		}
 
-		refreshPlaylist(targetLastPlayed, targetIsActive) {
+		refreshPlaylist(targetLastPlayed, targetIsActive, targetIsPaused, targetNeedsAppend) {
 			const folderId =
 				this.ui.shadowRoot?.getElementById("folder-select")?.value;
+
+			// Priority for targets: passed argument > current state
+			const finalLastPlayed = targetLastPlayed || this.state.state.lastPlayedId;
+			const finalIsActive =
+				targetIsActive !== undefined
+					? targetIsActive
+					: this.state.state.isFolderActive;
+
 			if (folderId) {
 				this.bridge.send("get_playlist", folderId).then((response) => {
 					if (response?.success) {
+						// Update unified manager first
+						MPV.playbackStateManager.update({
+							folderId: folderId,
+							lastPlayedId: targetLastPlayed || response.lastPlayedId || response.last_played_id,
+							isRunning: targetIsActive !== undefined ? targetIsActive : response.isRunning,
+							isPaused: targetIsPaused !== undefined ? targetIsPaused : response.isPaused,
+							isIdle: response.isIdle,
+							needsAppend: targetNeedsAppend !== undefined ? targetNeedsAppend : response.needsAppend
+						});
+
 						this.playlistUI?.render(
 							response.list,
-							targetLastPlayed || response.last_played_id,
-							targetIsActive || response.isFolderActive,
-						);
-						this.setPlaybackActive(
-							targetIsActive || response.isFolderActive,
-							response.needsAppend,
+							this.state.state.lastPlayedId,
+							this.state.state.isFolderActive,
 						);
 					}
 				});
@@ -845,7 +918,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			playBtns.forEach((btn) => {
 				if (btn) {
 					btn.classList.toggle("btn-loading", isLoading);
-					if (isLoading) btn.classList.remove("btn-playing");
+					if (isLoading) {
+						btn.classList.remove("btn-playing");
+					}
 				}
 			});
 		}
@@ -884,7 +959,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 		}
 
-		setPlaybackActive(isActive, needsAppend = false) {
+		setPlaybackActive(isActive, needsAppend = false, isPaused = false) {
 			if (!this.ui.shadowRoot) return;
 			this.state.update({ isFolderActive: isActive });
 
@@ -905,11 +980,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			playBtns.forEach((btn) => {
 				if (btn) {
 					btn.classList.toggle("btn-playing", isActive);
-					if (isActive) {
-						btn.classList.remove("btn-loading");
+					if (isActive || needsAppend) {
+						this.setPlaybackLoading(false);
+					}
+					if (isActive && !needsAppend) {
 						btn.title = "Play/Pause Playlist";
 					} else {
-						btn.title = needsAppend ? "Append to Playlist" : "Play Playlist";
+						btn.title = needsAppend ? "Queue to Playlist" : "Play Playlist";
 					}
 				}
 			});
@@ -918,30 +995,41 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Only if NOT currently in the closing state
 			if (!this.state.state.isClosing) {
 				if (playBtn) {
-					playBtn.innerHTML = isActive
-						? '<span class="emoji">⏸️</span> Play/Pause'
-						: '<span class="emoji">▶️</span> Play';
+					if (needsAppend) {
+						playBtn.innerHTML = '<span class="emoji">➕</span> Queue';
+					} else {
+						playBtn.innerHTML = isActive
+							? '<span class="emoji">⏸️</span> Play/Pause'
+							: '<span class="emoji">▶️</span> Play';
+					}
 				}
 				if (compactPlayBtn) {
-					compactPlayBtn.innerHTML = isActive
-						? '<span class="emoji">⏸️</span>'
-						: '<span class="emoji">▶️</span>';
+					if (needsAppend) {
+						compactPlayBtn.innerHTML = '<span class="emoji">➕</span>';
+					} else {
+						compactPlayBtn.innerHTML = isActive
+							? '<span class="emoji">⏸️</span>'
+							: '<span class="emoji">▶️</span>';
+					}
 				}
 			}
 		}
 
 		sendCommandToBackground(action, folderId, data = {}) {
+			// Get current 'needsAppend' state from the UI button title or internal knowledge
+			const playBtn = this.ui.shadowRoot?.getElementById("btn-play");
+			const needsAppend = playBtn?.innerHTML.includes("Queue");
+
 			// Optimistic Toggle Check:
-			// Play/Pause should be INSTANT for better UX.
-			// We only bypass the response wait if it's a toggle (folder already active).
+			// Only treat as a simple toggle if the folder is active AND we don't need to append items.
 			const isToggle =
 				action === "play" &&
 				this.state.state.isFolderActive &&
+				!needsAppend &&
 				!data.play_new_instance;
 
 			if (action === "play" && !isToggle) {
-				this.setPlaybackClosing(false);
-				this.setPlaybackLoading(true);
+				MPV.playbackStateManager.setLoading(folderId);
 			}
 
 			// Fire and forget for toggles
@@ -953,19 +1041,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.bridge
 				.send(action, folderId, data)
 				.then((response) => {
-					if (action === "play") {
-						this.setPlaybackLoading(false);
-						if (response?.success) {
-							this.setPlaybackActive(true, response.needsAppend);
-						} else {
-							// Reset state on failure/cancellation
-							this.setPlaybackActive(this.state.state.isFolderActive);
-						}
-					}
-
 					// UI Refresh Logic for State-Modifying Actions:
 					// If the action is known to modify the playlist, ensure we refresh our local view.
 					const stateModifyingActions = [
+						"play",
 						"add",
 						"append",
 						"clear",
@@ -974,28 +1053,35 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						"get_playlist",
 					];
 					if (response?.success && stateModifyingActions.includes(action)) {
+						// Always update the manager with whatever state the bridge returns
+						MPV.playbackStateManager.update({
+							folderId: folderId,
+							isRunning: response.isFolderActive ?? response.isRunning,
+							isPaused: response.isPaused,
+							needsAppend: response.needsAppend,
+							lastPlayedId: response.last_played_id || response.lastPlayedId
+						});
+
 						// Prefer using the list returned in the response if available (faster)
 						if (response.list) {
 							this.playlistUI?.render(
 								response.list,
-								response.last_played_id,
-								response.isFolderActive,
-							);
-							this.setPlaybackActive(
-								response.isFolderActive,
-								response.needsAppend,
+								response.last_played_id || response.lastPlayedId,
+								this.state.state.isFolderActive,
 							);
 						} else {
 							// Fallback to a full refresh if the response is generic
 							this.refreshPlaylist();
 						}
+					} else if (action === "play") {
+						// Handle play failure
+						MPV.playbackStateManager.update({ isRunning: this.state.state.isFolderActive });
 					}
 				})
 				.catch((err) => {
 					console.error(`[Controller] Command '${action}' failed:`, err);
 					if (action === "play") {
-						this.setPlaybackLoading(false);
-						this.setPlaybackActive(this.state.state.isFolderActive);
+						MPV.playbackStateManager.update({ isRunning: this.state.state.isFolderActive });
 					}
 				});
 		}
@@ -1128,7 +1214,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 							this.state.state.detectedUrl,
 						),
 					});
-					if (result?.success) this.refreshPlaylist();
+					if (result?.success) {
+						setTimeout(() => this.refreshPlaylist(), 50);
+					}
 				}
 			});
 			root.getElementById("btn-clear")?.addEventListener("click", async () => {
@@ -1157,7 +1245,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 								this.state.state.detectedUrl,
 							),
 						});
-						if (result?.success) this.refreshPlaylist();
+						if (result?.success) {
+							setTimeout(() => this.refreshPlaylist(), 50);
+						}
 					}
 				});
 			root

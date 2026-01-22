@@ -130,7 +130,7 @@ class PlaybackHandler(BaseHandler):
             return native_link.success(message="No new items to append.")
 
         self.file_io.save_playlist_shard(folder_id, all_folders_context[folder_id]['playlist'])
-        return self.mpv_session.append_batch(final_processed_items)
+        return self.mpv_session.append_batch(final_processed_items, folder_id=folder_id)
 
     def handle_remove_item_live(self, request: native_link.LiveUpdateRequest):
         if not request.folder_id or not request.item_id:
@@ -401,7 +401,7 @@ class PlaybackHandler(BaseHandler):
                                 return processed
                             processed_new_items = []
                             for res in executor.map(process_wrapper, new_items): processed_new_items.extend(res)
-                        return self.mpv_session.append_batch(processed_new_items)
+                        return self.mpv_session.append_batch(processed_new_items, folder_id=folder_id)
                     else:
                         if self.mpv_session.ipc_manager:
                             self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})

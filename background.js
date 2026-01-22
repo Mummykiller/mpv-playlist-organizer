@@ -69,6 +69,12 @@ const actionHandlers = {
 	set_folder_order: folder_management_handlers.handleSetFolderOrder,
 	// MPV and Playlist Actions
 	is_mpv_running: playback_handlers.handleIsMpvRunning,
+	get_playback_status: async (request) => {
+		const folderId = request.folderId;
+		const data = await storage.get();
+		const playlist = folderId ? data.folders[folderId]?.playlist : null;
+		return playback_handlers.getVisualPlaybackState(folderId, playlist);
+	},
 	update_item_resume_time: playback_handlers.handleUpdateItemResumeTime,
 	update_item_marked_as_watched:
 		playback_handlers.handleUpdateItemMarkedAsWatched,

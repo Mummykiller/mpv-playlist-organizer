@@ -42,7 +42,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					}
 
 					if (response) {
-						const silentActions = ["get_playlist", "heartbeat"];
+						const silentActions = ["play", "get_playlist", "heartbeat"];
 						if (response.message && !silentActions.includes(action)) {
 							this.onLog({
 								text: `[Background]: ${response.message}`,

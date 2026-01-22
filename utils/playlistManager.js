@@ -7,7 +7,9 @@ import { findM3u8InUrl } from "../background/handlers/m3u8_scanner.js";
 import {
 	getMpvPlaylistCompletedExitCode,
 	getVisualPlaybackState,
+	handleAppend,
 	isFolderActive,
+	broadcastPlaybackState,
 } from "../background/handlers/playback.js";
 import { broadcastLog, broadcastToTabs } from "../background/messaging.js";
 import { storage } from "../background/storage_instance.js";
@@ -136,7 +138,7 @@ async function addUrlToFolder(
 		debouncedSyncToNativeHostFile(folderId, true);
 
 		// Calculate visual state (async) for the broadcast
-		const { isActive, isPaused } = await getVisualPlaybackState(
+		const { isActive, isPaused, needsAppend } = await getVisualPlaybackState(
 			folderId,
 			data.folders[folderId].playlist,
 		);
@@ -149,13 +151,18 @@ async function addUrlToFolder(
 			last_played_id: data.folders[folderId].last_played_id,
 			isFolderActive: isActive,
 			isPaused: isPaused,
+			needsAppend: needsAppend,
 		});
 
+		// Also trigger a lightweight status update to ensure managers are in sync
+		broadcastPlaybackState(folderId, { needsAppend });
+
 		// Trigger live append if MPV is running
-		const globalPrefs = data.settings.ui_preferences.global;
-		if (globalPrefs.auto_append_on_add !== false) {
-			callNativeHost({
-				action: "append",
+		const { mpv_playback_cache: playbackCache } = await chrome.storage.local.get("mpv_playback_cache");
+		const isMpvAlive = playbackCache && playbackCache.folderId === folderId && (playbackCache.is_running || !playbackCache.isIdle);
+
+		if (isMpvAlive && data.settings.ui_preferences.global.auto_append_on_add !== false) {
+			handleAppend({
 				url_item: newItem,
 				folderId: folderId,
 			}).catch(() => {});
@@ -333,12 +340,19 @@ export async function handleRemoveItem(request) {
 			await storage.set(data, folderId);
 			debouncedSyncToNativeHostFile(folderId, true);
 
+			const { isActive, isPaused, needsAppend } = await getVisualPlaybackState(
+				folderId,
+				playlist,
+			);
+
 			broadcastToTabs({
 				action: "render_playlist",
 				folderId: folderId,
 				playlist: playlist,
 				last_played_id: data.folders[folderId].last_played_id,
-				isFolderActive: isFolderActive(folderId),
+				isFolderActive: isActive,
+				isPaused: isPaused,
+				needsAppend: needsAppend,
 			});
 
 			if (data.settings.ui_preferences.global.live_removal !== false) {
@@ -366,12 +380,19 @@ export async function handleSetPlaylistOrder(request) {
 	await storage.set(storageData, folderId);
 	debouncedSyncToNativeHostFile(folderId, true);
 
+	const { isActive, isPaused, needsAppend } = await getVisualPlaybackState(
+		folderId,
+		order,
+	);
+
 	broadcastToTabs({
 		action: "render_playlist",
 		folderId: folderId,
 		playlist: order,
 		last_played_id: storageData.folders[folderId].last_played_id,
-		isFolderActive: isFolderActive(folderId),
+		isFolderActive: isActive,
+		isPaused: isPaused,
+		needsAppend: needsAppend,
 	});
 
 	callNativeHost({ action: "reorder_live", folderId, new_order: order }).catch(
@@ -394,48 +415,51 @@ export async function handleGetPlaylist(request) {
 	// Optimization: Use getFolder to avoid loading the entire library
 	const { folder, settings } = await storage.getFolder(request.folderId);
 
-	// Check playback status to get accurate active/paused state
-	const statusResponse = await callNativeHost({
-		action: "get_playback_status",
-	}).catch(() => null);
+	const { mpv_playback_cache } = await chrome.storage.local.get("mpv_playback_cache");
+	
+	// Fast Path: Check if cache already has status for THIS folder
+	let finalStatus = null;
+	if (mpv_playback_cache && mpv_playback_cache.folderId === request.folderId) {
+		finalStatus = {
+			is_running: mpv_playback_cache.is_running !== false,
+			is_paused: mpv_playback_cache.isPaused,
+			isIdle: mpv_playback_cache.isIdle,
+			sessionIds: mpv_playback_cache.sessionIds,
+			lastPlayedId: mpv_playback_cache.lastPlayedId,
+			folderId: mpv_playback_cache.folderId,
+		};
+	}
 
-	let finalStatus = statusResponse;
-	if (!finalStatus) {
-		const { mpv_playback_cache } = await chrome.storage.local.get(
-			"mpv_playback_cache",
-		);
-		if (mpv_playback_cache && mpv_playback_cache.folderId === request.folderId) {
-			finalStatus = {
-				is_running: !mpv_playback_cache.isIdle,
-				is_paused: mpv_playback_cache.isPaused,
-				session_ids: mpv_playback_cache.session_ids,
-				folderId: mpv_playback_cache.folderId,
-			};
+	// Deep Check: Only query native host if cache is missing or says it's running (to get latest readahead/sessionIds)
+	if (!finalStatus || finalStatus.is_running) {
+		const statusResponse = await callNativeHost({
+			action: "get_playback_status",
+		}).catch(() => null);
+		
+		if (statusResponse?.success) {
+			finalStatus = statusResponse;
 		}
 	}
 
 	let isActive = !!(
-		finalStatus?.is_running && finalStatus.folderId === request.folderId
+		(finalStatus?.is_running || finalStatus?.isRunning) && finalStatus.folderId === request.folderId
 	);
 	let needsAppend = false;
 	const lastPlayedId = finalStatus?.lastPlayedId || folder.last_played_id;
 
-	// UI REVERSION LOGIC: If we are active but there are new items in storage not in MPV,
-	// we want the play button to show "Play" (not Pause) to signal an append needed.
-	if (isActive && finalStatus.session_ids) {
-		const sessionIds = new Set(finalStatus.session_ids);
+	// Calculate if we need append based on session IDs in cache vs current playlist
+	if (isActive && finalStatus.sessionIds) {
+		const sessionIds = new Set(finalStatus.sessionIds);
 		needsAppend = folder.playlist.some((item) => !sessionIds.has(item.id));
-		if (needsAppend) {
-			isActive = false; // Revert to Play icon
-		}
 	}
 
 	return {
 		success: true,
 		list: folder.playlist,
-		last_played_id: lastPlayedId,
-		isFolderActive: isActive,
+		lastPlayedId: lastPlayedId,
+		isRunning: isActive,
 		needsAppend: needsAppend,
-		isPaused: (finalStatus?.is_paused || finalStatus?.is_idle) ?? false,
+		isPaused: (finalStatus?.isPaused || finalStatus?.is_paused || finalStatus?.isIdle || finalStatus?.is_idle) ?? false,
+		isIdle: (finalStatus?.isIdle || finalStatus?.is_idle) ?? false
 	};
 }

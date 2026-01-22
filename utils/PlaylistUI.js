@@ -44,6 +44,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.minimizedCountSpan.style.display = "inline";
 				this.minimizedPlayBtn.classList.add("with-counter");
 			}
+
+			// Proactively update state with the latest IDs
+			if (lastPlayedId) {
+				this.controller.state.update({ lastPlayedId: lastPlayedId }, true);
+			}
+
 			if (!this.fullContainer) return;
 
 			const oldItemCount =
@@ -160,6 +166,31 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.controller.updateAddButtonState();
 		}
 
+		/**
+		 * Efficiently updates the active/last-played highlight classes without a full re-render.
+		 */
+		syncActiveHighlight(lastPlayedId, isFolderActive) {
+			if (!this.fullContainer) return;
+
+			const highlightEnabled =
+				this.controller.state.state.settings?.enable_active_item_highlight ??
+				true;
+
+			this.fullContainer.querySelectorAll(".list-item").forEach((item) => {
+				const itemId = item.dataset.id;
+				item.classList.remove("active-item", "last-played-item");
+
+				if (highlightEnabled && lastPlayedId && itemId === lastPlayedId) {
+					item.classList.add(
+						isFolderActive ? "active-item" : "last-played-item",
+					);
+					if (isFolderActive) {
+						item.scrollIntoView({ behavior: "smooth", block: "center" });
+					}
+				}
+			});
+		}
+
 		_bindPlaylistControls() {
 			if (
 				!this.fullContainer ||
@@ -173,8 +204,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.compactFolderSelect.value = newFolderId;
 
 				// Reset UI state for the new folder
-				this.controller.setPlaybackLoading(false);
-				this.controller.setPlaybackClosing(false);
+				MPV.playbackStateManager.update({
+					folderId: newFolderId,
+					isRunning: false,
+					isIdle: false,
+					isPaused: false,
+					isClosing: false
+				});
 
 				chrome.runtime.sendMessage({
 					action: "set_last_folder_id",
