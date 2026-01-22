@@ -5,7 +5,7 @@ import {
 	normalizeYouTubeUrl,
 } from "../../utils/commUtils.module.js";
 import { updateContextMenus } from "../../utils/contextMenu.js";
-import { callNativeHost } from "../../utils/nativeConnection.js";
+import { nativeLink } from "../../utils/nativeLink.js";
 import { broadcastLog, broadcastToTabs } from "../messaging.js";
 import { storage } from "../storage_instance.js";
 import * as m3u8_scanner_handlers from "./m3u8_scanner.js";
@@ -245,9 +245,7 @@ export async function handleGetUiPreferences(request, sender) {
 			globalPrefs.node_path = _nativeInfoCache.node_path;
 	} else {
 		try {
-			const nativeSettings = await callNativeHost({
-				action: "get_ui_preferences",
-			});
+			const nativeSettings = await nativeLink.getUiPreferences();
 			if (nativeSettings?.success && nativeSettings.preferences) {
 				const np = nativeSettings.preferences;
 				if (np.mpv_decoder) {
@@ -383,10 +381,7 @@ export async function handleSetUiPreferences(request, sender) {
 			});
 
 			if (Object.keys(syncPrefs).length > 0) {
-				await callNativeHost({
-					action: "set_ui_preferences",
-					preferences: syncPrefs,
-				});
+				await nativeLink.setUiPreferences(syncPrefs);
 			}
 		} catch (e) {
 			console.warn("Failed to sync preferences to native host:", e);
@@ -403,9 +398,7 @@ export async function handleSetUiPreferences(request, sender) {
 
 export async function handleGetDefaultAutomaticFlags() {
 	try {
-		const response = await callNativeHost({
-			action: "get_default_automatic_flags",
-		});
+		const response = await nativeLink.getDefaultAutomaticFlags();
 		if (response.success && response.flags) {
 			return { success: true, flags: response.flags };
 		}
@@ -455,8 +448,7 @@ export function handleForceReloadSettings() {
 export async function handleForceRefreshDependencies() {
 	_nativeInfoCache.decoder = null;
 	_nativeInfoCache.timestamp = 0;
-	const response = await callNativeHost({
-		action: "check_dependencies",
+	const response = await nativeLink.call("check_dependencies", {
 		force_refresh: true,
 	});
 

@@ -18,7 +18,7 @@ import {
 	sanitizeString,
 	sendMessageAsync,
 } from "./commUtils.module.js";
-import { callNativeHost } from "./nativeConnection.js";
+import { nativeLink } from "./nativeLink.js";
 
 // A lock to prevent multiple scraping processes for the same URL at the same time.
 const scrapingInProgress = new Set();
@@ -323,7 +323,7 @@ export async function handleClear(request) {
 		isFolderActive: isFolderActive(folderId),
 	});
 
-	callNativeHost({ action: "clear_live", folderId: folderId }).catch(() => {});
+	nativeLink.clearLive(folderId).catch(() => {});
 	return { success: true, message: `Playlist for '${folderId}' cleared.` };
 }
 
@@ -365,8 +365,7 @@ export async function handleRemoveItem(request) {
 			});
 
 			if (data.settings.ui_preferences.global.live_removal !== false) {
-				callNativeHost({
-					action: "remove_item_live",
+				nativeLink.call("remove_item_live", {
 					folderId,
 					item_id: itemToRemove.id,
 				}).catch(() => {});
@@ -404,7 +403,7 @@ export async function handleSetPlaylistOrder(request) {
 		needsAppend: needsAppend,
 	});
 
-	callNativeHost({ action: "reorder_live", folderId, new_order: order }).catch(
+	nativeLink.reorderLive(folderId, order).catch(
 		() => {},
 	);
 	return { success: true };
@@ -441,9 +440,7 @@ export async function handleGetPlaylist(request) {
 
 	// Deep Check: Only query native host if cache is missing or says it's running (to get latest readahead/sessionIds)
 	if (!finalStatus || finalStatus.is_running) {
-		const statusResponse = await callNativeHost({
-			action: "get_playback_status",
-		}).catch(() => null);
+		const statusResponse = await nativeLink.getPlaybackStatus().catch(() => null);
 		
 		if (statusResponse?.success) {
 			finalStatus = statusResponse;
