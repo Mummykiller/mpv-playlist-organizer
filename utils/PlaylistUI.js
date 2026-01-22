@@ -230,12 +230,29 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				const copyBtn = e.target.closest(".btn-copy-item");
 
 				if (removeBtn) {
+					const listItem = removeBtn.closest(".list-item");
 					const index = parseInt(removeBtn.dataset.index, 10);
+					const itemId = listItem?.dataset.id;
 					const folderId = this.folderSelect.value;
-					if (!isNaN(index))
-						this.controller.sendCommandToBackground("remove_item", folderId, {
-							data: { index },
-						});
+
+					if (!isNaN(index) && listItem) {
+						// Optimistic UI update: fade out immediately
+						listItem.classList.add("removing");
+
+						// Send both index and ID for robustness
+						this.controller
+							.sendCommandToBackground("remove_item", folderId, {
+								data: { index, id: itemId },
+							})
+							.catch((err) => {
+								// Rollback on error
+								listItem.classList.remove("removing");
+								this.controller.addLogEntry({
+									text: `[Content]: Failed to remove item: ${err.message}`,
+									type: "error",
+								});
+							});
+					}
 				} else if (copyBtn) {
 					const url = copyBtn.dataset.url;
 					if (url) {
