@@ -1,6 +1,6 @@
 // background/handlers/dependency_anilist.js
 
-import { callNativeHost } from "../../utils/nativeConnection.js";
+import { nativeLink } from "../../utils/nativeLink.js";
 import { broadcastLog } from "../messaging.js";
 import { storage } from "../storage_instance.js";
 
@@ -19,18 +19,16 @@ export async function handleGetAnilistReleases(request) {
 	if (_inFlightReleasesRequest === requestKey && !isCacheDisabled)
 		return _inFlightReleasesRequest;
 
-	try {
-		const deleteCache = isCacheDisabled;
-		const nativeResponse = await callNativeHost({
-			action: "get_anilist_releases",
-			force: forceRefresh || isCacheDisabled, // Removed '|| daysOffset !== 0'
-			delete_cache: deleteCache,
-			is_cache_disabled: isCacheDisabled,
-			days: daysOffset,
-		});
-
-		if (nativeResponse.success && nativeResponse.output) {
-			try {
+		try {
+			const deleteCache = isCacheDisabled;
+			const nativeResponse = await nativeLink.getAnilistReleases({
+				force: forceRefresh || isCacheDisabled, // Removed '|| daysOffset !== 0'
+				delete_cache: deleteCache,
+				is_cache_disabled: isCacheDisabled,
+				days: daysOffset,
+			});
+	
+			if (nativeResponse.success && nativeResponse.output) {			try {
 				const data = JSON.parse(nativeResponse.output);
 				return { success: true, output: data };
 			} catch (e) {
@@ -67,7 +65,7 @@ export async function handleYtdlpUpdateCheck(request) {
 		return { success: true, message: "Confirmation requested." };
 	}
 	if (updateBehavior === "auto")
-		return callNativeHost({ action: "run_ytdlp_update" });
+		return nativeLink.runYtdlpUpdate();
 }
 
 export async function handleUserConfirmedYtdlpUpdate() {
@@ -75,7 +73,7 @@ export async function handleUserConfirmedYtdlpUpdate() {
 		text: `[Background]: Starting yt-dlp update...`,
 		type: "info",
 	});
-	return callNativeHost({ action: "run_ytdlp_update" });
+	return nativeLink.runYtdlpUpdate();
 }
 
 export async function handleManualYtdlpUpdate() {
@@ -83,5 +81,5 @@ export async function handleManualYtdlpUpdate() {
 		text: `[Background]: Manual yt-dlp update triggered.`,
 		type: "info",
 	});
-	return callNativeHost({ action: "run_ytdlp_update" });
+	return nativeLink.runYtdlpUpdate();
 }

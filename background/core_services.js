@@ -1,6 +1,6 @@
 // background/core_services.js
 
-import { callNativeHost } from "../utils/nativeConnection.js";
+import { nativeLink } from "../utils/nativeLink.js";
 import { broadcastLog, broadcastToTabs } from "./messaging.js";
 import { storage } from "./storage_instance.js";
 
@@ -26,7 +26,7 @@ export const _syncToNativeHostFile = async (folderId = null) => {
 			payload.is_incremental = false;
 		}
 
-		await callNativeHost(payload);
+		await nativeLink.call("export_data", payload);
 	} catch (e) {
 		console.error(`[CoreSync] ${e.message}`);
 		broadcastLog({

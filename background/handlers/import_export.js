@@ -2,7 +2,7 @@
 
 import { sanitizeString } from "../../utils/commUtils.module.js";
 import { updateContextMenus } from "../../utils/contextMenu.js";
-import { callNativeHost } from "../../utils/nativeConnection.js";
+import { nativeLink } from "../../utils/nativeLink.js";
 import { debouncedSyncToNativeHostFile } from "../core_services.js";
 import { broadcastToTabs } from "../messaging.js";
 import { storage } from "../storage_instance.js";
@@ -16,8 +16,7 @@ export async function handleImportFromFile(request, sender) {
 
 	if (!filename) return { success: false, error: "No filename provided." };
 
-	const response = await callNativeHost({
-		action: "import_from_file",
+	const response = await nativeLink.fileSystem.call("import_from_file", {
 		filename,
 	});
 	if (!response.success) return response;
@@ -202,10 +201,7 @@ async function handleImportSettings(importedData, filename) {
 				if (globalPrefs[key] !== undefined) syncPrefs[key] = globalPrefs[key];
 			});
 			if (Object.keys(syncPrefs).length > 0) {
-				await callNativeHost({
-					action: "set_ui_preferences",
-					preferences: syncPrefs,
-				});
+				await nativeLink.setUiPreferences(syncPrefs);
 			}
 		} catch (err) {}
 
@@ -247,8 +243,7 @@ export async function handleExportSettings(request) {
 		settings: filteredSettings,
 	};
 
-	return callNativeHost({
-		action: "export_playlists",
+	return nativeLink.fileSystem.call("export_playlists", {
 		data: exportData,
 		filename,
 		subfolder: "settings",
@@ -274,8 +269,7 @@ export async function handleExportAllPlaylistsSeparately(request) {
 		});
 	}
 
-	return callNativeHost({
-		action: "export_all_playlists_separately",
+	return nativeLink.fileSystem.call("export_all_playlists_separately", {
 		data: filteredFolders,
 		customNames: options.customNames || {},
 	});
@@ -303,17 +297,16 @@ export async function handleExportFolderPlaylist(request) {
 		return newItem;
 	});
 
-	return callNativeHost({
-		action: "export_playlists",
+	return nativeLink.fileSystem.call("export_playlists", {
 		data: folderToExport,
 		filename: request.filename,
 	});
 }
 
 export async function handleListImportFiles() {
-	return callNativeHost({ action: "list_import_files" });
+	return nativeLink.fileSystem.listFiles();
 }
 
 export async function handleOpenExportFolder() {
-	return callNativeHost({ action: "open_export_folder" });
+	return nativeLink.fileSystem.openExportFolder();
 }

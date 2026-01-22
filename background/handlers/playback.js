@@ -1,7 +1,7 @@
 import {
 	addNativeListener,
-	callNativeHost,
 } from "../../utils/nativeConnection.js";
+import { nativeLink } from "../../utils/nativeLink.js";
 import { debouncedSyncToNativeHostFile } from "../core_services.js";
 import { broadcastLog, broadcastToTabs } from "../messaging.js";
 import { storage } from "../storage_instance.js";
@@ -40,61 +40,9 @@ class PlaybackSession {
 	 * Sends a single URL item to the native host for playback.
 	 */
 	async _playSingleUrlItem(url_item, globalPrefs) {
-		// Ensure the item has the latest granular preferences
-		if (!url_item.settings) url_item.settings = {};
-		url_item.settings.yt_use_cookies = globalPrefs.yt_use_cookies ?? true;
-		url_item.settings.yt_mark_watched = globalPrefs.yt_mark_watched ?? true;
-		url_item.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
-		url_item.settings.other_sites_use_cookies =
-			globalPrefs.other_sites_use_cookies ?? true;
-
-		return callNativeHost(
-			{
-				action: "play",
-				url_item: url_item,
-				folderId: this.folderId,
-				geometry:
-					globalPrefs.launch_geometry === "custom"
-						? null
-						: globalPrefs.launch_geometry,
-				custom_width:
-					globalPrefs.launch_geometry === "custom"
-						? globalPrefs.custom_geometry_width
-						: null,
-				custom_height:
-					globalPrefs.launch_geometry === "custom"
-						? globalPrefs.custom_geometry_height
-						: null,
-				custom_mpv_flags: globalPrefs.custom_mpv_flags || "",
-				automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
-				force_terminal: globalPrefs.force_terminal ?? false,
-				clear_on_completion: globalPrefs.clear_on_completion ?? false,
-				start_paused: false, // Default to not paused when playing sequentially
-				// Networking & Performance Sync
-				disable_network_overrides:
-					globalPrefs.disable_network_overrides ?? false,
-				enable_cache: globalPrefs.enable_cache ?? true,
-				http_persistence: globalPrefs.http_persistence || "auto",
-				demuxer_max_bytes: globalPrefs.demuxer_max_bytes || "1G",
-				demuxer_max_back_bytes: globalPrefs.demuxer_max_back_bytes || "500M",
-				cache_secs: globalPrefs.cache_secs || 500,
-				demuxer_readahead_secs: globalPrefs.demuxer_readahead_secs || 500,
-				stream_buffer_size: globalPrefs.stream_buffer_size || "10M",
-				ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
-				enable_reconnect: globalPrefs.enable_reconnect ?? true,
-				reconnect_delay: globalPrefs.reconnect_delay || 4,
-				mpv_decoder: globalPrefs.mpv_decoder || "auto",
-				ytdl_quality: globalPrefs.ytdl_quality || "best",
-				performance_profile: globalPrefs.performance_profile || "default",
-				enable_precise_resume: globalPrefs.enable_precise_resume ?? true,
-				ultra_scalers: globalPrefs.ultra_scalers ?? true,
-				ultra_video_sync: globalPrefs.ultra_video_sync ?? true,
-				ultra_interpolation: globalPrefs.ultra_interpolation || "oversample",
-				ultra_deband: globalPrefs.ultra_deband ?? true,
-				ultra_fbo: globalPrefs.ultra_fbo ?? true,
-			},
-			true,
-		); // Pass shouldThrow = true
+		return nativeLink.play(url_item, this.folderId, {
+			start_paused: false,
+		});
 	}
 
 	/**
@@ -121,23 +69,7 @@ class PlaybackSession {
 					});
 
 					try {
-						// Ensure all items have the latest granular preferences
-						batchItems.forEach((item) => {
-							if (!item.settings) item.settings = {};
-							item.settings.yt_use_cookies = globalPrefs.yt_use_cookies ?? true;
-							item.settings.yt_mark_watched =
-								globalPrefs.yt_mark_watched ?? true;
-							item.settings.yt_ignore_config =
-								globalPrefs.yt_ignore_config ?? true;
-							item.settings.other_sites_use_cookies =
-								globalPrefs.other_sites_use_cookies ?? true;
-						});
-
-						const response = await callNativeHost({
-							action: "append",
-							url_items: batchItems, // Use plural 'url_items'
-							folderId: this.folderId,
-						});
+						const response = await nativeLink.append(batchItems, this.folderId);
 
 						if (response.success) {
 							// Successfully appended the entire batch
@@ -271,9 +203,7 @@ export const playbackManager = new PlaybackManager();
 export async function getVisualPlaybackState(folderId, playlist = null) {
 	try {
 		// 1. Try to get real-time status with a tight timeout
-		const statusResponse = await callNativeHost({
-			action: "get_playback_status",
-		}).catch(() => null);
+		const statusResponse = await nativeLink.getPlaybackStatus().catch(() => null);
 
 		// 2. If native host is not available/timed out, fallback to local cache
 		let finalStatus = statusResponse;
@@ -592,7 +522,7 @@ export async function handleIsMpvRunning() {
 			lastPlayedId: mpv_playback_cache.lastPlayedId
 		};
 	}
-	return callNativeHost({ action: "is_mpv_running" });
+	return nativeLink.isMpvRunning();
 }
 
 /**
@@ -701,11 +631,6 @@ export async function handlePlay(request) {
 	const {
 		url_item,
 		folderId,
-		custom_mpv_flags,
-		geometry,
-		custom_width,
-		custom_height,
-		start_paused,
 		play_new_instance,
 	} = request;
 
@@ -724,68 +649,15 @@ export async function handlePlay(request) {
 			type: "info",
 		});
 
-		const data = await storage.get();
-		const globalPrefs = data.settings.ui_preferences.global;
-
-		if (!url_item.settings) url_item.settings = {};
-		url_item.settings.yt_use_cookies = globalPrefs.yt_use_cookies ?? true;
-		url_item.settings.yt_mark_watched = globalPrefs.yt_mark_watched ?? true;
-		url_item.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
-		url_item.settings.other_sites_use_cookies =
-			globalPrefs.other_sites_use_cookies ?? true;
-
-		const nativeAction = play_new_instance ? "play_new_instance" : "play";
-		const nativePayload = {
-			action: nativeAction,
-			url_item: url_item,
-			folderId: folderId,
-			geometry:
-				geometry ||
-				(globalPrefs.launch_geometry === "custom"
-					? null
-					: globalPrefs.launch_geometry),
-			custom_width:
-				custom_width ||
-				(globalPrefs.launch_geometry === "custom"
-					? globalPrefs.custom_geometry_width
-					: null),
-			custom_height:
-				custom_height ||
-				(globalPrefs.launch_geometry === "custom"
-					? globalPrefs.custom_geometry_height
-					: null),
-			custom_mpv_flags: custom_mpv_flags || globalPrefs.custom_mpv_flags || "",
-			automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
-			force_terminal: globalPrefs.force_terminal ?? false,
-			clear_on_completion:
-				request.clear_on_completion ?? globalPrefs.clear_on_completion ?? false,
-			start_paused: start_paused ?? false,
-			// Networking & Performance Sync
-			disable_network_overrides: globalPrefs.disable_network_overrides ?? false,
-			enable_cache: globalPrefs.enable_cache ?? true,
-			http_persistence: globalPrefs.http_persistence || "auto",
-			demuxer_max_bytes: globalPrefs.demuxer_max_bytes || "1G",
-			demuxer_max_back_bytes: globalPrefs.demuxer_max_back_bytes || "500M",
-			cache_secs: globalPrefs.cache_secs || 500,
-			demuxer_readahead_secs: globalPrefs.demuxer_readahead_secs || 500,
-			stream_buffer_size: globalPrefs.stream_buffer_size || "10M",
-			ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
-			enable_reconnect: globalPrefs.enable_reconnect ?? true,
-			reconnect_delay: globalPrefs.reconnect_delay || 4,
-			mpv_decoder: globalPrefs.mpv_decoder || "auto",
-			ytdl_quality: globalPrefs.ytdl_quality || "best",
-			performance_profile: globalPrefs.performance_profile || "default",
-			enable_precise_resume: globalPrefs.enable_precise_resume ?? true,
-			ultra_scalers: globalPrefs.ultra_scalers ?? true,
-			ultra_video_sync: globalPrefs.ultra_video_sync ?? true,
-			ultra_interpolation: globalPrefs.ultra_interpolation || "oversample",
-			ultra_deband: globalPrefs.ultra_deband ?? true,
-			ultra_fbo: globalPrefs.ultra_fbo ?? true,
+		const options = {
+			play_new_instance: request.play_new_instance,
+			geometry: request.geometry,
+			custom_width: request.custom_width,
+			custom_height: request.custom_height,
+			custom_mpv_flags: request.custom_mpv_flags,
+			start_paused: request.start_paused,
+			clear_on_completion: request.clear_on_completion,
 		};
-
-		if (play_new_instance) {
-			nativePayload.playlist = [url_item.url];
-		}
 
 		if (!play_new_instance && folderId) {
 			const session = playbackManager.findSessionByFolderId(folderId);
@@ -806,7 +678,7 @@ export async function handlePlay(request) {
 			}
 		}
 
-		const response = await callNativeHost(nativePayload);
+		const response = await nativeLink.play(url_item, folderId, options);
 
 		if (response.success && !play_new_instance) {
 			// Proactively clear launching state once command is accepted
@@ -821,6 +693,7 @@ export async function handlePlay(request) {
 			session.isPlaying = true;
 
 			// Smart Detection: Is this actually the last item in the folder?
+			const data = await storage.get();
 			let isLast = true;
 			if (folderId && data.folders[folderId]) {
 				const playlist = data.folders[folderId].playlist;
@@ -847,34 +720,18 @@ export async function handlePlay(request) {
 			};
 		}
 
-		// Ensure all items in the batch have the latest granular preferences
-		const globalPrefs = data.settings.ui_preferences.global;
-		const updatedPlaylist = folder.playlist.map((item) => {
-			if (!item.settings) item.settings = {};
-			item.settings.yt_use_cookies = globalPrefs.yt_use_cookies ?? true;
-			item.settings.yt_mark_watched = globalPrefs.yt_mark_watched ?? true;
-			item.settings.yt_ignore_config = globalPrefs.yt_ignore_config ?? true;
-			item.settings.other_sites_use_cookies =
-				globalPrefs.other_sites_use_cookies ?? true;
-			return item;
-		});
-
-		// Send the actual playlist items directly to preserve IDs and avoid anonymous M3U re-generation
-		const m3u_data = {
-			type: "items",
-			value: updatedPlaylist,
-		};
-		const effective_folder_id = folderId;
-
 		// Delegate to handlePlayM3U for folder playback
 		return handlePlayM3U({
-			m3u_data: m3u_data,
-			folderId: effective_folder_id,
-			custom_mpv_flags: custom_mpv_flags,
-			geometry: geometry,
-			custom_width: custom_width,
-			custom_height: custom_height,
-			start_paused: start_paused,
+			m3u_data: {
+				type: "items",
+				value: folder.playlist,
+			},
+			folderId: folderId,
+			custom_mpv_flags: request.custom_mpv_flags,
+			geometry: request.geometry,
+			custom_width: request.custom_width,
+			custom_height: request.custom_height,
+			start_paused: request.start_paused,
 			clear_on_completion: request.clear_on_completion,
 			play_new_instance: play_new_instance,
 		});
@@ -890,12 +747,6 @@ export async function handlePlayM3U(request) {
 	const {
 		m3u_data,
 		folderId,
-		custom_mpv_flags,
-		geometry,
-		custom_width,
-		custom_height,
-		start_paused,
-		clear_on_completion,
 		play_new_instance,
 	} = request;
 
@@ -919,60 +770,15 @@ export async function handlePlayM3U(request) {
 		session.isProcessingQueue = false;
 	}
 
-	const data = await storage.get();
-	const globalPrefs = data.settings.ui_preferences.global;
-
-	const nativeAction = play_new_instance ? "play_new_instance" : "play_m3u";
-	const nativePayload = {
-		action: nativeAction,
-		m3u_data: m3u_data, // Can be type 'content', 'url', or 'path'
-		folderId: folderId,
-		geometry:
-			geometry ||
-			(globalPrefs.launch_geometry === "custom"
-				? null
-				: globalPrefs.launch_geometry),
-		custom_width:
-			custom_width ||
-			(globalPrefs.launch_geometry === "custom"
-				? globalPrefs.custom_geometry_width
-				: null),
-		custom_height:
-			custom_height ||
-			(globalPrefs.launch_geometry === "custom"
-				? globalPrefs.custom_geometry_height
-				: null),
-		custom_mpv_flags: custom_mpv_flags || globalPrefs.custom_mpv_flags || "",
-		automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
-		force_terminal: globalPrefs.force_terminal ?? false,
-		clear_on_completion:
-			clear_on_completion ?? globalPrefs.clear_on_completion ?? false,
-		start_paused: start_paused ?? false,
-		// Networking & Performance Sync
-		disable_network_overrides: globalPrefs.disable_network_overrides ?? false,
-		enable_cache: globalPrefs.enable_cache ?? true,
-		http_persistence: globalPrefs.http_persistence || "auto",
-		demuxer_max_bytes: globalPrefs.demuxer_max_bytes || "1G",
-		demuxer_max_back_bytes: globalPrefs.demuxer_max_back_bytes || "500M",
-		cache_secs: globalPrefs.cache_secs || 500,
-		demuxer_readahead_secs: globalPrefs.demuxer_readahead_secs || 500,
-		stream_buffer_size: globalPrefs.stream_buffer_size || "10M",
-		ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
-		enable_reconnect: globalPrefs.enable_reconnect ?? true,
-		reconnect_delay: globalPrefs.reconnect_delay || 4,
-		mpv_decoder: globalPrefs.mpv_decoder || "auto",
-		ytdl_quality: globalPrefs.ytdl_quality || "best",
-		performance_profile: globalPrefs.performance_profile || "default",
-		enable_precise_resume: globalPrefs.enable_precise_resume ?? true,
-		ultra_scalers: globalPrefs.ultra_scalers ?? true,
-		ultra_video_sync: globalPrefs.ultra_video_sync ?? true,
-		ultra_interpolation: globalPrefs.ultra_interpolation || "oversample",
-		ultra_deband: globalPrefs.ultra_deband ?? true,
-		ultra_fbo: globalPrefs.ultra_fbo ?? true,
+	const options = {
+		play_new_instance: request.play_new_instance,
+		geometry: request.geometry,
+		custom_width: request.custom_width,
+		custom_height: request.custom_height,
+		custom_mpv_flags: request.custom_mpv_flags,
+		start_paused: request.start_paused,
+		clear_on_completion: request.clear_on_completion,
 	};
-	if (play_new_instance && m3u_data.type === "items") {
-		nativePayload.playlist = m3u_data.value.map((item) => item.url);
-	}
 
 	if (!play_new_instance && folderId) {
 		const session = playbackManager.findSessionByFolderId(folderId);
@@ -992,7 +798,7 @@ export async function handlePlayM3U(request) {
 						});		}
 	}
 
-	const response = await callNativeHost(nativePayload);
+	const response = await nativeLink.playM3U(m3u_data, folderId, options);
 
 	if (response.success && !play_new_instance) {
 		// Proactively clear launching state once command is accepted
@@ -1278,7 +1084,7 @@ export async function handleCloseMpv(request) {
 		folderId: folderId,
 		isClosing: true,
 	});
-	return callNativeHost({ action: "close_mpv", folderId: folderId });
+	return nativeLink.closeMpv(folderId);
 }
 
 export function getMpvPlaylistCompletedExitCode() {

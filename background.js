@@ -17,7 +17,8 @@ import { broadcastLog, broadcastToTabs } from "./background/messaging.js";
 import { storage } from "./background/storage_instance.js";
 import { updateContextMenus } from "./utils/contextMenu.js";
 import { diagnosticCollector } from "./utils/diagnosticCollector.js";
-import { addNativeListener, callNativeHost } from "./utils/nativeConnection.js";
+import { addNativeListener } from "./utils/nativeConnection.js";
+import { nativeLink } from "./utils/nativeLink.js";
 import * as playlistManager from "./utils/playlistManager.js";
 
 // --- Shared State ---
@@ -111,7 +112,7 @@ actionHandlers["session_restored"] = playback_handlers.handleSessionRestored;
 
 async function performNativeHostHeartbeat() {
 	try {
-		const response = await callNativeHost({ action: "ping" });
+		const response = await nativeLink.ping();
 		if (response?.success) {
 			nativeHostStatus = {
 				status: "online",
