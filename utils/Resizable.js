@@ -4,6 +4,7 @@
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 (() => {
+	const MPV = window.MPV_INTERNAL;
 	window.MPV_INTERNAL.Resizable = class Resizable {
 		constructor(element, handle, options = {}) {
 			this.element = element;

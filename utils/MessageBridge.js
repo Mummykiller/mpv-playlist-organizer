@@ -5,6 +5,7 @@
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 (() => {
+	const MPV = window.MPV_INTERNAL;
 	window.MPV_INTERNAL.MessageBridge = class MessageBridge {
 		constructor({ onLog } = {}) {
 			this.onLog = onLog || (() => {});

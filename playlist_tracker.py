@@ -38,6 +38,7 @@ class PlaylistTracker:
         self.is_naturally_completed = False
         self.lock = threading.Lock()
         self.current_id = None
+        self.last_played_id = None
 
         for item in initial_playlist:
             self.add_item(item)
@@ -198,6 +199,7 @@ class PlaylistTracker:
 
                             # 2. Update the active item ID and RESET session duration
                             self.current_id = new_id
+                            self.last_played_id = new_id
                             self.pending_last_played_id = new_id # Mark as pending
                             self.current_session_duration = 0
                             self.last_time_pos = None

@@ -185,11 +185,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			);
 			cleanTitle = cleanTitle.replace(junkRegex, " ");
 
-			if (episode)
-				cleanTitle = cleanTitle.replace(
-					new RegExp(`\\b${episode}\\b`, "g"),
-					"",
-				);
 			cleanTitle = cleanTitle.replace(/\s\.\d+\s/g, " ");
 			cleanTitle = cleanTitle
 				.replace(/\s*[-|:]\s*$/, "")

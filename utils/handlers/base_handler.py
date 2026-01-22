@@ -68,8 +68,10 @@ class BaseHandler:
         url_item, all_folders = self._resolve_or_assign_item_id(url_item, folder_id, all_folders)
         
         res = self.services.apply_bypass_script(url_item, self.send_message, session=self.mpv_session)
-        processed_url, script_headers, ytdl_opts, use_ytdl_flag, is_yt_flag, entries, 
-        disable_http_flag, cookies_file, mark_watched, ytdl_fmt, cookies_browser = res
+        (
+            processed_url, script_headers, ytdl_opts, use_ytdl_flag, is_yt_flag, entries, 
+            disable_http_flag, cookies_file, mark_watched, ytdl_fmt, cookies_browser
+        ) = res
 
         if entries:
             processed_entries = []

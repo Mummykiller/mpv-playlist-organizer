@@ -5,6 +5,7 @@
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 (() => {
+	const MPV = window.MPV_INTERNAL;
 	window.MPV_INTERNAL.ContentState = class ContentState {
 		constructor({ onUpdate }) {
 			this.onUpdate = onUpdate || (() => {});

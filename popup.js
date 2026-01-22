@@ -707,7 +707,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (miniPlayBtn) {
 				miniPlayBtn.classList.toggle(
 					"btn-playing",
-					!!effectiveIsFolderActive,
+					!!effectiveIsFolderActive || !!effectiveNeedsAppend,
 				);
 				
 				// Clear loading state if we have a definitive render, 
@@ -1676,15 +1676,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		}
 
-		async function handlePlaySelectedPlaylist(folderId) {
-			if (!folderId) {
-				return showStatus("Please select a folder.", true);
-			}
-			
-			// Get current 'needsAppend' state from the button
-			const needsAppend = miniPlayBtn?.title.includes("Queue");
-
-			// Optimistic Toggle check
+				async function handlePlaySelectedPlaylist(folderId) {
+					if (!folderId) {
+						return showStatus("Please select a folder.", true);
+					}
+		
+					// Get current 'needsAppend' state from the button
+					const needsAppend =
+						miniPlayBtn?.title.includes("Queue") ||
+						miniPlayBtn?.innerHTML.includes("<line");
+					// Optimistic Toggle check
 			const isToggle = popupState.isFolderActive && !needsAppend && !isPlaybackClosing;
 			if (!isToggle) {
 				MPV.playbackStateManager.setLoading(folderId);

@@ -50,7 +50,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.playbackUnsubscribe = MPV.playbackStateManager.subscribe((pbState) => {
 				// Map the playback status to internal ContentState
 				this.state.update({
-					isFolderActive: pbState.status !== "stopped",
+					isFolderActive: pbState.status !== "stopped" || pbState.needsAppend,
 					lastPlayedId: pbState.lastPlayedId,
 					isClosing: pbState.isClosing
 				}, true);
@@ -908,6 +908,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Guard: Do not show loading state if we are already closing.
 			if (this.state.state.isClosing) return;
 
+			// Optimization: If we are already in the target state, skip
+			const isCurrentlyLoading = this.ui.shadowRoot.getElementById("btn-play")?.classList.contains("btn-loading");
+			if (isCurrentlyLoading === isLoading) return;
+
 			const playBtns = [
 				this.ui.shadowRoot.getElementById("btn-play"),
 				this.ui.shadowRoot.getElementById("btn-compact-play"),
@@ -920,6 +924,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					btn.classList.toggle("btn-loading", isLoading);
 					if (isLoading) {
 						btn.classList.remove("btn-playing");
+					} else {
+						// Re-apply btn-playing if folder is active or needs append
+						const pbState = MPV.playbackStateManager.state;
+						if (pbState.isRunning || pbState.needsAppend) {
+							btn.classList.add("btn-playing");
+						}
 					}
 				}
 			});
@@ -979,14 +989,16 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			playBtns.forEach((btn) => {
 				if (btn) {
-					btn.classList.toggle("btn-playing", isActive);
+					btn.classList.toggle("btn-playing", isActive || needsAppend);
 					if (isActive || needsAppend) {
 						this.setPlaybackLoading(false);
 					}
-					if (isActive && !needsAppend) {
+					if (needsAppend) {
+						btn.title = "Queue to Playlist";
+					} else if (isActive) {
 						btn.title = "Play/Pause Playlist";
 					} else {
-						btn.title = needsAppend ? "Queue to Playlist" : "Play Playlist";
+						btn.title = "Play Playlist";
 					}
 				}
 			});
@@ -1018,7 +1030,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		sendCommandToBackground(action, folderId, data = {}) {
 			// Get current 'needsAppend' state from the UI button title or internal knowledge
 			const playBtn = this.ui.shadowRoot?.getElementById("btn-play");
-			const needsAppend = playBtn?.innerHTML.includes("Queue");
+			const needsAppend = playBtn?.innerHTML.includes("Queue") || playBtn?.innerHTML.includes("➕");
 
 			// Optimistic Toggle Check:
 			// Only treat as a simple toggle if the folder is active AND we don't need to append items.
