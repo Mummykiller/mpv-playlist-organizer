@@ -31,31 +31,19 @@ A dedicated `NativeLink` layer now handles all JS-Python translation and model v
 ---
 
 ## 4. Module Bloat: `services.py` (~1,000 lines)
-**Status:** Medium Risk / Next Priority
-This file remains a "junk drawer."
-
-**Proposed Action:**
-*   Move `MpvCommandBuilder` to its own file.
-*   Move AniList logic to `anilist_service.py`.
-*   Move dependency checking (`check_mpv_and_ytdlp_status`) to `dependency_manager.py`.
+**Status:** ✅ COMPLETED
+*   Decomposed into `mpv_command_builder.py`, `anilist_service.py`, and `dependency_manager.py`.
+*   `services.py` now acts as a clean entry point with minimal delegation logic.
 
 ---
 
 ## 5. Method Complexity & Deep Nesting
-**Status:** Medium Risk / Source of Technical Debt
-*   **`LauncherService.launch`**: Still spans over 150 lines. Needs decomposition into `_prepare_env`, `_spawn_process`, and `_sync_initial_state`.
-*   **`EnrichmentService.resolve_input_items`**: Needs cleanup to reduce nesting levels.
-
-**Proposed Action:**
-*   Break these into private helper methods within `utils/session_services.py`.
+**Status:** ✅ COMPLETED
+*   `LauncherService.launch` decomposed into `_prepare_launch_env`, `_spawn_process`, and `_sync_initial_state`.
+*   `EnrichmentService.resolve_input_items` refactored to reduce nesting levels.
 
 ---
 
 ## 6. Architectural Constraints: Late Imports (`E402`)
-**Status:** Best Case / Documentation Need
-`ruff` flags dozens of module-level imports that are not at the top of the file.
-
-*   **Reason:** These are **intentional**. To meet the browser's Native Messaging timeout requirements, the "Native Host" must start in under 50ms. Moving heavy imports (like `tkinter`, `shlex`, or `concurrent.futures`) inside functions ensures the initial handshake is near-instant.
-
-**Proposed Action:**
-*   Keep as-is for performance, but add a global header comment explaining *why* we ignore PEP 8 in these specific cases.
+**Status:** ✅ COMPLETED
+*   Added global header comments to `native_host.py` and `services.py` explaining the performance rationale for late imports.

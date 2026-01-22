@@ -202,6 +202,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// 6. Global Event Listeners
 			window.addEventListener("mousedown", this.handleMouseDown, true);
+			window.addEventListener("focus", () => {
+				// Proactively refresh status when tab gains focus
+				this.refreshPlaylist();
+			});
 		}
 
 		handleMouseDown(event) {
@@ -249,7 +253,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		// --- State & UI Persistence ---
 
 		savePreference(prefs) {
-			this.bridge.send("set_ui_preferences", null, { preferences: prefs });
+			return this.bridge.send("set_ui_preferences", null, { preferences: prefs });
 		}
 
 		setMinimizedState(shouldBeMinimized, save = true) {
@@ -1105,14 +1109,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const fid = getFolderId();
 					if (!fid) return;
 
-					const status = await this.bridge.send("is_mpv_running");
-					if (!status?.is_running) {
-						this.addLogEntry({
-							text: "[Content]: Close command ignored, MPV is not running.",
-							type: "info",
-						});
-						return;
-					}
+					const isLaunching = root
+						.getElementById("btn-play")
+						?.classList.contains("btn-loading");
 
 					const confirmed =
 						!this.state.state.settings.confirm_close_mpv ||
@@ -1182,15 +1181,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const isLaunching = root
 						.getElementById("btn-compact-play")
 						?.classList.contains("btn-loading");
-
-					const status = await this.bridge.send("is_mpv_running");
-					if (!status?.is_running && !isLaunching) {
-						this.addLogEntry({
-							text: "[Content]: Close command ignored, MPV is not running.",
-							type: "info",
-						});
-						return;
-					}
 
 					const confirmed =
 						!this.state.state.settings.confirm_close_mpv ||
@@ -1312,7 +1302,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					onDragMove: () => this.updateAdaptiveElements(),
 					onDragEnd: (e, pos) => {
 						this.preResizePosition = null;
-						this.savePreference({ position: pos });
+						this.savePreference({ position: pos }).then(() => {
+							// Re-sync UI state after move to ensure highlight persists
+							this.refreshPlaylist();
+						});
 					},
 				});
 			}
@@ -1328,7 +1321,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					dragButton: 2,
 					onDragEnd: (e, pos) => {
 						this.ui.minimizedHost.classList.remove("top-left", "top-right");
-						this.savePreference({ minimizedStubPosition: pos });
+						this.savePreference({ minimizedStubPosition: pos }).then(() => {
+							this.refreshPlaylist();
+						});
 					},
 				});
 			}

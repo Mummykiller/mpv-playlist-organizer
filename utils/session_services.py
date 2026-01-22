@@ -106,64 +106,68 @@ class EnrichmentService:
         return [item]
 
     def resolve_input_items(self, url_items_or_m3u, enriched_items_list, headers):
-        _url_items_list = enriched_items_list if enriched_items_list is not None else []
-        input_was_raw = False
+        """Resolves raw input (URL, Path, M3U content, or List) into a list of items."""
+        if enriched_items_list is not None:
+            if isinstance(url_items_or_m3u, str) and url_items_or_m3u.startswith('http://localhost'):
+                logging.info(f"Local M3U server URL detected: {url_items_or_m3u}. Skipping M3U parsing.")
+            return enriched_items_list, False
 
-        if isinstance(url_items_or_m3u, str):
-            if url_items_or_m3u.startswith('http://localhost') and enriched_items_list is not None:
-                 logging.info(f"Local M3U server URL detected: {url_items_or_m3u}. Skipping M3U parsing.")
-            else:
-                is_youtube_playlist = "youtube.com/playlist" in url_items_or_m3u or ("youtube.com/watch" in url_items_or_m3u and "list=" in url_items_or_m3u)
-                
-                if is_youtube_playlist:
-                    logging.info(f"Expanding YouTube playlist: {url_items_or_m3u}")
-                    # Unpack all 11 values to avoid ValueError
-                    _, _, _, _, _, entries, _, _, _, _, _ = apply_bypass_script({'url': url_items_or_m3u}, self.send_message)
-                    if entries:
-                        _url_items_list = entries
-                        input_was_raw = True
-                    else:
-                        _url_items_list = [{'url': url_items_or_m3u}]
-                        input_was_raw = True
+        # If we reach here, enriched_items_list is None, so we must resolve the raw input.
+        if isinstance(url_items_or_m3u, list):
+            return url_items_or_m3u, True
+        if isinstance(url_items_or_m3u, dict):
+            return [url_items_or_m3u], True
+        
+        if not isinstance(url_items_or_m3u, str):
+            return [], False
 
-                if not _url_items_list:
-                    if os.path.exists(url_items_or_m3u):
-                        input_was_raw = True
-                        with open(url_items_or_m3u, 'r', encoding='utf-8') as f:
-                            m3u_content = f.read()
-                    elif urlparse(url_items_or_m3u).scheme in ['http', 'https']:
-                        if not is_safe_url(url_items_or_m3u):
-                            logging.error(f"SSRF Protection: Blocked access to {url_items_or_m3u}")
-                            return None, False
+        # String-based input (URL, Path, or raw M3U)
+        url_items, input_was_raw = self._resolve_string_input(url_items_or_m3u, headers)
+        return url_items, input_was_raw
 
-                        try:
-                            fetch_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
-                            if headers:
-                                fetch_headers.update(headers)
-                            req = Request(url_items_or_m3u, headers=fetch_headers)
-                            with urlopen(req, timeout=10) as response:
-                                m3u_content = response.read().decode('utf-8')
-                            input_was_raw = True
-                        except Exception as e:
-                            logging.error(f"Failed to fetch M3U: {e}")
-                            return None, False
-                    else:
-                        input_was_raw = True
-                        m3u_content = url_items_or_m3u
+    def _resolve_string_input(self, input_str, headers):
+        """Helper to resolve string-based input into items."""
+        # 1. YouTube Playlist Check
+        is_yt_pl = "youtube.com/playlist" in input_str or ("youtube.com/watch" in input_str and "list=" in input_str)
+        if is_yt_pl:
+            logging.info(f"Expanding YouTube playlist: {input_str}")
+            res = apply_bypass_script({'url': input_str}, self.send_message)
+            entries = res[5] # entries index
+            if entries:
+                return entries, True
+            return [{'url': input_str}], True
 
-                if m3u_content:
-                    _url_items_list = parse_m3u(m3u_content)
+        # 2. File Path Check
+        if os.path.exists(input_str):
+            with open(input_str, 'r', encoding='utf-8') as f:
+                return parse_m3u(f.read()), True
 
-        elif isinstance(url_items_or_m3u, list):
-            _url_items_list = url_items_or_m3u
-            if enriched_items_list is None:
-                input_was_raw = True
-        elif isinstance(url_items_or_m3u, dict):
-            _url_items_list = [url_items_or_m3u]
-            if enriched_items_list is None:
-                input_was_raw = True
+        # 3. URL Check
+        if urlparse(input_str).scheme in ['http', 'https']:
+            if not is_safe_url(input_str):
+                logging.error(f"SSRF Protection: Blocked access to {input_str}")
+                return None, False
+            
+            m3u_content = self._fetch_remote_m3u(input_str, headers)
+            if m3u_content:
+                return parse_m3u(m3u_content), True
+            return [{'url': input_str}], True
 
-        return _url_items_list, input_was_raw
+        # 4. Raw M3U fallback
+        return parse_m3u(input_str), True
+
+    def _fetch_remote_m3u(self, url, headers):
+        """Fetches M3U content from a remote URL."""
+        try:
+            fetch_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
+            if headers:
+                fetch_headers.update(headers)
+            req = Request(url, headers=fetch_headers)
+            with urlopen(req, timeout=10) as response:
+                return response.read().decode('utf-8')
+        except Exception as e:
+            logging.error(f"Failed to fetch remote M3U: {e}")
+            return None
 
     def handle_standard_flow_launch(self, session, url_items, start_index, folder_id, settings, file_io):
         """Handles the background restoration of playlist order and sequential metadata enrichment."""
@@ -304,284 +308,203 @@ class LauncherService:
 
         threading.Thread(target=watcher, daemon=True).start()
 
+    def _prepare_launch_env(self, has_terminal_flag):
+        """Scrubs environment variables based on a whitelist for security."""
+        if has_terminal_flag:
+            return os.environ.copy()
+            
+        base_env = os.environ
+        env = {}
+        if platform.system() == "Windows":
+            allowed = {
+                'ALLUSERSPROFILE', 'APPDATA', 'COMPUTERNAME', 'ComSpec', 'CommonProgramFiles',
+                'CommonProgramFiles(x86)', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA', 'LOGONSERVER',
+                'NUMBER_OF_PROCESSORS', 'OS', 'PATH', 'PATHEXT', 'PROCESSOR_ARCHITECTURE',
+                'PROCESSOR_IDENTIFIER', 'PROCESSOR_LEVEL', 'PROCESSOR_REVISION', 'ProgramData',
+                'ProgramFiles', 'ProgramFiles(x86)', 'Public', 'SystemDrive', 'SystemRoot',
+                'TEMP', 'TMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'windir'
+            }
+        else:
+            allowed = {
+                'HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'PWD', 'SHELL', 'TERM', 'USER',
+                'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+                'XDG_CACHE_HOME', 'DBUS_SESSION_BUS_ADDRESS',
+                'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP',
+                'MPV_HOME', 'PULSE_SERVER', 'PIPEWIRE_RUNTIME_DIR'
+            }
+        
+        for key, val in base_env.items():
+            if key in allowed or key.startswith("LC_") or (platform.system() != "Windows" and key.startswith("XDG_")):
+                env[key] = val
+        return env
+
+    def _sync_initial_state(self, url_item, folder_id, settings, playlist_start_index, launch_lua_options, launch_url):
+        """Sets up IPC properties, lua options, and triggers the initial file load."""
+        mgr = self.session.ipc_manager
+        
+        # 1. Register all playlist items' options
+        if self.session.playlist:
+            for i, item in enumerate(self.session.playlist):
+                lua_opts, item_url = services.construct_lua_options(
+                    item, settings, self.session.SCRIPT_DIR, index=playlist_start_index + i
+                )
+                mgr.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_opts), str(playlist_start_index + i)]})
+
+        # 2. Set Hot-Swap Properties for the current item
+        mgr.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(launch_lua_options)]})
+        
+        orig_url = url_item.get('original_url') or url_item.get('url', '')
+        props = {
+            "user-data/original-url": sanitize_url(orig_url),
+            "user-data/id": url_item.get('id', ""),
+            "user-data/folder-id": folder_id,
+            "user-data/project-root": self.session.SCRIPT_DIR,
+            "user-data/cookies-browser": url_item.get('cookies_browser', ""),
+            "user-data/is-youtube": "yes" if url_item.get('is_youtube') else "no",
+            "ytdl": "yes" if url_item.get('is_youtube') or url_item.get('use_ytdl_mpv') else "no"
+        }
+        for k, v in props.items():
+            mgr.send({"command": ["set_property", k, v]})
+
+        # 3. Atomic Load with Resume Priming
+        if launch_lua_options.get('resume_time') and float(launch_lua_options['resume_time']) > 0:
+            start_time = int(float(launch_lua_options['resume_time']))
+            mgr.send({"command": ["script-message", "primed_resume_time", str(start_time)]})
+        
+        mgr.send({"command": ["loadfile", launch_url, "replace"]})
+
     def launch(self, url_item, folder_id, settings, file_io, **kwargs):
         logging.info(f"[PY][Session] Starting a new MPV instance for URL: {url_item.get('url')}")
         mpv_exe = self.session.get_mpv_executable()
         ipc_path = ipc_utils.get_ipc_path()
-
-        force_terminal = kwargs.get('force_terminal', False)
         playlist_start_index = kwargs.get('playlist_start_index', 0)
 
-        # Prioritize item-specific flags if they were enriched just before this call
+        # 1. Prepare Metadata & Launch URL
         is_youtube = kwargs.get('is_youtube') if kwargs.get('is_youtube') is not None else url_item.get('is_youtube', False)
         use_ytdl_mpv = kwargs.get('use_ytdl_mpv') if kwargs.get('use_ytdl_mpv') is not None else url_item.get('use_ytdl_mpv', False)
-        ytdl_raw_options = kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options')
-        headers = kwargs.get('headers') or url_item.get('headers')
-        disable_http_persistent = kwargs.get('disable_http_persistent') if kwargs.get('disable_http_persistent') is not None else url_item.get('disable_http_persistent', False)
-        cookies_browser = kwargs.get('cookies_browser') or url_item.get('cookies_browser')
-
         launch_url = sanitize_url(url_item.get('url'))
-        
-        # --- Solid ID Injection ---
         if url_item.get('id'):
-            separator = "#" if "#" not in launch_url else "&"
-            launch_url = f"{launch_url}{separator}mpv_organizer_id={url_item['id']}"
+            launch_url += ("#" if "#" not in launch_url else "&") + f"mpv_organizer_id={url_item['id']}"
 
-        # --- DETERMINISTIC BYPASS HINT ---
-        # We check if the process should start in 'Nuclear Bypass' mode based on the first item
+        # 2. Force Bypass Hint
         force_bypass = False
         targeted = settings.get('targeted_defaults', 'none')
-        if targeted == 'animepahe' and launch_url:
-            if "kwik.cx" in launch_url or "owocdn.top" in launch_url or "uwucdn.top" in launch_url:
-                force_bypass = True
+        if targeted == 'animepahe' and any(x in launch_url for x in ["kwik.cx", "owocdn.top", "uwucdn.top"]):
+            force_bypass = True
         elif targeted == 'all-none-yt' and not is_youtube:
             force_bypass = True
 
         if getattr(self.session, 'launch_cancelled', False):
-            logging.info("[PY] Launch aborted before process start.")
             return {"success": False, "error": "Launch cancelled by user."}
 
         try:
-            # IDLE LAUNCH: Start MPV empty, then load file via IPC. 
-            # This ensures IPC options (headers) are registered before the file starts loading.
+            # 3. Construct Command
             full_command, has_terminal_flag = services.construct_mpv_command(
-                mpv_exe=mpv_exe,
-                ipc_path=ipc_path,
-                url=None, # Start idle
-                is_youtube=is_youtube,
-                ytdl_raw_options=ytdl_raw_options,
-                geometry=kwargs.get('geometry'),
-                custom_width=kwargs.get('custom_width'),
-                custom_height=kwargs.get('custom_height'),
-                custom_mpv_flags=kwargs.get('custom_mpv_flags'),
+                mpv_exe=mpv_exe, ipc_path=ipc_path, url=None, is_youtube=is_youtube,
+                ytdl_raw_options=kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options'),
+                geometry=kwargs.get('geometry'), custom_width=kwargs.get('custom_width'),
+                custom_height=kwargs.get('custom_height'), custom_mpv_flags=kwargs.get('custom_mpv_flags'),
                 automatic_mpv_flags=kwargs.get('automatic_mpv_flags'),
-                headers=headers,
-                disable_http_persistent=disable_http_persistent,
-                start_paused=kwargs.get('start_paused', False),
-                script_dir=self.session.SCRIPT_DIR,
-                load_on_completion_script=True,
-                title=url_item.get('title'),
-                use_ytdl_mpv=use_ytdl_mpv,
-                is_youtube_override=use_ytdl_mpv,
-                idle="yes", 
-                force_terminal=force_terminal,
-                input_terminal="no" if not force_terminal else "yes",
-                settings=settings,
-                flag_dir=self.session.FLAG_DIR,
-                playlist_start_index=playlist_start_index,
-                cookies_browser=cookies_browser,
+                headers=kwargs.get('headers') or url_item.get('headers'),
+                disable_http_persistent=kwargs.get('disable_http_persistent', False),
+                start_paused=kwargs.get('start_paused', False), script_dir=self.session.SCRIPT_DIR,
+                load_on_completion_script=True, title=url_item.get('title'),
+                use_ytdl_mpv=use_ytdl_mpv, is_youtube_override=use_ytdl_mpv, idle="yes", 
+                force_terminal=kwargs.get('force_terminal', False), settings=settings,
+                flag_dir=self.session.FLAG_DIR, playlist_start_index=playlist_start_index,
+                cookies_browser=kwargs.get('cookies_browser') or url_item.get('cookies_browser'),
                 force_bypass=force_bypass
             )
 
-            # Add precise resume if needed for initial launch
-            # (Resume logic moved to IPC loadfile command below)
-
-            popen_kwargs = services.get_mpv_popen_kwargs(has_terminal_flag)
-            
-            # Environment Scrubbing (Zero-Trust)
-            if not has_terminal_flag:
-                base_env = os.environ
-                env = {}
-                
-                # Platform-specific whitelist
-                if platform.system() == "Windows":
-                    ALLOWED_KEYS = {
-                        'ALLUSERSPROFILE', 'APPDATA', 'COMPUTERNAME', 'ComSpec', 'CommonProgramFiles',
-                        'CommonProgramFiles(x86)', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA', 'LOGONSERVER',
-                        'NUMBER_OF_PROCESSORS', 'OS', 'PATH', 'PATHEXT', 'PROCESSOR_ARCHITECTURE',
-                        'PROCESSOR_IDENTIFIER', 'PROCESSOR_LEVEL', 'PROCESSOR_REVISION', 'ProgramData',
-                        'ProgramFiles', 'ProgramFiles(x86)', 'Public', 'SystemDrive', 'SystemRoot',
-                        'TEMP', 'TMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'windir'
-                    }
-                else:
-                    ALLOWED_KEYS = {
-                        'HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'PWD', 'SHELL', 'TERM', 'USER',
-                        'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
-                        'XDG_CACHE_HOME', 'DBUS_SESSION_BUS_ADDRESS',
-                        'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP',
-                        'MPV_HOME', 'PULSE_SERVER', 'PIPEWIRE_RUNTIME_DIR'
-                    }
-                
-                for key, val in base_env.items():
-                    # Allow specific keys and safe prefixes (like LC_ for locale)
-                    if key in ALLOWED_KEYS or key.startswith("LC_") or (platform.system() != "Windows" and key.startswith("XDG_")):
-                        env[key] = val
-            else:
-                # Terminal emulators (Konsole, GNOME Terminal) require full environment (Qt/GTK libs)
-                env = os.environ.copy()
-
-            process = subprocess.Popen(full_command, env=env, **popen_kwargs)
-            self.session.process = process
-            self.session.ipc_path = ipc_path
+            # 4. Spawn Process
+            env = self._prepare_launch_env(has_terminal_flag)
+            process = subprocess.Popen(full_command, env=env, **services.get_mpv_popen_kwargs(has_terminal_flag))
+            self.session.process, self.session.ipc_path = process, ipc_path
 
             if process.stdout:
-                stderr_thread = threading.Thread(target=self.session.log_stream, args=(process.stdout, logging.warning, folder_id))
-                stderr_thread.daemon = True
-                stderr_thread.start()
+                threading.Thread(target=self.session.log_stream, args=(process.stdout, logging.warning, folder_id), daemon=True).start()
 
+            # 5. Connect & Sync
             self.session.ipc_manager = ipc_utils.IPCSocketManager()
             if not self.session.ipc_manager.connect(self.session.ipc_path, timeout=5.0):
                 raise RuntimeError(f"Failed to connect to MPV IPC at {self.session.ipc_path}")
 
-            # --- PID Resolution & Persistence ---
-            # IMPORTANT: We must get the REAL mpv PID from the IPC server because
-            # if a terminal wrapper was used, process.pid is the terminal emulator's PID.
-            self.session.pid = process.pid # Fallback to process PID
-            try:
-                pid_response = self.session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=5.0, expect_response=True)
-                if pid_response and pid_response.get("error") == "success":
-                    actual_mpv_pid = pid_response.get("data")
-                    if actual_mpv_pid:
-                        self.session.pid = actual_mpv_pid
-                        logging.info(f"[PY][Session] Resolved actual MPV PID: {self.session.pid} (Process PID: {process.pid})")
-            except Exception as e:
-                logging.debug(f"[PY][Session] Failed to resolve actual MPV PID via IPC (using process PID): {e}")
+            # Resolve actual PID (important for terminal wrappers)
+            self.session.pid = process.pid
+            pid_res = self.session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=5.0, expect_response=True)
+            if pid_res and pid_res.get("error") == "success":
+                self.session.pid = pid_res.get("data")
 
-            self.session.owner_folder_id = folder_id
-            self.session.is_alive = True
+            self.session.owner_folder_id, self.session.is_alive = folder_id, True
+            self.session.playlist = kwargs.get('full_playlist') or [url_item]
             self.session.persist_session()
 
-            self.session.playlist = kwargs.get('full_playlist') if kwargs.get('full_playlist') is not None else [url_item]
-            
-            if self.session.playlist:
-                for i, item in enumerate(self.session.playlist):
-                    # Centralized helper handles enrichment, headers, and setting normalization
-                    lua_options, item_url = services.construct_lua_options(
-                        item, settings, self.session.SCRIPT_DIR, index=playlist_start_index + i
-                    )
-                    self.session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(playlist_start_index + i)]})
-
-            # --- PRE-LOAD PROPERTY SYNC (Eliminates race conditions) ---
-            # We only set hot-swap-options for the SPECIFIC item we are about to load.
-            # This ensures adaptive_headers.lua has the correct context immediately.
-            launch_lua_options, _ = services.construct_lua_options(
-                url_item, settings, self.session.SCRIPT_DIR
-            )
-            
-            self.session.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(launch_lua_options)]})
-
-            orig_url = url_item.get('original_url') or url_item.get('url', '')
-            self.session.ipc_manager.send({"command": ["set_property", "user-data/original-url", sanitize_url(orig_url)]})
-            self.session.ipc_manager.send({"command": ["set_property", "user-data/id", url_item.get('id', "")]})
-            self.session.ipc_manager.send({"command": ["set_property", "user-data/folder-id", folder_id]})
-            self.session.ipc_manager.send({"command": ["set_property", "user-data/project-root", self.session.SCRIPT_DIR]})
-            self.session.ipc_manager.send({"command": ["set_property", "user-data/cookies-browser", url_item.get('cookies_browser', "")]})
-            self.session.ipc_manager.send({"command": ["set_property", "user-data/is-youtube", "yes" if url_item.get('is_youtube') else "no"]})
-
-            # Explicitly force ytdl state for initial file
-            ytdl_val = "yes" if url_item.get('is_youtube') or url_item.get('use_ytdl_mpv') else "no"
-            self.session.ipc_manager.send({"command": ["set_property", "ytdl", ytdl_val]})
-
-            # --- Trigger Atomic Load via Script Message Priming ---
-            if launch_lua_options.get('resume_time') and float(launch_lua_options['resume_time']) > 0:
-                start_time = int(float(launch_lua_options['resume_time']))
-                # Send a scripted message that Lua will catch during the on_load hook
-                self.session.ipc_manager.send({"command": ["script-message", "primed_resume_time", str(start_time)]})
-                self.session.ipc_manager.send({"command": ["loadfile", launch_url, "replace"]})
-            else:
-                self.session.ipc_manager.send({"command": ["loadfile", launch_url, "replace"]})
+            launch_lua_options, _ = services.construct_lua_options(url_item, settings, self.session.SCRIPT_DIR)
+            self._sync_initial_state(url_item, folder_id, settings, playlist_start_index, launch_lua_options, launch_url)
 
             from playlist_tracker import PlaylistTracker
             self.session.playlist_tracker = PlaylistTracker(folder_id, self.session.playlist, file_io, settings, self.session.ipc_path, self.session.send_message)
             self.session.playlist_tracker.start_tracking()
 
-            def process_waiter(proc, f_id):
-                initial_pid = proc.pid
-                # Retrieve the resolved MPV PID which might be different if a terminal wrapper is used.
-                actual_pid = getattr(self.session, 'pid', None)
-                
-                # If we have a separate MPV process (likely via terminal wrapper),
-                # we monitor both to avoid delays caused by shell 'sleep' or wrapper persistence.
-                if actual_pid and actual_pid != initial_pid:
-                    logging.info(f"[PY][Session] process_waiter: Parallel monitoring for Wrapper({initial_pid}) and MPV({actual_pid})")
-                    while proc.poll() is None:
-                        if not ipc_utils.is_pid_running(actual_pid):
-                            logging.info(f"[PY][Session] MPV({actual_pid}) exited early while wrapper is still running. Proceeding with exit logic.")
-                            break
-                        time.sleep(0.1)
-                else:
-                    # NO WRAPPER: Wait for the process to exit naturally
-                    proc.wait()
-                
-                # Determine the return code. If the wrapper is still running but MPV is dead,
-                # we use a placeholder that will be overridden by the completion flag check if applicable.
-                return_code = proc.poll()
-                if return_code is None:
-                    # proc is still running, so we've broken out because MPV is dead.
-                    # We'll use 0 as a placeholder; the flag check below will set it to 99 if natural completion.
-                    return_code = 0
-                    # Ensure the wrapper process is eventually reaped in the background.
-                    threading.Thread(target=proc.wait, daemon=True).start()
-                else:
-                    # proc finished naturally
-                    pass
-                
-                exit_reason = None
-                
-                # Check for completion flags. We check multiple PIDs because if a terminal wrapper
-                # was used, the actual MPV PID might be different from the process PID.
-                actual_pid = getattr(self.session, 'pid', None)
-                pids_to_check = list(set(filter(None, [initial_pid, actual_pid])))
-                
-                logging.debug(f"[PY][Session] Process {initial_pid} exited. Return code: {return_code}. Checking flags for PIDs: {pids_to_check}")
-
-                # --- Handle Terminal Wrapper Exit ---
-                # If the wrapper exited but the actual MPV PID is still running,
-                # we don't clear the session yet. Instead, we hand off to the orphaned watcher.
-                if actual_pid and actual_pid != initial_pid:
-                    if ipc_utils.is_pid_running(actual_pid):
-                        logging.info(f"[PY][Session] Terminal wrapper (PID {initial_pid}) exited, but MPV (PID {actual_pid}) is still alive. Handing off to restored process watcher.")
-                        self.start_restored_process_watcher(actual_pid, self.session.ipc_path, f_id)
-                        return
-
-                flag_found = False
-                for pid in pids_to_check:
-                    flag_candidates = [
-                        os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{pid}.flag'),
-                        os.path.join("/tmp", f'mpv_natural_completion_{pid}.flag') # Fallback location used by Lua
-                    ]
-                    if self.session.ipc_path:
-                        flag_candidates.append(os.path.join(os.path.dirname(self.session.ipc_path), f'mpv_natural_completion_{pid}.flag'))
-
-                    for flag_file in flag_candidates:
-                        if os.path.exists(flag_file):
-                            if getattr(self.session, 'manual_quit', False):
-                                logging.info(f"[PY][Session] Natural completion flag found for PID {pid}, but manual_quit is TRUE. Ignoring flag.")
-                            else:
-                                try:
-                                    with open(flag_file, 'r', encoding='utf-8') as f:
-                                        exit_reason = f.read().strip()
-                                except Exception:
-                                    exit_reason = "completed"
-                                logging.info(f"[PY][Session] Natural completion detected for PID {pid} (Reason: {exit_reason}). Overriding return code to 99.")
-                                return_code = 99
-                            
-                            try:
-                                os.remove(flag_file)
-                            except Exception:
-                                pass
-                            flag_found = True
-                            break
-                    if flag_found:
-                        break
-
-                stats = self.session.clear(mpv_return_code=return_code)
-                self.session.send_message({
-                    "action": "mpv_exited", 
-                    "folder_id": f_id, 
-                    "return_code": return_code, 
-                    "reason": exit_reason,
-                    "played_ids": stats.get("played_ids", []),
-                    "session_ids": stats.get("session_ids", [])
-                })
-
-            threading.Thread(target=process_waiter, args=(process, folder_id), daemon=True).start()
+            # 6. Exit Watcher
+            self._start_exit_watcher(process, folder_id)
             
             resume_msg = f" at {int(float(launch_lua_options['resume_time']))}s" if launch_lua_options.get('resume_time') else ""
             return {"success": True, "message": f"MPV playback initiated{resume_msg}."}
         except Exception as e:
-            logging.error(f"Launcher Error: {e}")
-            return {"success": False, "error": f"Error launching mpv: {e}"}
+            logging.error(f"Launcher Error: {type(e).__name__}: {e}", exc_info=True)
+            return {"success": False, "error": f"Error launching mpv: {str(e)}"}
+
+    def _start_exit_watcher(self, process, folder_id):
+        """Helper to start the process waiter thread."""
+        def process_waiter(proc, f_id):
+            initial_pid = proc.pid
+            actual_pid = getattr(self.session, 'pid', None)
+            
+            if actual_pid and actual_pid != initial_pid:
+                while proc.poll() is None:
+                    if not ipc_utils.is_pid_running(actual_pid): break
+                    time.sleep(0.1)
+            else:
+                proc.wait()
+            
+            return_code = proc.poll() if proc.poll() is not None else 0
+            if proc.poll() is None: threading.Thread(target=proc.wait, daemon=True).start()
+            
+            exit_reason = None
+            actual_pid = getattr(self.session, 'pid', None)
+            pids = list(set(filter(None, [initial_pid, actual_pid])))
+
+            if actual_pid and actual_pid != initial_pid and ipc_utils.is_pid_running(actual_pid):
+                self.start_restored_process_watcher(actual_pid, self.session.ipc_path, f_id)
+                return
+
+            for pid in pids:
+                flag_candidates = [
+                    os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{pid}.flag'),
+                    os.path.join("/tmp", f'mpv_natural_completion_{pid}.flag')
+                ]
+                if self.session.ipc_path: flag_candidates.append(os.path.join(os.path.dirname(self.session.ipc_path), f'mpv_natural_completion_{pid}.flag'))
+
+                for flag_file in flag_candidates:
+                    if os.path.exists(flag_file):
+                        if not getattr(self.session, 'manual_quit', False):
+                            try:
+                                with open(flag_file, 'r', encoding='utf-8') as f: exit_reason = f.read().strip()
+                            except Exception: exit_reason = "completed"
+                            return_code = 99
+                        try: os.remove(flag_file)
+                        except Exception: pass
+                        break
+                if exit_reason: break
+
+            stats = self.session.clear(mpv_return_code=return_code)
+            self.session.send_message({
+                "action": "mpv_exited", "folder_id": f_id, "return_code": return_code, "reason": exit_reason,
+                "played_ids": stats.get("played_ids", []), "session_ids": stats.get("session_ids", [])
+            })
+
+        threading.Thread(target=process_waiter, args=(process, folder_id), daemon=True).start()
 
     def close(self):
         """Closes the current mpv session gracefully via IPC, then forcefully if needed."""
@@ -618,33 +541,59 @@ class LauncherService:
                 logging.warning(f"Failed to send quit command via IPC: {e}")
 
         # 3. Wait for process to exit
+        was_killed = False
         if proc:
             try:
                 proc.wait(timeout=1.0)
+                was_killed = True
             except subprocess.TimeoutExpired:
                 logging.warning(f"MPV process {pid} did not exit gracefully. Terminating.")
                 proc.terminate()
                 try:
                     proc.wait(timeout=1.0)
+                    was_killed = True
                 except subprocess.TimeoutExpired:
                     logging.warning(f"MPV process {pid} did not terminate. Killing.")
                     proc.kill()
+                    proc.wait()
+                    was_killed = True
         elif pid:
-            # Fallback if we only have the PID (e.g. after restore)
+            # Reconnected session (no proc object)
+            logging.info(f"Reconnected session: Attempting to close via PID {pid}")
             try:
                 if platform.system() == "Windows":
+                    # On Windows, we use taskkill to be thorough
                     subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], 
                                  capture_output=True, check=False)
                 else:
+                    # Unix: try SIGTERM then SIGKILL
                     os.kill(pid, signal.SIGTERM)
-                    time.sleep(0.5)
-                    if ipc_utils.is_pid_running(pid):
+                    # Poll for a moment
+                    for _ in range(10):
+                        time.sleep(0.1)
+                        if not ipc_utils.is_pid_running(pid):
+                            was_killed = True
+                            break
+                    
+                    if not was_killed:
                         os.kill(pid, signal.SIGKILL)
+                        was_killed = True
+                
+                # Check if it actually died (final verification)
+                if not was_killed and not ipc_utils.is_pid_running(pid):
+                    was_killed = True
             except OSError:
-                pass # Process already gone
+                was_killed = True # Process already gone
 
-        self.session.clear()
-        return {"success": True, "message": "MPV session closed."}
+        if was_killed:
+            self.session.clear()
+            return {"success": True, "message": "MPV session closed."}
+        else:
+            # Even if we couldn't verify death, we clear our state if PID is gone
+            if not ipc_utils.is_pid_running(pid):
+                self.session.clear()
+                return {"success": True, "message": "MPV session cleared (already dead)."}
+            return {"success": False, "error": "Failed to close MPV session."}
 
 class IPCService:
     def __init__(self, session):
@@ -668,7 +617,6 @@ class IPCService:
         
         # --- REFRESH LUA INDICES ---
         if self.session.ipc_manager and self.session.ipc_manager.is_connected():
-            import file_io
             settings = file_io.get_settings()
             
             for idx, item in enumerate(simulated_playlist):
