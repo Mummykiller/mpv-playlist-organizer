@@ -148,36 +148,100 @@ class PlaybackHandler(BaseHandler):
         return self.mpv_session.clear_live(request.folder_id)
 
     def handle_close_mpv(self, request: native_link.LiveUpdateRequest):
-        if not self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path):
+        # Determine if we should signal launch cancellation (if it's not even running)
+        is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
+        if is_running:
+            if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
+                pass
+            else:
+                is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
+        
+        if not is_running:
             self.mpv_session.launch_cancelled = True
+            
         response = self.mpv_session.close()
         self._stop_local_m3u_server()
         return response
 
     def handle_is_mpv_running(self, request: native_link.LiveUpdateRequest):
-        is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
+        # 1. Check logical state
+        is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
+        
+        # 2. Verify with IPC if we have a connection
+        if is_running:
+            if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
+                # Simple ping - if it fails, we don't immediately kill the session
+                # because the process might just be busy or starting up.
+                res = self.mpv_session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
+                if not res or res.get("error") != "success":
+                    # If IPC fails but PID is still there, it's just 'unresponsive' not 'dead'
+                    if not self.ipc_utils.is_pid_running(self.mpv_session.pid):
+                        is_running = False
+            else:
+                # No active manager, use the utility check
+                is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
+
+        # 3. Only clear if the process is actually gone
         if not is_running and self.mpv_session.pid:
-            self.mpv_session.clear()
+            if not self.ipc_utils.is_pid_running(self.mpv_session.pid):
+                logging.info(f"is_mpv_running: PID {self.mpv_session.pid} is gone. Cleaning up.")
+                self.mpv_session.clear()
+
         return native_link.success({
             "is_running": is_running,
             "folderId": self.mpv_session.owner_folder_id if is_running else None
         })
 
     def handle_get_playback_status(self, request: native_link.LiveUpdateRequest):
-        is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
+        # 1. Check logical state
+        is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
+        
+        # 2. Verify with IPC
+        if is_running:
+            if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
+                # We'll rely on the property fetches below. If they fail,
+                # we'll double check the PID before giving up.
+                pass
+            else:
+                is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
+
         if not is_running:
-            if self.mpv_session.pid: self.mpv_session.clear()
-            return native_link.success({"is_running": False, "is_paused": False})
+            # ONLY clear if the process is actually dead
+            if self.mpv_session.pid and not self.ipc_utils.is_pid_running(self.mpv_session.pid):
+                logging.info(f"get_playback_status: PID {self.mpv_session.pid} is gone. Cleaning up.")
+                self.mpv_session.clear()
+                return native_link.success({"is_running": False, "is_paused": False})
+            elif self.mpv_session.pid:
+                # PID is still there, just IPC failed. Treat as running but state unknown.
+                is_running = True
+            else:
+                return native_link.success({"is_running": False, "is_paused": False})
         
         is_paused = self.mpv_session.get_pause_state()
         is_idle = self.mpv_session.get_idle_state()
         session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
         
+        # If we couldn't get IPC state but PID is still alive, fallback to safe defaults
+        # instead of letting the UI think the session is dead.
+        if is_paused is None: is_paused = False
+        if is_idle is None: is_idle = False
+        
+        # Get the latest last_played_id from tracker or session
+        last_played_id = None
+        if self.mpv_session.playlist_tracker:
+            last_played_id = self.mpv_session.playlist_tracker.last_played_id
+        
+        # Fallback to session metadata if tracker isn't ready
+        if not last_played_id and self.mpv_session.playlist:
+            # Check for the last played id in the session's local cache
+            last_played_id = getattr(self.mpv_session, 'last_played_id_cache', None)
+
         return native_link.success({
             "is_running": True,
             "is_paused": is_paused if is_paused is not None else False,
             "is_idle": is_idle if is_idle is not None else False,
             "folderId": self.mpv_session.owner_folder_id,
+            "lastPlayedId": last_played_id,
             "session_ids": session_ids
         })
 

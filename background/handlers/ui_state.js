@@ -56,17 +56,19 @@ export async function handleContentScriptInit(request, sender) {
 		const mpvStatus = await playback_handlers
 			.handleIsMpvRunning()
 			.catch(() => ({ is_running: false }));
-		let folderId = mpvStatus?.is_running ? mpvStatus.folderId : null;
-		const isFolderActive = !!folderId;
-		let lastPlayedId = null;
-
-		if (!folderId) {
-			folderId =
-				data.settings.last_used_folder_id || Object.keys(data.folders)[0];
-		}
+		
+		const currentMpvFolderId = (mpvStatus?.is_running && mpvStatus.folderId) ? mpvStatus.folderId : null;
+		
+		// Priority for UI initial view:
+		// 1. If MPV is running, show THAT folder.
+		// 2. Otherwise use last used folder.
+		const folderId = currentMpvFolderId || data.settings.last_used_folder_id || Object.keys(data.folders)[0];
+		
+		// Determine if the folder we are about to show is the one that's active in MPV
+		const isFolderActive = !!(currentMpvFolderId && currentMpvFolderId === folderId);
 
 		const folder = data.folders[folderId];
-		lastPlayedId = folder?.last_played_id;
+		const lastPlayedId = folder?.last_played_id;
 
 		const detectedUrl = m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId);
 

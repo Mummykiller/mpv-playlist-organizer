@@ -206,6 +206,23 @@ class PlaybackSession {
 class PlaybackManager {
 	constructor() {
 		this.sessions = new Map(); // folderId -> PlaybackSession
+		this._initFromCache();
+	}
+
+	async _initFromCache() {
+		try {
+			const { mpv_playback_cache } = await chrome.storage.local.get(
+				"mpv_playback_cache",
+			);
+			if (mpv_playback_cache && mpv_playback_cache.folderId) {
+				// Optimistically create a session if we think one was running
+				const session = this.getSession(mpv_playback_cache.folderId);
+				session.isPlaying = true;
+				console.log(
+					`[BG] PlaybackManager: Initialized optimistic session for '${mpv_playback_cache.folderId}' from cache.`,
+				);
+			}
+		} catch (e) {}
 	}
 
 	getSession(folderId) {
@@ -232,25 +249,47 @@ export const playbackManager = new PlaybackManager();
  */
 export async function getVisualPlaybackState(folderId, playlist = null) {
 	try {
+		// 1. Try to get real-time status with a tight timeout
 		const statusResponse = await callNativeHost({
 			action: "get_playback_status",
-		}).catch(() => ({}));
+		}).catch(() => null);
+
+		// 2. If native host is not available/timed out, fallback to local cache
+		let finalStatus = statusResponse;
+		if (!finalStatus) {
+			const { mpv_playback_cache } = await chrome.storage.local.get(
+				"mpv_playback_cache",
+			);
+			if (mpv_playback_cache && mpv_playback_cache.folderId === folderId) {
+				finalStatus = {
+					is_running: !mpv_playback_cache.isIdle,
+					is_paused: mpv_playback_cache.isPaused,
+					session_ids: mpv_playback_cache.session_ids,
+					folderId: mpv_playback_cache.folderId,
+				};
+			}
+		}
+
+		if (!finalStatus)
+			return { isActive: false, isPaused: false, needsAppend: false };
+
 		let isActive = !!(
-			statusResponse?.is_running && statusResponse.folderId === folderId
+			finalStatus.is_running && finalStatus.folderId === folderId
 		);
 		const isPaused =
-			(statusResponse?.is_paused || statusResponse?.is_idle) ?? false;
+			(finalStatus.is_paused || finalStatus.is_idle) ?? false;
 		let needsAppend = false;
+		const lastPlayedId = finalStatus.lastPlayedId;
 
-		if (isActive && statusResponse.session_ids && playlist) {
-			const sessionIds = new Set(statusResponse.session_ids);
+		if (isActive && finalStatus.session_ids && playlist) {
+			const sessionIds = new Set(finalStatus.session_ids);
 			needsAppend = playlist.some((item) => !sessionIds.has(item.id));
 			if (needsAppend) {
 				isActive = false; // Revert to Play icon to signal append needed
 			}
 		}
 
-		return { isActive, isPaused, needsAppend };
+		return { isActive, isPaused, needsAppend, lastPlayedId };
 	} catch (e) {
 		return { isActive: false, isPaused: false, needsAppend: false };
 	}
@@ -991,13 +1030,16 @@ export async function handlePlaybackStatusChanged(data) {
 	const storageData = await storage.get();
 	const folder = storageData.folders[folderId];
 	if (folder) {
+		const { isActive, isPaused: vPaused, needsAppend } = await getVisualPlaybackState(folderId, folder.playlist);
+		
 		broadcastToTabs({
 			action: "render_playlist",
 			folderId: folderId,
 			playlist: folder.playlist,
 			last_played_id: folder.last_played_id,
-			isFolderActive: !is_idle,
-			isPaused: is_paused,
+			isFolderActive: isActive,
+			isPaused: vPaused,
+			needsAppend: needsAppend
 		});
 	}
 }

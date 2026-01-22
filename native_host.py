@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""
+MPV Playlist Organizer - Native Host
+This script acts as the bridge between the Chrome Extension and the local system.
+
+NOTE ON LATE IMPORTS (E402): 
+Module-level imports are intentionally placed inside functions or later in the file 
+to ensure the initial handshake with the browser occurs in < 50ms.
+"""
 import sys
 import os
 import traceback
@@ -341,36 +349,6 @@ try:
         # The delegation system: One receptionist (main loop), many workers (threads)
         executor = ThreadPoolExecutor(max_workers=10)
 
-        # --- IPC Event Listener (Background) ---
-        def ipc_event_listener():
-            """Continuously listens for events from the active MPV session."""
-            logging.info("[PY] IPC event listener thread started.")
-            while True:
-                if mpv_session.ipc_manager and mpv_session.ipc_manager.is_connected():
-                    event = mpv_session.ipc_manager.receive_event(timeout=1.0)
-                    if event:
-                        if event.get('event') == 'client-message':
-                            args = event.get('args', [])
-                            # Look for our custom ytdl failure signal
-                            if len(args) >= 1 and args[0] == "ytdl_error_detected":
-                                error_msg = args[1] if len(args) > 1 else "Unknown ytdl error"
-                                logging.warning(f"[PY][IPC] YTDL Failure signaled from Lua: {error_msg}")
-                                send_message({
-                                    "action": "ytdlp_update_check", 
-                                    "folder_id": mpv_session.owner_folder_id,
-                                    "log": {
-                                        "text": f"[Native Host]: YTDL Failure detected ({error_msg}). Checking for updates...",
-                                        "type": "error"
-                                    }
-                                })
-                    else:
-                        # Prevent tight loop if receive_event returns None immediately
-                        time.sleep(0.5)
-                else:
-                    time.sleep(1.0)
-
-        threading.Thread(target=ipc_event_listener, daemon=True).start()
-
         # Ensure stdin/stdout are available (critical for native messaging)
         if sys.stdin is None or sys.stdout is None:
             logging.error("[PY][MAIN] Standard input/output is missing. If on Windows, ensure the registry key points to 'python.exe' and not 'pythonw.exe'.")
@@ -451,6 +429,22 @@ try:
                     send_message(error_resp)
                 except Exception:
                     pass
+
+        # --- Automatic Session Restoration ---
+        # Attempt to reconnect to an existing MPV session immediately upon startup.
+        # This ensures the browser is notified of active playback even after a reload.
+        try:
+            restore_data = mpv_session.restore()
+            if restore_data:
+                logging.info(f"[PY][MAIN] Automatic restoration successful for folder '{mpv_session.owner_folder_id}'.")
+                # Send unsolicited event to notify the extension
+                # We wrap this in a short delay to ensure the browser port is fully ready to receive
+                def notify_restore():
+                    time.sleep(0.2)
+                    send_message(native_link.success(restore_data, action="session_restored"))
+                threading.Thread(target=notify_restore, daemon=True).start()
+        except Exception as e:
+            logging.error(f"[PY][MAIN] Error during automatic session restoration: {e}")
 
         while True:
             try:

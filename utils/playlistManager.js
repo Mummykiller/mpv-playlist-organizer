@@ -397,16 +397,33 @@ export async function handleGetPlaylist(request) {
 	// Check playback status to get accurate active/paused state
 	const statusResponse = await callNativeHost({
 		action: "get_playback_status",
-	}).catch(() => ({}));
+	}).catch(() => null);
+
+	let finalStatus = statusResponse;
+	if (!finalStatus) {
+		const { mpv_playback_cache } = await chrome.storage.local.get(
+			"mpv_playback_cache",
+		);
+		if (mpv_playback_cache && mpv_playback_cache.folderId === request.folderId) {
+			finalStatus = {
+				is_running: !mpv_playback_cache.isIdle,
+				is_paused: mpv_playback_cache.isPaused,
+				session_ids: mpv_playback_cache.session_ids,
+				folderId: mpv_playback_cache.folderId,
+			};
+		}
+	}
+
 	let isActive = !!(
-		statusResponse?.is_running && statusResponse.folderId === request.folderId
+		finalStatus?.is_running && finalStatus.folderId === request.folderId
 	);
 	let needsAppend = false;
+	const lastPlayedId = finalStatus?.lastPlayedId || folder.last_played_id;
 
 	// UI REVERSION LOGIC: If we are active but there are new items in storage not in MPV,
 	// we want the play button to show "Play" (not Pause) to signal an append needed.
-	if (isActive && statusResponse.session_ids) {
-		const sessionIds = new Set(statusResponse.session_ids);
+	if (isActive && finalStatus.session_ids) {
+		const sessionIds = new Set(finalStatus.session_ids);
 		needsAppend = folder.playlist.some((item) => !sessionIds.has(item.id));
 		if (needsAppend) {
 			isActive = false; // Revert to Play icon
@@ -416,9 +433,9 @@ export async function handleGetPlaylist(request) {
 	return {
 		success: true,
 		list: folder.playlist,
-		last_played_id: folder.last_played_id,
+		last_played_id: lastPlayedId,
 		isFolderActive: isActive,
 		needsAppend: needsAppend,
-		isPaused: (statusResponse?.is_paused || statusResponse?.is_idle) ?? false,
+		isPaused: (finalStatus?.is_paused || finalStatus?.is_idle) ?? false,
 	};
 }

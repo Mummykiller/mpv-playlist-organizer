@@ -5,7 +5,9 @@ import sys
 import threading
 import time
 import uuid
+import platform
 import services
+import file_io
 from utils import ipc_utils, url_analyzer
 from utils.session_services import EnrichmentService, LauncherService, IPCService
 
@@ -37,6 +39,7 @@ class MpvSessionManager:
         self.manual_quit = False
         self.session_cookies = set()
         self.launch_cancelled = False
+        self.last_played_id_cache = None
 
         # --- Injected Dependencies ---
         self.get_all_folders_from_file = dependencies['get_all_folders_from_file']
@@ -62,15 +65,22 @@ class MpvSessionManager:
             self.ipc_manager.register_script_message_handler("ytdl_error_detected", self._handle_ytdl_error)
 
     def _handle_ytdl_error(self, args):
-        error_msg = args[0] if args else ""
-        # Filter for relevant errors
-        # "Sign in" -> Age restriction / Auth
-        # "cookies" -> Generic cookie error
-        # "403" -> Access denied (often stale cookie or bad IP)
-        # "unavailable" -> Generic
-        # "Private video" -> Auth
+        error_msg = args[0] if args else "Unknown error"
+        logging.warning(f"[PY][IPC] YTDL Failure signaled from Lua: {error_msg}")
+        
+        # Notify extension to check for updates
+        self.send_message({
+            "action": "ytdlp_update_check", 
+            "folder_id": self.owner_folder_id,
+            "log": {
+                "text": f"[Native Host]: YTDL Failure detected ({error_msg}). Checking for updates...",
+                "type": "error"
+            }
+        })
+
+        # Attempt automatic fallback if it's a known cookie issue
         if any(x in error_msg for x in ["Sign in", "cookies", "403", "unavailable", "Private video"]):
-            logging.warning(f"Detected potential cookie error: {error_msg}. Attempting fallback.")
+            logging.info(f"Attempting cookie fallback for: {error_msg}")
             threading.Thread(target=self._perform_cookie_fallback, daemon=True).start()
 
     def _perform_cookie_fallback(self):
@@ -216,6 +226,7 @@ class MpvSessionManager:
             self.playlist = None
             self.owner_folder_id = None
             self.manual_quit = False
+            self.last_played_id_cache = None
 
             if self.session_cookies:
                 logging.info(f"Cleaning up {len(self.session_cookies)} session cookies.")
@@ -271,8 +282,15 @@ class MpvSessionManager:
     def restore(self):
         """Checks for a persisted session file and restores state if the process is still alive."""
         with self.sync_lock:
+            # 1. Check if we are already reconnected
             if self.is_alive and self.pid and ipc_utils.is_pid_running(self.pid):
-                return {"was_stale": False, "folder_id": self.owner_folder_id, "last_played_id": getattr(self, 'last_played_id_cache', None)}
+                return {
+                    "was_stale": False, 
+                    "folder_id": self.owner_folder_id, 
+                    "last_played_id": getattr(self, 'last_played_id_cache', None),
+                    "token": getattr(self, 'current_token', None),
+                    "playlist": self.playlist
+                }
 
             if not os.path.exists(self.session_file):
                 return None
@@ -290,10 +308,10 @@ class MpvSessionManager:
                 if not all([pid, ipc_path, owner_folder_id]):
                     raise ValueError("Session file is malformed.")
 
-                # Try to connect and get the REAL PID from MPV
+                # 2. Verify IPC connectivity and get actual MPV PID
                 actual_mpv_pid = None
                 temp_manager = ipc_utils.IPCSocketManager()
-                if temp_manager.connect(ipc_path, timeout=2.0):
+                if temp_manager.connect(ipc_path, timeout=2.0, start_event_reader=False):
                     try:
                         pid_resp = temp_manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=1.0)
                         if pid_resp and pid_resp.get("error") == "success":
@@ -302,27 +320,21 @@ class MpvSessionManager:
                         pass
                     temp_manager.close()
 
-                # Validation: Success if PID matches OR if IPC is alive (handles terminal wrappers)
+                # 3. Validation Logic
                 is_alive = False
                 if actual_mpv_pid:
-                    if actual_mpv_pid == pid:
-                        is_alive = True
-                    elif ipc_utils.is_pid_running(pid):
-                        # PID mismatch but recorded PID (terminal) is still running
-                        is_alive = True
-                        logging.info(f"[PY][Session] Restore: PID mismatch (Recorded: {pid}, Actual: {actual_mpv_pid}) but wrapper still alive. Updating to actual PID.")
-                    else:
-                        # PID mismatch and recorded PID is gone, but MPV is alive!
-                        is_alive = True
-                        logging.info(f"[PY][Session] Restore: Terminal wrapper PID {pid} is gone, but MPV PID {actual_mpv_pid} is alive. Updating.")
-                
+                    is_alive = True # Socket is alive, that's enough for us to try re-attach
+                elif ipc_utils.is_pid_running(pid):
+                    # PID exists but IPC failed - might be starting up or just unresponsive
+                    is_alive = True
+                    logging.warning(f"[PY][Session] Restore: PID {pid} is running but IPC check failed. Attempting attachment anyway.")
+
                 if is_alive:
-                    import file_io
                     folder_data = file_io.get_folder_data(owner_folder_id)
                     if not folder_data:
                         raise RuntimeError(f"Could not find data for restored folder '{owner_folder_id}'.")
 
-                    # Use the actual PID for all future operations
+                    # 4. Populate Session State (Full Parity)
                     self.pid = actual_mpv_pid if actual_mpv_pid else pid
                     self.ipc_path = ipc_path
                     self.playlist = folder_data.get("playlist", [])
@@ -330,36 +342,40 @@ class MpvSessionManager:
                     self.current_token = token
                     self.is_alive = True
                     
-                    # Update session file with correct PID if it changed
+                    # Persist actual PID if it changed (important for terminal wrappers)
                     if actual_mpv_pid and actual_mpv_pid != pid:
                         self.persist_session()
 
+                    # 5. Initialize Services
                     self.ipc_manager = ipc_utils.IPCSocketManager()
-                    self.ipc_manager.connect(self.ipc_path)
-                    self.register_ipc_callbacks() # Register event handlers
-                    
-                    last_played_id = None
-                    if self.ipc_manager.is_connected():
-                        try:
-                            path_resp = self.ipc_manager.send({"command": ["get_property", "path"]}, expect_response=True)
-                            title_resp = self.ipc_manager.send({"command": ["get_property", "media-title"]}, expect_response=True)
-                            
-                            current_path = path_resp.get("data") if path_resp and path_resp.get("error") == "success" else None
-                            current_title = title_resp.get("data") if title_resp and title_resp.get("error") == "success" else None
+                    if not self.ipc_manager.connect(self.ipc_path, timeout=5.0):
+                        logging.error(f"[PY][Session] Restore: Persistent IPC connection failed.")
+                        self.is_alive = False
+                        return None
 
-                            if current_path or current_title:
-                                for item in self.playlist:
-                                    if current_path and (item.get('url') == current_path or item.get('original_url') == current_path):
-                                        last_played_id = item.get('id')
-                                        break
-                                    if current_title and item.get('title') == current_title:
-                                        last_played_id = item.get('id')
-                                        break
-                                self.last_played_id_cache = last_played_id
-                        except Exception as e:
-                            logging.warning(f"Failed to query active item during restore: {e}")
+                    self.register_ipc_callbacks()
                     
-                    import file_io
+                    # 6. Re-sync active item ID
+                    last_played_id = None
+                    try:
+                        id_resp = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=1.0)
+                        if id_resp and id_resp.get("error") == "success":
+                            last_played_id = id_resp.get("data")
+                        
+                        if not last_played_id:
+                            # Fallback to path/title matching
+                            path_resp = self.ipc_manager.send({"command": ["get_property", "path"]}, expect_response=True)
+                            curr_path = path_resp.get("data") if path_resp else None
+                            if curr_path:
+                                for item in self.playlist:
+                                    if item.get('url') == curr_path or item.get('original_url') == curr_path:
+                                        last_played_id = item.get('id')
+                                        break
+                        
+                        self.last_played_id_cache = last_played_id
+                    except Exception as e:
+                        logging.warning(f"Failed to query active item during restore: {e}")
+                    
                     from playlist_tracker import PlaylistTracker
                     self.playlist_tracker = PlaylistTracker(owner_folder_id, self.playlist, file_io, file_io.get_settings(), self.ipc_path, self.send_message)
                     self.playlist_tracker.start_tracking()
@@ -372,22 +388,20 @@ class MpvSessionManager:
                         "folder_id": owner_folder_id, 
                         "last_played_id": last_played_id, 
                         "token": token,
-                        "playlist": self.playlist # Send full playlist for deep sync
+                        "playlist": self.playlist
                     }
                 else:
                     logging.warning(f"[PY][Session] Stale session for PID {pid} found. Cleaning up.")
-                    try:
-                        os.remove(self.session_file)
-                    except OSError:
-                        pass
+                    if os.path.exists(self.session_file):
+                        try: os.remove(self.session_file)
+                        except OSError: pass
                     return {"was_stale": True, "folder_id": owner_folder_id, "return_code": -1}
 
             except Exception as e:
                 logging.warning(f"[PY][Session] Could not restore session: {e}. Cleaning up.")
-                try:
-                    os.remove(self.session_file)
-                except OSError:
-                    pass
+                if os.path.exists(self.session_file):
+                    try: os.remove(self.session_file)
+                    except OSError: pass
                 return None
 
     def append_batch(self, items, mode="append"):
@@ -627,7 +641,23 @@ class MpvSessionManager:
             launch_item = _url_items_list[playlist_start_index]
 
             if self.pid:
-                if not ipc_utils.is_process_alive(self.pid, self.ipc_path):
+                # 1. Determine if actually alive
+                currently_alive = self.is_alive
+                if currently_alive:
+                    if self.ipc_manager and self.ipc_manager.is_connected():
+                        # Verification ping
+                        res = self.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
+                        if not res or res.get("error") != "success":
+                            # Ping failed, but is the process really gone?
+                            if not ipc_utils.is_pid_running(self.pid):
+                                currently_alive = False
+                            else:
+                                logging.warning(f"Session PID {self.pid} is unresponsive but still running. Keeping alive.")
+                    else:
+                        currently_alive = ipc_utils.is_process_alive(self.pid, self.ipc_path)
+
+                if not currently_alive:
+                    logging.info(f"Session for PID {self.pid} is confirmed dead. Clearing.")
                     self.clear() 
                 elif folder_id == self.owner_folder_id: 
                     # --- HOT SWAP LOGIC ---
@@ -712,9 +742,13 @@ class MpvSessionManager:
                         "enriched_m3u_content": self._generate_m3u_content(_url_items_list)
                     }
                 else:
-                    self.close()
+                    # Folder mismatch - close old session first
+                    if ipc_utils.is_pid_running(self.pid):
+                        self.close()
+                    else:
+                        self.clear()
 
-            # --- LAUNCH LOGIC (Outside of self.pid check, inside sync_lock) ---
+            # --- LAUNCH LOGIC ---
             # Determine indices for the staggered launch
             # If we are background-loading, the initial MPV instance only sees ONE item, so it starts at 0.
             staggered_initial_index = 0 if len(_url_items_list) > 1 else playlist_start_index

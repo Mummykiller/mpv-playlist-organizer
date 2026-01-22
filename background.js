@@ -289,6 +289,22 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 	try {
 		const tab = await chrome.tabs.get(activeInfo.tabId);
 		await injectIntoTab(tab);
+
+		// Proactive broadcast: Even if the script is already there,
+		// tell it to refresh its view of the global playback state.
+		const data = await storage.get();
+		const currentStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
+		
+		if (currentStatus?.is_running) {
+			const folder = data.folders[currentStatus.folderId];
+			broadcastToTabs({
+				action: "render_playlist",
+				folderId: currentStatus.folderId,
+				playlist: folder?.playlist,
+				last_played_id: folder?.last_played_id,
+				isFolderActive: true
+			});
+		}
 	} catch (e) {}
 });
 
