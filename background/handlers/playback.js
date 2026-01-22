@@ -229,7 +229,20 @@ class PlaybackManager {
 		if (!this.sessions.has(folderId)) {
 			this.sessions.set(folderId, new PlaybackSession(folderId));
 		}
-		return this.sessions.get(folderId);
+		const session = this.sessions.get(folderId);
+
+		// Proactive check: If we think we are not playing, but cache says otherwise, trust the cache.
+		// This fixes race conditions during extension reloads.
+		if (!session.isPlaying) {
+			chrome.storage.local.get("mpv_playback_cache").then(({ mpv_playback_cache }) => {
+				if (mpv_playback_cache && mpv_playback_cache.folderId === folderId && !mpv_playback_cache.isIdle) {
+					session.isPlaying = true;
+					console.log(`[BG] PlaybackManager: Updated session '${folderId}' to isPlaying=true from proactive cache check.`);
+				}
+			});
+		}
+
+		return session;
 	}
 
 	cleanupSession(folderId) {
@@ -262,9 +275,10 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 			);
 			if (mpv_playback_cache && mpv_playback_cache.folderId === folderId) {
 				finalStatus = {
-					is_running: !mpv_playback_cache.isIdle,
+					is_running: mpv_playback_cache.is_running !== false,
 					is_paused: mpv_playback_cache.isPaused,
-					session_ids: mpv_playback_cache.session_ids,
+					sessionIds: mpv_playback_cache.sessionIds,
+					lastPlayedId: mpv_playback_cache.lastPlayedId,
 					folderId: mpv_playback_cache.folderId,
 				};
 			}
@@ -273,20 +287,21 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 		if (!finalStatus)
 			return { isActive: false, isPaused: false, needsAppend: false };
 
-		let isActive = !!(
-			finalStatus.is_running && finalStatus.folderId === folderId
-		);
+		// Robust Active check: 
+		// If (Process is running OR background manager has an active session) AND folder matches
+		const isProcessRunning = !!(finalStatus.isRunning || finalStatus.is_running);
+		const isManagerActive = isFolderActive(folderId);
+		
+		let isActive = (isProcessRunning || isManagerActive) && (finalStatus.folderId === folderId || !finalStatus.folderId);
+		
 		const isPaused =
-			(finalStatus.is_paused || finalStatus.is_idle) ?? false;
+			(finalStatus.isPaused || finalStatus.is_paused || finalStatus.isIdle || finalStatus.is_idle) ?? false;
 		let needsAppend = false;
 		const lastPlayedId = finalStatus.lastPlayedId;
 
-		if (isActive && finalStatus.session_ids && playlist) {
-			const sessionIds = new Set(finalStatus.session_ids);
+		if (isActive && finalStatus.sessionIds && playlist) {
+			const sessionIds = new Set(finalStatus.sessionIds);
 			needsAppend = playlist.some((item) => !sessionIds.has(item.id));
-			if (needsAppend) {
-				isActive = false; // Revert to Play icon to signal append needed
-			}
 		}
 
 		return { isActive, isPaused, needsAppend, lastPlayedId };
@@ -306,11 +321,14 @@ export function isFolderActive(folderId) {
 }
 
 export async function handleMpvQuitting(data) {
-	const { folderId, is_natural_completion, played_ids, session_ids } = data;
+	const { folderId, isNaturalCompletion, playedIds, sessionIds } = data;
 	broadcastLog({
 		text: `[Background]: MPV shutdown sequence started for '${folderId}'.`,
 		type: "info",
 	});
+	
+	broadcastPlaybackState(folderId, { isClosing: true, isRunning: false });
+
 	broadcastToTabs({
 		action: "render_playlist",
 		folderId: folderId,
@@ -318,7 +336,7 @@ export async function handleMpvQuitting(data) {
 	});
 
 	// --- Early Clear/Confirm Logic ---
-	if (is_natural_completion && folderId) {
+	if (isNaturalCompletion && folderId) {
 		const storageData = await storage.get();
 		const globalPrefs = storageData.settings.ui_preferences.global;
 		const clearMode = globalPrefs.clear_on_completion || "no";
@@ -333,8 +351,8 @@ export async function handleMpvQuitting(data) {
 
 			if (clearMode === "yes") {
 				await clearFolderPlaylist(folderId, {
-					played_ids,
-					session_ids,
+					playedIds,
+					sessionIds,
 					scope: clearScope,
 				});
 			} else if (clearMode === "confirm") {
@@ -347,8 +365,8 @@ export async function handleMpvQuitting(data) {
 						.sendMessage(activeTab.id, {
 							action: "show_clear_confirmation",
 							folderId: folderId,
-							played_ids,
-							session_ids,
+							playedIds,
+							sessionIds,
 							scope: clearScope,
 						})
 						.catch(() => {});
@@ -359,7 +377,7 @@ export async function handleMpvQuitting(data) {
 }
 
 export async function handleMpvExited(data) {
-	const { folderId, returnCode, reason, played_ids, session_ids } = data;
+	const { folderId, returnCode, reason, playedIds, sessionIds } = data;
 	if (!folderId) return;
 
 	// Check if this folder was already handled by the early quitting logic
@@ -367,12 +385,17 @@ export async function handleMpvExited(data) {
 	earlyClearsInProgress.delete(folderId); // Cleanup for next session
 
 	// 1. Immediate UI Reset
+	broadcastPlaybackState(folderId, { isRunning: false, isClosing: false, isIdle: false });
+
 	broadcastToTabs({
 		action: "render_playlist",
 		folderId: folderId,
 		isFolderActive: false,
 		isClosing: false,
 	});
+
+	// Clear cache on exit
+	await chrome.storage.local.remove("mpv_playback_cache");
 
 	// Mapping of common exit codes to human-readable explanations.
 	const exitCodeExplanations = {
@@ -431,8 +454,8 @@ export async function handleMpvExited(data) {
 						type: "info",
 					});
 					await clearFolderPlaylist(folderId, {
-						played_ids,
-						session_ids,
+						playedIds,
+						sessionIds,
 						scope: clearScope,
 					});
 				} else if (clearMode === "confirm") {
@@ -450,8 +473,8 @@ export async function handleMpvExited(data) {
 							.sendMessage(activeTab.id, {
 								action: "show_clear_confirmation",
 								folderId: folderId,
-								played_ids,
-								session_ids,
+								playedIds,
+								sessionIds,
 								scope: clearScope,
 							})
 							.catch(() => {});
@@ -480,26 +503,26 @@ export async function handleMpvExited(data) {
 		action: "render_playlist",
 		folderId: folderId,
 		playlist: folder.playlist,
-		last_played_id: folder.last_played_id,
+		lastPlayedId: folder.last_played_id,
 		isFolderActive: false,
 	});
 }
 
 async function clearFolderPlaylist(folderId, options = {}) {
-	const { played_ids, session_ids, scope = "all" } = options;
+	const { playedIds, sessionIds, scope = "all" } = options;
 	const storageData = await storage.get();
 
 	if (storageData.folders[folderId]) {
 		const folder = storageData.folders[folderId];
 		const originalCount = folder.playlist.length;
 
-		if (scope === "played" && played_ids && played_ids.length > 0) {
-			const playedSet = new Set(played_ids);
+		if (scope === "played" && playedIds && playedIds.length > 0) {
+			const playedSet = new Set(playedIds);
 			folder.playlist = folder.playlist.filter(
 				(item) => !playedSet.has(item.id),
 			);
-		} else if (scope === "session" && session_ids && session_ids.length > 0) {
-			const sessionSet = new Set(session_ids);
+		} else if (scope === "session" && sessionIds && sessionIds.length > 0) {
+			const sessionSet = new Set(sessionIds);
 			folder.playlist = folder.playlist.filter(
 				(item) => !sessionSet.has(item.id),
 			);
@@ -536,8 +559,8 @@ export async function handleClearPlaylistConfirmation(request) {
 			type: "info",
 		});
 		await clearFolderPlaylist(request.folderId, {
-			played_ids: request.played_ids,
-			session_ids: request.session_ids,
+			playedIds: request.playedIds,
+			sessionIds: request.sessionIds,
 			scope: request.scope,
 		});
 		return { success: true };
@@ -550,6 +573,16 @@ export async function handleClearPlaylistConfirmation(request) {
 }
 
 export async function handleIsMpvRunning() {
+	const { mpv_playback_cache } = await chrome.storage.local.get("mpv_playback_cache");
+	if (mpv_playback_cache && mpv_playback_cache.folderId && !mpv_playback_cache.isIdle) {
+		return { 
+			success: true, 
+			is_running: true, 
+			folderId: mpv_playback_cache.folderId,
+			isPaused: mpv_playback_cache.isPaused,
+			lastPlayedId: mpv_playback_cache.lastPlayedId
+		};
+	}
 	return callNativeHost({ action: "is_mpv_running" });
 }
 
@@ -745,9 +778,36 @@ export async function handlePlay(request) {
 			nativePayload.playlist = [url_item.url];
 		}
 
+		if (!play_new_instance && folderId) {
+			const session = playbackManager.findSessionByFolderId(folderId);
+			const isAlreadyActive = session && session.isPlaying;
+
+			if (!isAlreadyActive) {
+				// Update cache to show loading state instantly (Incremental)
+				const { mpv_playback_cache: existing } = await chrome.storage.local.get("mpv_playback_cache");
+				await chrome.storage.local.set({
+					mpv_playback_cache: {
+						...(existing || {}),
+						folderId,
+						is_running: true,
+						isLaunching: true,
+						timestamp: Date.now(),
+					},
+				});
+			}
+		}
+
 		const response = await callNativeHost(nativePayload);
 
 		if (response.success && !play_new_instance) {
+			// Proactively clear launching state once command is accepted
+			const { mpv_playback_cache: current } = await chrome.storage.local.get("mpv_playback_cache");
+			if (current && current.folderId === folderId) {
+				await chrome.storage.local.set({
+					mpv_playback_cache: { ...current, isLaunching: false }
+				});
+			}
+
 			const session = playbackManager.getSession(folderId);
 			session.isPlaying = true;
 
@@ -842,9 +902,12 @@ export async function handlePlayM3U(request) {
 	if (!play_new_instance) {
 		const session = playbackManager.getSession(folderId);
 		session.queue = [];
-		session.isPlaying = false;
+		// Only reset playing state if we are switching folders or starting fresh
+		if (session.folderId !== folderId || !session.isPlaying) {
+			session.isPlaying = false;
+			session.currentPlayingItem = null;
+		}
 		session.isProcessingQueue = false;
-		session.currentPlayingItem = null;
 	}
 
 	const data = await storage.get();
@@ -902,9 +965,35 @@ export async function handlePlayM3U(request) {
 		nativePayload.playlist = m3u_data.value.map((item) => item.url);
 	}
 
+	if (!play_new_instance && folderId) {
+		const session = playbackManager.findSessionByFolderId(folderId);
+		const isAlreadyActive = session && session.isPlaying;
+
+		if (!isAlreadyActive) {
+			// Update cache to show loading state instantly (Incremental)
+			const { mpv_playback_cache: existing } = await chrome.storage.local.get("mpv_playback_cache");
+						await chrome.storage.local.set({
+							mpv_playback_cache: {
+								...(existing || {}),
+								folderId,
+								is_running: true,
+								isLaunching: true,
+								timestamp: Date.now(),
+							},
+						});		}
+	}
+
 	const response = await callNativeHost(nativePayload);
 
 	if (response.success && !play_new_instance) {
+		// Proactively clear launching state once command is accepted
+		const { mpv_playback_cache: current } = await chrome.storage.local.get("mpv_playback_cache");
+		if (current && current.folderId === folderId) {
+			await chrome.storage.local.set({
+				mpv_playback_cache: { ...current, isLaunching: false }
+			});
+		}
+
 		const session = playbackManager.getSession(folderId);
 		session.isPlaying = true;
 		session.currentPlayingItem = { folderId: folderId, isLastInFolder: true }; // Mark as playing this folder
@@ -932,7 +1021,7 @@ export async function handlePlayM3U(request) {
 			}
 		}
 
-		const successMessage = response.already_active
+		const successMessage = (response.already_active || response.handled_directly)
 			? null
 			: response.message || `Playback initiated for playlist '${folderId}'.`;
 		return {
@@ -969,6 +1058,7 @@ export async function handleUpdateLastPlayed(data) {
 					.mpv_playback_cache || {};
 			if (currentCache.folderId === folderId) {
 				currentCache.isIdle = false;
+				currentCache.is_running = true;
 				await chrome.storage.local.set({ mpv_playback_cache: currentCache });
 			}
 		}
@@ -976,13 +1066,23 @@ export async function handleUpdateLastPlayed(data) {
 
 	const finalData = await storage.get();
 	if (finalData.folders[folderId]) {
+		// Calculate full visual state for a complete broadcast
+		const {
+			isActive,
+			isPaused,
+			needsAppend,
+			lastPlayedId,
+		} = await getVisualPlaybackState(folderId, finalData.folders[folderId].playlist);
+
 		// Broadcast the update so the UI highlights the new item immediately
 		broadcastToTabs({
 			action: "render_playlist",
 			folderId: folderId,
 			playlist: finalData.folders[folderId].playlist,
-			last_played_id: itemId,
-			isFolderActive: true,
+			lastPlayedId: lastPlayedId || itemId,
+			isFolderActive: isActive,
+			isPaused: isPaused,
+			needsAppend: needsAppend,
 		});
 	}
 }
@@ -1008,38 +1108,88 @@ export async function handleUpdateItemResumeTime(data) {
 }
 
 /**
+ * Broadcasts a lightweight playback state update to all UI components.
+ */
+export async function broadcastPlaybackState(folderId, statusOverride = {}) {
+	const { mpv_playback_cache } = await chrome.storage.local.get("mpv_playback_cache");
+	
+	const targetFolderId = folderId || mpv_playback_cache?.folderId;
+	if (!targetFolderId) return;
+
+	const isActive = isFolderActive(targetFolderId);
+	const cacheIsActive = !!(mpv_playback_cache && mpv_playback_cache.is_running !== false && mpv_playback_cache.folderId === targetFolderId);
+	
+	let needsAppend = false;
+	if (isActive || cacheIsActive) {
+		const storageData = await storage.get();
+		const folder = storageData.folders[targetFolderId];
+		const sessionIds = mpv_playback_cache?.sessionIds;
+		if (folder && folder.playlist && sessionIds) {
+			const sessionSet = new Set(sessionIds);
+			needsAppend = folder.playlist.some(item => !sessionSet.has(item.id));
+		}
+	}
+
+	const state = {
+		folderId: targetFolderId,
+		isRunning: isActive || cacheIsActive,
+		isPaused: mpv_playback_cache?.isPaused || false,
+		isIdle: mpv_playback_cache?.isIdle || false,
+		lastPlayedId: mpv_playback_cache?.lastPlayedId,
+		needsAppend: needsAppend,
+		...statusOverride
+	};
+
+	broadcastToTabs({
+		action: "playback_state_changed",
+		state: state
+	});
+}
+
+/**
  * Handles 'playback_status_changed' from the native host tracker.
  * Caches the state in storage for instant UI access.
  */
 export async function handlePlaybackStatusChanged(data) {
-	const { folderId, is_paused, is_idle, session_ids } = data;
+	const { folderId, isPaused, isIdle, sessionIds, lastPlayedId } = data;
 	if (!folderId) return;
 
 	// Cache in local storage for instant popup access
 	await chrome.storage.local.set({
 		mpv_playback_cache: {
 			folderId,
-			isPaused: is_paused,
-			isIdle: is_idle,
-			session_ids: session_ids || [],
+			is_running: true, // If we got a status update, it's definitely running
+			isPaused: isPaused,
+			isIdle: isIdle,
+			lastPlayedId: lastPlayedId,
+			sessionIds: sessionIds || [],
+			isLaunching: false, // Got a status update, so launch is finished
 			timestamp: Date.now(),
 		},
 	});
 
-	// Notify UI
+	// 1. Lightweight status sync
+	broadcastPlaybackState(folderId);
+
+	// 2. Heavy data sync (Playlist render)
 	const storageData = await storage.get();
 	const folder = storageData.folders[folderId];
 	if (folder) {
-		const { isActive, isPaused: vPaused, needsAppend } = await getVisualPlaybackState(folderId, folder.playlist);
-		
+		const {
+			isActive,
+			isPaused: vPaused,
+			needsAppend,
+			lastPlayedId: vLastPlayedId,
+		} = await getVisualPlaybackState(folderId, folder.playlist);
+
 		broadcastToTabs({
 			action: "render_playlist",
 			folderId: folderId,
 			playlist: folder.playlist,
-			last_played_id: folder.last_played_id,
+			lastPlayedId: vLastPlayedId || folder.last_played_id,
 			isFolderActive: isActive,
 			isPaused: vPaused,
-			needsAppend: needsAppend
+			needsAppend: needsAppend,
 		});
 	}
 }
@@ -1061,18 +1211,21 @@ export async function handleUpdateItemMarkedAsWatched(data) {
 				await storage.set(storageData, folderId);
 
 				// Broadcast update so all UI instances refresh (Tabs + Popup)
-				const playbackState = await getVisualPlaybackState(
-					folderId,
-					folder.playlist,
-				);
+				const {
+					isActive,
+					isPaused,
+					needsAppend,
+					lastPlayedId,
+				} = await getVisualPlaybackState(folderId, folder.playlist);
+
 				broadcastToTabs({
 					action: "render_playlist",
 					folderId: folderId,
 					playlist: folder.playlist,
-					last_played_id: folder.last_played_id,
-					isFolderActive: playbackState.isActive,
-					isPaused: playbackState.isPaused,
-					needsAppend: playbackState.needsAppend,
+					lastPlayedId: lastPlayedId || folder.last_played_id,
+					isFolderActive: isActive,
+					isPaused: isPaused,
+					needsAppend: needsAppend,
 				});
 				break;
 			}
@@ -1094,14 +1247,14 @@ export async function handleAppend(request) {
 	});
 
 	broadcastLog({
-		text: `[Background]: Received 'append' request for (${folderId}): ${url_item.title || url_item.url}`,
+		text: `[Background]: Received 'queue' request for (${folderId}): ${url_item.title || url_item.url}`,
 		type: "info",
 	});
 
 	session.processQueue(); // Process the queue to append the item
 	return {
 		success: true,
-		message: `Appended ${url_item.title || url_item.url} to queue`,
+		message: `Queued ${url_item.title || url_item.url} to playlist`,
 	};
 }
 
@@ -1121,8 +1274,11 @@ export function getMpvPlaylistCompletedExitCode() {
 }
 
 export function handleSessionRestored(request) {
-	const result = request.result;
-	if (!result) {
+	// The Python 'success' responder flattens dicts into the top level.
+	// After translation, the keys will be camelCased.
+	const result = request.wasStale !== undefined ? request : request.result;
+
+	if (!result || (result.wasStale === undefined && result.folderId === undefined)) {
 		broadcastLog({
 			text: `[Background]: No active session found to restore.`,
 			type: "info",
@@ -1130,7 +1286,7 @@ export function handleSessionRestored(request) {
 		return;
 	}
 
-	if (result.was_stale) {
+	if (result.wasStale) {
 		broadcastLog({
 			text: `[Background]: Detected stale MPV session for folder '${result.folderId}'.`,
 			type: "info",
@@ -1151,6 +1307,20 @@ export function handleSessionRestored(request) {
 			folderId: result.folderId,
 			isLastInFolder: true,
 		};
+
+		// Proactively update cache for restoration
+		chrome.storage.local.set({
+			mpv_playback_cache: {
+				folderId: result.folderId,
+				is_running: true,
+				isPaused: false,
+				isIdle: false,
+				lastPlayedId: result.lastPlayedId,
+				sessionIds: (result.playlist || []).map(i => i.id).filter(Boolean),
+				isLaunching: false,
+				timestamp: Date.now(),
+			}
+		});
 
 		// Notify UI to show active highlight and provide feedback
 		storage.get().then((storageData) => {
@@ -1208,7 +1378,7 @@ export function handleSessionRestored(request) {
 				action: "render_playlist",
 				folderId: folderId,
 				playlist: folder.playlist,
-				last_played_id: lastPlayedId,
+				lastPlayedId: lastPlayedId,
 				isFolderActive: true,
 				isClosing: false,
 			});

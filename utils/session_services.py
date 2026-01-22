@@ -206,7 +206,7 @@ class EnrichmentService:
                     
                     if enriched_future and session.is_alive:
                         logging.info(f"[PY][Session] Background: Appending batch of {len(enriched_future)} future items.")
-                        session.append_batch(enriched_future, mode="append")
+                        session.append_batch(enriched_future, mode="append", folder_id=folder_id)
 
                 # 2. Enrich and Batch Append History Items
                 if history_items:
@@ -222,7 +222,7 @@ class EnrichmentService:
                     if enriched_history and session.is_alive:
                         logging.info(f"[PY][Session] Background: Appending and moving {len(enriched_history)} history items.")
                         # Append them to the end first
-                        session.append_batch(enriched_history, mode="append")
+                        session.append_batch(enriched_history, mode="append", folder_id=folder_id)
                         
                         # Move them to the front (0, 1, 2...)
                         total_len = len(session.playlist)

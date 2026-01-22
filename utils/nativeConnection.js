@@ -20,10 +20,38 @@ const eventListeners = {
 	update_last_played: [],
 	update_item_resume_time: [],
 	update_item_marked_as_watched: [],
+	playback_status_changed: [],
 	mpv_quitting: [],
 	session_restored: [],
 	log: [],
 };
+
+/**
+ * Normalizes keys in an object from snake_case to camelCase where appropriate.
+ * Ensures upper layers always see a consistent schema.
+ */
+function normalizePayload(data) {
+	if (!data || typeof data !== "object") return data;
+	
+	const mapping = {
+		folder_id: "folderId",
+		is_running: "isRunning",
+		is_paused: "isPaused",
+		is_idle: "isIdle",
+		last_played_id: "lastPlayedId",
+		session_ids: "sessionIds",
+		played_ids: "playedIds",
+		playlist_items: "playlistItems"
+	};
+
+	const normalized = { ...data };
+	for (const [snake, camel] of Object.entries(mapping)) {
+		if (data[snake] !== undefined && data[camel] === undefined) {
+			normalized[camel] = data[snake];
+		}
+	}
+	return normalized;
+}
 
 /**
  * Registers a listener for unsolicited native host events.
@@ -39,8 +67,9 @@ export function addNativeListener(action, callback) {
  */
 function dispatchNativeEvent(action, data) {
 	if (eventListeners[action]) {
+		const normalizedData = normalizePayload(data);
 		eventListeners[action].forEach((cb) => {
-			cb(data);
+			cb(normalizedData);
 		});
 	}
 }
@@ -97,14 +126,16 @@ function connectToNativeHost() {
 
 		nativePort.onMessage.addListener((response) => {
 			const { request_id, ...responseData } = response;
+			const normalizedResponse = normalizePayload(responseData);
+
 			if (request_id && requestPromises[request_id]) {
-				requestPromises[request_id].resolve(responseData);
+				requestPromises[request_id].resolve(normalizedResponse);
 				delete requestPromises[request_id];
 				return;
 			}
-			if (responseData.action)
-				dispatchNativeEvent(responseData.action, responseData);
-			if (responseData.log) dispatchNativeEvent("log", responseData.log);
+			if (normalizedResponse.action)
+				dispatchNativeEvent(normalizedResponse.action, normalizedResponse);
+			if (normalizedResponse.log) dispatchNativeEvent("log", normalizedResponse.log);
 		});
 
 		connectionStatus = ConnectionStatus.CONNECTED;
