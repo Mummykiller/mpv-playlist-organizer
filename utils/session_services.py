@@ -236,39 +236,10 @@ class EnrichmentService:
                 # --- REFRESH LUA INDICES AFTER MOVE ---
                 # Since we moved items, we must update Lua's index mapping.
                 if session.ipc_manager and session.ipc_manager.is_connected():
-                    essential_flags = services.get_essential_ytdlp_flags()
                     for idx, item in enumerate(session.playlist):
-                        item_url = sanitize_url(item['url'])
-                        if item.get('is_youtube') and item.get('original_url'):
-                            item_url = sanitize_url(item['original_url'])
-                        
-                        raw_opts = item.get('ytdl_raw_options')
-                        if item.get('cookies_browser'):
-                             browser_opt = f"cookies-from-browser={item['cookies_browser']}"
-                             raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
-                        final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
-
-                        # Helper to get mark_watched
-                        def get_mark_watched(it):
-                            val = it.get('mark_watched')
-                            if val is None:
-                                val = it.get('settings', {}).get('yt_mark_watched', True)
-                            return val.lower() in ("true", "yes", "1") if isinstance(val, str) else bool(val)
-
-                        lua_options = {
-                            "id": item.get('id'), "title": item.get('title'),
-                            "headers": item.get('headers'), "ytdl_raw_options": final_item_raw_opts,
-                            "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
-                            "ytdl_format": item.get('ytdl_format'),
-                            "ffmpeg_path": settings.get('ffmpeg_path'),
-                            "original_url": sanitize_url(item.get('original_url') or item.get('url')),
-                            "cookies_browser": item.get('cookies_browser'),
-                            "resume_time": item.get('resume_time'),
-                            "project_root": session.SCRIPT_DIR,
-                            "mark_watched": get_mark_watched(item),
-                            "marked_as_watched": item.get('marked_as_watched', False),
-                            "targeted_defaults": settings.get('targeted_defaults', 'none')
-                        }
+                        lua_options, item_url = services.construct_lua_options(
+                            item, settings, session.SCRIPT_DIR, index=idx
+                        )
                         session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
 
                 logging.info("[PY][Session] Background: Batched restoration complete.")
@@ -474,95 +445,19 @@ class LauncherService:
             
             if self.session.playlist:
                 for i, item in enumerate(self.session.playlist):
-                    item_url = sanitize_url(item['url'])
-                    if item.get('is_youtube') and item.get('original_url'):
-                        item_url = sanitize_url(item['original_url'])
-                    
-                    # --- Centralized Flag Collection for Launch ---
-                    essential_flags = services.get_essential_ytdlp_flags()
-                    raw_opts = item.get('ytdl_raw_options')
-                    if item.get('cookies_browser'):
-                         browser_opt = f"cookies-from-browser={item['cookies_browser']}"
-                         raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
-                    final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
-
-                    lua_options = {
-                        "id": item.get('id'),
-                        "title": item.get('title'),
-                        "headers": item.get('headers'),
-                        "ytdl_raw_options": final_item_raw_opts,
-                        "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
-                        "ytdl_format": item.get('ytdl_format'),
-                        "ffmpeg_path": settings.get('ffmpeg_path'),
-                        "original_url": sanitize_url(item.get('original_url') or item.get('url')),
-                        "disable_http_persistent": item.get('disable_http_persistent', False) or kwargs.get('disable_http_persistent', False),
-                        "cookies_file": item.get('cookies_file'),
-                        "cookies_browser": item.get('cookies_browser'),
-                        "disable_network_overrides": settings.get('disable_network_overrides', False),
-                        "http_persistence": settings.get('http_persistence', 'auto'),
-                        "enable_reconnect": settings.get('enable_reconnect', True),
-                        "reconnect_delay": settings.get('reconnect_delay', 4),
-                        "demuxer_max_bytes": settings.get('demuxer_max_bytes'),
-                        "demuxer_max_back_bytes": settings.get('demuxer_max_back_bytes'),
-                        "cache_secs": settings.get('cache_secs'),
-                        "demuxer_readahead_secs": settings.get('demuxer_readahead_secs'),
-                        "stream_buffer_size": settings.get('stream_buffer_size'),
-                        "enable_cache": settings.get('enable_cache', True),
-                        "resume_time": item.get('resume_time') if settings.get('enable_precise_resume') else None,
-                        "project_root": self.session.SCRIPT_DIR,
-                        "mark_watched": item.get('mark_watched', False),
-                        "marked_as_watched": item.get('marked_as_watched', False),
-                        "targeted_defaults": settings.get('targeted_defaults', 'none')
-                    }
+                    # Centralized helper handles enrichment, headers, and setting normalization
+                    lua_options, item_url = services.construct_lua_options(
+                        item, settings, self.session.SCRIPT_DIR, index=playlist_start_index + i
+                    )
                     self.session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(playlist_start_index + i)]})
 
             # --- PRE-LOAD PROPERTY SYNC (Eliminates race conditions) ---
             # We only set hot-swap-options for the SPECIFIC item we are about to load.
             # This ensures adaptive_headers.lua has the correct context immediately.
-            essential_flags = services.get_essential_ytdlp_flags()
-            raw_opts = url_item.get('ytdl_raw_options')
-            if url_item.get('cookies_browser'):
-                 browser_opt = f"cookies-from-browser={url_item['cookies_browser']}"
-                 raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
-            final_launch_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
+            launch_lua_options, _ = services.construct_lua_options(
+                url_item, settings, self.session.SCRIPT_DIR
+            )
             
-            # Helper to get mark_watched with proper fallbacks and normalization
-            def get_mark_watched(it):
-                val = it.get('mark_watched')
-                if val is None:
-                    val = it.get('settings', {}).get('yt_mark_watched', True)
-                if isinstance(val, str):
-                    return val.lower() in ("true", "yes", "1")
-                return bool(val)
-
-            launch_lua_options = {
-                "id": url_item.get('id'),
-                "title": url_item.get('title'),
-                "headers": url_item.get('headers'),
-                "ytdl_raw_options": final_launch_raw_opts,
-                "use_ytdl_mpv": url_item.get('use_ytdl_mpv', False) or url_item.get('is_youtube', False),
-                "ytdl_format": url_item.get('ytdl_format'),
-                "ffmpeg_path": settings.get('ffmpeg_path'),
-                "original_url": sanitize_url(url_item.get('original_url') or url_item.get('url')),
-                "disable_http_persistent": url_item.get('disable_http_persistent', False) or kwargs.get('disable_http_persistent', False),
-                "cookies_file": url_item.get('cookies_file'),
-                "cookies_browser": url_item.get('cookies_browser'),
-                "disable_network_overrides": settings.get('disable_network_overrides', False),
-                "http_persistence": settings.get('http_persistence', 'auto'),
-                "enable_reconnect": settings.get('enable_reconnect', True),
-                "reconnect_delay": settings.get('reconnect_delay', 4),
-                "demuxer_max_bytes": settings.get('demuxer_max_bytes'),
-                "demuxer_max_back_bytes": settings.get('demuxer_max_back_bytes'),
-                "cache_secs": settings.get('cache_secs'),
-                "demuxer_readahead_secs": settings.get('demuxer_readahead_secs'),
-                "stream_buffer_size": settings.get('stream_buffer_size'),
-                "enable_cache": settings.get('enable_cache', True),
-                "resume_time": url_item.get('resume_time') if settings.get('enable_precise_resume') else None,
-                "project_root": self.session.SCRIPT_DIR,
-                "mark_watched": get_mark_watched(url_item),
-                "marked_as_watched": url_item.get('marked_as_watched', False),
-                "targeted_defaults": settings.get('targeted_defaults', 'none')
-            }
             self.session.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(launch_lua_options)]})
 
             orig_url = url_item.get('original_url') or url_item.get('url', '')
@@ -775,31 +670,12 @@ class IPCService:
         if self.session.ipc_manager and self.session.ipc_manager.is_connected():
             import file_io
             settings = file_io.get_settings()
-            essential_flags = services.get_essential_ytdlp_flags()
             
             for idx, item in enumerate(simulated_playlist):
-                item_url = sanitize_url(item['url'])
-                if item.get('is_youtube') and item.get('original_url'):
-                    item_url = sanitize_url(item['original_url'])
-                
-                raw_opts = item.get('ytdl_raw_options')
-                if item.get('cookies_browser'):
-                     browser_opt = f"cookies-from-browser={item['cookies_browser']}"
-                     raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
-                final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
-
-                lua_options = {
-                    "id": item.get('id'), "title": item.get('title'),
-                    "headers": item.get('headers'), "ytdl_raw_options": final_item_raw_opts,
-                    "use_ytdl_mpv": item.get('use_ytdl_mpv', False),
-                    "original_url": sanitize_url(item.get('original_url') or item.get('url')),
-                    "cookies_browser": item.get('cookies_browser'),
-                    "resume_time": item.get('resume_time'),
-                    "demuxer_max_bytes": settings.get('demuxer_max_bytes'),
-                    "cache_secs": settings.get('cache_secs'),
-                    "project_root": self.session.SCRIPT_DIR,
-                    "targeted_defaults": settings.get('targeted_defaults', 'none')
-                }
+                # Centralized helper handles enrichment, headers, and setting normalization
+                lua_options, item_url = services.construct_lua_options(
+                    item, settings, self.session.SCRIPT_DIR, index=idx
+                )
                 self.session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
 
         if self.session.playlist_tracker:

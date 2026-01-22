@@ -11,34 +11,28 @@ The installer is now decomposed into a tiny entry point, a logic engine in `inst
 ---
 
 ## 2. The "God Object" Pattern: `HandlerManager` (~970 lines)
-**Status:** High Risk / Maintenance Bottleneck
-Located in `utils/native_host_handlers.py`, this class handles every single action from the Chrome Extension. As new features (AniList, M3U server, etc.) are added, this file becomes unreadable.
+**Status:** ✅ COMPLETED
+Split into specialized modules in `utils/handlers/`:
+*   `playback_handler.py`
+*   `data_handler.py`
+*   `settings_handler.py`
+*   `base_handler.py` (Shared logic)
 
-**Proposed Action:**
-*   Decompose `HandlerManager` into specialized handler modules:
-    *   `playback_handler.py`: `play`, `append`, `close_mpv`.
-    *   `data_handler.py`: `export_data`, `import_from_file`, `sharding`.
-    *   `services_handler.py`: `anilist`, `ytdlp_update`.
-*   Use a lightweight `Router` in `native_host.py` to dispatch messages to the correct handler.
+A dedicated `NativeLink` layer now handles all JS-Python translation and model validation.
 
 ---
 
 ## 3. High Logic Duplication (DRY Violations)
-**Status:** Medium Risk / Source of Subtle Bugs
-Crucial logic is manually repeated in multiple locations, making the app fragile during updates.
-
-*   **Lua Options Construction:** The `lua_options` dictionary (sent to MPV) is built in 4+ places (`mpv_session.py`, `session_services.py`).
-*   **Settings Merging:** The logic to merge extension overrides into global settings is copy-pasted across `handle_play`, `handle_play_batch`, and `handle_play_m3u`.
-*   **URL ID Injection:** Appending `#mpv_organizer_id=` to URLs is duplicated in `_generate_m3u_content` and `LauncherService.launch`.
-
-**Proposed Action:**
-*   Create a centralized `PayloadFactory` or move these into `services.py` as pure functions.
+**Status:** ✅ COMPLETED
+*   **Lua Options Construction:** Centralized into `services.construct_lua_options`.
+*   **Settings Merging:** Automated via the `SettingsOverrides` model in `NativeLink`.
+*   **Outbound Translation:** Automated in `native_host.py` via `responder._translate_keys`.
 
 ---
 
 ## 4. Module Bloat: `services.py` (~1,000 lines)
-**Status:** Medium Risk / Low Navigability
-This file has become a "junk drawer" for any logic that doesn't fit elsewhere (GPU detection, AniList caching, yt-dlp updates, command building).
+**Status:** Medium Risk / Next Priority
+This file remains a "junk drawer."
 
 **Proposed Action:**
 *   Move `MpvCommandBuilder` to its own file.
@@ -48,14 +42,12 @@ This file has become a "junk drawer" for any logic that doesn't fit elsewhere (G
 ---
 
 ## 5. Method Complexity & Deep Nesting
-**Status:** Low Risk / Readability Issue
-Specific methods are too long and handle too many low-level details.
-
-*   **`LauncherService.launch`**: Spans over 150 lines. Handles environment scrubbing, process spawning, PID resolution, and initial IPC sync.
-*   **`EnrichmentService.resolve_input_items`**: Heavily nested logic for distinguishing between local files, remote URLs, and raw M3U content.
+**Status:** Medium Risk / Source of Technical Debt
+*   **`LauncherService.launch`**: Still spans over 150 lines. Needs decomposition into `_prepare_env`, `_spawn_process`, and `_sync_initial_state`.
+*   **`EnrichmentService.resolve_input_items`**: Needs cleanup to reduce nesting levels.
 
 **Proposed Action:**
-*   Break these into private helper methods (e.g., `_prepare_env()`, `_wait_for_handshake()`).
+*   Break these into private helper methods within `utils/session_services.py`.
 
 ---
 

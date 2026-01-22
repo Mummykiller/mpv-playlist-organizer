@@ -139,37 +139,13 @@ class MpvSessionManager:
                     # Or just use the URL key which adaptive_headers uses.
                     item_url = services.sanitize_url(url)
                     
-                    # Helper to get mark_watched with proper fallbacks and normalization
-                    def get_mark_watched(it):
-                        val = it.get('mark_watched')
-                        if val is None:
-                            val = it.get('settings', {}).get('yt_mark_watched', True)
-                        if isinstance(val, str):
-                            return val.lower() in ("true", "yes", "1")
-                        return bool(val)
-
-                    lua_options = {
-                        "id": target_item.get('id'), 
-                        "title": target_item.get('title'),
-                        "headers": target_item.get('headers'),
-                        "ytdl_raw_options": final_opts, # CLEAN options (no browser arg)
-                        "use_ytdl_mpv": True,
-                        "ytdl_format": target_item.get('ytdl_format'),
-                        "ffmpeg_path": None, # Should be in essential_flags
-                        "original_url": item_url,
-                        "cookies_file": cookie_path, # FALLBACK FILE
-                        "cookies_browser": target_item.get('cookies_browser'),
-                        "resume_time": None, # Don't seek on retry? or get current pos?
-                        "demuxer_max_bytes": settings.get('demuxer_max_bytes', '1G'),
-                        "demuxer_max_back_bytes": settings.get('demuxer_max_back_bytes', '500M'),
-                        "cache_secs": settings.get('cache_secs', 500),
-                        "demuxer_readahead_secs": settings.get('demuxer_readahead_secs', 500),
-                        "stream_buffer_size": settings.get('stream_buffer_size', '10M'),
-                        "project_root": self.SCRIPT_DIR,
-                        "mark_watched": get_mark_watched(target_item),
-                        "marked_as_watched": target_item.get('marked_as_watched', False),
-                        "targeted_defaults": settings.get('targeted_defaults', 'none')
-                    }
+                    # Centralized helper handles metadata, headers, and setting normalization
+                    # Note: We temporarily override cookies_file for this specific reload
+                    lua_options, _ = services.construct_lua_options(
+                        target_item, settings, self.SCRIPT_DIR
+                    )
+                    lua_options["cookies_file"] = cookie_path
+                    lua_options["use_ytdl_mpv"] = True # Force for fallback
                     
                     # Update Lua state
                     self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
@@ -455,53 +431,10 @@ class MpvSessionManager:
                 # Check duplicate status BEFORE adding to local list
                 is_duplicate = any(i.get('id') == item_id for i in self.playlist)
 
-                # --- Centralized Flag Collection for Appending ---
-                essential_flags = services.get_essential_ytdlp_flags()
-                raw_opts = item.get('ytdl_raw_options')
-                
-                # Support Direct Browser Access
-                if item.get('cookies_browser'):
-                     browser_opt = f"cookies-from-browser={item['cookies_browser']}"
-                     raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
-
-                final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
-
-                # Helper to get mark_watched with proper fallbacks and normalization
-                def get_mark_watched(it):
-                    val = it.get('mark_watched')
-                    if val is None:
-                        val = it.get('settings', {}).get('yt_mark_watched', True)
-                    if isinstance(val, str):
-                        return val.lower() in ("true", "yes", "1")
-                    return bool(val)
-
-                lua_options = {
-                    "id": item.get('id'), 
-                    "title": item.get('title'),
-                    "headers": item.get('headers'),
-                    "ytdl_raw_options": final_item_raw_opts,
-                    "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
-                    "ytdl_format": item.get('ytdl_format'),
-                    "ffmpeg_path": settings.get('ffmpeg_path'),
-                    "original_url": sanitize_url(item.get('original_url') or item.get('url')),
-                    "disable_http_persistent": item.get('disable_http_persistent', False),
-                    "cookies_file": item.get('cookies_file'),
-                    "cookies_browser": item.get('cookies_browser'),
-                    "disable_network_overrides": settings.get('disable_network_overrides', False),
-                    "http_persistence": settings.get('http_persistence', 'auto'),
-                    "enable_reconnect": settings.get('enable_reconnect', True),
-                    "reconnect_delay": settings.get('reconnect_delay', 4),
-                    "demuxer_max_bytes": settings.get('demuxer_max_bytes', '1G'),
-                    "demuxer_max_back_bytes": settings.get('demuxer_max_back_bytes', '500M'),
-                    "cache_secs": settings.get('cache_secs', 500),
-                    "demuxer_readahead_secs": settings.get('demuxer_readahead_secs', 500),
-                    "stream_buffer_size": settings.get('stream_buffer_size', '10M'),
-                    "resume_time": item.get('resume_time'),
-                    "project_root": self.SCRIPT_DIR,
-                    "mark_watched": get_mark_watched(item),
-                    "marked_as_watched": item.get('marked_as_watched', False),
-                    "targeted_defaults": settings.get('targeted_defaults', 'none')
-                }
+                # Centralized helper handles metadata, headers, and setting normalization
+                lua_options, item_url = services.construct_lua_options(
+                    item, settings, self.SCRIPT_DIR, index=mpv_playlist_count
+                )
                 
                 # Calculate the final index where this item will reside in MPV
                 # If we are appending, it's current_count + offset
@@ -723,41 +656,10 @@ class MpvSessionManager:
 
                         final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
 
-                        # Helper to get mark_watched with proper fallbacks and normalization
-                        def get_mark_watched(it):
-                            val = it.get('mark_watched')
-                            if val is None:
-                                val = it.get('settings', {}).get('yt_mark_watched', True)
-                            if isinstance(val, str):
-                                return val.lower() in ("true", "yes", "1")
-                            return bool(val)
-
-                        lua_options = {
-                            "id": launch_item.get('id'), 
-                            "title": launch_item.get('title'),
-                            "headers": launch_item.get('headers'),
-                            "ytdl_raw_options": final_item_raw_opts,
-                            "use_ytdl_mpv": launch_item.get('use_ytdl_mpv', False) or launch_item.get('is_youtube', False),
-                            "ytdl_format": launch_item.get('ytdl_format'),
-                            "ffmpeg_path": settings.get('ffmpeg_path'),
-                            "original_url": sanitize_url(launch_item.get('original_url') or launch_item.get('url')),
-                            "disable_http_persistent": launch_item.get('disable_http_persistent', False),
-                            "cookies_file": launch_item.get('cookies_file'),
-                            "disable_network_overrides": settings.get('disable_network_overrides', False),
-                            "http_persistence": settings.get('http_persistence', 'auto'),
-                            "enable_reconnect": settings.get('enable_reconnect', True),
-                            "reconnect_delay": settings.get('reconnect_delay', 4),
-                            "demuxer_max_bytes": settings.get('demuxer_max_bytes', '1G'),
-                            "demuxer_max_back_bytes": settings.get('demuxer_max_back_bytes', '500M'),
-                            "cache_secs": settings.get('cache_secs', 500),
-                            "demuxer_readahead_secs": settings.get('demuxer_readahead_secs', 500),
-                            "stream_buffer_size": settings.get('stream_buffer_size', '10M'),
-                            "resume_time": launch_item.get('resume_time') if settings.get('enable_precise_resume') else None,
-                            "project_root": self.SCRIPT_DIR,
-                            "mark_watched": get_mark_watched(launch_item),
-                            "marked_as_watched": launch_item.get('marked_as_watched', False),
-                            "targeted_defaults": settings.get('targeted_defaults', 'none')
-                        }
+                        # Centralized helper handles metadata, headers, and setting normalization
+                        lua_options, _ = services.construct_lua_options(
+                            launch_item, settings, self.SCRIPT_DIR
+                        )
                         
                         # PRE-LOAD PROPERTY SYNC (Eliminates race conditions)
                         # Set user-data manifest for the Lua script to find immediately
