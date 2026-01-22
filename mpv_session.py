@@ -6,6 +6,7 @@ import threading
 import time
 import uuid
 import platform
+import re
 import services
 import file_io
 from utils import ipc_utils, url_analyzer
@@ -337,7 +338,6 @@ class MpvSessionManager:
                     # 4. Populate Session State (Full Parity)
                     self.pid = actual_mpv_pid if actual_mpv_pid else pid
                     self.ipc_path = ipc_path
-                    self.playlist = folder_data.get("playlist", [])
                     self.owner_folder_id = owner_folder_id
                     self.current_token = token
                     self.is_alive = True
@@ -352,6 +352,43 @@ class MpvSessionManager:
                         logging.error(f"[PY][Session] Restore: Persistent IPC connection failed.")
                         self.is_alive = False
                         return None
+
+                    # --- Sync Internal Playlist with MPV Reality ---
+                    # We parse IDs from MPV's 'playlist' property to ensure self.playlist
+                    # only contains items that are actually in MPV.
+                    try:
+                        pl_resp = self.ipc_manager.send({"command": ["get_property", "playlist"]}, expect_response=True, timeout=2.0)
+                        mpv_playlist_urls = pl_resp.get("data") if pl_resp else None
+                        
+                        if mpv_playlist_urls and isinstance(mpv_playlist_urls, list):
+                            logging.info(f"[PY][Session] Restore: Found {len(mpv_playlist_urls)} items in MPV playlist.")
+                            synced_playlist = []
+                            shard_playlist = folder_data.get("playlist", [])
+                            shard_map = {item.get('id'): item for item in shard_playlist if item.get('id')}
+                            
+                            for mpv_item in mpv_playlist_urls:
+                                path = mpv_item.get('filename', '')
+                                logging.debug(f"[PY][Session] Restore: Processing MPV path: {path}")
+                                # Extract Solid ID from fragment
+                                match = re.search(r"[#&]mpv_organizer_id=([^#&]+)", path)
+                                item_id = match.group(1) if match else None
+                                logging.debug(f"[PY][Session] Restore: Extracted ID: {item_id}")
+                                
+                                if item_id and item_id in shard_map:
+                                    synced_playlist.append(shard_map[item_id])
+                                else:
+                                    # Fallback: try to find by URL if no ID fragment
+                                    # This might happen for items added outside our system
+                                    synced_playlist.append({"url": path, "title": mpv_item.get('title') or path, "id": item_id or str(uuid.uuid4())})
+                            
+                            self.playlist = synced_playlist
+                            logging.info(f"[PY][Session] Restore: Synced {len(self.playlist)} items from MPV reality.")
+                        else:
+                            self.playlist = folder_data.get("playlist", [])
+                            logging.warning("[PY][Session] Restore: Could not get playlist from MPV. Falling back to shard.")
+                    except Exception as e:
+                        self.playlist = folder_data.get("playlist", [])
+                        logging.warning(f"[PY][Session] Restore: Error syncing playlist: {e}. Falling back to shard.")
 
                     self.register_ipc_callbacks()
                     
@@ -404,6 +441,14 @@ class MpvSessionManager:
                     except OSError: pass
                 return None
 
+    def _remote_log(self, message):
+        """Sends a message to MPV to be printed in its terminal."""
+        if self.ipc_manager and self.ipc_manager.is_connected():
+            try:
+                self.ipc_manager.send({"command": ["script-message", "python_log", message]})
+            except Exception:
+                pass
+
     def append_batch(self, items, mode="append", folder_id=None):
         """Appends multiple items using a temporary M3U to preserve titles and options natively."""
         if not items:
@@ -414,15 +459,14 @@ class MpvSessionManager:
             logging.warning(f"[PY][Session] Append rejected: folder mismatch (active: '{self.owner_folder_id}', req: '{folder_id}')")
             return {"success": False, "error": f"Folder mismatch. Session is active for '{self.owner_folder_id}'."}
 
-        logging.info(f"Linked Playlist: Preparing to append {len(items)} items. Mode: {mode}")
-        for idx, item in enumerate(items):
-            logging.debug(f"  [{idx}] {item.get('title') or item.get('url')}")
-
+        logging.info(f"[PY][Session] Append Batch: {len(items)} items. mode={mode}, folder={folder_id}")
+        
         import file_io
         settings = file_io.get_settings()
         
         with self.sync_lock:
             if not self.is_alive or not self.ipc_manager:
+                logging.warning(f"[PY][Session] Append failed: session alive={self.is_alive}, ipc_connected={self.ipc_manager is not None}")
                 return {"success": False, "error": "No active session for append."}
 
             if self.playlist is None:
@@ -436,6 +480,7 @@ class MpvSessionManager:
                 res = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True, timeout=2.0)
                 if res and res.get("error") == "success":
                     mpv_playlist_count = int(res.get("data", 0))
+                    logging.info(f"[PY][Session] MPV reports {mpv_playlist_count} current items.")
                 else:
                     logging.warning(f"Append: Failed to get playlist-count, falling back to internal list size ({len(self.playlist)})")
                     mpv_playlist_count = len(self.playlist)
@@ -443,20 +488,22 @@ class MpvSessionManager:
                 logging.warning(f"Append: IPC Error getting playlist-count: {e}. Falling back to {len(self.playlist)}")
                 mpv_playlist_count = len(self.playlist)
 
+            items_to_append_to_internal_list = []
+            
             for item in items:
                 # Use the same logic as _generate_m3u_content to determine the key
-                item_url = item['url']
+                item_url_for_lua = item['url']
                 if item.get('is_youtube') and item.get('original_url'):
-                    item_url = item['original_url']
+                    item_url_for_lua = item['original_url']
                 
-                item_url = sanitize_url(item_url)
+                item_url_for_lua = sanitize_url(item_url_for_lua)
                 item_id = item.get('id')
                 
                 # Check duplicate status BEFORE adding to local list
                 is_duplicate = any(i.get('id') == item_id for i in self.playlist)
 
                 # Centralized helper handles metadata, headers, and setting normalization
-                lua_options, item_url = services.construct_lua_options(
+                lua_options, item_url_from_helper = services.construct_lua_options(
                     item, settings, self.SCRIPT_DIR, index=mpv_playlist_count
                 )
                 
@@ -465,19 +512,18 @@ class MpvSessionManager:
                 if not is_duplicate:
                     # Map metadata to the future index in MPV
                     # Note: this assumes items are appended to the end (mode="append")
-                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(mpv_playlist_count)]})
+                    logging.debug(f"[PY][Session] Sending metadata for new item: {item.get('title')} (index {mpv_playlist_count})")
+                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url_from_helper, json.dumps(lua_options), str(mpv_playlist_count)]})
                     
-                    item['url'] = item_url 
-                    self.playlist.append(item)
-                    if self.playlist_tracker:
-                        self.playlist_tracker.add_item(item)
+                    # Store for later update of self.playlist ONLY if loadlist succeeds
+                    items_to_append_to_internal_list.append(item)
                     mpv_playlist_count += 1
                 else:
                     # For duplicates, we still update metadata by URL as a fallback
-                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
+                    logging.debug(f"[PY][Session] Sending metadata for duplicate item: {item.get('title')}")
+                    self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url_from_helper, json.dumps(lua_options)]})
 
             m3u_content = self._generate_m3u_content(items)
-            logging.debug(f"[PY][Session] Generated M3U content for batch:\n{m3u_content}")
             
             temp_path = None
             try:
@@ -492,10 +538,18 @@ class MpvSessionManager:
                     tf.write(m3u_content)
                 
                 logging.info(f"[PY][Session] Sending loadlist command to MPV (mode: {mode}, path: {temp_path})")
-                res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True)
+                # Increased timeout to 5.0s for loadlist
+                res = self.ipc_manager.send({"command": ["loadlist", temp_path, mode]}, expect_response=True, timeout=5.0)
                 
                 if res and res.get("error") == "success":
-                    logging.info("[PY][Session] MPV successfully processed loadlist.")
+                    logging.info(f"[PY][Session] MPV successfully processed loadlist. Total items now tracked: {len(self.playlist) + len(items_to_append_to_internal_list)}")
+                    
+                    # NOW update internal state
+                    for itm in items_to_append_to_internal_list:
+                        self.playlist.append(itm)
+                        if self.playlist_tracker:
+                            self.playlist_tracker.add_item(itm)
+
                     idle_resp = self.ipc_manager.send({"command": ["get_property", "idle-active"]}, expect_response=True)
                     if idle_resp and idle_resp.get("data"):
                         logging.info("MPV is idle. Forcing playback to start after append.")
@@ -504,6 +558,7 @@ class MpvSessionManager:
                     
                     msg = f"Appended {len(items)} new item{'s' if len(items) > 1 else ''}"
                     self.ipc_manager.send({"command": ["show-text", msg, 3000]})
+                    self._remote_log(f"AdaptiveHeaders: {msg} to live session.")
                     
                     return {"success": True, "message": f"Appended {len(items)} items to active session."}
                 else:
@@ -516,8 +571,8 @@ class MpvSessionManager:
             finally:
                 if temp_path and os.path.exists(temp_path):
                     try:
-                        # Small sleep to ensure MPV has finished reading the file
-                        time.sleep(0.1)
+                        # Increased sleep to ensure MPV has finished reading the file
+                        time.sleep(0.5)
                         os.remove(temp_path)
                     except Exception:
                         pass
@@ -745,6 +800,7 @@ class MpvSessionManager:
                             "enriched_url_items": _url_items_list
                         }
 
+                    logging.info(f"[PY][Session] Session already active for folder '{folder_id}'. Returning already_active=True.")
                     return {
                         "success": True, 
                         "already_active": True, 

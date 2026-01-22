@@ -187,6 +187,9 @@ class IPCSocketManager:
                         ipc_logger.info(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
                         with self._buffer_lock:
                             self._event_buffer.append(event)
+                            # NEW: Limit buffer size to prevent memory leaks/performance degradation
+                            if len(self._event_buffer) > 1000:
+                                self._event_buffer.popleft()
                             self._buffer_lock.notify_all() # Notify waiters that new data arrived
                 else:
                     # EOF detected, connection closed by MPV or remote end
@@ -268,7 +271,9 @@ class IPCSocketManager:
                         # Check internal buffer for a command response (matching request_id)
                         for i in range(len(self._event_buffer)):
                             item = self._event_buffer[i]
-                            if item.get("request_id") == req_id or ("event" not in item and "request_id" not in item):
+                            # NEW: Precise request_id matching only. 
+                            # Non-command events are filtered out by the logic above.
+                            if item.get("request_id") == req_id:
                                 del self._event_buffer[i] 
                                 response = item
                                 ipc_logger.info(f"IPC RECV (from buffer): {json.dumps(response)}")

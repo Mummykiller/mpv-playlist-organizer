@@ -62,9 +62,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// 2. Derive Status
 			let newStatus = PlaybackStatus.STOPPED;
-			const isRunning = newData.isRunning ?? this.state.isRunning;
+			let isRunning = newData.isRunning ?? this.state.isRunning;
 			const isPaused = newData.isPaused ?? this.state.isPaused;
 			const isIdle = newData.isIdle ?? this.state.isIdle;
+
+			// If we need to append, we treat it as 'running' so the Queue button shows
+			if (this.state.needsAppend) {
+				isRunning = true;
+			}
 
 			if (isRunning) {
 				if (isPaused) {
@@ -82,10 +87,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					newStatus = PlaybackStatus.PLAYING;
 				}
 			}
-
-			// Special Guard: Ensure 'needsAppend' (Queue) triggers a UI state that allows the Queue button to show.
-			// The button logic usually looks for (!needsAppend) to show Play/Pause.
-			// No change to 'status' here, as Queue is an overlay property.
 
 			this.state.isRunning = isRunning;
 			this.state.isPaused = isPaused;
@@ -124,7 +125,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		_initGlobalListener() {
 			chrome.runtime.onMessage.addListener((msg) => {
 				if (msg.action === "playback_state_changed") {
-					this.update(msg.state);
+					this.update({
+						folderId: msg.state.folderId,
+						isRunning: msg.state.isRunning,
+						isPaused: msg.state.isPaused,
+						isIdle: msg.state.isIdle,
+						isClosing: msg.state.isClosing,
+						lastPlayedId: msg.state.lastPlayedId,
+						needsAppend: msg.state.needsAppend
+					});
 				} else if (msg.action === "render_playlist") {
 					// Fallback support for the heavier event if it contains status
 					if (msg.isFolderActive !== undefined || msg.isClosing !== undefined) {

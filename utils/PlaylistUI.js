@@ -4,6 +4,7 @@
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 (() => {
+	const MPV = window.MPV_INTERNAL;
 	window.MPV_INTERNAL.PlaylistUI = class PlaylistUI {
 		constructor(controller, uiManager) {
 			this.controller = controller;

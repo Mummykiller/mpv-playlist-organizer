@@ -4,6 +4,7 @@
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 (() => {
+	const MPV = window.MPV_INTERNAL;
 	window.MPV_INTERNAL.UIManager = class UIManager {
 		constructor() {
 			this.controllerHost = null;

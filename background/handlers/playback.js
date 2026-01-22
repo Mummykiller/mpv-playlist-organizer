@@ -206,6 +206,7 @@ class PlaybackSession {
 class PlaybackManager {
 	constructor() {
 		this.sessions = new Map(); // folderId -> PlaybackSession
+		this.syncCache = null; // Synchronous copy of mpv_playback_cache
 		this._initFromCache();
 	}
 
@@ -214,13 +215,16 @@ class PlaybackManager {
 			const { mpv_playback_cache } = await chrome.storage.local.get(
 				"mpv_playback_cache",
 			);
-			if (mpv_playback_cache && mpv_playback_cache.folderId) {
-				// Optimistically create a session if we think one was running
-				const session = this.getSession(mpv_playback_cache.folderId);
-				session.isPlaying = true;
-				console.log(
-					`[BG] PlaybackManager: Initialized optimistic session for '${mpv_playback_cache.folderId}' from cache.`,
-				);
+			if (mpv_playback_cache) {
+				this.syncCache = mpv_playback_cache;
+				if (mpv_playback_cache.folderId) {
+					// Optimistically create a session if we think one was running
+					const session = this.getSession(mpv_playback_cache.folderId);
+					session.isPlaying = true;
+					console.log(
+						`[BG] PlaybackManager: Initialized optimistic session for '${mpv_playback_cache.folderId}' from cache.`,
+					);
+				}
 			}
 		} catch (e) {}
 	}
@@ -232,14 +236,18 @@ class PlaybackManager {
 		const session = this.sessions.get(folderId);
 
 		// Proactive check: If we think we are not playing, but cache says otherwise, trust the cache.
-		// This fixes race conditions during extension reloads.
-		if (!session.isPlaying) {
-			chrome.storage.local.get("mpv_playback_cache").then(({ mpv_playback_cache }) => {
-				if (mpv_playback_cache && mpv_playback_cache.folderId === folderId && !mpv_playback_cache.isIdle) {
-					session.isPlaying = true;
-					console.log(`[BG] PlaybackManager: Updated session '${folderId}' to isPlaying=true from proactive cache check.`);
-				}
-			});
+		// Use syncCache for immediate (synchronous) check to avoid race conditions in handleAppend.
+		if (!session.isPlaying && this.syncCache) {
+			if (
+				this.syncCache.folderId === folderId &&
+				(this.syncCache.isRunning || this.syncCache.is_running !== false) &&
+				!this.syncCache.isIdle
+			) {
+				session.isPlaying = true;
+				console.log(
+					`[BG] PlaybackManager: Updated session '${folderId}' to isPlaying=true from synchronous cache check.`,
+				);
+			}
 		}
 
 		return session;
@@ -396,6 +404,7 @@ export async function handleMpvExited(data) {
 
 	// Clear cache on exit
 	await chrome.storage.local.remove("mpv_playback_cache");
+	playbackManager.syncCache = null;
 
 	// Mapping of common exit codes to human-readable explanations.
 	const exitCodeExplanations = {
@@ -1111,7 +1120,8 @@ export async function handleUpdateItemResumeTime(data) {
  * Broadcasts a lightweight playback state update to all UI components.
  */
 export async function broadcastPlaybackState(folderId, statusOverride = {}) {
-	const { mpv_playback_cache } = await chrome.storage.local.get("mpv_playback_cache");
+	const { mpv_playback_cache: storageCache } = await chrome.storage.local.get("mpv_playback_cache");
+	const mpv_playback_cache = storageCache || playbackManager.syncCache;
 	
 	const targetFolderId = folderId || mpv_playback_cache?.folderId;
 	if (!targetFolderId) return;
@@ -1124,6 +1134,7 @@ export async function broadcastPlaybackState(folderId, statusOverride = {}) {
 		const storageData = await storage.get();
 		const folder = storageData.folders[targetFolderId];
 		const sessionIds = mpv_playback_cache?.sessionIds;
+		
 		if (folder && folder.playlist && sessionIds) {
 			const sessionSet = new Set(sessionIds);
 			needsAppend = folder.playlist.some(item => !sessionSet.has(item.id));
@@ -1154,19 +1165,20 @@ export async function handlePlaybackStatusChanged(data) {
 	const { folderId, isPaused, isIdle, sessionIds, lastPlayedId } = data;
 	if (!folderId) return;
 
+	const cacheData = {
+		folderId,
+		is_running: true, // If we got a status update, it's definitely running
+		isPaused: isPaused,
+		isIdle: isIdle,
+		lastPlayedId: lastPlayedId,
+		sessionIds: sessionIds || [],
+		isLaunching: false, // Got a status update, so launch is finished
+		timestamp: Date.now(),
+	};
+
 	// Cache in local storage for instant popup access
-	await chrome.storage.local.set({
-		mpv_playback_cache: {
-			folderId,
-			is_running: true, // If we got a status update, it's definitely running
-			isPaused: isPaused,
-			isIdle: isIdle,
-			lastPlayedId: lastPlayedId,
-			sessionIds: sessionIds || [],
-			isLaunching: false, // Got a status update, so launch is finished
-			timestamp: Date.now(),
-		},
-	});
+	await chrome.storage.local.set({ mpv_playback_cache: cacheData });
+	playbackManager.syncCache = cacheData;
 
 	// 1. Lightweight status sync
 	broadcastPlaybackState(folderId);
@@ -1309,18 +1321,18 @@ export function handleSessionRestored(request) {
 		};
 
 		// Proactively update cache for restoration
-		chrome.storage.local.set({
-			mpv_playback_cache: {
-				folderId: result.folderId,
-				is_running: true,
-				isPaused: false,
-				isIdle: false,
-				lastPlayedId: result.lastPlayedId,
-				sessionIds: (result.playlist || []).map(i => i.id).filter(Boolean),
-				isLaunching: false,
-				timestamp: Date.now(),
-			}
-		});
+		const cacheData = {
+			folderId: result.folderId,
+			is_running: true,
+			isPaused: false,
+			isIdle: false,
+			lastPlayedId: result.lastPlayedId,
+			sessionIds: (result.playlist || []).map(i => i.id).filter(Boolean),
+			isLaunching: false,
+			timestamp: Date.now(),
+		};
+		chrome.storage.local.set({ mpv_playback_cache: cacheData });
+		playbackManager.syncCache = cacheData;
 
 		// Notify UI to show active highlight and provide feedback
 		storage.get().then((storageData) => {
