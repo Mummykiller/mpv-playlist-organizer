@@ -705,21 +705,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			// Update the play button based on current playback state
 			if (miniPlayBtn) {
+				const effectiveIsActive = !!effectiveIsFolderActive;
+				const showingNeedsAppend = effectiveIsActive && !!effectiveNeedsAppend;
+
 				miniPlayBtn.classList.toggle(
 					"btn-playing",
-					!!effectiveIsFolderActive || !!effectiveNeedsAppend,
+					effectiveIsActive || showingNeedsAppend,
 				);
 				
 				// Clear loading state if we have a definitive render, 
 				// unless we are currently awaiting a 'play' command response.
-				if (!isPlaybackLoading || effectiveIsFolderActive || effectiveNeedsAppend) {
+				if (!isPlaybackLoading || effectiveIsActive || showingNeedsAppend) {
 					setPlaybackLoading(false);
 				}
 
-				if (effectiveNeedsAppend) {
+				if (showingNeedsAppend) {
 					miniPlayBtn.title = "Queue to Playlist";
 					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
-				} else if (effectiveIsFolderActive) {
+				} else if (effectiveIsActive) {
 					miniPlayBtn.title = "Play/Pause Playlist";
 					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
 				} else {

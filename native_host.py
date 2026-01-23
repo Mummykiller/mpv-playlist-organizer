@@ -255,11 +255,20 @@ try:
         """Encodes and sends a message to stdout."""
         try:
             with print_lock:
-                # Apply path masking to the entire response object
-                # We convert to string, mask, then back to dict for the bridge
-                msg_str = json.dumps(message_content)
-                masked_str = security.mask_path(msg_str, DATA_DIR, SCRIPT_DIR)
-                message_content = json.loads(masked_str)
+                # Selective Path Masking: Only mask logs and errors to avoid corrupting functional URLs
+                if isinstance(message_content, dict):
+                    if 'log' in message_content:
+                        log_data = message_content['log']
+                        if isinstance(log_data, dict) and 'text' in log_data:
+                            log_data['text'] = security.mask_path(log_data['text'], DATA_DIR, SCRIPT_DIR)
+                        elif isinstance(log_data, str):
+                            message_content['log'] = security.mask_path(log_data, DATA_DIR, SCRIPT_DIR)
+                    
+                    if 'error' in message_content and isinstance(message_content['error'], str):
+                        message_content['error'] = security.mask_path(message_content['error'], DATA_DIR, SCRIPT_DIR)
+                    
+                    if 'message' in message_content and isinstance(message_content['message'], str):
+                         message_content['message'] = security.mask_path(message_content['message'], DATA_DIR, SCRIPT_DIR)
 
                 # Standardize output for JS bridge
                 translated_content = native_link.responder._translate_keys(message_content)

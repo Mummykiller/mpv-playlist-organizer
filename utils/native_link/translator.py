@@ -47,6 +47,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             url_item=message.get('url_item'),
             url_items=message.get('url_items'),
             playlist=message.get('playlist'),
+            playlist_start_id=message.get('playlist_start_id'),
             m3u_data=message.get('m3u_data'),
             geometry=message.get('geometry'),
             custom_width=message.get('custom_width'),

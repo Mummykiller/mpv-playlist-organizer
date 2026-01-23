@@ -356,7 +356,7 @@ class PlaylistTracker:
             self.ipc_manager.close()
 
     def _update_last_played(self, item_id):
-        """Saves the last played item ID to the folder's metadata and notifies the extension."""
+        """Saves the last played item ID to the folder's metadata and shard, and notifies the extension."""
         if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
             return
         
@@ -368,7 +368,21 @@ class PlaylistTracker:
                 self.file_io.save_index(index)
                 logging.debug(f"[PY][Tracker] Updated last_played_id to '{item_id}' for folder '{self.folder_id}'.")
             
-            # 2. Notify the extension so it can update its internal storage
+            # 2. Update the playlist shard with 'currently_playing' marker
+            playlist = self.file_io.get_playlist_shard(self.folder_id)
+            if playlist:
+                changed = False
+                for item in playlist:
+                    is_current = (item.get("id") == item_id)
+                    if item.get("currently_playing") != is_current:
+                        item["currently_playing"] = is_current
+                        changed = True
+                
+                if changed:
+                    self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
+                    logging.debug(f"[PY][Tracker] Marked item '{item_id}' as currently_playing in shard.")
+
+            # 3. Notify the extension so it can update its internal storage
             self.send_message({
                 "action": "update_last_played",
                 "folder_id": self.folder_id,
@@ -386,14 +400,19 @@ class PlaylistTracker:
             # 1. Update the specific playlist shard
             playlist = self.file_io.get_playlist_shard(self.folder_id)
             if playlist:
+                changed = False
                 for item in playlist:
                     if item.get("id") == item_id:
+                        # Ensure 'currently_playing' is set for the active item
+                        if not item.get("currently_playing"):
+                            item["currently_playing"] = True
+                            changed = True
+
                         # Only update if the difference is significant or it's a reset
                         old_time = item.get("resume_time", 0)
                         if abs(resume_time - old_time) > 2 or resume_time == 0:
                             item["resume_time"] = int(resume_time)
-                            self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
-                            logging.debug(f"[PY][Tracker] Updated resume_time for item '{item_id}' to {int(resume_time)}s.")
+                            changed = True
                             
                             # 2. Notify the extension
                             self.send_message({
@@ -402,7 +421,15 @@ class PlaylistTracker:
                                 "item_id": item_id,
                                 "resume_time": int(resume_time)
                             })
-                        break
+                    else:
+                        # Clear 'currently_playing' for other items if it was accidentally left on
+                        if item.get("currently_playing"):
+                            item["currently_playing"] = False
+                            changed = True
+                
+                if changed:
+                    self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
+                    logging.debug(f"[PY][Tracker] Shard updated for item '{item_id}' (Time: {int(resume_time)}s).")
         except Exception as e:
             logging.error(f"[PY][Tracker] Failed to update resume_time: {e}")
 
@@ -423,12 +450,24 @@ class PlaylistTracker:
             if persist:
                 playlist = self.file_io.get_playlist_shard(self.folder_id)
                 if playlist:
+                    changed = False
                     for item in playlist:
-                        if item.get("id") == item_id:
+                        is_target = (item.get("id") == item_id)
+                        
+                        # Sync marked_as_watched
+                        if is_target and item.get("marked_as_watched") != status:
                             item["marked_as_watched"] = status
-                            self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
-                            logging.debug(f"[PY][Tracker] Updated marked_as_watched for item '{item_id}' to {status}.")
-                            break
+                            changed = True
+                        
+                        # Sync currently_playing
+                        is_current = (item.get("id") == self.current_id)
+                        if item.get("currently_playing") != is_current:
+                            item["currently_playing"] = is_current
+                            changed = True
+                    
+                    if changed:
+                        self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
+                        logging.debug(f"[PY][Tracker] Shard updated for item '{item_id}' (Watched: {status}).")
             
             # 3. Notify the extension (always notify to keep UI in sync)
             self.send_message({

@@ -971,7 +971,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		setPlaybackActive(isActive, needsAppend = false, isPaused = false) {
 			if (!this.ui.shadowRoot) return;
-			this.state.update({ isFolderActive: isActive });
+			
+			// If not active, force needsAppend to false to clean up UI
+			const effectiveNeedsAppend = isActive ? needsAppend : false;
+			
+			this.state.update({ 
+				isFolderActive: isActive,
+				needsAppend: effectiveNeedsAppend
+			});
 
 			// Guard: If we are in the closing state, do not update UI button text
 			// as 'isClosing' has higher visual priority.
@@ -989,11 +996,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			playBtns.forEach((btn) => {
 				if (btn) {
-					btn.classList.toggle("btn-playing", isActive || needsAppend);
-					if (isActive || needsAppend) {
+					const showingNeedsAppend = isActive && effectiveNeedsAppend;
+					btn.classList.toggle("btn-playing", isActive || showingNeedsAppend);
+					if (isActive || showingNeedsAppend) {
 						this.setPlaybackLoading(false);
 					}
-					if (needsAppend) {
+					if (showingNeedsAppend) {
 						btn.title = "Queue to Playlist";
 					} else if (isActive) {
 						btn.title = "Play/Pause Playlist";
@@ -1007,7 +1015,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Only if NOT currently in the closing state
 			if (!this.state.state.isClosing) {
 				if (playBtn) {
-					if (needsAppend) {
+					const showingNeedsAppend = isActive && effectiveNeedsAppend;
+					if (showingNeedsAppend) {
 						playBtn.innerHTML = '<span class="emoji">➕</span> Queue';
 					} else {
 						playBtn.innerHTML = isActive
@@ -1016,7 +1025,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					}
 				}
 				if (compactPlayBtn) {
-					if (needsAppend) {
+					const showingNeedsAppend = isActive && effectiveNeedsAppend;
+					if (showingNeedsAppend) {
 						compactPlayBtn.innerHTML = '<span class="emoji">➕</span>';
 					} else {
 						compactPlayBtn.innerHTML = isActive

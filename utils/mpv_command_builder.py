@@ -147,6 +147,9 @@ class MpvCommandBuilder:
         if self.script_opts: args.append(f"--script-opts={','.join(self.script_opts)}")
         if self.title: args.append(f'--title={security.sanitize_string(self.title)}')
         if self.playlist_start and self.playlist_start > 0: args.append(f'--playlist-start={self.playlist_start}')
+        
+        # Performance optimization: Fast seeking for immediate startup
+        args.append("--hr-seek=no")
 
         if self.headers:
             if 'User-Agent' in self.headers: args.append(f'--user-agent={security.sanitize_string(str(self.headers["User-Agent"]))}')

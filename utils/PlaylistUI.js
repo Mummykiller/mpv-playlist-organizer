@@ -75,7 +75,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				playlist.forEach((item, index) => {
 					const itemDiv = document.createElement("div");
 					itemDiv.className = "list-item";
-					if (highlightEnabled && lastPlayedId && item.id === lastPlayedId) {
+					
+					const isCurrent = item.currently_playing || (lastPlayedId && item.id === lastPlayedId);
+					if (highlightEnabled && isCurrent) {
 						itemDiv.classList.add(
 							isFolderActive ? "active-item" : "last-played-item",
 						);

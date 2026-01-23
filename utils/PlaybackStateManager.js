@@ -61,15 +61,22 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (newData.isClosing !== undefined) this.state.isClosing = newData.isClosing;
 
 			// 2. Derive Status
-			let newStatus = PlaybackStatus.STOPPED;
 			let isRunning = newData.isRunning ?? this.state.isRunning;
 			const isPaused = newData.isPaused ?? this.state.isPaused;
 			const isIdle = newData.isIdle ?? this.state.isIdle;
 
-			// If we need to append, we treat it as 'running' so the Queue button shows
-			if (this.state.needsAppend) {
+			// If the player is NOT running, we must clear the needsAppend state
+			if (!isRunning) {
+				this.state.needsAppend = false;
+			}
+
+			// If we need to append AND the folder is active, we treat it as 'running' 
+			// so the Queue button shows instead of Play/Pause.
+			if (this.state.needsAppend && isRunning) {
 				isRunning = true;
 			}
+
+			let newStatus = PlaybackStatus.STOPPED;
 
 			if (isRunning) {
 				if (isPaused) {
