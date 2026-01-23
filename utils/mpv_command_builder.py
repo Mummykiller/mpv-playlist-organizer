@@ -7,26 +7,14 @@ import logging
 import shutil
 from datetime import datetime
 import file_io
+from . import security
 
 # Prevent __pycache__ generation
 import sys
 sys.dont_write_bytecode = True
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
-ALLOWED_PROTOCOLS = ('http://', 'https://', 'file://', 'udp://', 'rtmp://', 'rtsp://', 'mms://')
-
-SAFE_MPV_FLAGS_ALLOWLIST = {
-    '--start', '--end', '--speed', '--loop', '--loop-playlist', '--loop-file', '--pause',
-    '--save-position-on-quit', '--fullscreen', '--ontop', '--border', '--title',
-    '--geometry', '--autofit', '--autofit-larger', '--autofit-smaller', '--keep-open',
-    '--aspect', '--correct-pts', '--fps', '--deinterlace', '--hwdec', '--scale',
-    '--cscale', '--dscale', '--dither-depth', '--deband', '--deband-iterations',
-    '--deband-threshold', '--deband-range', '--fbo-format', '--profile', '--video-sync',
-    '--interpolation', '--tscale', '--volume', '--mute', '--audio-device',
-    '--audio-channels', '--sub-visibility', '--sub-pos', '--sub-scale', '--sub-font',
-    '--sub-font-size', '--no-audio', '--no-video', '--force-window', '--cursor-autohide',
-    '--terminal', '--input-terminal',
-}
+ALLOWED_PROTOCOLS = security.ALLOWED_PROTOCOLS
 
 class MpvCommandBuilder:
     def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False, is_youtube=False, settings=None, cookies_browser=None, force_bypass=False):
@@ -157,12 +145,12 @@ class MpvCommandBuilder:
         if self.input_terminal: args.append(f'--input-terminal={self.input_terminal}')
         for s in self.scripts: args.append(f'--script={s}')
         if self.script_opts: args.append(f"--script-opts={','.join(self.script_opts)}")
-        if self.title: args.append(f'--title={file_io.sanitize_string(self.title)}')
+        if self.title: args.append(f'--title={security.sanitize_string(self.title)}')
         if self.playlist_start and self.playlist_start > 0: args.append(f'--playlist-start={self.playlist_start}')
 
         if self.headers:
-            if 'User-Agent' in self.headers: args.append(f'--user-agent={file_io.sanitize_string(str(self.headers["User-Agent"]))}')
-            if 'Referer' in self.headers: args.append(f'--referrer={file_io.sanitize_string(str(self.headers["Referer"]))}')
+            if 'User-Agent' in self.headers: args.append(f'--user-agent={security.sanitize_string(str(self.headers["User-Agent"]))}')
+            if 'Referer' in self.headers: args.append(f'--referrer={security.sanitize_string(str(self.headers["Referer"]))}')
 
         decoder = self.settings.get('mpv_decoder', 'auto')
         if decoder: args.append(f"--hwdec={decoder}")
@@ -208,7 +196,7 @@ class MpvCommandBuilder:
                     f = f_info.get('flag')
                     if f == '--terminal': self.has_terminal_flag = True
                     elif not f or f.startswith('--hwdec'): continue
-                    elif f.split('=', 1)[0] in SAFE_MPV_FLAGS_ALLOWLIST: args.append(f)
+                    elif f.split('=', 1)[0] in security.SAFE_MPV_FLAGS_ALLOWLIST: args.append(f)
 
         if self.custom_flags:
             try:
@@ -219,7 +207,7 @@ class MpvCommandBuilder:
                         elif isinstance(f, str): parsed.extend(shlex.split(f))
                 elif isinstance(self.custom_flags, str): parsed.extend(shlex.split(self.custom_flags))
                 for a in parsed:
-                    if a.startswith('--') and a.split('=', 1)[0] in SAFE_MPV_FLAGS_ALLOWLIST: args.append(a)
+                    if a.startswith('--') and a.split('=', 1)[0] in security.SAFE_MPV_FLAGS_ALLOWLIST: args.append(a)
             except Exception: pass
 
         if self.has_terminal_flag: args = [a for a in args if a != '--terminal' and a != 'terminal']

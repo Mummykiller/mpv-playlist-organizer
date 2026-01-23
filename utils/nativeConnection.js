@@ -1,4 +1,5 @@
 import { broadcastLog } from "../background/messaging.js";
+import * as security from "./security.module.js";
 
 const NATIVE_HOST_NAME = "com.mpv_playlist_organizer.handler";
 
@@ -181,6 +182,15 @@ function connectToNativeHost() {
  */
 export async function callNativeHost(message, shouldThrow = false) {
 	try {
+		// --- Pre-Validation Security Gate ---
+		// Check for URLs in the message and validate them
+		if (message.url && !security.isValidUrl(message.url)) {
+			throw new Error(`Security Block: Unsafe URL protocol or length.`);
+		}
+		if (message.url_item?.url && !security.isValidUrl(message.url_item.url)) {
+			throw new Error(`Security Block: Unsafe URL in item.`);
+		}
+
 		return await new Promise((resolve, reject) => {
 			const ensureConnectedAndSend = async () => {
 				await connectToNativeHost();

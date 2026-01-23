@@ -10,6 +10,7 @@ import uuid
 import socket
 import ipaddress
 from urllib.parse import urlparse
+from . import security
 
 # Constants for file patterns
 COOKIE_PREFIX = "mpv_cookies_"
@@ -35,32 +36,9 @@ _COOKIES_CACHE = {
 
 def is_safe_url(url):
     """
-    Validates a URL against SSRF attacks by resolving the hostname 
-    and checking against private IP ranges.
+    Validates a URL against SSRF attacks. Delegates to security module.
     """
-    try:
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-        if not hostname:
-            return True # No hostname (e.g. file path), let protocol check handle it
-
-        # Resolve hostname to IP
-        try:
-            ip_str = socket.gethostbyname(hostname)
-        except socket.gaierror:
-            return False # DNS failure
-
-        ip = ipaddress.ip_address(ip_str)
-        
-        # Block Private IPs (10.x, 192.168.x, 172.16.x, 127.x)
-        if ip.is_private or ip.is_loopback or ip.is_link_local:
-            logging.warning(f"SSRF Protection: Blocked access to private IP {ip_str} ({hostname})")
-            return False
-            
-        return True
-    except Exception as e:
-        logging.error(f"SSRF Check Failed: {e}")
-        return False
+    return security.is_safe_url(url)
 
 class VolatileCookieManager:
     """Manages cookie extraction to volatile memory (RAM) to avoid disk writes."""

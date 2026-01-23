@@ -160,7 +160,7 @@ try:
     from mpv_session import MpvSessionManager
     import cli
     import services
-    from utils import ipc_utils
+    from utils import ipc_utils, security
     from utils.native_host_handlers import HandlerManager
     from utils.janitor import Janitor
     from utils import native_link
@@ -184,7 +184,9 @@ try:
         def add_error(self, context, error):
             with self.lock:
                 timestamp = datetime.now().isoformat()
-                self.errors.append({"timestamp": timestamp, "context": context, "error": str(error)})
+                # Apply path masking to diagnostic errors
+                masked_error = security.mask_path(str(error), DATA_DIR, SCRIPT_DIR)
+                self.errors.append({"timestamp": timestamp, "context": context, "error": masked_error})
                 if len(self.errors) > 50:
                     self.errors.pop(0)
 
@@ -212,10 +214,11 @@ try:
         for line in iter(stream.readline, b''):
             decoded_line = line.decode('utf-8', errors='ignore').strip()
             clean_line = ansi_escape.sub('', decoded_line)
-            # Filter out the noisy and irrelevant 'uname' warning on Windows.
-            # Also filter out ffmpeg hls keepalive spam and thumbnail script errors.
+            # Mask paths in the logs
+            clean_line = security.mask_path(clean_line, DATA_DIR, SCRIPT_DIR)
+            
             if "'uname' is not recognized" not in clean_line and "keepalive request failed" not in clean_line and "[mpv_thumbnail_script" not in clean_line:
-                log_level(f"[PY][MPV]: {decoded_line}")
+                log_level(f"[PY][MPV]: {clean_line}")
                 if not ytdlp_failure_detected and any(keyword in clean_line for keyword in YTDLP_FAILURE_KEYWORDS):
                     ytdlp_failure_detected = True # Prevent multiple triggers
                     logging.warning("[PY][MPV] Detected a potential yt-dlp failure. Notifying extension.")
@@ -237,6 +240,11 @@ try:
             logging.info("[PY][MAIN] Stdin closed (EOF). Exiting native host.")
             sys.exit(0)
         message_length = struct.unpack('@I', raw_length)[0]
+        # Security check: Limit incoming message size
+        if message_length > security.SECURITY_LIMITS['MAX_IPC_MESSAGE_SIZE']:
+             logging.error(f"[PY][MAIN] Incoming message too large: {message_length} bytes.")
+             sys.exit(1)
+             
         message = sys.stdin.buffer.read(message_length).decode('utf-8')
         return json.loads(message)
 
@@ -246,6 +254,12 @@ try:
         """Encodes and sends a message to stdout."""
         try:
             with print_lock:
+                # Apply path masking to the entire response object
+                # We convert to string, mask, then back to dict for the bridge
+                msg_str = json.dumps(message_content)
+                masked_str = security.mask_path(msg_str, DATA_DIR, SCRIPT_DIR)
+                message_content = json.loads(masked_str)
+
                 # Standardize output for JS bridge
                 translated_content = native_link.responder._translate_keys(message_content)
                 encoded_content = json.dumps(translated_content).encode('utf-8')
@@ -405,6 +419,16 @@ try:
         def task_wrapper(message):
             """Worker thread task to execute handler and send response."""
             try:
+                # 1. Mandatory Security Payload Validation
+                is_valid, err_msg = security.validate_payload(message)
+                if not is_valid:
+                    logging.warning(f"[PY][SECURITY] Blocked malicious payload: {err_msg}")
+                    error_resp = native_link.failure(f"Security block: {err_msg}")
+                    if message.get('request_id'):
+                        error_resp['request_id'] = message.get('request_id')
+                    send_message(error_resp)
+                    return
+
                 request = native_link.translate(message)
                 command = request.action
                 handler = COMMAND_HANDLERS.get(command)
@@ -429,6 +453,7 @@ try:
                     send_message(error_resp)
                 except Exception:
                     pass
+
 
         # --- Automatic Session Restoration ---
         # Attempt to reconnect to an existing MPV session immediately upon startup.
