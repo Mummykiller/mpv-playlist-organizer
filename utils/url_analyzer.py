@@ -161,10 +161,6 @@ class VolatileCookieManager:
                 except Exception:
                     pass
 
-def sanitize_url(url):
-    """Sanitizes a URL by removing potentially dangerous characters for shell commands."""
-    return file_io.sanitize_string(url, is_filename=False)
-
 def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
     """
     Extracts cookies to a VOLATILE (RAM-based) file.
@@ -176,7 +172,7 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
     import time
     import shutil
     
-    url = sanitize_url(url)
+    url = file_io.sanitize_string(url, is_filename=False)
     now = time.time()
     
     # Layer 1: In-memory cache check (1 hour)
@@ -242,7 +238,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     or 'cookies_file' path if extraction was forced (e.g. for Python-side expansion).
     """
     # First line of defense inside analyzer: sanitize the URL
-    url = sanitize_url(url)
+    url = file_io.sanitize_string(url, is_filename=False)
     
     # --- Protocol Validation ---
     # Must match services.ALLOWED_PROTOCOLS

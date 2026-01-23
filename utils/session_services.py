@@ -15,159 +15,11 @@ from services import apply_bypass_script
 from utils.url_analyzer import is_safe_url
 import services
 import file_io
+from .item_processor import ItemProcessor
 
-def sanitize_url(url):
-    return file_io.sanitize_string(url, is_filename=False)
-
-class EnrichmentService:
-    def __init__(self, send_message_func):
-        self.send_message = send_message_func
-
-    def enrich_single_item(self, item, folder_id=None, session_cookies_ref=None, sync_lock=None, settings=None, session=None):
-        if item.get('enriched'):
-            return [item]
-        
-        if session and getattr(session, 'launch_cancelled', False):
-            raise RuntimeError("Launch cancelled by user.")
-
-        if not item.get('id'):
-            item['id'] = str(uuid.uuid4())
-
-        if not item.get('original_url'):
-            item['original_url'] = item.get('url')
-
-        url_dict_for_analysis = {'url': item.get('url'), 'title': item.get('title'), 'id': item.get('id'), 'folder_id': folder_id}
-        
-        (
-            processed_url,
-            headers_for_mpv,
-            ytdl_raw_options_for_mpv,
-            use_ytdl_mpv_flag,
-            is_youtube_flag_from_script,
-            entries,
-            disable_http_persistent_flag,
-            cookies_file,
-            mark_watched_flag,
-            ytdl_format_from_script,
-            cookies_browser
-        ) = apply_bypass_script(url_dict_for_analysis, self.send_message, settings=settings, session=session)
-        
-        if entries:
-            processed_entries = []
-            for entry in entries:
-                if not entry.get('id'):
-                    entry['id'] = str(uuid.uuid4())
-                if not entry.get('original_url'):
-                    entry['original_url'] = entry.get('url')
-                entry['is_youtube'] = True
-                if 'use_ytdl_mpv' not in entry:
-                    entry['use_ytdl_mpv'] = False 
-                
-                # Propagate cookies browser if available
-                if cookies_browser:
-                    entry['cookies_browser'] = cookies_browser
-                if cookies_file:
-                    entry['cookies_file'] = cookies_file
-
-                processed_entries.append(entry)
-            return processed_entries
-
-        item['url'] = processed_url
-        item['original_url'] = item.get('original_url') or item.get('url')
-        item['ytdl_format'] = ytdl_format_from_script # Save format preference
-        
-        if headers_for_mpv:
-            if not item.get('headers'):
-                item['headers'] = headers_for_mpv
-            else:
-                merged_headers = headers_for_mpv.copy()
-                merged_headers.update(item['headers'])
-                item['headers'] = merged_headers
-
-        if ytdl_raw_options_for_mpv:
-            import file_io
-            item['ytdl_raw_options'] = file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), ytdl_raw_options_for_mpv)
-
-        item['use_ytdl_mpv'] = use_ytdl_mpv_flag
-        item['is_youtube'] = is_youtube_flag_from_script
-        item['disable_http_persistent'] = disable_http_persistent_flag
-        item['cookies_file'] = cookies_file
-        item['cookies_browser'] = cookies_browser # Store browser name
-        item['mark_watched'] = mark_watched_flag
-        
-        if cookies_file and session_cookies_ref is not None:
-            if sync_lock:
-                with sync_lock:
-                    session_cookies_ref.add(cookies_file)
-            else:
-                session_cookies_ref.add(cookies_file)
-                
-        item['enriched'] = True
-        return [item]
-
-    def resolve_input_items(self, url_items_or_m3u, enriched_items_list, headers):
-        """Resolves raw input (URL, Path, M3U content, or List) into a list of items."""
-        if enriched_items_list is not None:
-            if isinstance(url_items_or_m3u, str) and url_items_or_m3u.startswith('http://localhost'):
-                logging.info(f"Local M3U server URL detected: {url_items_or_m3u}. Skipping M3U parsing.")
-            return enriched_items_list, False
-
-        # If we reach here, enriched_items_list is None, so we must resolve the raw input.
-        if isinstance(url_items_or_m3u, list):
-            return url_items_or_m3u, True
-        if isinstance(url_items_or_m3u, dict):
-            return [url_items_or_m3u], True
-        
-        if not isinstance(url_items_or_m3u, str):
-            return [], False
-
-        # String-based input (URL, Path, or raw M3U)
-        url_items, input_was_raw = self._resolve_string_input(url_items_or_m3u, headers)
-        return url_items, input_was_raw
-
-    def _resolve_string_input(self, input_str, headers):
-        """Helper to resolve string-based input into items."""
-        # 1. YouTube Playlist Check
-        is_yt_pl = "youtube.com/playlist" in input_str or ("youtube.com/watch" in input_str and "list=" in input_str)
-        if is_yt_pl:
-            logging.info(f"Expanding YouTube playlist: {input_str}")
-            res = apply_bypass_script({'url': input_str}, self.send_message)
-            entries = res[5] # entries index
-            if entries:
-                return entries, True
-            return [{'url': input_str}], True
-
-        # 2. File Path Check
-        if os.path.exists(input_str):
-            with open(input_str, 'r', encoding='utf-8') as f:
-                return parse_m3u(f.read()), True
-
-        # 3. URL Check
-        if urlparse(input_str).scheme in ['http', 'https']:
-            if not is_safe_url(input_str):
-                logging.error(f"SSRF Protection: Blocked access to {input_str}")
-                return None, False
-            
-            m3u_content = self._fetch_remote_m3u(input_str, headers)
-            if m3u_content:
-                return parse_m3u(m3u_content), True
-            return [{'url': input_str}], True
-
-        # 4. Raw M3U fallback
-        return parse_m3u(input_str), True
-
-    def _fetch_remote_m3u(self, url, headers):
-        """Fetches M3U content from a remote URL."""
-        try:
-            fetch_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
-            if headers:
-                fetch_headers.update(headers)
-            req = Request(url, headers=fetch_headers)
-            with urlopen(req, timeout=10) as response:
-                return response.read().decode('utf-8')
-        except Exception as e:
-            logging.error(f"Failed to fetch remote M3U: {e}")
-            return None
+class EnrichmentService(ItemProcessor):
+    def __init__(self, services, send_message_func, file_io_module):
+        super().__init__(services, send_message_func, file_io_module)
 
     def handle_standard_flow_launch(self, session, url_items, start_index, folder_id, settings, file_io):
         """Handles the background restoration of playlist order and sequential metadata enrichment."""
@@ -355,7 +207,7 @@ class LauncherService:
         
         orig_url = url_item.get('original_url') or url_item.get('url', '')
         props = {
-            "user-data/original-url": sanitize_url(orig_url),
+            "user-data/original-url": services.sanitize_url(orig_url),
             "user-data/id": url_item.get('id', ""),
             "user-data/folder-id": folder_id,
             "user-data/project-root": self.session.SCRIPT_DIR,
@@ -382,7 +234,7 @@ class LauncherService:
         # 1. Prepare Metadata & Launch URL
         is_youtube = kwargs.get('is_youtube') if kwargs.get('is_youtube') is not None else url_item.get('is_youtube', False)
         use_ytdl_mpv = kwargs.get('use_ytdl_mpv') if kwargs.get('use_ytdl_mpv') is not None else url_item.get('use_ytdl_mpv', False)
-        launch_url = sanitize_url(url_item.get('url'))
+        launch_url = services.sanitize_url(url_item.get('url'))
         if url_item.get('id'):
             launch_url += ("#" if "#" not in launch_url else "&") + f"mpv_organizer_id={url_item['id']}"
 

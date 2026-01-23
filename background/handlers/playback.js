@@ -75,12 +75,19 @@ class PlaybackSession {
 							// Successfully appended the entire batch
 							this.queue.splice(0, batch.length);
 
-							// If the queue is now empty, the last item in this batch is the final one
+							const lastBatchItem = batch[batch.length - 1];
+
+							// If the queue is now empty, check if this is the final item in the FOLDER
 							if (this.queue.length === 0) {
-								batch[batch.length - 1].isLastInFolder = true;
+								const folder = data.folders[this.folderId];
+								if (folder && folder.playlist && folder.playlist.length > 0) {
+									lastBatchItem.isLastInFolder =
+										folder.playlist[folder.playlist.length - 1].id ===
+										lastBatchItem.urlItem.id;
+								}
 							}
 
-							this.currentPlayingItem = batch[batch.length - 1]; // Track last item
+							this.currentPlayingItem = lastBatchItem; // Track last item
 							continue; // Queue might have grown while we were awaiting, so continue loop
 						} else {
 							// Append failed (likely MPV closed), fall through to start new session
@@ -275,7 +282,28 @@ export async function handleMpvQuitting(data) {
 
 	// --- Early Clear/Confirm Logic ---
 	if (isNaturalCompletion && folderId) {
+		const session = playbackManager.findSessionByFolderId(folderId);
 		const storageData = await storage.get();
+		const folder = storageData.folders[folderId];
+		
+		if (!folder || !folder.playlist) return;
+
+		// VERIFICATION SYSTEM: Ensure we are actually at the end of the ENTIRE list
+		const sessionSet = new Set(sessionIds || []);
+		const isLastItemInSession = folder.playlist.length > 0 && 
+			sessionSet.has(folder.playlist[folder.playlist.length - 1].id);
+		
+		// Only proceed if the intent was the last item AND the reality matches
+		const isActuallyComplete = isLastItemInSession && (session?.currentPlayingItem?.isLastInFolder ?? true);
+
+		if (!isActuallyComplete) {
+			broadcastLog({
+				text: `[Background]: Natural completion ignored for '${folderId}'. Entire list was not played.`,
+				type: "info",
+			});
+			return;
+		}
+
 		const globalPrefs = storageData.settings.ui_preferences.global;
 		const clearMode = globalPrefs.clear_on_completion || "no";
 		const clearScope = globalPrefs.clear_scope || "all";
@@ -370,6 +398,10 @@ export async function handleMpvExited(data) {
 
 	// Only attempt to clear if it wasn't already handled early AND it looks like a natural completion
 	if (!wasEarlyHandled) {
+		const session = playbackManager.findSessionByFolderId(folderId);
+		const storageData = await storage.get();
+		const folder = storageData.folders[folderId];
+
 		// MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion via custom script.
 		const isNaturalCompletion = returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE;
 
@@ -378,53 +410,69 @@ export async function handleMpvExited(data) {
 				text: `[Background]: Playlist for folder '${folderId}' finished naturally (Exit Code 99).`,
 				type: "info",
 			});
+
+			if (folder && folder.playlist) {
+				const sessionSet = new Set(sessionIds || []);
+				const isLastItemInSession = folder.playlist.length > 0 && 
+					sessionSet.has(folder.playlist[folder.playlist.length - 1].id);
+				
+				// Verification: Did we intend to finish the list, and did we actually reach the end?
+				const isActuallyComplete = isLastItemInSession && (session?.currentPlayingItem?.isLastInFolder ?? true);
+
+				if (!isActuallyComplete) {
+					broadcastLog({
+						text: `[Background]: Natural completion (99) ignored for '${folderId}'. Entire list was not played.`,
+						type: "info",
+					});
+					return;
+				}
+			}
 		}
 
 		if (
+			isNaturalCompletion &&
 			session &&
 			session.currentPlayingItem &&
 			session.currentPlayingItem.folderId === folderId &&
 			session.currentPlayingItem.isLastInFolder
 		) {
-			if (isNaturalCompletion) {
-				if (clearMode === "yes") {
-					broadcastLog({
-						text: `[Background]: Auto-clearing items for '${folderId}' (Scope: ${clearScope}).`,
-						type: "info",
-					});
-					await clearFolderPlaylist(folderId, {
-						playedIds,
-						sessionIds,
-						scope: clearScope,
-					});
-				} else if (clearMode === "confirm") {
-					broadcastLog({
-						text: `[Background]: Requesting confirmation to clear playlist for '${folderId}'.`,
-						type: "info",
-					});
-					// Send a message to the active tab to show a confirmation dialog
-					const [activeTab] = await chrome.tabs.query({
-						active: true,
-						currentWindow: true,
-					});
-					if (activeTab) {
-						chrome.tabs
-							.sendMessage(activeTab.id, {
-								action: "show_clear_confirmation",
-								folderId: folderId,
-								playedIds,
-								sessionIds,
-								scope: clearScope,
-							})
-							.catch(() => {});
-					}
-				}
-			} else if (clearMode !== "no") {
+			if (clearMode === "yes") {
 				broadcastLog({
-					text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion).`,
+					text: `[Background]: Auto-clearing items for '${folderId}' (Scope: ${clearScope}).`,
 					type: "info",
 				});
+				await clearFolderPlaylist(folderId, {
+					playedIds,
+					sessionIds,
+					scope: clearScope,
+				});
+			} else if (clearMode === "confirm") {
+				broadcastLog({
+					text: `[Background]: Requesting confirmation to clear playlist for '${folderId}'.`,
+					type: "info",
+				});
+				// Send a message to the active tab to show a confirmation dialog
+				const [activeTab] = await chrome.tabs.query({
+					active: true,
+					currentWindow: true,
+				});
+				if (activeTab) {
+					chrome.tabs
+						.sendMessage(activeTab.id, {
+							action: "show_clear_confirmation",
+							folderId: folderId,
+							playedIds,
+							sessionIds,
+							scope: clearScope,
+						})
+						.catch(() => {});
+				}
 			}
+		} else if (isNaturalCompletion === false && clearMode !== "no") {
+			broadcastLog({
+				text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion).`,
+				type: "info",
+			});
 		}
 	} else {
 		console.debug(`[Background]: Cleanup for '${folderId}' already triggered during quitting phase.`);

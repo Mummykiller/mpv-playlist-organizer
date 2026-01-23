@@ -7,7 +7,7 @@ import re
 import shutil
 from utils.ipc_utils import IPC_DIR_LINUX, is_pid_running, IPCSocketManager
 import mpv_session
-from utils import url_analyzer, native_host_handlers
+from utils import url_analyzer, m3u_server
 
 # Prevent bytecode generation
 sys.dont_write_bytecode = True
@@ -40,12 +40,12 @@ class Janitor:
         delta_re = re.compile(re.escape(mpv_session.DELTA_PREFIX) + r'(?P<pid>\d+)_')
         
         # server_PID.m3u
-        server_re = re.compile(re.escape(native_host_handlers.SERVER_PREFIX) + r'(?P<pid>\d+)' + re.escape(native_host_handlers.SERVER_EXT) + r'$')
+        server_re = re.compile(re.escape(m3u_server.SERVER_PREFIX) + r'(?P<pid>\d+)' + re.escape(m3u_server.SERVER_EXT) + r'$')
 
         PATTERNS = [
             (cookie_re, url_analyzer.COOKIE_EXT),
             (delta_re, mpv_session.DELTA_EXT),
-            (server_re, native_host_handlers.SERVER_EXT)
+            (server_re, m3u_server.SERVER_EXT)
         ]
 
         # Use topdown=False to allow cleaning empty directories after their content
