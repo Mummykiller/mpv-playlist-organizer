@@ -20,10 +20,16 @@ from .item_processor import ItemProcessor
 class EnrichmentService(ItemProcessor):
     def __init__(self, services, send_message_func, file_io_module):
         super().__init__(services, send_message_func, file_io_module)
+        self._sync_in_progress = False
 
     def handle_standard_flow_launch(self, session, url_items, start_index, folder_id, settings, file_io):
         """Handles the background restoration of playlist order and sequential metadata enrichment."""
+        if self._sync_in_progress:
+            logging.info(f"[PY][Session] Sync already in progress for folder '{folder_id}'. Skipping redundant trigger.")
+            return
+
         def task():
+            self._sync_in_progress = True
             try:
                 # Poll for readiness instead of hard sleep
                 start_wait = time.time()
@@ -72,19 +78,8 @@ class EnrichmentService(ItemProcessor):
                             enriched_history.extend(res)
                     
                     if enriched_history and session.is_alive:
-                        logging.info(f"[PY][Session] Background: Appending and moving {len(enriched_history)} history items.")
-                        # Append them to the end first
-                        session.append_batch(enriched_history, mode="append", folder_id=folder_id)
-                        
-                        # Move them to the front (0, 1, 2...)
-                        total_len = len(session.playlist)
-                        history_count = len(enriched_history)
-                        for i in range(history_count):
-                            source_idx = (total_len - history_count) + i
-                            session.ipc_manager.send({"command": ["playlist-move", source_idx, i]})
-                            if session.playlist and source_idx < len(session.playlist):
-                                item = session.playlist.pop(source_idx)
-                                session.playlist.insert(i, item)
+                        logging.info(f"[PY][Session] Background: Prepending batch of {len(enriched_history)} history items.")
+                        session.append_batch(enriched_history, mode="prepend", folder_id=folder_id)
 
                 if session.playlist_tracker:
                     session.playlist_tracker.update_playlist_order(session.playlist)
@@ -101,6 +96,8 @@ class EnrichmentService(ItemProcessor):
                 logging.info("[PY][Session] Background: Batched restoration complete.")
             except Exception as e:
                 logging.error(f"[PY][Session] Background task error: {e}", exc_info=True)
+            finally:
+                self._sync_in_progress = False
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -194,13 +191,11 @@ class LauncherService:
         """Sets up IPC properties, lua options, and triggers the initial file load."""
         mgr = self.session.ipc_manager
         
-        # 1. Register all playlist items' options
-        if self.session.playlist:
-            for i, item in enumerate(self.session.playlist):
-                lua_opts, item_url = services.construct_lua_options(
-                    item, settings, self.session.SCRIPT_DIR, index=playlist_start_index + i
-                )
-                mgr.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_opts), str(playlist_start_index + i)]})
+        # 1. Register the current item's options with its actual global index
+        lua_opts, item_url = services.construct_lua_options(
+            url_item, settings, self.session.SCRIPT_DIR, index=playlist_start_index
+        )
+        mgr.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_opts), str(playlist_start_index)]})
 
         # 2. Set Hot-Swap Properties for the current item
         mgr.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(launch_lua_options)]})
@@ -218,10 +213,11 @@ class LauncherService:
         for k, v in props.items():
             mgr.send({"command": ["set_property", k, v]})
 
-        # 3. Atomic Load with Resume Priming
-        if launch_lua_options.get('resume_time') and float(launch_lua_options['resume_time']) > 0:
-            start_time = int(float(launch_lua_options['resume_time']))
-            mgr.send({"command": ["script-message", "primed_resume_time", str(start_time)]})
+        # 3. Atomic Load with Synchronous Resume Priming
+        if settings.get('enable_precise_resume', True):
+            start_time = int(float(launch_lua_options.get('resume_time') or 0))
+            # Use user-data for synchronous delivery before loadfile
+            mgr.send({"command": ["set_property", "user-data/primed-resume-time", str(start_time)]})
         
         mgr.send({"command": ["loadfile", launch_url, "replace"]})
 
@@ -252,7 +248,7 @@ class LauncherService:
         try:
             # 3. Construct Command
             full_command, has_terminal_flag = services.construct_mpv_command(
-                mpv_exe=mpv_exe, ipc_path=ipc_path, url=None, is_youtube=is_youtube,
+                mpv_exe=mpv_exe, ipc_path=ipc_path, url=launch_url, is_youtube=is_youtube,
                 ytdl_raw_options=kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options'),
                 geometry=kwargs.get('geometry'), custom_width=kwargs.get('custom_width'),
                 custom_height=kwargs.get('custom_height'), custom_mpv_flags=kwargs.get('custom_mpv_flags'),

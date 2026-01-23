@@ -76,7 +76,7 @@ class BaseHandler:
                     for new_item in processed_items:
                         self._resolve_or_assign_item_id(new_item, folder_id, all_folders)
         
-        return [url_item], all_folders
+        return processed_items, all_folders
 
     def _get_merged_settings(self, request_settings):
         """Merges global settings with request-specific overrides."""

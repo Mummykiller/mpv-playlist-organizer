@@ -2,6 +2,7 @@ local utils = require 'mp.utils'
 local url_options = {}
 local id_options = {}
 local indexed_options = {}
+local session_timestamps = {} -- Internal memory for the current session
 local primed_resume_time = nil
 
 -- Store initial global states
@@ -23,6 +24,21 @@ end
 local function url_decode(str)
     if not str or str == "" then return "" end
     return str:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
+end
+
+local function save_current_position()
+    local path = mp.get_property("path")
+    if not path or path == "" then return end
+    
+    local time = mp.get_property_number("time-pos")
+    if time and time > 5 then -- Only save if we are at least 5s in
+        local id = mp.get_property("user-data/id")
+        if id and id ~= "" then
+            session_timestamps[id] = time
+        end
+        session_timestamps[path] = time
+        debug_log("Saved position: " .. tostring(time) .. " for " .. path)
+    end
 end
 
 -- Register options from Python
@@ -98,17 +114,26 @@ local function apply_adaptive_settings()
     local pos = mp.get_property_number("playlist-pos")
     local stripped_path = path:gsub("[#&]mpv_organizer_id=[^#&]+", "")
     
+    -- Strictly use ID or URL. Removed indexed_options fallback as it's prone to sync issues.
     local opts = (item_id and id_options[item_id]) or 
-                 (pos and indexed_options[pos]) or 
                  url_options[stripped_path] or url_options[path]
 
     if not opts then
-        debug_log("No options found for path: " .. path .. " (ID: " .. tostring(item_id) .. ", Pos: " .. tostring(pos) .. ")")
+        debug_log("No options found for path: " .. path .. " (ID: " .. tostring(item_id) .. ")")
     else
         debug_log("Resolved options for " .. (opts.title or path))
     end
 
-    -- 4b. Explicit YouTube Check (Always useful)
+    -- 4b. Synchronous Primed Resume Time (from Python IPC)
+    -- This is the ONLY source of truth for forced jumps now.
+    local sync_primed = mp.get_property("user-data/primed-resume-time")
+    if sync_primed and sync_primed ~= "" then
+        primed_resume_time = tonumber(sync_primed)
+        mp.set_property("user-data/primed-resume-time", "") -- Clear it immediately
+        debug_log("Sync primed resume time found: " .. tostring(primed_resume_time))
+    end
+
+    -- 4c. Explicit YouTube Check (Always useful)
     local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
     if is_yt then
         debug_log("YouTube detected, enforcing ytdl=yes")
@@ -116,7 +141,20 @@ local function apply_adaptive_settings()
         mp.set_property("user-data/is-youtube", "yes")
     end
 
-    if not opts and not primed_resume_time then return end
+    -- 4d. Session Memory Fallback
+    -- If no primed time, check if we've been in this file before during THIS session.
+    if primed_resume_time == nil then
+        local session_time = (item_id and session_timestamps[item_id]) or session_timestamps[path]
+        if session_time then
+            primed_resume_time = session_time
+            debug_log("Session memory found: resuming at " .. tostring(session_time))
+        end
+    end
+
+    if not primed_resume_time then 
+        -- If no primed time, and no options, exit early.
+        if not opts then return end
+    end
 
     -- 5. Always apply UI/State features (Titles & Resume)
     if opts and opts.title and opts.title ~= "" then
@@ -124,12 +162,13 @@ local function apply_adaptive_settings()
         mp.set_property("force-media-title", opts.title)
     end
 
-    -- Priority: 1. Primed time from Python message, 2. Item-specific resume_time
-    local effective_resume = primed_resume_time or (opts and tonumber(opts.resume_time))
-    if effective_resume and effective_resume > 0 then
-        mp.set_property_number("file-local-options/start", effective_resume)
+    -- Priority: ONLY use primed_resume_time. 
+    -- Metadata fallback removed to prevent accidental jumps.
+    -- We check if primed_resume_time is NOT nil, allowing 0 to be a valid forced start.
+    if primed_resume_time ~= nil then
+        mp.set_property_number("file-local-options/start", primed_resume_time)
         mp.set_property("file-local-options/resume-playback", "no")
-        debug_log("Applied resume time: " .. tostring(effective_resume))
+        debug_log("Applied primed resume time: " .. tostring(primed_resume_time))
         primed_resume_time = nil -- Consume it
     end
 
@@ -168,7 +207,8 @@ local function apply_adaptive_settings()
         local r_delay = tonumber(opts.reconnect_delay) or 4
         
         -- Use robust reconnect flags (excluding at_eof to avoid VOD loops)
-        local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d", persistence, reconnect_val, r_delay)
+        local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d,analyzeduration=%s,probesize=%s", 
+                                 persistence, reconnect_val, r_delay, tostring(opts.analyzeduration or 0), tostring(opts.probesize or 32))
         mp.set_property("demuxer-lavf-o", lp)
     else
         -- 8. Apply "Turbo" Networking Overrides (Only if NOT bypassed)
@@ -229,3 +269,5 @@ mp.add_hook("on_load", 0, function()
         mp.msg.error("AdaptiveHeaders: Error in on_load hook: " .. tostring(err))
     end
 end)
+
+mp.register_event("end-file", save_current_position)

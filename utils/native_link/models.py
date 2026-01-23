@@ -53,6 +53,7 @@ class PlaybackRequest(BaseRequest):
     url_item: Optional[Dict[str, Any]] = None
     url_items: Optional[List[Dict[str, Any]]] = None
     playlist: Optional[List[Dict[str, Any]]] = None
+    playlist_start_id: Optional[str] = None
     m3u_data: Optional[Dict[str, Any]] = None
     
     # Launch Options

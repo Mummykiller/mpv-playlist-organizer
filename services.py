@@ -115,6 +115,8 @@ def construct_lua_options(item, settings, script_dir, index=None):
         "cache_secs": settings.get('cache_secs', 500),
         "demuxer_readahead_secs": settings.get('demuxer_readahead_secs', 500),
         "stream_buffer_size": settings.get('stream_buffer_size', '10M'),
+        "analyzeduration": settings.get('analyzeduration', 0),
+        "probesize": settings.get('probesize', 32),
         "resume_time": item.get('resume_time'),
         "project_root": script_dir,
         "mark_watched": get_mark_watched(item, settings),

@@ -389,6 +389,7 @@ export async function handleMpvExited(data) {
 	const session = playbackManager.findSessionByFolderId(folderId);
 	if (session) {
 		session.isPlaying = false;
+		session.queue = []; // Clear pending items if the player closed
 	}
 
 	const storageData = await storage.get();
