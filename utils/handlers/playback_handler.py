@@ -6,27 +6,65 @@ import json
 import subprocess
 import threading
 import sys
-from urllib.request import urlopen
+from concurrent.futures import ThreadPoolExecutor
 from .base_handler import BaseHandler
+from .registry import command
 from .. import native_link
 
 class PlaybackHandler(BaseHandler):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, ctx):
+        super().__init__(ctx)
         from ..m3u_server import M3UServer
-        self.m3u_server = M3UServer(self.script_dir, self.temp_playlists_dir, self.server_token)
+        self.m3u_server = M3UServer(ctx.script_dir, ctx.temp_playlists_dir, self.server_token)
 
-    def handle_play(self, request: native_link.PlaybackRequest):
-        url_item = request.url_item
-        folder_id = request.folder_id
-        if not folder_id or not url_item:
-            return native_link.failure("Missing folderId or url_item for play action.")
+    def _orchestrate_playback(self, request: native_link.PlaybackRequest, input_type: str):
+        """
+        Unified pipeline for all playback types.
+        1. Resolve Input -> List[Item]
+        2. Active Session Pre-check
+        3. Parallel Enrichment
+        4. Session Launch/Append
+        """
+        folder_id = request.folder_id or str(uuid.uuid4())
+        settings = self._get_merged_settings(request.settings)
+        
+        # 1. Resolve Input
+        raw_input = None
+        if input_type == 'single':
+            raw_input = [request.url_item]
+        elif input_type == 'batch':
+            raw_input = request.playlist
+        elif input_type == 'm3u':
+            m3u_data = request.m3u_data
+            if not m3u_data or 'value' not in m3u_data:
+                return native_link.failure("Missing M3U data.")
+            raw_input = m3u_data['value']
+        
+        # Resolve to standard list of items
+        items, is_expanded = self.item_processor.resolve_input_items(
+            raw_input, None, (request.url_item or {}).get('headers')
+        )
+        
+        if not items:
+            return native_link.failure("Could not resolve any playable items.")
 
+        # 2. Active Session Pre-check (Already Active / Pause Cycle)
+        if not request.play_new_instance and self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id:
+            current_ids = {item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')}
+            new_items = [item for item in items if self.item_processor.ensure_id(item)['id'] not in current_ids]
+            
+            if not new_items:
+                if self.mpv_session.ipc_manager:
+                    logging.info(f"[PY][Handler] No new items for folder {folder_id}. Cycling pause.")
+                    self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
+                    return native_link.success(already_active=True)
+
+        # 3. Parallel Enrichment & Initial Launch
+        launch_payload = items if len(items) > 1 else items[0]
+        
         try:
-            settings = self._get_merged_settings(request.settings)
-
             first_call_result = self.mpv_session.start(
-                url_item, folder_id, settings, self.file_io,
+                launch_payload, folder_id, settings, self.file_io,
                 geometry=request.geometry, custom_width=request.custom_width, 
                 custom_height=request.custom_height, custom_mpv_flags=request.custom_mpv_flags, 
                 automatic_mpv_flags=request.automatic_mpv_flags, 
@@ -36,54 +74,19 @@ class PlaybackHandler(BaseHandler):
             if not first_call_result["success"] or first_call_result.get("handled_directly"):
                 return first_call_result
 
-            enriched_url_items = first_call_result["enriched_url_items"]
-            enriched_item = enriched_url_items[0]
-
-            result = self.mpv_session.start(
-                enriched_item, folder_id, settings, self.file_io,
-                geometry=request.geometry, custom_width=request.custom_width, 
-                custom_height=request.custom_height, custom_mpv_flags=request.custom_mpv_flags, 
-                automatic_mpv_flags=request.automatic_mpv_flags, 
-                start_paused=request.start_paused, enriched_items_list=enriched_url_items,
-                headers=enriched_item.get('headers'),
-                ytdl_raw_options=enriched_item.get('ytdl_raw_options'),
-                use_ytdl_mpv=enriched_item.get('use_ytdl_mpv', False),
-                is_youtube=enriched_item.get('is_youtube', False),
-                disable_http_persistent=enriched_item.get('disable_http_persistent', False),
-                force_terminal=request.force_terminal
-            )
-            return result if result else native_link.failure("Failed to start MPV session.")
-        except Exception as e:
-            if "Launch cancelled" in str(e):
-                self.mpv_session.clear()
-                return native_link.failure("Cancelled")
-            raise e
-
-    def handle_play_batch(self, request: native_link.PlaybackRequest):
-        playlist = request.playlist
-        folder_id = request.folder_id
-        if not folder_id or not playlist:
-            return native_link.failure("Missing folderId or playlist for play_batch action.")
-
-        try:
-            settings = self._get_merged_settings(request.settings)
-
-            first_call_result = self.mpv_session.start(
-                playlist, folder_id, settings, self.file_io,
-                geometry=request.geometry, custom_width=request.custom_width, 
-                custom_height=request.custom_height, custom_mpv_flags=request.custom_mpv_flags, 
-                automatic_mpv_flags=request.automatic_mpv_flags, 
-                start_paused=request.start_paused, force_terminal=request.force_terminal
-            )
-            
-            if not first_call_result["success"]:
-                return first_call_result
-
+            # Final Launch Orchestration
             enriched_url_items = first_call_result["enriched_url_items"]
             first_item = enriched_url_items[0] if enriched_url_items else {}
+            enriched_m3u_content = first_call_result.get("enriched_m3u_content")
+            
+            target_payload = enriched_url_items
+            if enriched_m3u_content and (input_type == 'm3u' or len(enriched_url_items) > 1):
+                local_server_url = self.m3u_server.start(enriched_m3u_content)
+                if local_server_url:
+                    target_payload = local_server_url
 
-            result = self.mpv_session.start(
-                enriched_url_items, folder_id, settings, self.file_io,
+            return self.mpv_session.start(
+                target_payload, folder_id, settings, self.file_io,
                 geometry=request.geometry, custom_width=request.custom_width, 
                 custom_height=request.custom_height, custom_mpv_flags=request.custom_mpv_flags, 
                 automatic_mpv_flags=request.automatic_mpv_flags, 
@@ -95,13 +98,29 @@ class PlaybackHandler(BaseHandler):
                 disable_http_persistent=first_item.get('disable_http_persistent', False),
                 force_terminal=request.force_terminal
             )
-            return result
         except Exception as e:
             if "Launch cancelled" in str(e):
                 self.mpv_session.clear()
                 return native_link.failure("Cancelled")
             raise e
 
+    @command('play')
+    def handle_play(self, request: native_link.PlaybackRequest):
+        if not request.folder_id or not request.url_item:
+            return native_link.failure("Missing folderId or url_item for play action.")
+        return self._orchestrate_playback(request, 'single')
+
+    @command('play_batch')
+    def handle_play_batch(self, request: native_link.PlaybackRequest):
+        if not request.folder_id or not request.playlist:
+            return native_link.failure("Missing folderId or playlist for play_batch action.")
+        return self._orchestrate_playback(request, 'batch')
+
+    @command('play_m3u')
+    def handle_play_m3u(self, request: native_link.PlaybackRequest):
+        return self._orchestrate_playback(request, 'm3u')
+
+    @command('append')
     def handle_append(self, request: native_link.PlaybackRequest):
         url_item = request.url_item
         url_items_list = request.url_items
@@ -114,7 +133,6 @@ class PlaybackHandler(BaseHandler):
         items_to_process = url_items_list if url_items_list else [url_item]
         
         final_processed_items = []
-        from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=5) as executor:
             def process_wrapper(item):
                 processed, _ = self._process_url_item(item, folder_id, all_folders_context)
@@ -123,39 +141,33 @@ class PlaybackHandler(BaseHandler):
             for processed_list in results:
                 final_processed_items.extend(processed_list)
 
-        logging.info(f"[PY][Handler] handle_append: Processed {len(items_to_process)} input items into {len(final_processed_items)} final items.")
         if not final_processed_items:
-            logging.warning("[PY][Handler] handle_append: No items after processing. Returning success.")
             return native_link.success(message="No new items to append.")
 
         self.file_io.save_playlist_shard(folder_id, all_folders_context[folder_id]['playlist'])
-        logging.info(f"[PY][Handler] handle_append: Calling mpv_session.append_batch with {len(final_processed_items)} items.")
         return self.mpv_session.append_batch(final_processed_items, folder_id=folder_id)
 
+    @command('remove_item_live')
     def handle_remove_item_live(self, request: native_link.LiveUpdateRequest):
         if not request.folder_id or not request.item_id:
             return native_link.failure("Missing folderId or item_id.")
         return self.mpv_session.remove(request.item_id, request.folder_id)
 
+    @command('reorder_live')
     def handle_reorder_live(self, request: native_link.LiveUpdateRequest):
         if not request.folder_id or not request.new_order:
             return native_link.failure("Missing folderId or new_order.")
         return self.mpv_session.reorder(request.folder_id, request.new_order)
 
+    @command('clear_live')
     def handle_clear_live(self, request: native_link.LiveUpdateRequest):
         if not request.folder_id:
             return native_link.failure("Missing folderId.")
         return self.mpv_session.clear_live(request.folder_id)
 
+    @command('close_mpv')
     def handle_close_mpv(self, request: native_link.LiveUpdateRequest):
-        # Determine if we should signal launch cancellation (if it's not even running)
         is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
-        if is_running:
-            if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
-                pass
-            else:
-                is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
-        
         if not is_running:
             self.mpv_session.launch_cancelled = True
             
@@ -163,28 +175,20 @@ class PlaybackHandler(BaseHandler):
         self.m3u_server.stop()
         return response
 
+    @command('is_mpv_running')
     def handle_is_mpv_running(self, request: native_link.LiveUpdateRequest):
-        # 1. Check logical state
         is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
-        
-        # 2. Verify with IPC if we have a connection
         if is_running:
             if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
-                # Simple ping - if it fails, we don't immediately kill the session
-                # because the process might just be busy or starting up.
                 res = self.mpv_session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
                 if not res or res.get("error") != "success":
-                    # If IPC fails but PID is still there, it's just 'unresponsive' not 'dead'
                     if not self.ipc_utils.is_pid_running(self.mpv_session.pid):
                         is_running = False
             else:
-                # No active manager, use the utility check
                 is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
 
-        # 3. Only clear if the process is actually gone
         if not is_running and self.mpv_session.pid:
             if not self.ipc_utils.is_pid_running(self.mpv_session.pid):
-                logging.info(f"is_mpv_running: PID {self.mpv_session.pid} is gone. Cleaning up.")
                 self.mpv_session.clear()
 
         return native_link.success({
@@ -192,27 +196,18 @@ class PlaybackHandler(BaseHandler):
             "folderId": self.mpv_session.owner_folder_id if is_running else None
         })
 
+    @command('get_playback_status')
     def handle_get_playback_status(self, request: native_link.LiveUpdateRequest):
-        # 1. Check logical state
         is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
-        
-        # 2. Verify with IPC
         if is_running:
-            if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
-                # We'll rely on the property fetches below. If they fail,
-                # we'll double check the PID before giving up.
-                pass
-            else:
+            if not (self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected()):
                 is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
 
         if not is_running:
-            # ONLY clear if the process is actually dead
             if self.mpv_session.pid and not self.ipc_utils.is_pid_running(self.mpv_session.pid):
-                logging.info(f"get_playback_status: PID {self.mpv_session.pid} is gone. Cleaning up.")
                 self.mpv_session.clear()
                 return native_link.success({"is_running": False, "is_paused": False})
             elif self.mpv_session.pid:
-                # PID is still there, just IPC failed. Treat as running but state unknown.
                 is_running = True
             else:
                 return native_link.success({"is_running": False, "is_paused": False})
@@ -221,30 +216,25 @@ class PlaybackHandler(BaseHandler):
         is_idle = self.mpv_session.get_idle_state()
         session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
         
-        # If we couldn't get IPC state but PID is still alive, fallback to safe defaults
-        # instead of letting the UI think the session is dead.
         if is_paused is None: is_paused = False
         if is_idle is None: is_idle = False
         
-        # Get the latest last_played_id from tracker or session
         last_played_id = None
         if self.mpv_session.playlist_tracker:
             last_played_id = getattr(self.mpv_session.playlist_tracker, 'last_played_id', None)
-        
-        # Fallback to session metadata if tracker isn't ready
         if not last_played_id and self.mpv_session.playlist:
-            # Check for the last played id in the session's local cache
             last_played_id = getattr(self.mpv_session, 'last_played_id_cache', None)
 
         return native_link.success({
             "is_running": True,
-            "is_paused": is_paused if is_paused is not None else False,
-            "is_idle": is_idle if is_idle is not None else False,
+            "is_paused": is_paused,
+            "is_idle": is_idle,
             "folderId": self.mpv_session.owner_folder_id,
             "lastPlayedId": last_played_id,
             "session_ids": session_ids
         })
 
+    @command('play_new_instance')
     def handle_play_new_instance(self, request: native_link.PlaybackRequest):
         return self._launch_unmanaged_mpv(
             request.playlist or [], request.geometry, request.custom_width,
@@ -262,7 +252,7 @@ class PlaybackHandler(BaseHandler):
                 settings=settings, playlist_start_index=0
             )
             process = subprocess.Popen(full_command, **self.services.get_mpv_popen_kwargs(has_terminal_flag))
-            threading.Thread(target=self.log_stream, args=(process.stderr, logging.warning, None), daemon=True).start()
+            threading.Thread(target=self.ctx.log_stream, args=(process.stderr, logging.warning, None), daemon=True).start()
             return native_link.success(message="New MPV instance launched.")
         except Exception as e:
             logging.error(f"Error launching unmanaged mpv: {e}")
@@ -271,139 +261,3 @@ class PlaybackHandler(BaseHandler):
     def _stop_local_m3u_server(self):
         """Helper for external cleanup (atexit)."""
         self.m3u_server.stop()
-
-    def handle_play_m3u(self, request: native_link.PlaybackRequest):
-        m3u_data = request.m3u_data
-        folder_id = request.folder_id or str(uuid.uuid4())
-        if not m3u_data or 'type' not in m3u_data or 'value' not in m3u_data:
-            return native_link.failure("Missing or malformed 'm3u_data'.")
-
-        m3u_source = m3u_data['value']
-        m3u_type = m3u_data['type']
-        target_folder = self.file_io.get_folder_data(folder_id) or {"playlist": []}
-
-        settings = self._get_merged_settings(request.settings)
-        
-        logging.info(f"[PY][Handler] handle_play_m3u: folder_id='{folder_id}', type='{m3u_type}', session_alive={self.mpv_session.is_alive}")
-
-        # Pre-check for simple 'items' type to handle pause toggle or early exit if nothing new
-        if m3u_type == 'items' and not request.play_new_instance and self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id:
-            incoming_items = m3u_data.get('value', [])
-            current_ids = {item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')}
-            new_ids = [item.get('id') for item in incoming_items if item.get('id') and item.get('id') not in current_ids]
-            
-            logging.info(f"[PY][Handler] handle_play_m3u (Pre-check): Current IDs count={len(current_ids)}, New IDs found={len(new_ids)}")
-            
-            if not new_ids:
-                if self.mpv_session.ipc_manager:
-                    logging.info("[PY][Handler] No new items. Cycling pause.")
-                    self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
-                    return native_link.success(already_active=True)
-
-        try:
-            # 1. Start or Verify Session (WITH LOCK)
-            new_items = []
-            enriched_m3u_content = ""
-            first_call_result = None
-
-            with self.m3u_server.server_lock:
-                logging.info(f"[PY][Handler] handle_play_m3u: Calling mpv_session.start for folder '{folder_id}'")
-                first_call_result = self.mpv_session.start(
-                    m3u_source, folder_id, settings, self.file_io,
-                    geometry=request.geometry, custom_width=request.custom_width, 
-                    custom_height=request.custom_height, custom_mpv_flags=request.custom_mpv_flags, 
-                    automatic_mpv_flags=request.automatic_mpv_flags, 
-                    start_paused=request.start_paused, force_terminal=request.force_terminal
-                )
-                
-                if not first_call_result["success"]:
-                    logging.error(f"[PY][Handler] handle_play_m3u: Session start failed: {first_call_result.get('error')}")
-                    return first_call_result
-                
-                # If handled directly (like single item hot-swap) and NOT just already active
-                if first_call_result.get("handled_directly") and not first_call_result.get("already_active"):
-                    logging.info("[PY][Handler] handle_play_m3u: Handled directly by session manager.")
-                    return first_call_result
-
-                enriched_url_items = first_call_result.get("enriched_url_items", [])
-                enriched_m3u_content = first_call_result.get("enriched_m3u_content", "")
-
-                # Determine if we are in 'Append' mode
-                is_append_mode = self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id
-                
-                if is_append_mode:
-                    current_ids = {item['id'] for item in (self.mpv_session.playlist or []) if 'id' in item}
-                    new_items = [item for item in enriched_url_items if item.get('id') and item.get('id') not in current_ids]
-                    
-                    logging.info(f"[PY][Handler] handle_play_m3u: Reality Check. Session alive. New items to append: {len(new_items)}")
-
-                    if self.m3u_server.temp_file and os.path.exists(self.m3u_server.temp_file) and enriched_m3u_content:
-                        with open(self.m3u_server.temp_file, 'w', encoding='utf-8') as f:
-                            f.write(enriched_m3u_content)
-                    
-                    if not new_items:
-                        logging.info("[PY][Handler] handle_play_m3u: No new items found after start(). Succeeded via already_active.")
-                        if self.mpv_session.ipc_manager:
-                            self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
-                        return native_link.success(already_active=True)
-                else:
-                    # Fresh launch handling
-                    if m3u_type == 'items' and not request.play_new_instance:
-                        logging.info("[PY][Handler] handle_play_m3u: Fresh launch for items type complete.")
-                        return first_call_result
-
-                    # Server-based playback setup (M3U content/URLs)
-                    if not self.m3u_server.temp_file:
-                        self.m3u_server.temp_file = os.path.join(self.temp_playlists_dir, f"temp_playlist_{uuid.uuid4().hex}.m3u")
-                    with open(self.m3u_server.temp_file, 'w', encoding='utf-8') as f:
-                        f.write(enriched_m3u_content)
-
-                    playlist_start_index = 0
-                    last_played_id = target_folder.get("last_played_id")
-                    if settings.get("enable_smart_resume", True) and last_played_id:
-                        for idx, item in enumerate(enriched_url_items):
-                            if item.get('id') == last_played_id:
-                                playlist_start_index = idx
-                                break
-
-                    first_item = enriched_url_items[playlist_start_index] if playlist_start_index < len(enriched_url_items) else (enriched_url_items[0] if enriched_url_items else {})
-                    local_server_url = self.m3u_server.start(enriched_m3u_content)
-                    if not local_server_url: raise RuntimeError("Server failed.")
-                    
-                    return self.mpv_session.start(
-                        local_server_url, folder_id, settings, self.file_io,
-                        geometry=request.geometry, custom_width=request.custom_width, 
-                        custom_height=request.custom_height, custom_mpv_flags=request.custom_mpv_flags, 
-                        automatic_mpv_flags=request.automatic_mpv_flags, 
-                        start_paused=request.start_paused, enriched_items_list=enriched_url_items,
-                        headers=first_item.get('headers'), ytdl_raw_options=first_item.get('ytdl_raw_options'),
-                        use_ytdl_mpv=any(item.get('use_ytdl_mpv', False) for item in enriched_url_items),
-                        is_youtube=first_item.get('is_youtube', False),
-                        disable_http_persistent=first_item.get('disable_http_persistent', False),
-                        force_terminal=request.force_terminal, playlist_start_index=playlist_start_index
-                    )
-
-            # 2. Process and Append (OUTSIDE THE LOCK)
-            from concurrent.futures import ThreadPoolExecutor
-            all_folders_context = {folder_id: {"playlist": target_folder.get('playlist', [])}}
-            
-            def process_wrapper(item):
-                logging.debug(f"[PY][Handler] Processing new item for append: {item.get('title')}")
-                processed, _ = self._process_url_item(item, folder_id, all_folders_context)
-                return processed
-            
-            processed_new_items = []
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                for res in executor.map(process_wrapper, new_items): 
-                    processed_new_items.extend(res)
-            
-            logging.info(f"[PY][Handler] handle_play_m3u: Forwarding {len(processed_new_items)} processed items to append_batch.")
-            return self.mpv_session.append_batch(processed_new_items, folder_id=folder_id)
-
-        except Exception as e:
-            if "Launch cancelled" in str(e):
-                self.mpv_session.clear()
-                return native_link.failure("Cancelled")
-            self.m3u_server.stop()
-            logging.error(f"[PY][Handler] handle_play_m3u ERROR: {e}", exc_info=True)
-            return native_link.failure(f"Error playing M3U: {str(e)}")

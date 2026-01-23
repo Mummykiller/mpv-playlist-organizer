@@ -1,14 +1,45 @@
-from typing import Dict, Any, Type
+from typing import Dict, Any, Type, Optional
 from .models import (
     BaseRequest, PlaybackRequest, LiveUpdateRequest, 
     DataSyncRequest, ServiceRequest, SettingsOverrides
 )
 
+# Action to Dataclass mapping
+ACTION_MAP: Dict[str, Type[BaseRequest]] = {
+    # Playback
+    'play': PlaybackRequest,
+    'play_batch': PlaybackRequest,
+    'play_m3u': PlaybackRequest,
+    'append': PlaybackRequest,
+    'play_new_instance': PlaybackRequest,
+    
+    # Live Updates / Status
+    'remove_item_live': LiveUpdateRequest,
+    'reorder_live': LiveUpdateRequest,
+    'clear_live': LiveUpdateRequest,
+    'is_mpv_running': LiveUpdateRequest,
+    'get_playback_status': LiveUpdateRequest,
+    'close_mpv': LiveUpdateRequest,
+    
+    # Data & Settings
+    'export_data': DataSyncRequest,
+    'export_playlists': DataSyncRequest,
+    'export_all_playlists_separately': DataSyncRequest,
+    'import_from_file': DataSyncRequest,
+    'set_ui_preferences': DataSyncRequest,
+    
+    # Services
+    'get_anilist_releases': ServiceRequest,
+    'check_dependencies': ServiceRequest,
+}
+
 def translate(message: Dict[str, Any]) -> BaseRequest:
     action = message.get('action')
     request_id = message.get('request_id')
     
-    if action in ['play', 'play_batch', 'play_m3u', 'append', 'play_new_instance']:
+    req_class = ACTION_MAP.get(action, BaseRequest)
+    
+    if req_class == PlaybackRequest:
         return PlaybackRequest(
             action=action,
             request_id=request_id,
@@ -28,7 +59,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             settings=SettingsOverrides.from_dict(message)
         )
     
-    elif action in ['remove_item_live', 'reorder_live', 'clear_live', 'is_mpv_running', 'get_playback_status', 'close_mpv']:
+    elif req_class == LiveUpdateRequest:
         return LiveUpdateRequest(
             action=action,
             request_id=request_id,
@@ -37,7 +68,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             new_order=message.get('new_order')
         )
     
-    elif action in ['export_data', 'export_playlists', 'export_all_playlists_separately', 'import_from_file', 'set_ui_preferences']:
+    elif req_class == DataSyncRequest:
         return DataSyncRequest(
             action=action,
             request_id=request_id,
@@ -49,7 +80,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             preferences=message.get('preferences')
         )
         
-    elif action in ['get_anilist_releases', 'check_dependencies']:
+    elif req_class == ServiceRequest:
         return ServiceRequest(
             action=action,
             request_id=request_id,
@@ -60,5 +91,4 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             force_refresh=message.get('force_refresh', False)
         )
     
-    # Fallback for simple actions or unknown ones
     return BaseRequest(action=action, request_id=request_id)

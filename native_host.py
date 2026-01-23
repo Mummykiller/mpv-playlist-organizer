@@ -162,6 +162,7 @@ try:
     import services
     from utils import ipc_utils, security
     from utils.native_host_handlers import HandlerManager
+    from utils.handlers.registry import HandlerRegistry
     from utils.janitor import Janitor
     from utils import native_link
 
@@ -293,7 +294,9 @@ try:
         script_dir=SCRIPT_DIR,
         anilist_cache_file=ANILIST_CACHE_FILE,
         temp_playlists_dir=TEMP_PLAYLISTS_DIR,
-        log_stream=log_stream
+        log_stream=log_stream,
+        data_dir=DATA_DIR,
+        diagnostic_collector=diagnostic_collector
     )
 
     def cleanup_ipc_socket(session_manager):
@@ -368,16 +371,8 @@ try:
             logging.error("[PY][MAIN] Standard input/output is missing. If on Windows, ensure the registry key points to 'python.exe' and not 'pythonw.exe'.")
             sys.exit(1)
 
-        # The delegation system: One receptionist (main loop), many workers (threads)
-        executor = ThreadPoolExecutor(max_workers=10)
-
-        def handle_restore_session(request: native_link.BaseRequest):
-            """Manual trigger for session restoration from the extension."""
-            res = mpv_session.restore()
-            if res:
-                return native_link.success(res, action="session_restored")
-            return native_link.success(None, action="session_restored")
-
+        # --- Built-in Meta Handlers ---
+        @HandlerRegistry.command('ping')
         def handle_ping(request: native_link.BaseRequest):
             """Returns basic system info to verify connectivity."""
             return native_link.success({
@@ -386,35 +381,15 @@ try:
                 "status": "online"
             })
 
-        COMMAND_HANDLERS = {
-            'ping': handle_ping,
-            'restore_session': handle_restore_session,
-            'play': handler_manager.playback.handle_play,
-            'play_batch': handler_manager.playback.handle_play_batch,
-            'play_m3u': handler_manager.playback.handle_play_m3u,
-            'remove_item_live': handler_manager.playback.handle_remove_item_live,
-            'reorder_live': handler_manager.playback.handle_reorder_live,
-            'clear_live': handler_manager.playback.handle_clear_live,
-            'append': handler_manager.playback.handle_append,
-            'play_new_instance': handler_manager.playback.handle_play_new_instance,
-            'close_mpv': handler_manager.playback.handle_close_mpv,
-            'is_mpv_running': handler_manager.playback.handle_is_mpv_running,
-            'get_playback_status': handler_manager.playback.handle_get_playback_status,
-            'export_data': handler_manager.data.handle_export_data,
-            'export_playlists': handler_manager.data.handle_export_playlists,
-            'export_all_playlists_separately': handler_manager.data.handle_export_all_separately,
-            'list_import_files': handler_manager.data.handle_list_import_files,
-            'import_from_file': handler_manager.data.handle_import_from_file,
-            'open_export_folder': handler_manager.data.handle_open_export_folder,
-            'get_anilist_releases': handler_manager.settings.handle_get_anilist_releases,
-            'run_ytdlp_update': handler_manager.settings.handle_run_ytdlp_update,
-            'check_dependencies': handler_manager.settings.handle_check_dependencies,
-            'get_all_folders': handler_manager.data.handle_get_all_folders,
-            'get_ui_preferences': handler_manager.settings.handle_get_ui_preferences,
-            'set_ui_preferences': handler_manager.settings.handle_set_ui_preferences,
-            'get_default_automatic_flags': handler_manager.settings.handle_get_default_automatic_flags,
-            'get_diagnostics': lambda msg: {"success": True, "errors": diagnostic_collector.get_errors()}
-        }
+        @HandlerRegistry.command('restore_session')
+        def handle_restore_session(request: native_link.BaseRequest):
+            """Manual trigger for session restoration from the extension."""
+            res = mpv_session.restore()
+            return native_link.success(res, action="session_restored")
+
+        @HandlerRegistry.command('get_diagnostics')
+        def handle_get_diagnostics(request: native_link.BaseRequest):
+            return {"success": True, "errors": diagnostic_collector.get_errors()}
 
         def task_wrapper(message):
             """Worker thread task to execute handler and send response."""
@@ -430,15 +405,16 @@ try:
                     return
 
                 request = native_link.translate(message)
-                command = request.action
-                handler = COMMAND_HANDLERS.get(command)
+                command_name = request.action
+                
+                # Dynamic dispatch using the registry
+                handler = HandlerRegistry.get_handler(command_name)
                 
                 if handler:
                     response = handler(request)
                 else:
-                    response = native_link.failure("Unknown command")
+                    response = native_link.failure(f"Unknown command: {command_name}")
 
-                # Add the request_id to the response so the extension can match it
                 if request.request_id:
                     response['request_id'] = request.request_id
                 send_message(response)
@@ -453,6 +429,28 @@ try:
                     send_message(error_resp)
                 except Exception:
                     pass
+
+        # --- Automatic Session Restoration ---
+        try:
+            restore_data = mpv_session.restore()
+            if restore_data:
+                logging.info(f"[PY][MAIN] Automatic restoration successful for folder '{mpv_session.owner_folder_id}'.")
+                def notify_restore():
+                    time.sleep(0.2)
+                    send_message(native_link.success(restore_data, action="session_restored"))
+                threading.Thread(target=notify_restore, daemon=True).start()
+        except Exception as e:
+            logging.error(f"[PY][MAIN] Error during automatic session restoration: {e}")
+
+        while True:
+            try:
+                message = get_message()
+                logging.info(f"[PY][RECV] (ID: {message.get('request_id')}): {message.get('action')}")
+                executor.submit(task_wrapper, message)
+            except Exception as e:
+                logging.error(f"[PY][MAIN] Error in main loop: {e}", exc_info=True)
+                if not sys.stdin or sys.stdin.closed:
+                    break
 
 
         # --- Automatic Session Restoration ---
