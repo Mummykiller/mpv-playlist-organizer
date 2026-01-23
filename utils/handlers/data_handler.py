@@ -5,7 +5,15 @@ import platform
 from .base_handler import BaseHandler
 from .. import native_link
 
+from .base_handler import BaseHandler
+from .registry import command
+from .. import native_link
+
 class DataHandler(BaseHandler):
+    def __init__(self, ctx):
+        super().__init__(ctx)
+
+    @command('export_data')
     def handle_export_data(self, request: native_link.DataSyncRequest):
         data = request.data
         if data is None:
@@ -23,11 +31,13 @@ class DataHandler(BaseHandler):
         else:
             return self.file_io.write_folders_file(data)
 
+    @command('export_playlists')
     def handle_export_playlists(self, request: native_link.DataSyncRequest):
         if not request.data or not request.filename:
             return native_link.failure("Missing data or filename.")
         return self.file_io.write_export_file(request.filename, request.data, subfolder=request.subfolder)
 
+    @command('export_all_playlists_separately')
     def handle_export_all_separately(self, request: native_link.DataSyncRequest):
         folders = request.data
         custom_names = request.custom_names or {}
@@ -41,9 +51,11 @@ class DataHandler(BaseHandler):
                     count += 1
         return native_link.success(message=f"Successfully exported {count} playlists.")
 
+    @command('list_import_files')
     def handle_list_import_files(self, request: native_link.BaseRequest):
         return self.file_io.list_import_files()
 
+    @command('import_from_file')
     def handle_import_from_file(self, request: native_link.DataSyncRequest):
         if not request.filename: return native_link.failure("No filename provided.")
         try:
@@ -57,6 +69,7 @@ class DataHandler(BaseHandler):
         except Exception as e:
             return native_link.failure(f"Failed to read file: {e}")
 
+    @command('open_export_folder')
     def handle_open_export_folder(self, request: native_link.BaseRequest):
         try:
             os.makedirs(self.file_io.EXPORT_DIR, exist_ok=True)
@@ -72,5 +85,6 @@ class DataHandler(BaseHandler):
         except Exception as e:
             return native_link.failure(f"Failed to open folder: {e}")
 
+    @command('get_all_folders')
     def handle_get_all_folders(self, request: native_link.BaseRequest):
         return native_link.success({"folders": self.file_io.get_all_folders_from_file()})

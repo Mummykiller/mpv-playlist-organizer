@@ -3,26 +3,23 @@ import os
 import uuid
 import threading
 from .. import native_link
+from .context import BackendContext
 
 class BaseHandler:
-    def __init__(self, mpv_session, file_io, services, ipc_utils, 
-                 send_message, script_dir, anilist_cache_file, 
-                 temp_playlists_dir, log_stream):
-        self.mpv_session = mpv_session
-        self.file_io = file_io
-        self.services = services
-        self.ipc_utils = ipc_utils
-        self.send_message = send_message
-        self.script_dir = script_dir
-        self.anilist_cache_file = anilist_cache_file
-        self.temp_playlists_dir = temp_playlists_dir
-        self.log_stream = log_stream
+    def __init__(self, ctx: BackendContext):
+        self.ctx = ctx
+        # Aliases for easier access while maintaining some compatibility
+        self.mpv_session = ctx.mpv
+        self.file_io = ctx.io
+        self.services = ctx.services
+        self.ipc_utils = ctx.ipc
+        self.send_message = ctx.sender
         
-        # Shared locks and state that might be needed by multiple handlers
+        # Shared locks
         self.all_folders_lock = threading.Lock()
         
         from ..item_processor import ItemProcessor
-        self.item_processor = ItemProcessor(services, send_message, file_io)
+        self.item_processor = ItemProcessor(ctx.services, ctx.sender, ctx.io)
 
         # Restore session token
         restored_data = self.mpv_session.restore()
