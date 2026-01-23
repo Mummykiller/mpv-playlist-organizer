@@ -12,21 +12,8 @@ import { storage } from "./storage_instance.js";
 export { storage, broadcastLog, broadcastToTabs };
 
 export const _syncToNativeHostFile = async (folderId = null) => {
-	const data = await storage.get();
 	try {
-		const payload = {
-			action: "export_data",
-		};
-
-		if (folderId && data.folders[folderId]) {
-			payload.data = { [folderId]: data.folders[folderId] };
-			payload.is_incremental = true;
-		} else {
-			payload.data = data.folders;
-			payload.is_incremental = false;
-		}
-
-		await nativeLink.call("export_data", payload);
+		await nativeLink.syncToFile(folderId);
 	} catch (e) {
 		console.error(`[CoreSync] ${e.message}`);
 		broadcastLog({

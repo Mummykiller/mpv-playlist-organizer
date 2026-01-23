@@ -122,8 +122,25 @@ class NativeLink {
 	}
 
 	// --- UI State & Preferences ---
-	async syncToFile(folderId, force = false) {
-		return this.call("sync_to_file", { folderId, force });
+	/**
+	 * Syncs the current state to the native host's persistent storage.
+	 * @param {string} folderId Optional ID for incremental sync.
+	 */
+	async syncToFile(folderId = null) {
+		const data = await storage.get();
+		const payload = {
+			action: "export_data",
+		};
+
+		if (folderId && data.folders[folderId]) {
+			payload.data = { [folderId]: data.folders[folderId] };
+			payload.is_incremental = true;
+		} else {
+			payload.data = data.folders;
+			payload.is_incremental = false;
+		}
+
+		return this.call("export_data", payload);
 	}
 
 	async setUiPreferences(preferences) {
