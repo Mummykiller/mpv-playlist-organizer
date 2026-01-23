@@ -95,8 +95,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					if (req.folderId && req.folderId !== currentFolderId) return;
 
 					// 3. Render Playlist
-					const playlistToRender = req.playlist || this.playlistUI?.currentPlaylist;
-					if (playlistToRender && playlistToRender.length > 0) {
+					const playlistToRender = req.playlist !== undefined ? req.playlist : this.playlistUI?.currentPlaylist;
+					if (playlistToRender) {
 						this.playlistUI?.render(
 							playlistToRender,
 							req.lastPlayedId || req.last_played_id || this.state.state.lastPlayedId,

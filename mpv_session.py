@@ -21,10 +21,6 @@ DELTA_PREFIX = "delta_"
 DELTA_EXT = ".m3u"
 NATURAL_COMPLETION_FLAG = "mpv_natural_completion_"
 
-def sanitize_url(url):
-    import file_io
-    return file_io.sanitize_string(url, is_filename=False)
-
 class MpvSessionManager:
     def __init__(self, session_file_path, dependencies):
         self.process = None
@@ -52,7 +48,7 @@ class MpvSessionManager:
         self.FLAG_DIR = os.path.join(os.path.dirname(self.TEMP_PLAYLISTS_DIR), "flags")
         
         # --- Specialized Services ---
-        self.enricher = EnrichmentService(self.send_message)
+        self.enricher = EnrichmentService(services, self.send_message, file_io)
         self.launcher = LauncherService(self)
         self.ipc_service = IPCService(self)
 
@@ -496,7 +492,7 @@ class MpvSessionManager:
                 if item.get('is_youtube') and item.get('original_url'):
                     item_url_for_lua = item['original_url']
                 
-                item_url_for_lua = sanitize_url(item_url_for_lua)
+                item_url_for_lua = services.sanitize_url(item_url_for_lua)
                 item_id = item.get('id')
                 
                 # Check duplicate status BEFORE adding to local list
@@ -599,7 +595,7 @@ class MpvSessionManager:
                 if self.playlist_tracker:
                     self.playlist_tracker.remove_item_internal(item_id)
                 
-                title = sanitize_url(removed_item.get('title') or "Item")
+                title = services.sanitize_url(removed_item.get('title') or "Item")
                 if len(title) > 60:
                     title = title[:57] + "..."
                 self.ipc_manager.send({"command": ["show-text", f"Removed: {title}", 2000]}, expect_response=True)
@@ -653,7 +649,7 @@ class MpvSessionManager:
 
             logging.debug(f"[PY][Session] Generating M3U entry: {safe_title} -> {url_to_use[:60]}...")
             m3u_lines.append(f"#EXTINF:-1,{safe_title}")
-            m3u_lines.append(sanitize_url(url_to_use))
+            m3u_lines.append(services.sanitize_url(url_to_use))
         return "\n".join(m3u_lines)
 
     def start(self, url_items_or_m3u, folder_id, settings, file_io, **kwargs):
@@ -730,9 +726,9 @@ class MpvSessionManager:
                     if len(_url_items_list) == 1 and self.ipc_manager and self.ipc_manager.is_connected():
                         logging.info(f"Hot Swap: Switching active session to new item: {launch_item.get('title')}")
                         
-                        target_url = sanitize_url(launch_item['url'])
+                        target_url = services.sanitize_url(launch_item['url'])
                         if launch_item.get('is_youtube') and launch_item.get('original_url'):
-                            target_url = sanitize_url(launch_item['original_url'])
+                            target_url = services.sanitize_url(launch_item['original_url'])
                         
                         # --- Solid ID Injection ---
                         # Append the UUID as a fragment to the URL. 
@@ -761,7 +757,7 @@ class MpvSessionManager:
                         self.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(lua_options)]})
                         
                         orig_url = launch_item.get('original_url') or launch_item.get('url', '')
-                        self.ipc_manager.send({"command": ["set_property", "user-data/original-url", sanitize_url(orig_url)]})
+                        self.ipc_manager.send({"command": ["set_property", "user-data/original-url", services.sanitize_url(orig_url)]})
                         self.ipc_manager.send({"command": ["set_property", "user-data/id", launch_item.get('id', "")]})
                         
                         # Explicitly set global state as a fallback layer

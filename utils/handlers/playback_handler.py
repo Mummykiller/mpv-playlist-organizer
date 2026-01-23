@@ -10,10 +10,12 @@ from urllib.request import urlopen
 from .base_handler import BaseHandler
 from .. import native_link
 
-SERVER_PREFIX = "server_"
-SERVER_EXT = ".m3u"
-
 class PlaybackHandler(BaseHandler):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        from ..m3u_server import M3UServer
+        self.m3u_server = M3UServer(self.script_dir, self.temp_playlists_dir, self.server_token)
+
     def handle_play(self, request: native_link.PlaybackRequest):
         url_item = request.url_item
         folder_id = request.folder_id
@@ -21,10 +23,7 @@ class PlaybackHandler(BaseHandler):
             return native_link.failure("Missing folderId or url_item for play action.")
 
         try:
-            settings = self.file_io.get_settings()
-            for key, value in request.settings.__dict__.items():
-                if value is not None:
-                    settings[key] = value
+            settings = self._get_merged_settings(request.settings)
 
             first_call_result = self.mpv_session.start(
                 url_item, folder_id, settings, self.file_io,
@@ -67,10 +66,7 @@ class PlaybackHandler(BaseHandler):
             return native_link.failure("Missing folderId or playlist for play_batch action.")
 
         try:
-            settings = self.file_io.get_settings()
-            for key, value in request.settings.__dict__.items():
-                if value is not None:
-                    settings[key] = value
+            settings = self._get_merged_settings(request.settings)
 
             first_call_result = self.mpv_session.start(
                 playlist, folder_id, settings, self.file_io,
@@ -164,7 +160,7 @@ class PlaybackHandler(BaseHandler):
             self.mpv_session.launch_cancelled = True
             
         response = self.mpv_session.close()
-        self._stop_local_m3u_server()
+        self.m3u_server.stop()
         return response
 
     def handle_is_mpv_running(self, request: native_link.LiveUpdateRequest):
@@ -272,74 +268,9 @@ class PlaybackHandler(BaseHandler):
             logging.error(f"Error launching unmanaged mpv: {e}")
             return native_link.failure(f"Error launching new mpv instance: {e}")
 
-    def _start_local_m3u_server(self, m3u_content):
-        with self.server_lock:
-            if not self.temp_m3u_file_for_server:
-                self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, f"{SERVER_PREFIX}{os.getpid()}{SERVER_EXT}")
-            with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
-                f.write(m3u_content)
-
-            if self.playlist_server_process and self.playlist_server_process.poll() is None:
-                base_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u"
-                return f"{base_url}?token={self.server_token}" if self.server_token else base_url
-
-            server_path = os.path.join(self.script_dir, "playlist_server.py")
-            if not os.path.exists(server_path): return None
-
-            server_env = os.environ.copy()
-            server_env["MPV_PLAYLIST_TOKEN"] = self.server_token
-            try:
-                self.playlist_server_process = subprocess.Popen(
-                    [sys.executable, server_path, '--port', '0', '--file', self.temp_m3u_file_for_server],
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, env=server_env
-                )
-                start_time = time.time()
-                while time.time() - start_time < 5:
-                    line = self.playlist_server_process.stdout.readline()
-                    if not line: break
-                    try:
-                        data = json.loads(line.strip())
-                        if data.get("status") == "running" and data.get("port"):
-                            self.playlist_server_port = int(data.get("port"))
-                            break
-                    except json.JSONDecodeError: pass
-                
-                def consume_stderr(proc):
-                    for line in iter(proc.stderr.readline, ''): logging.info(f"Server stderr: {line.strip()}")
-                    proc.stderr.close()
-                threading.Thread(target=consume_stderr, args=(self.playlist_server_process,), daemon=True).start()
-
-                if self.playlist_server_port is None: raise RuntimeError("Port detection failed.")
-                fetch_url = f"http://localhost:{self.playlist_server_port}/playlist.m3u?token={self.server_token}"
-                for _ in range(30):
-                    try:
-                        with urlopen(fetch_url, timeout=0.2) as r:
-                            if r.getcode() == 200: return fetch_url
-                    except Exception: pass
-                    time.sleep(0.2)
-                raise RuntimeError("Server timeout.")
-            except Exception as e:
-                logging.error(f"Failed to start M3U server: {e}")
-                self._stop_unlocked()
-                return None
-
     def _stop_local_m3u_server(self):
-        with self.server_lock: self._stop_unlocked()
-
-    def _stop_unlocked(self):
-        if self.playlist_server_process:
-            try:
-                self.playlist_server_process.terminate()
-                self.playlist_server_process.wait(timeout=2)
-            except Exception:
-                try: self.playlist_server_process.kill()
-                except Exception: pass
-            self.playlist_server_process = self.playlist_server_port = None
-            time.sleep(0.2)
-        if self.temp_m3u_file_for_server and os.path.exists(self.temp_m3u_file_for_server):
-            try: os.remove(self.temp_m3u_file_for_server)
-            except Exception: pass
-            self.temp_m3u_file_for_server = None
+        """Helper for external cleanup (atexit)."""
+        self.m3u_server.stop()
 
     def handle_play_m3u(self, request: native_link.PlaybackRequest):
         m3u_data = request.m3u_data
@@ -347,13 +278,11 @@ class PlaybackHandler(BaseHandler):
         if not m3u_data or 'type' not in m3u_data or 'value' not in m3u_data:
             return native_link.failure("Missing or malformed 'm3u_data'.")
 
-        settings = self.file_io.get_settings()
         m3u_source = m3u_data['value']
         m3u_type = m3u_data['type']
         target_folder = self.file_io.get_folder_data(folder_id) or {"playlist": []}
 
-        for key, value in request.settings.__dict__.items():
-            if value is not None: settings[key] = value
+        settings = self._get_merged_settings(request.settings)
         
         logging.info(f"[PY][Handler] handle_play_m3u: folder_id='{folder_id}', type='{m3u_type}', session_alive={self.mpv_session.is_alive}")
 
@@ -377,7 +306,7 @@ class PlaybackHandler(BaseHandler):
             enriched_m3u_content = ""
             first_call_result = None
 
-            with self.server_lock:
+            with self.m3u_server.server_lock:
                 logging.info(f"[PY][Handler] handle_play_m3u: Calling mpv_session.start for folder '{folder_id}'")
                 first_call_result = self.mpv_session.start(
                     m3u_source, folder_id, settings, self.file_io,
@@ -408,8 +337,8 @@ class PlaybackHandler(BaseHandler):
                     
                     logging.info(f"[PY][Handler] handle_play_m3u: Reality Check. Session alive. New items to append: {len(new_items)}")
 
-                    if self.temp_m3u_file_for_server and os.path.exists(self.temp_m3u_file_for_server) and enriched_m3u_content:
-                        with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
+                    if self.m3u_server.temp_file and os.path.exists(self.m3u_server.temp_file) and enriched_m3u_content:
+                        with open(self.m3u_server.temp_file, 'w', encoding='utf-8') as f:
                             f.write(enriched_m3u_content)
                     
                     if not new_items:
@@ -424,9 +353,9 @@ class PlaybackHandler(BaseHandler):
                         return first_call_result
 
                     # Server-based playback setup (M3U content/URLs)
-                    if not self.temp_m3u_file_for_server:
-                        self.temp_m3u_file_for_server = os.path.join(self.temp_playlists_dir, f"temp_playlist_{uuid.uuid4().hex}.m3u")
-                    with open(self.temp_m3u_file_for_server, 'w', encoding='utf-8') as f:
+                    if not self.m3u_server.temp_file:
+                        self.m3u_server.temp_file = os.path.join(self.temp_playlists_dir, f"temp_playlist_{uuid.uuid4().hex}.m3u")
+                    with open(self.m3u_server.temp_file, 'w', encoding='utf-8') as f:
                         f.write(enriched_m3u_content)
 
                     playlist_start_index = 0
@@ -438,7 +367,7 @@ class PlaybackHandler(BaseHandler):
                                 break
 
                     first_item = enriched_url_items[playlist_start_index] if playlist_start_index < len(enriched_url_items) else (enriched_url_items[0] if enriched_url_items else {})
-                    local_server_url = self._start_local_m3u_server(enriched_m3u_content)
+                    local_server_url = self.m3u_server.start(enriched_m3u_content)
                     if not local_server_url: raise RuntimeError("Server failed.")
                     
                     return self.mpv_session.start(
@@ -475,6 +404,6 @@ class PlaybackHandler(BaseHandler):
             if "Launch cancelled" in str(e):
                 self.mpv_session.clear()
                 return native_link.failure("Cancelled")
-            self._stop_local_m3u_server()
+            self.m3u_server.stop()
             logging.error(f"[PY][Handler] handle_play_m3u ERROR: {e}", exc_info=True)
             return native_link.failure(f"Error playing M3U: {str(e)}")
