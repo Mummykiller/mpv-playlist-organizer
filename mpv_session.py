@@ -817,12 +817,20 @@ class MpvSessionManager:
 
             launch_result = self.launcher.launch(
                 launch_item, folder_id, settings, file_io,
-                full_playlist=_url_items_list if len(_url_items_list) == 1 else [_url_items_list[playlist_start_index]],
+                full_playlist=_url_items_list if len(_url_items_list) > 1 else [_url_items_list[playlist_start_index]],
                 playlist_start_index=staggered_initial_index,
                 **kwargs
             )
             
             if launch_result.get("success"):
+                # Ensure owner-only permissions for the IPC socket immediately after creation
+                if self.ipc_path and os.path.exists(self.ipc_path) and platform.system() != "Windows":
+                    try:
+                        os.chmod(self.ipc_path, 0o600)
+                        logging.info(f"Set secure permissions (0600) for IPC socket: {self.ipc_path}")
+                    except Exception as e:
+                        logging.warning(f"Failed to set IPC socket permissions: {e}")
+                
                 self.register_ipc_callbacks()
 
         if launch_result.get("success") and len(_url_items_list) > 1:

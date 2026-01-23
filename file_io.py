@@ -5,6 +5,7 @@ import platform
 import shutil
 import sys
 import re
+from utils import security
 
 # Prevent __pycache__ generation
 sys.dont_write_bytecode = True
@@ -12,26 +13,6 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
 import time
 import threading
-
-# --- Security Constants ---
-YTDLP_SAFE_FLAGS_ALLOWLIST = {
-    'cookies', 'cookies-from-browser', 'user-agent', 'referer', 'add-header',
-    'format', 'f', 'concurrent-fragments', 'N', 'limit-rate', 'r', 'retries', 'R',
-    'fragment-retries', 'skip-unavailable-fragments', 'keep-fragments',
-    'buffer-size', 'http-chunk-size', 'playlist-start', 'playlist-end',
-    'playlist-items', 'match-filter', 'no-playlist', 'yes-playlist', 'age-limit',
-    'min-filesize', 'max-filesize', 'date', 'datebefore', 'dateafter',
-    'min-views', 'max-views', 'min-downloads', 'max-downloads', 'min-likes',
-    'max-likes', 'min-dislikes', 'max-dislikes', 'match-title', 'reject-title',
-    'id', 'I', 'proxy', 'socket-timeout', 'source-address', 'force-ipv4', '4',
-    'force-ipv6', '6', 'geo-verification-proxy', 'geo-bypass',
-    'geo-bypass-country', 'geo-bypass-ip-block', 'flat-playlist',
-    'no-flat-playlist', 'live-from-start', 'wait-for-video', 'no-wait-for-video',
-    'ignore-config', 'no-ignore-config', 'compat-options', 'alias', 'print',
-    'no-warnings', 'dump-user-agent', 'version', 'update', 'verbose', 'v',
-    'quiet', 'q', 'no-check-certificate', 'prefer-insecure', 'ffmpeg-location',
-    'remote-components', 'js-runtimes'
-}
 
 # --- Concurrency & Locking ---
 
@@ -300,50 +281,9 @@ def save_playlist_shard(folder_id, playlist, update_index=True):
 def validate_safe_path(path, allow_user_content=False):
     """
     Validates that a path is safe for usage in flags (configuration/scripts).
-    Resolves symlinks (realpath) and ensures it resides in allowed directories.
-    
-    If allow_user_content is True, allows arbitrary paths (use for media files).
-    For flags, keep it False.
+    Delegates to utils.security.
     """
-    if not path:
-        return None
-    
-    try:
-        # Special case for Windows named pipes used for IPC
-        if platform.system() == "Windows" and path.startswith("\\\\.\\pipe\\"):
-            return path
-
-        resolved = os.path.realpath(os.path.abspath(path))
-        
-        # Allowed bases for configuration/flags
-        allowed_prefixes = [
-            os.path.realpath(DATA_DIR),
-            os.path.realpath(SCRIPT_DIR),
-            os.path.realpath(TEMP_DIR)
-        ]
-
-        if platform.system() == "Linux":
-            if os.path.exists("/dev/shm"):
-                allowed_prefixes.append(os.path.realpath("/dev/shm"))
-            
-            xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
-            if xdg_runtime:
-                allowed_prefixes.append(os.path.realpath(xdg_runtime))
-            
-            # Allow the fallback IPC directory in user home
-            allowed_prefixes.append(os.path.realpath(os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")))
-        
-        # Check if path starts with any allowed prefix
-        is_allowed = any(resolved.startswith(prefix) for prefix in allowed_prefixes)
-        
-        if not is_allowed and not allow_user_content:
-            logging.warning(f"Security: Path validation failed. {resolved} is not in allowed directories.")
-            return None
-            
-        return resolved
-    except Exception as e:
-        logging.error(f"Path validation error: {e}")
-        return None
+    return security.validate_safe_path(path, DATA_DIR, SCRIPT_DIR, TEMP_DIR, allow_user_content)
 
 # --- Atomic Write & Safe Load Helpers ---
 
@@ -433,29 +373,11 @@ def get_mpv_executable():
 
 def sanitize_string(s, is_filename=False):
     """Sanitizes a string. preserves URL integrity while preventing shell/M3U issues."""
-    if not isinstance(s, str):
-        return s
-    
-    if is_filename:
-        # Strict blacklist for folder names / filenames used in filesystem paths.
-        # Strips: / \ : * ? " < > | $ ; & ` and newlines.
-        restricted = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '$', ';', '&', '`', '\n', '\r', '\t']
-        for char in restricted:
-            s = s.replace(char, '')
-    else:
-        # Minimal destruction for URLs and Titles.
-        # Only remove characters that are strictly illegal in M3U or break our JSON/logging.
-        # We allow $, &, ;, |, and others because they are functional in many stream URLs.
-        # We rely on list-based subprocess calls for shell safety.
-        restricted = ['"', '`', '\n', '\r', '\t']
-        for char in restricted:
-            s = s.replace(char, '')
-            
-    return s.strip()
+    return security.sanitize_string(s, is_filename)
 
 def sanitize_folder_name(name):
     """Specific strict sanitization for folder names used in filesystem paths."""
-    return sanitize_string(name, is_filename=True)
+    return security.sanitize_string(name, is_filename=True)
 
 def is_youtube_url(url):
     """Returns True if the URL is a recognized YouTube video or playlist URL."""
@@ -480,41 +402,9 @@ def get_youtube_id(url):
 def sanitize_ytdlp_options(options_str):
     """
     Sanitizes a comma-separated string of yt-dlp options (key=value).
-    Enforces a strict whitelist of safe flags.
-    Handles escaped commas correctly.
+    Delegates to utils.security.
     """
-    if not options_str or not isinstance(options_str, str):
-        return ""
-
-    safe_options = []
-    # Split by comma NOT preceded by backslash
-    parts = re.split(r'(?<!\\),', options_str)
-    
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        
-        if '=' in part:
-            key, value = part.split('=', 1)
-        else:
-            key = part
-            value = ""
-            
-        clean_key = key.strip().lower()
-        # Remove leading dashes for lookup
-        lookup_key = clean_key.lstrip('-')
-        
-        if lookup_key in YTDLP_SAFE_FLAGS_ALLOWLIST:
-            # Ensure boolean flags or empty values have exactly one trailing '='
-            if value == "":
-                safe_options.append(f"{clean_key}=")
-            else:
-                safe_options.append(f"{clean_key}={value}")
-        else:
-            logging.warning(f"Security: Removed unauthorized yt-dlp option '{key}' (not in whitelist)")
-        
-    return ",".join(safe_options)
+    return security.sanitize_ytdlp_options(options_str)
 
 def merge_ytdlp_options(*args):
     """Merges multiple ytdl-raw-options strings into one, deduplicating keys. Handles escaped commas."""
