@@ -2,10 +2,9 @@
  * Shared communication utilities for the MPV Playlist Organizer.
  * ES Module version for Background/Module contexts.
  *
- * !!! SYNC WARNING !!!
- * This file duplicates logic from 'utils/commUtils.js'.
- * Any changes made here MUST be replicated in that file to ensure
- * consistent behavior between Content Scripts and the Background Service Worker.
+ * !!! SOURCE OF TRUTH !!!
+ * This file is the source for 'utils/commUtils.js'.
+ * The global version is auto-generated from this file.
  */
 
 export function debounce(func, wait) {

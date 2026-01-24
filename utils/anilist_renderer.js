@@ -1,10 +1,11 @@
-/**
- * @class AniListRenderer
- */
+// AUTO-GENERATED from anilist_renderer.module.js. DO NOT EDIT MANUALLY.
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
-
 (() => {
 	const MPV = window.MPV_INTERNAL;
+	const { sendMessageAsync } = window.MPV_INTERNAL;
+	/**
+	 * ES Module version of AniListRenderer for Background/Module context.
+	 */
 
 	MPV.AniListRenderer = class AniListRenderer {
 		static _cache = null;
@@ -14,12 +15,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		static async fetchReleases(forceRefresh = false, daysOffset = 0) {
 			const now = Date.now();
+			// Only use cache for 'today' (offset 0)
 			if (
 				daysOffset === 0 &&
 				!forceRefresh &&
 				AniListRenderer._cache &&
-				now - AniListRenderer._cacheTimestamp <
-					AniListRenderer.CACHE_DURATION_MS
+				now - AniListRenderer._cacheTimestamp < AniListRenderer.CACHE_DURATION_MS
 			)
 				return AniListRenderer._cache;
 
@@ -27,7 +28,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				return AniListRenderer._inFlightRequest;
 			AniListRenderer._inFlightRequest = (async () => {
 				try {
-					const response = await MPV.sendMessageAsync({
+					const response = await sendMessageAsync({
 						action: "get_anilist_releases",
 						force: forceRefresh,
 						days: daysOffset,
@@ -50,10 +51,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		static render(container, releases, offset = 0) {
 			if (!container) return;
 
-			// Efficiently clear container
-			while (container.firstChild) {
-				container.removeChild(container.lastChild);
-			}
+			// Find existing list and remove it (to preserve nav controls)
+			const oldList = container.querySelector(
+				".anilist-releases-list, .anilist-empty-message",
+			);
+			if (oldList) oldList.remove();
 
 			if (!releases || !releases.releases || releases.releases.length === 0) {
 				const emptyMsg = document.createElement("div");
@@ -65,61 +67,26 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				container.appendChild(emptyMsg);
 				return;
 			}
-
 			const list = document.createElement("ul");
 			list.className = "anilist-releases-list";
-
-			const fragment = document.createDocumentFragment();
-
 			releases.releases.forEach((item) => {
 				const li = document.createElement("li");
 				li.className = "anilist-release-item";
-
-				// Create elements manually for better performance and security than innerHTML
-				const link = document.createElement("a");
-				link.href = `https://anilist.co/anime/${item.id}`;
-				link.target = "_blank";
-				link.title = "View on AniList";
-
-				const img = document.createElement("img");
-				img.src = item.cover_image;
-				img.alt = item.title;
-				img.className = "release-cover-image";
-				img.loading = "lazy"; // Add lazy loading for images
-
-				link.appendChild(img);
-				li.appendChild(link);
-
-				const details = document.createElement("div");
-				details.className = "release-details";
-
-				const title = document.createElement("div");
-				title.className = "release-title";
-				title.title = item.title;
-				title.textContent = item.title;
-
-				const bottomInfo = document.createElement("div");
-				bottomInfo.className = "release-bottom-info";
-
-				const episodeInfo = document.createElement("div");
-				episodeInfo.className = "release-episode-info";
-				episodeInfo.textContent = `Ep ${item.episode}`;
-
-				const airingTime = document.createElement("div");
-				airingTime.className = "release-airing-time";
-				airingTime.textContent = item.airing_at;
-
-				bottomInfo.appendChild(episodeInfo);
-				bottomInfo.appendChild(airingTime);
-				details.appendChild(title);
-				details.appendChild(bottomInfo);
-				li.appendChild(details);
-
-				fragment.appendChild(li);
+				li.innerHTML = `
+	                <a href="https://anilist.co/anime/${item.id}" target="_blank" title="View on AniList">
+	                    <img src="${item.cover_image}" alt="${item.title}" class="release-cover-image">
+	                </a>
+	                <div class="release-details">
+	                    <div class="release-title" title="${item.title}">${item.title}</div>
+	                    <div class="release-bottom-info">
+	                        <div class="release-episode-info">Ep ${item.episode}</div>
+	                        <div class="release-airing-time">${item.airing_at}</div>
+	                    </div>
+	                </div>`;
+				list.appendChild(li);
 			});
-
-			list.appendChild(fragment);
 			container.appendChild(list);
 		}
-	};
+	}
+
 })();
