@@ -10,6 +10,7 @@ import {
 	handleAppend,
 	isFolderActive,
 	broadcastPlaybackState,
+	broadcastPlaylistState,
 } from "../background/handlers/playback.js";
 import { broadcastLog, broadcastToTabs } from "../background/messaging.js";
 import { storage } from "../background/storage_instance.js";
@@ -19,6 +20,7 @@ import {
 	sendMessageAsync,
 } from "./commUtils.module.js";
 import { nativeLink } from "./nativeLink.js";
+import { createHandler } from "../background/handler_factory.js";
 
 // A lock to prevent multiple scraping processes for the same URL at the same time.
 const scrapingInProgress = new Set();
@@ -137,25 +139,8 @@ async function addUrlToFolder(
 		// Immediate sync to native host file
 		debouncedSyncToNativeHostFile(folderId, true);
 
-		// Calculate visual state (async) for the broadcast
-		const { isActive, isPaused, needsAppend } = await getVisualPlaybackState(
-			folderId,
-			data.folders[folderId].playlist,
-		);
-
-		// Notify all UIs to refresh
-		broadcastToTabs({
-			action: "render_playlist",
-			folderId: folderId,
-			playlist: data.folders[folderId].playlist,
-			last_played_id: data.folders[folderId].last_played_id,
-			isFolderActive: isActive,
-			isPaused: isPaused,
-			needsAppend: needsAppend,
-		});
-
-		// Also trigger a lightweight status update to ensure managers are in sync
-		broadcastPlaybackState(folderId, { needsAppend });
+		// Notify all UIs to refresh with unified broadcast
+		await broadcastPlaylistState(folderId, data.folders[folderId].playlist);
 
 		// Trigger live append if MPV is running
 		const { mpv_playback_cache: playbackCache } = await chrome.storage.local.get("mpv_playback_cache");
@@ -306,30 +291,22 @@ export async function handleAdd(request, sender) {
 	}
 }
 
-export async function handleClear(request) {
-	const data = await storage.get();
-	const folderId = request.folderId;
+export const handleClear = createHandler(async ({ folderId, data }) => {
 	if (!data.folders[folderId])
 		return { success: false, error: "Folder not found." };
 
 	data.folders[folderId].playlist = [];
-	await storage.set(data, folderId);
-	debouncedSyncToNativeHostFile(folderId, true);
-
-	broadcastToTabs({
-		action: "render_playlist",
-		folderId: folderId,
-		playlist: [],
-		isFolderActive: isFolderActive(folderId),
-	});
-
 	nativeLink.clearLive(folderId).catch(() => {});
+	
 	return { success: true, message: `Playlist for '${folderId}' cleared.` };
-}
+}, {
+	requireFolder: true,
+	syncToNative: true,
+	syncImmediate: true,
+	broadcastPlaylist: true
+});
 
-export async function handleRemoveItem(request) {
-	const data = await storage.get();
-	const { folderId } = request;
+export const handleRemoveItem = createHandler(async ({ request, folderId, data }) => {
 	const indexToRemove = request.data?.index;
 	const idToRemove = request.data?.id;
 
@@ -346,23 +323,6 @@ export async function handleRemoveItem(request) {
 		if (finalIndex >= 0 && finalIndex < playlist.length) {
 			const itemToRemove = playlist[finalIndex];
 			playlist.splice(finalIndex, 1);
-			await storage.set(data, folderId);
-			debouncedSyncToNativeHostFile(folderId, true);
-
-			const { isActive, isPaused, needsAppend } = await getVisualPlaybackState(
-				folderId,
-				playlist,
-			);
-
-			broadcastToTabs({
-				action: "render_playlist",
-				folderId: folderId,
-				playlist: playlist,
-				last_played_id: data.folders[folderId].last_played_id,
-				isFolderActive: isActive,
-				isPaused: isPaused,
-				needsAppend: needsAppend,
-			});
 
 			if (data.settings.ui_preferences.global.live_removal !== false) {
 				nativeLink.call("remove_item_live", {
@@ -374,40 +334,27 @@ export async function handleRemoveItem(request) {
 		}
 	}
 	return { success: false, error: "Invalid item index or ID." };
-}
+}, {
+	requireFolder: true,
+	syncToNative: true,
+	syncImmediate: true,
+	broadcastPlaylist: true
+});
 
-export async function handleSetPlaylistOrder(request) {
-	const {
-		folderId,
-		data: { order },
-	} = request;
-	const storageData = await storage.get();
-	if (!storageData.folders[folderId]) return { success: false };
+export const handleSetPlaylistOrder = createHandler(async ({ request, folderId, data }) => {
+	const { order } = request.data;
+	if (!data.folders[folderId]) return { success: false };
 
-	storageData.folders[folderId].playlist = order;
-	await storage.set(storageData, folderId);
-	debouncedSyncToNativeHostFile(folderId, true);
-
-	const { isActive, isPaused, needsAppend } = await getVisualPlaybackState(
-		folderId,
-		order,
-	);
-
-	broadcastToTabs({
-		action: "render_playlist",
-		folderId: folderId,
-		playlist: order,
-		last_played_id: storageData.folders[folderId].last_played_id,
-		isFolderActive: isActive,
-		isPaused: isPaused,
-		needsAppend: needsAppend,
-	});
-
-	nativeLink.reorderLive(folderId, order).catch(
-		() => {},
-	);
+	data.folders[folderId].playlist = order;
+	nativeLink.reorderLive(folderId, order).catch(() => {});
+	
 	return { success: true };
-}
+}, {
+	requireFolder: true,
+	syncToNative: true,
+	syncImmediate: true,
+	broadcastPlaylist: true
+});
 
 export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
 	if (scrapingInProgress.has(urlToAdd)) return { success: true };

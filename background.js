@@ -303,14 +303,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 		const currentStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
 		
 		if (currentStatus?.is_running) {
-			const folder = data.folders[currentStatus.folderId];
-			broadcastToTabs({
-				action: "render_playlist",
-				folderId: currentStatus.folderId,
-				playlist: folder?.playlist,
-				last_played_id: folder?.last_played_id,
-				isFolderActive: true
-			});
+			await playback_handlers.broadcastPlaylistState(currentStatus.folderId);
 		}
 	} catch (e) {}
 });
