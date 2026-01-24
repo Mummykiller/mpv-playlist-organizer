@@ -29,6 +29,6 @@ export async function broadcastToTabs(message) {
  * Broadcasts a log message to active content scripts and the popup.
  */
 export function broadcastLog(logObject) {
-	const message = { log: logObject };
+	const message = { action: "log", log: logObject };
 	broadcastToTabs(message);
 }

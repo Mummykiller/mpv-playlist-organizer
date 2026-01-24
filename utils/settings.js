@@ -88,6 +88,11 @@ export class OptionsManager {
 				type: "checkbox",
 			},
 			{
+				key: "clear_on_item_finish",
+				elementId: "clear-on-item-finish-checkbox",
+				type: "checkbox",
+			},
+			{
 				key: "clear_on_completion",
 				elementId: "clear-on-completion-select",
 				type: "select",

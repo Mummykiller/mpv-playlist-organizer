@@ -65,7 +65,10 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             action=action,
             request_id=request_id,
             folder_id=message.get('folderId'),
-            item_id=message.get('item_id'),
+            item_id=message.get('item_id') or message.get('itemId'),
+            played_ids=message.get('playedIds') or message.get('played_ids'),
+            watched_ids=message.get('watchedIds') or message.get('watched_ids'),
+            session_ids=message.get('sessionIds') or message.get('session_ids'),
             new_order=message.get('new_order')
         )
     

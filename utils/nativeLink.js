@@ -4,7 +4,7 @@
  * Provides a type-safe, semantic API for the Native Host.
  */
 
-import { callNativeHost } from "./nativeConnection.js";
+import { callNativeHost } from "./nativeConnection.module.js";
 import { storage } from "../background/storage_instance.js";
 
 class NativeLink {

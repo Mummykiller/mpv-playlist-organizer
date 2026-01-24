@@ -1,6 +1,6 @@
 import {
 	addNativeListener,
-} from "../../utils/nativeConnection.js";
+} from "../../utils/nativeConnection.module.js";
 import { nativeLink } from "../../utils/nativeLink.js";
 import { debouncedSyncToNativeHostFile } from "../core_services.js";
 import { broadcastLog, broadcastToTabs } from "../messaging.js";
@@ -28,11 +28,74 @@ addNativeListener("update_item_marked_as_watched", (data) =>
 addNativeListener("playback_status_changed", (data) =>
 	handlePlaybackStatusChanged(data),
 );
+addNativeListener("item_natural_completion", (data) =>
+	handleItemNaturalCompletion(data),
+);
 addNativeListener("mpv_quitting", (data) => handleMpvQuitting(data));
 addNativeListener("session_restored", (data) => handleSessionRestored(data));
 
+export async function handleItemNaturalCompletion(data) {
+	const { folderId, itemId } = data;
+	if (!folderId || !itemId) return;
+
+	const storageData = await storage.get();
+	const globalPrefs = storageData.settings.ui_preferences.global;
+	const clearMode = globalPrefs.clear_on_completion || "no";
+	
+	if (globalPrefs.clear_on_item_finish && clearMode !== "no") {
+		const session = playbackManager.getSession(folderId);
+		session.completedItemIds.add(itemId);
+		
+		// Flag this folder so handleMpvExited knows a batch clear is already being managed
+		playbackManager.earlyClearsInProgress.add(folderId);
+
+		if (clearMode === "yes") {
+			// Mode: "yes" -> Clear immediately and silently
+			broadcastLog({
+				text: `[Background]: Item '${itemId}' finished. Auto-clearing from '${folderId}'.`,
+				type: "info",
+			});
+			await clearFolderPlaylist(folderId, {
+				playedIds: [itemId],
+				scope: "played",
+			});
+			// Still remove from session set just in case
+			session.completedItemIds.delete(itemId);
+		} else if (clearMode === "confirm") {
+			// Mode: "confirm" -> Visual clear nice + Stacked popup
+			broadcastLog({
+				text: `[Background]: Item finished. Staging for batch clear (Items in stack: ${session.completedItemIds.size}).`,
+				type: "info",
+			});
+
+			// 1. Refresh UI to hide the completed items visually
+			await broadcastPlaylistState(folderId);
+
+			// 2. Trigger/update the stacked confirmation
+			const [activeTab] = await chrome.tabs.query({
+				active: true,
+				currentWindow: true,
+			});
+			
+			if (activeTab) {
+				const completedList = Array.from(session.completedItemIds);
+				chrome.tabs
+					.sendMessage(activeTab.id, {
+						action: "show_clear_confirmation",
+						folderId: folderId,
+						playedIds: completedList,
+						sessionIds: completedList,
+						scope: "played",
+						count: completedList.length
+					})
+					.catch(() => {});
+			}
+		}
+	}
+}
+
 export async function handleMpvQuitting(data) {
-	const { folderId, isNaturalCompletion, playedIds, sessionIds } = data;
+	const { folderId, isNaturalCompletion, playedIds, watchedIds, sessionIds } = data;
 	broadcastLog({
 		text: `[Background]: MPV shutdown sequence started for '${folderId}'.`,
 		type: "info",
@@ -44,35 +107,26 @@ export async function handleMpvQuitting(data) {
 
 	// --- Early Clear/Confirm Logic ---
 	if (isNaturalCompletion && folderId) {
-		const session = playbackManager.findSessionByFolderId(folderId);
 		const storageData = await storage.get();
 		const folder = storageData.folders[folderId];
 		
 		if (!folder || !folder.playlist) return;
 
-		// VERIFICATION SYSTEM: Ensure we are actually at the end of the ENTIRE list
-		const sessionSet = new Set(sessionIds || []);
-		const isLastItemInSession = folder.playlist.length > 0 && 
-			sessionSet.has(folder.playlist[folder.playlist.length - 1].id);
+		// THE DECIDER: Use items that actually passed the threshold
+		const watchedSet = new Set(watchedIds || playedIds || []);
+		const folderIds = folder.playlist.map(i => i.id);
 		
-		// Only proceed if the intent was the last item AND the reality matches
-		const isActuallyComplete = isLastItemInSession && (session?.currentPlayingItem?.isLastInFolder ?? true);
-
-		if (!isActuallyComplete) {
-			broadcastLog({
-				text: `[Background]: Natural completion ignored for '${folderId}'. Entire list was not played.`,
-				type: "info",
-			});
-			return;
-		}
-
+		// If everything currently in the folder was "watched" (not just touched), we clear all.
+		const isFullFolderComplete = folderIds.length > 0 && folderIds.every(id => watchedSet.has(id));
+		
 		const globalPrefs = storageData.settings.ui_preferences.global;
 		const clearMode = globalPrefs.clear_on_completion || "no";
-		const clearScope = globalPrefs.clear_scope || "all";
+		// Default to 'session' scope for natural completion if not a full clear
+		const clearScope = isFullFolderComplete ? "all" : (globalPrefs.clear_scope || "session");
 
 		if (clearMode !== "no") {
 			broadcastLog({
-				text: `[Background]: Early completion detected for '${folderId}'. Triggering ${clearMode} logic.`,
+				text: `[Background]: Completion detected for '${folderId}'. (Full: ${isFullFolderComplete}). Mode: ${clearMode}.`,
 				type: "info",
 			});
 			playbackManager.earlyClearsInProgress.add(folderId);
@@ -154,54 +208,26 @@ export async function handleMpvExited(data) {
 		session.queue = []; // Clear pending items if the player closed
 	}
 
-	const storageData = await storage.get();
-	const globalPrefs = storageData.settings.ui_preferences.global;
-	const clearMode = globalPrefs.clear_on_completion || "no";
-	const clearScope = globalPrefs.clear_scope || "all";
-
 	// Only attempt to clear if it wasn't already handled early AND it looks like a natural completion
 	if (!wasEarlyHandled) {
-		const session = playbackManager.findSessionByFolderId(folderId);
 		const storageData = await storage.get();
 		const folder = storageData.folders[folderId];
 
 		// MPV_PLAYLIST_COMPLETED_EXIT_CODE (99) indicates natural playlist completion via custom script.
 		const isNaturalCompletion = returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE;
 
-		if (isNaturalCompletion) {
-			broadcastLog({
-				text: `[Background]: Playlist for folder '${folderId}' finished naturally (Exit Code 99).`,
-				type: "info",
-			});
+		if (isNaturalCompletion && folder && folder.playlist) {
+			const globalPrefs = storageData.settings.ui_preferences.global;
+			const clearMode = globalPrefs.clear_on_completion || "no";
+			
+			const watchedSet = new Set(data.watchedIds || data.playedIds || []);
+			const folderIds = folder.playlist.map(i => i.id);
+			const isFullFolderComplete = folderIds.length > 0 && folderIds.every(id => watchedSet.has(id));
+			const clearScope = isFullFolderComplete ? "all" : (globalPrefs.clear_scope || "session");
 
-			if (folder && folder.playlist) {
-				const sessionSet = new Set(sessionIds || []);
-				const isLastItemInSession = folder.playlist.length > 0 && 
-					sessionSet.has(folder.playlist[folder.playlist.length - 1].id);
-				
-				// Verification: Did we intend to finish the list, and did we actually reach the end?
-				const isActuallyComplete = isLastItemInSession && (session?.currentPlayingItem?.isLastInFolder ?? true);
-
-				if (!isActuallyComplete) {
-					broadcastLog({
-						text: `[Background]: Natural completion (99) ignored for '${folderId}'. Entire list was not played.`,
-						type: "info",
-					});
-					return;
-				}
-			}
-		}
-
-		if (
-			isNaturalCompletion &&
-			session &&
-			session.currentPlayingItem &&
-			session.currentPlayingItem.folderId === folderId &&
-			session.currentPlayingItem.isLastInFolder
-		) {
 			if (clearMode === "yes") {
 				broadcastLog({
-					text: `[Background]: Auto-clearing items for '${folderId}' (Scope: ${clearScope}).`,
+					text: `[Background]: Auto-clearing session items for '${folderId}' (Full: ${isFullFolderComplete}).`,
 					type: "info",
 				});
 				await clearFolderPlaylist(folderId, {
@@ -211,10 +237,9 @@ export async function handleMpvExited(data) {
 				});
 			} else if (clearMode === "confirm") {
 				broadcastLog({
-					text: `[Background]: Requesting confirmation to clear playlist for '${folderId}'.`,
+					text: `[Background]: Requesting confirmation to clear items for '${folderId}'.`,
 					type: "info",
 				});
-				// Send a message to the active tab to show a confirmation dialog
 				const [activeTab] = await chrome.tabs.query({
 					active: true,
 					currentWindow: true,
@@ -231,7 +256,7 @@ export async function handleMpvExited(data) {
 						.catch(() => {});
 				}
 			}
-		} else if (isNaturalCompletion === false && clearMode !== "no") {
+		} else if (isNaturalCompletion === false && (storageData?.settings?.ui_preferences?.global?.clear_on_completion || "no") !== "no") {
 			broadcastLog({
 				text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion).`,
 				type: "info",
@@ -258,19 +283,25 @@ async function clearFolderPlaylist(folderId, options = {}) {
 		const folder = storageData.folders[folderId];
 		const originalCount = folder.playlist.length;
 
-		if (scope === "played" && playedIds && playedIds.length > 0) {
+		// Correctly handle the scope to avoid clearing the whole folder
+		if (scope === "played" && Array.isArray(playedIds) && playedIds.length > 0) {
 			const playedSet = new Set(playedIds);
+			console.log(`[Background] clearFolderPlaylist: Removing ${playedIds.length} items from storage:`, playedIds);
 			folder.playlist = folder.playlist.filter(
 				(item) => !playedSet.has(item.id),
 			);
-		} else if (scope === "session" && sessionIds && sessionIds.length > 0) {
+		} else if (scope === "session" && Array.isArray(sessionIds) && sessionIds.length > 0) {
 			const sessionSet = new Set(sessionIds);
 			folder.playlist = folder.playlist.filter(
 				(item) => !sessionSet.has(item.id),
 			);
-		} else {
-			// Default 'all' behavior (or fallback if IDs missing)
+		} else if (scope === "all") {
 			folder.playlist = [];
+		} else {
+			// If scope is unknown or IDs are missing, DO NOT clear everything.
+			// This prevents accidental wiping of the whole playlist.
+			console.warn(`[Background] clearFolderPlaylist: Aborted clear. Scope '${scope}' was requested but no valid IDs were provided.`);
+			return false;
 		}
 
 		const removedCount = originalCount - folder.playlist.length;
@@ -289,25 +320,56 @@ async function clearFolderPlaylist(folderId, options = {}) {
 	return false;
 }
 
-export async function handleClearPlaylistConfirmation(request) {
-	if (request.confirmed && request.folderId) {
+export const handleClearPlaylistConfirmation = createHandler(async ({ request }) => {
+	const folderId = request.folderId;
+	if (!folderId) return { success: false };
+
+	const playedIds = request.playedIds; // Handled by normalization
+	const sessionIds = request.sessionIds;
+	const scope = request.scope;
+
+	if (request.confirmed) {
+		const clearCount = playedIds?.length || 0;
 		broadcastLog({
-			text: `[Background]: User confirmed clearing playlist for '${request.folderId}'.`,
+			text: `[Background]: Confirmed! Removing ${clearCount} item(s) from '${folderId}'.`,
 			type: "info",
 		});
-		await clearFolderPlaylist(request.folderId, {
-			playedIds: request.playedIds,
-			sessionIds: request.sessionIds,
-			scope: request.scope,
+
+		// PERMANENT DELETE only on confirm
+		await clearFolderPlaylist(folderId, {
+			playedIds,
+			sessionIds,
+			scope,
 		});
-		return { success: true };
+
+		// Clear the staged list
+		const session = playbackManager.findSessionByFolderId(folderId);
+		if (session) {
+			const confirmedIds = new Set(playedIds || []);
+			for (const id of session.completedItemIds) {
+				if (confirmedIds.has(id)) {
+					session.completedItemIds.delete(id);
+				}
+			}
+		}
+	} else {
+		broadcastLog({
+			text: `[Background]: User declined clearing playlist for '${folderId}'. Items restored.`,
+			type: "info",
+		});
+
+		// RESTORE items to UI if cancelled
+		const session = playbackManager.findSessionByFolderId(folderId);
+		if (session) {
+			session.completedItemIds.clear();
+			await broadcastPlaylistState(folderId);
+		}
 	}
-	broadcastLog({
-		text: `[Background]: User declined clearing playlist for '${request.folderId}'.`,
-		type: "info",
-	});
+
 	return { success: true };
-}
+}, { 
+	manualPersistence: true 
+});
 
 /**
  * Checks if MPV is currently playing a different folder and asks for confirmation if enabled.

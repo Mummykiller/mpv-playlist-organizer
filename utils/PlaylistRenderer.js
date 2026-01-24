@@ -19,7 +19,14 @@
         }
 
         render(state) {
-            const playlist = state.playlist || [];
+            let playlist = state.playlist || [];
+            const completedIds = new Set(state.completedIds || []);
+            
+            // Filter out staged completed items for the "cleared nice" effect
+            if (completedIds.size > 0) {
+                playlist = playlist.filter(item => !completedIds.has(item.id));
+            }
+
             const lastPlayedId = state.lastPlayedId;
             const isActive = state.isActive;
             const isPaused = state.isPaused;

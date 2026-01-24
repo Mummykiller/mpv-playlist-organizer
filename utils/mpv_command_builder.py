@@ -67,6 +67,10 @@ class MpvCommandBuilder:
                     safe_flag_dir = file_io.validate_safe_path(flag_dir)
                     if safe_flag_dir:
                          self.script_opts.append(f'on_completion-flag_dir={safe_flag_dir}')
+                
+                # Pass clear_on_item_finish preference
+                clear_item = self.settings.get('clear_on_item_finish', False)
+                self.script_opts.append(f"on_completion-clear_on_item_finish={'yes' if clear_item else 'no'}")
         return self
 
     def with_adaptive_headers_script(self, script_dir):

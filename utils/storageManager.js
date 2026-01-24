@@ -221,6 +221,7 @@ export class StorageManager {
 						confirm_close_mpv: true,
 						confirm_play_new: true,
 						confirm_folder_switch: true,
+						clear_on_item_finish: false,
 						clear_on_completion: "no",
 						clear_scope: "session",
 						anilistPanelVisible: false,
