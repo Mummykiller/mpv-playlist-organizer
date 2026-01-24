@@ -35,12 +35,20 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this._bindPlaylistDragAndDrop();
 		}
 
-		render(playlist, lastPlayedId, isFolderActive = false) {
-			this.currentPlaylist = playlist || [];
+		render(playlist, lastPlayedId, isFolderActive = false, completedIds = []) {
+			const completedSet = new Set(completedIds || []);
+			let effectivePlaylist = playlist || [];
+			
+			// Visual filtering for staged items
+			if (completedSet.size > 0) {
+				effectivePlaylist = effectivePlaylist.filter(item => !completedSet.has(item.id));
+			}
+
+			this.currentPlaylist = effectivePlaylist;
 			if (this.itemCountSpan)
-				this.itemCountSpan.textContent = playlist?.length || 0;
+				this.itemCountSpan.textContent = effectivePlaylist?.length || 0;
 			if (this.minimizedPlayBtn && this.minimizedCountSpan) {
-				const count = playlist?.length || 0;
+				const count = effectivePlaylist?.length || 0;
 				this.minimizedCountSpan.textContent = count;
 				this.minimizedCountSpan.style.display = "inline";
 				this.minimizedPlayBtn.classList.add("with-counter");

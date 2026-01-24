@@ -9,7 +9,6 @@ end
 -- Function to get the reliable flag directory
 local function get_flag_dir()
     -- 1. Try script-opts passed from Python (highest priority)
-    -- We try both the namespaced and non-namespaced versions for maximum compatibility
     local script_name = mp.get_script_name()
     local opt_dir = mp.get_opt("flag_dir") or mp.get_opt(script_name .. "-flag_dir")
     
@@ -43,6 +42,16 @@ local function get_flag_dir()
     
     return "/tmp/mpv_playlist_organizer_flags/"
 end
+
+-- Read clear_on_item_finish preference
+local function get_clear_on_item_finish()
+    local script_name = mp.get_script_name()
+    local opt = mp.get_opt("clear_on_item_finish") or mp.get_opt(script_name .. "-clear_on_item_finish")
+    return opt == "yes"
+end
+
+local clear_on_item_finish = get_clear_on_item_finish()
+log("Option clear_on_item_finish: " .. (clear_on_item_finish and "yes" or "no"))
 
 -- Ensure the directory exists before writing
 local function ensure_dir(path)
@@ -154,9 +163,18 @@ function on_end_file(event)
 
     -- Case 1: The file finished naturally
     if event.reason == 'eof' then
-        -- If pos is -1 (or nil) or we are past the end, there is nothing next.
-        if not pos or pos < 0 or pos >= count then
+        -- Always notify Python that THIS item finished if it was natural
+        if pos and count > 0 then
+            log("Item finished (EOF). Notifying Python.")
+            mp.commandv("script-message", "item_natural_completion", tostring(pos))
+        end
+
+        -- If we just finished the last item in the playlist
+        if pos and count > 0 and pos >= count - 1 then
             handle_natural_completion("Reached end of playlist (EOF on last item)")
+        elseif not pos or pos < 0 then
+            -- Fallback for weird edge cases where pos is lost
+            handle_natural_completion("Reached end of playlist (Position invalid)")
         end
     
     -- Case 2: The player went idle (usually happens after EOF with --idle=yes)

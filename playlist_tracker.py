@@ -21,6 +21,7 @@ class PlaylistTracker:
         self.folder_id = folder_id
         self.playlist = []
         self.played_item_ids = set()
+        self.threshold_met_ids = set() # Items watched > 30s
         self.watched_this_session = set() # Track items already marked as watched this session
         
         # New: Track playback duration in the current session
@@ -127,6 +128,9 @@ class PlaylistTracker:
         # Immediate Heartbeat to register Python presence
         self.ipc_manager.send({"command": ["script-message", "tracker_heartbeat"]})
         
+        # Register handler for individual item completion
+        self.ipc_manager.register_script_message_handler("item_natural_completion", self._handle_item_completion)
+
         # Proactive Status Push: Notify the UI immediately upon connection
         # This clears the 'isLaunching' state in the background cache instantly.
         self._update_playback_status()
@@ -189,10 +193,14 @@ class PlaylistTracker:
 
                         if new_id != self.current_id:
                             # 1. If we were playing something else, do a FINAL save for it
+                            # ONLY if it wasn't just cleared by the item_natural_completion logic
                             if self.current_id and self.current_id != -1 and self.current_id != "-1" and current_time > 1:
-                                logging.info(f"[PY][Tracker] Saving final position for old item {self.current_id}: {int(current_time)}s")
-                                self._update_resume_time(self.current_id, current_time)
-                                self.played_item_ids.add(self.current_id)
+                                if self.current_id not in self.watched_this_session:
+                                    logging.info(f"[PY][Tracker] Saving final position for old item {self.current_id}: {int(current_time)}s")
+                                    self._update_resume_time(self.current_id, current_time)
+                                    self.played_item_ids.add(self.current_id)
+                                else:
+                                    logging.debug(f"[PY][Tracker] Skipping final save for {self.current_id} (already handled by completion).")
 
                             # Store previous ID to handle late 'end-file' events
                             self.previous_id = self.current_id
@@ -273,6 +281,7 @@ class PlaylistTracker:
 
                             # 1. Check for mark-as-watched threshold (30s of SESSION playback)
                             if self.current_session_duration >= 30:
+                                self.threshold_met_ids.add(self.current_id)
                                 self._check_mark_watched(self.current_id)
 
                             # 2. Throttled periodic save (Every 5s of video time, but NO MORE THAN once every 5s of real time)
@@ -296,12 +305,13 @@ class PlaylistTracker:
                             self.pending_last_played_id = None
                     
                     if reason == 'eof':
-                        # Heuristic: If 'eof' happens immediately after an ID change (session < 5s),
-                        # it almost certainly belongs to the PREVIOUS item, not the new one.
-                        # This fixes race conditions where property-change arrives before end-file.
+                        # Attribution logic: 
+                        # In most cases, current_id is the item that just finished.
+                        # If we just switched IDs and immediately got an EOF, it might belong to previous_id.
                         target_id_for_eof = self.current_id
                         
-                        if self.current_session_duration < 5 and self.previous_id:
+                        # Only fallback to previous_id if we literally just switched and haven't played anything.
+                        if self.current_session_duration < 1 and self.previous_id:
                             logging.info(f"[PY][Tracker] Detected late EOF event. Attributing to previous item: {self.previous_id}")
                             target_id_for_eof = self.previous_id
                         
@@ -314,7 +324,7 @@ class PlaylistTracker:
                             # Check if this item is the last in our tracked playlist
                             with self.lock:
                                 if self.playlist and self.playlist[-1].get('id') == target_id_for_eof:
-                                    logging.info(f"[PY][Tracker] Last item in playlist finished naturally ({target_id_for_eof}). Setting completion flag.")
+                                    logging.info(f"[PY][Tracker] Last item in session playlist finished naturally ({target_id_for_eof}). Setting completion flag.")
                                     self.is_naturally_completed = True
                             
                     elif reason == 'stop' or reason == 'quit':
@@ -329,6 +339,7 @@ class PlaylistTracker:
                         "folder_id": self.folder_id,
                         "is_natural_completion": self.is_naturally_completed,
                         "played_ids": list(self.played_item_ids),
+                        "watched_ids": list(self.threshold_met_ids),
                         "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
                     })
                     # 2. Stop loop
@@ -354,6 +365,42 @@ class PlaylistTracker:
         # Clean up the local manager when loop exits
         if self.ipc_manager:
             self.ipc_manager.close()
+
+    def _handle_item_completion(self, args):
+        """Handles the notification from Lua that a specific item finished naturally."""
+        logging.info(f"[PY][Tracker] Received item_natural_completion with args: {args}")
+        try:
+            pos = int(args[0]) if args else -1
+            if pos < 0: 
+                logging.warning(f"[PY][Tracker] Invalid position received: {pos}")
+                return
+
+            target_id = None
+            with self.lock:
+                if 0 <= pos < len(self.playlist):
+                    target_id = self.playlist[pos].get('id')
+                else:
+                    logging.warning(f"[PY][Tracker] Position {pos} out of range for playlist length {len(self.playlist)}")
+            
+            if target_id:
+                logging.info(f"[PY][Tracker] Item at index {pos} (ID: {target_id}) finished naturally. Notifying extension for individual clear.")
+                
+                # Critical: Add to watched_this_session IMMEDIATELY to block any late 
+                # time-pos updates from trying to save or mark it again.
+                self.watched_this_session.add(target_id)
+                self.played_item_ids.add(target_id)
+                
+                # Reset its disk state to 0 so even if a sync happens, it's clean
+                self._update_resume_time(target_id, 0)
+                
+                # Send specialized clear message
+                self.send_message({
+                    "action": "item_natural_completion",
+                    "folder_id": self.folder_id,
+                    "item_id": target_id
+                })
+        except Exception as e:
+            logging.error(f"[PY][Tracker] Error handling item completion: {e}")
 
     def _update_last_played(self, item_id):
         """Saves the last played item ID to the folder's metadata and shard, and notifies the extension."""

@@ -669,6 +669,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			isFolderActive = null,
 			isPaused = null,
 			needsAppend = null,
+			completedIds = null,
 		) {
 			// Update persistent state with whatever was provided
 			if (playlist) popupState.currentPlaylist = playlist;
@@ -676,9 +677,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (typeof isFolderActive === "boolean") popupState.isFolderActive = isFolderActive;
 			if (typeof isPaused === "boolean") popupState.isPaused = isPaused;
 			if (typeof needsAppend === "boolean") popupState.needsAppend = needsAppend;
+			if (completedIds) popupState.completedIds = completedIds;
 
 			// Use fallbacks from persistent state
-			const effectivePlaylist = playlist || popupState.currentPlaylist;
+			let effectivePlaylist = playlist || popupState.currentPlaylist || [];
 			const effectiveLastPlayedId = lastPlayedId || popupState.lastPlayedId;
 			const effectiveIsFolderActive =
 				typeof isFolderActive === "boolean" ? isFolderActive : popupState.isFolderActive;
@@ -686,6 +688,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 				typeof isPaused === "boolean" ? isPaused : (popupState.isPaused || false);
 			const effectiveNeedsAppend = 
 				typeof needsAppend === "boolean" ? needsAppend : (popupState.needsAppend || false);
+			const effectiveCompletedIds = new Set(completedIds || popupState.completedIds || []);
+
+			// Filter out staged completed items
+			if (effectiveCompletedIds.size > 0) {
+				effectivePlaylist = effectivePlaylist.filter(item => !effectiveCompletedIds.has(item.id));
+			}
 
 			// Guard: If we are in the closing state, do not update UI button icons
 			// or state as 'isPlaybackClosing' has higher visual priority.
@@ -2109,6 +2117,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 							request.isFolderActive,
 							request.isPaused,
 							request.needsAppend,
+							request.completedIds,
 						);
 					}
 				}

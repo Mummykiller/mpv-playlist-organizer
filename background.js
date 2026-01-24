@@ -19,7 +19,7 @@ import { broadcastLog, broadcastToTabs } from "./background/messaging.js";
 import { storage } from "./background/storage_instance.js";
 import { updateContextMenus } from "./utils/contextMenu.js";
 import { diagnosticCollector } from "./utils/diagnosticCollector.js";
-import { addNativeListener } from "./utils/nativeConnection.js";
+import { addNativeListener } from "./utils/nativeConnection.module.js";
 import { nativeLink } from "./utils/nativeLink.js";
 import * as playlistManager from "./utils/playlistManager.js";
 

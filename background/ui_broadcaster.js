@@ -79,6 +79,10 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 	const { isActive, isPaused, needsAppend, lastPlayedId } = 
 		await getVisualPlaybackState(folderId, targetPlaylist);
 
+	// Get completed items for visual filtering
+	const session = playbackManager.findSessionByFolderId(folderId);
+	const completedIds = session ? Array.from(session.completedItemIds) : [];
+
 	broadcastToTabs({
 		action: action,
 		folderId: folderId,
@@ -87,6 +91,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 		isFolderActive: isActive,
 		isPaused: isPaused,
 		needsAppend: needsAppend,
+		completedIds: completedIds,
 	});
 
 	broadcastPlaybackState(folderId, { needsAppend });

@@ -323,7 +323,8 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 					"ultra_scalers", "ultra_video_sync", "ultra_interpolation", "ultra_deband",
 					"ultra_fbo", "ytdl_quality", "enable_precise_resume", "yt_use_cookies",
 					"yt_mark_watched", "yt_ignore_config", "other_sites_use_cookies",
-					"targeted_defaults", "enable_per_item_mark_watched", "clear_on_completion",
+					"targeted_defaults", "enable_per_item_mark_watched", 
+					"clear_on_item_finish", "clear_on_completion",
 					"clear_scope", "force_terminal", "launch_geometry", "custom_geometry_width",
 					"custom_geometry_height", "custom_mpv_flags",
 				];

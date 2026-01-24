@@ -101,6 +101,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 							playlistToRender,
 							req.lastPlayedId || req.last_played_id || this.state.state.lastPlayedId,
 							req.isFolderActive ?? this.state.state.isFolderActive,
+							req.completedIds || []
 						);
 					} else if (req.playlist === null) {
 						// Explicit empty playlist signal
@@ -149,22 +150,24 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				show_confirmation: (req, send) =>
 					this._handleAsyncConfirmation(req, send),
 				show_clear_confirmation: async (req) => {
-					const scopeText =
-						req.scope === "played"
-							? "played items"
-							: req.scope === "session"
-								? "session items"
-								: "all items";
-					const confirmed = await this.showPageLevelConfirmation(
-						`MPV finished naturally. Clear ${scopeText} in "${req.folderId}"?`,
-					);
-					this.bridge.send("confirm_clear_playlist", null, {
-						confirmed,
-						folderId: req.folderId,
-						played_ids: req.played_ids,
-						session_ids: req.session_ids,
-						scope: req.scope,
-					});
+					const scopeText = req.count > 1 ? `${req.count} items` : "item";
+					const message = `MPV finished naturally. Clear ${scopeText} in "${req.folderId}"?`;
+					
+					const result = await this.showStackedClearConfirmation(req.folderId, message, req);
+					
+					if (result !== null) { 
+						// result is either the final request data (confirmed) or false (cancelled)
+						const confirmed = result !== false;
+						const finalReq = confirmed ? result : req;
+
+						this.bridge.send("confirm_clear_playlist", null, {
+							confirmed,
+							folderId: finalReq.folderId,
+							played_ids: finalReq.playedIds || finalReq.played_ids,
+							session_ids: finalReq.sessionIds || finalReq.session_ids,
+							scope: finalReq.scope,
+						});
+					}
 				},
 				scrape_and_get_details: (req, send) => {
 					// Prefer the URL passed in the request (from background scanner)
@@ -777,6 +780,57 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 
 			send({ url, title });
+		}
+
+		showStackedClearConfirmation(folderId, message, requestData) {
+			const existingHost = document.getElementById("mpv-page-level-modal-host");
+			
+			if (existingHost && existingHost.dataset.folderId === folderId) {
+				const shadow = existingHost.shadowRoot;
+				const messageEl = shadow.getElementById("page-level-modal-message");
+				const contentEl = shadow.querySelector(".modal-content");
+				
+				if (messageEl) {
+					messageEl.textContent = message;
+					// Subtle visual feedback that the stack grew
+					if (contentEl) {
+						contentEl.style.transition = "transform 0.1s ease";
+						contentEl.style.transform = "scale(1.02)";
+						setTimeout(() => contentEl.style.transform = "scale(1)", 100);
+					}
+				}
+				
+				// Update the data on the host
+				existingHost.dataset.latestRequest = JSON.stringify(requestData);
+				return Promise.resolve(null);
+			}
+
+			return new Promise((resolve) => {
+				let modalHostRef = null;
+
+				this.showPageLevelConfirmation(message).then((confirmed) => {
+					// Use the reference we captured during creation
+					let dataToReturn = requestData;
+					
+					if (modalHostRef && modalHostRef.dataset.latestRequest) {
+						try {
+							dataToReturn = JSON.parse(modalHostRef.dataset.latestRequest);
+						} catch (e) {
+							console.error("[Controller] Failed to parse latestRequest data:", e);
+						}
+					}
+					
+					// Return the latest data if confirmed, otherwise false
+					resolve(confirmed ? dataToReturn : false);
+				});
+				
+				// Capture and tag the host immediately after creation
+				modalHostRef = document.getElementById("mpv-page-level-modal-host");
+				if (modalHostRef) {
+					modalHostRef.dataset.folderId = folderId;
+					modalHostRef.dataset.latestRequest = JSON.stringify(requestData);
+				}
+			});
 		}
 
 		showPageLevelConfirmation(message) {

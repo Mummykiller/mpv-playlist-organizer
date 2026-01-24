@@ -6,6 +6,29 @@ import { broadcastLog, broadcastToTabs } from "./messaging.js";
 import { storage } from "./storage_instance.js";
 import { broadcastPlaylistState } from "./ui_broadcaster.js";
 
+function normalizeRequest(request) {
+	if (!request || typeof request !== "object") return request;
+	
+	const mapping = {
+		folder_id: "folderId",
+		item_id: "itemId",
+		played_ids: "playedIds",
+		session_ids: "sessionIds",
+		is_running: "isRunning",
+		is_paused: "isPaused",
+		is_idle: "isIdle",
+		last_played_id: "lastPlayedId"
+	};
+
+	const normalized = { ...request };
+	for (const [snake, camel] of Object.entries(mapping)) {
+		if (request[snake] !== undefined && request[camel] === undefined) {
+			normalized[camel] = request[snake];
+		}
+	}
+	return normalized;
+}
+
 /**
  * Higher-order function to create standardized request handlers.
  * 
@@ -30,9 +53,10 @@ export function createHandler(logic, options = {}) {
 		onFinally = null
 	} = options;
 
-	return async (request = {}, sender = {}) => {
+	return async (rawRequest = {}, sender = {}) => {
+		const request = normalizeRequest(rawRequest);
 		const context = { 
-			request: request || {}, 
+			request: request, 
 			sender: sender || {}, 
 			folderId: request?.folderId || request?.data?.folderId 
 		};
