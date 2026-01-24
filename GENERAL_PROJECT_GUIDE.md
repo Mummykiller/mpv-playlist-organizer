@@ -65,3 +65,10 @@ The project is a hybrid media management application consisting of three distinc
 - **MPV Reload:** Restart the player instance or reload the script in MPV.
 - **Diagnostics:** Use `installer.py` -> "Run Diagnostics".
 - **Legacy Tests:** `testing_tools/test_bridge_protocol.py` is deprecated.
+
+## 8. JavaScript Build Process
+The project uses a custom Python script to maintain compatibility between ES Modules (Background) and Global Scope (Content Scripts).
+
+- **Source of Truth:** Always edit the `*.module.js` files in `utils/`.
+- **Generation:** Run `python3 testing_tools/generate_js.py` to update the legacy `*.js` files.
+- **Why:** Chrome Content Scripts do not natively support ES Module imports from extension resources without complex bundling. This script "transpiles" modules into namespaced globals (`MPV_INTERNAL`, `MPV_SECURITY`).

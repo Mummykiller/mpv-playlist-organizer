@@ -1,18 +1,17 @@
-/**
- * Shared communication utilities for the MPV Playlist Organizer.
- * Namespaced Global version for Content Scripts.
- *
- * !!! SYNC WARNING !!!
- * This file is the Master Source of Truth for shared logic.
- * Any changes made here MUST be replicated in 'utils/commUtils.module.js'
- * to ensure consistent behavior between Content Scripts and the Background Worker.
- */
+// AUTO-GENERATED from commUtils.module.js. DO NOT EDIT MANUALLY.
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
-
 (() => {
 	const MPV = window.MPV_INTERNAL;
+	/**
+	 * Shared communication utilities for the MPV Playlist Organizer.
+	 * ES Module version for Background/Module contexts.
+	 *
+	 * !!! SOURCE OF TRUTH !!!
+	 * This file is the source for 'utils/commUtils.js'.
+	 * The global version is auto-generated from this file.
+	 */
 
-	MPV.debounce = (func, wait) => {
+	MPV.debounce = function debounce(func, wait) {
 		let timeout;
 		return function executedFunction(...args) {
 			const later = () => {
@@ -22,7 +21,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			clearTimeout(timeout);
 			timeout = setTimeout(later, wait);
 		};
-	};
+	}
 
 	MPV.sendMessageAsync = (payload) =>
 		new Promise((resolve, reject) => {
@@ -41,7 +40,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	 * @param {string} str The string to sanitize.
 	 * @param {boolean} isFilename If true, applies strict filesystem-safe filtering.
 	 */
-	MPV.sanitizeString = (str, isFilename = false) => {
+	MPV.sanitizeString = function sanitizeString(str, isFilename = false) {
 		if (typeof str !== "string") return str;
 		if (isFilename) {
 			// Strict filtering for filenames (strips / \ : * ? " < > | $ ; & ` and newlines)
@@ -50,14 +49,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Minimal filtering for Titles/URLs (strips " ` and newlines)
 			return str.replace(/["`\n\r\t]/g, "").trim();
 		}
-	};
+	}
 
-	MPV.isYouTubeUrl = (url) => {
+	MPV.isYouTubeUrl = function isYouTubeUrl(url) {
 		if (!url || typeof url !== "string") return false;
 		return url.includes("youtube.com/") || url.includes("youtu.be/");
-	};
+	}
 
-	MPV.getYoutubeId = (url) => {
+	MPV.getYoutubeId = function getYoutubeId(url) {
 		if (!url) return null;
 		const videoMatch = url.match(
 			/(?:v=|\/v\/|embed\/|youtu\.be\/|\/shorts\/)([a-zA-Z0-9_-]{11})/,
@@ -66,12 +65,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		const listMatch = url.match(/[?&]list=([a-zA-Z0-9_-]+)/);
 		if (listMatch) return listMatch[1];
 		return null;
-	};
+	}
 
 	/**
 	 * Normalizes YouTube URLs by removing timestamps and other tracking parameters.
 	 */
-	MPV.normalizeYouTubeUrl = (ytUrl) => {
+	MPV.normalizeYouTubeUrl = function normalizeYouTubeUrl(ytUrl) {
 		if (!ytUrl || typeof ytUrl !== "string") return ytUrl;
 		try {
 			const urlObj = new URL(ytUrl);
@@ -85,17 +84,17 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			if (isStandard || isShortLink || isShorts) {
 				// Strip timestamps and index/shuffle parameters that break resume/deduplication logic
-				["t", "index", "start", "ab_channel", "attr_tag"].forEach((p) =>
-					urlObj.searchParams.delete(p),
-				);
+				["t", "index", "start", "ab_channel", "attr_tag"].forEach((p) => {
+					urlObj.searchParams.delete(p);
+				});
 				return urlObj.toString();
 			}
 		} catch (e) {}
 		return ytUrl;
-	};
+	}
 
 	MPV.Logger = class Logger {
-		constructor(tag = "MPV") {
+		constructor(tag = "BG") {
 			this.tag = tag;
 		}
 		_format(msg) {
@@ -119,5 +118,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		debug(msg) {
 			console.debug(this._format(msg));
 		}
-	};
+	}
+
 })();
