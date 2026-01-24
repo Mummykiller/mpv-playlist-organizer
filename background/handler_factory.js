@@ -4,13 +4,13 @@ import { updateContextMenus } from "../utils/contextMenu.js";
 import { debouncedSyncToNativeHostFile } from "./core_services.js";
 import { broadcastLog, broadcastToTabs } from "./messaging.js";
 import { storage } from "./storage_instance.js";
-import { broadcastPlaylistState } from "./handlers/playback.js";
+import { broadcastPlaylistState } from "./ui_broadcaster.js";
 
 /**
  * Higher-order function to create standardized request handlers.
  * 
- * @param {Function} logic - The core action logic. Receives { request, sender, data, folderId }.
- * @param {Object} options - Configuration for side effects.
+ * @param {Function} logic - The core action logic. Receives context object.
+ * @param {Object} options - Configuration for side effects and hooks.
  * @returns {Function} - The async handler function.
  */
 export function createHandler(logic, options = {}) {
@@ -20,35 +20,53 @@ export function createHandler(logic, options = {}) {
 		syncImmediate = false,
 		broadcastFolders = false,
 		broadcastPlaylist = false,
+		broadcastPreferences = false,
 		updateMenus = false,
-		successMessage = null
+		successMessage = null,
+		manualPersistence = false,
+		onBefore = null,
+		onSuccess = null,
+		onError = null,
+		onFinally = null
 	} = options;
 
-	return async (request, sender) => {
+	return async (request = {}, sender = {}) => {
+		const context = { 
+			request: request || {}, 
+			sender: sender || {}, 
+			folderId: request?.folderId || request?.data?.folderId 
+		};
+		
 		try {
-			const folderId = request.folderId || request.data?.folderId;
-			if (requireFolder && !folderId) {
+			if (requireFolder && !context.folderId) {
 				return { success: false, error: "Missing folderId." };
 			}
 
+			// Hook: Before Logic (e.g., for optimistic UI updates)
+			if (onBefore) await onBefore(context);
+
 			// Context Setup: Fetch storage
 			const data = await storage.get();
+			context.data = data;
+			context.storage = storage;
 
 			// Execution: Run the specific logic
-			// Logic should return { success, error, message, ...extra }
-			// It can modify 'data' directly.
-			const result = await logic({ request, sender, data, folderId });
+			const result = await logic(context);
 
 			if (!result || result.success === false) {
-				return result || { success: false, error: "Unknown error in handler logic." };
+				const failResult = result || { success: false, error: "Unknown error in handler logic." };
+				if (onError) await onError(failResult, context);
+				return failResult;
 			}
 
-			// Persistence: Auto-save if logic was successful
-			await storage.set(data, folderId);
+			// Persistence: Auto-save if logic was successful and not manual
+			if (!manualPersistence) {
+				await storage.set(data, context.folderId);
+			}
 
 			// Side-Effects
 			if (syncToNative) {
-				debouncedSyncToNativeHostFile(folderId, syncImmediate);
+				debouncedSyncToNativeHostFile(context.folderId, syncImmediate);
 			}
 
 			if (updateMenus) {
@@ -61,12 +79,16 @@ export function createHandler(logic, options = {}) {
 				broadcastToTabs({ 
 					action: "foldersChanged", 
 					foldersChanged: true, 
-					folderId: result.folderId || folderId 
+					folderId: result.folderId || context.folderId 
 				});
 			}
 
-			if (broadcastPlaylist && folderId) {
-				await broadcastPlaylistState(folderId);
+			if (broadcastPlaylist && (result.folderId || context.folderId)) {
+				await broadcastPlaylistState(result.folderId || context.folderId);
+			}
+
+			if (broadcastPreferences) {
+				broadcastToTabs({ action: "preferences_changed" });
 			}
 
 			if (successMessage || result.message) {
@@ -76,12 +98,22 @@ export function createHandler(logic, options = {}) {
 				});
 			}
 
+			// Hook: Success
+			if (onSuccess) await onSuccess(result, context);
+
 			return { success: true, ...result };
 		} catch (error) {
 			const errorMsg = `Handler Error: ${error.message}`;
 			console.error(`[HandlerFactory] ${errorMsg}`, error);
+			const errorResult = { success: false, error: errorMsg };
+			
 			broadcastLog({ text: `[Background]: ${errorMsg}`, type: "error" });
-			return { success: false, error: errorMsg };
+			
+			if (onError) await onError(errorResult, context);
+			
+			return errorResult;
+		} finally {
+			if (onFinally) await onFinally(context);
 		}
 	};
 }

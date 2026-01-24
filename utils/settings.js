@@ -319,7 +319,7 @@ export class OptionsManager {
 
 		this.debouncedSaveAllPreferences = this._debounce(
 			this.saveAllPreferences.bind(this),
-			400,
+			200,
 		);
 	}
 

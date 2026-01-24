@@ -139,8 +139,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					),
 				last_folder_changed: (req) => this._syncFolderChange(req),
 				log: (req) => this.addLogEntry(req.log),
-				preferences_changed: () =>
-					this.applyInitialState().then(() => this.refreshPlaylist()),
+				preferences_changed: (req) => {
+					if (req.preferences && Object.keys(req.preferences).length > 0) {
+						this.applyPreferences(req.preferences);
+					} else {
+						this.applyInitialState().then(() => this.refreshPlaylist());
+					}
+				},
 				show_confirmation: (req, send) =>
 					this._handleAsyncConfirmation(req, send),
 				show_clear_confirmation: async (req) => {
@@ -337,10 +342,26 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// 1. Visibility
 			if (state.minimized) {
 				this.ui.controllerHost.style.display = "none";
-				this.ui.minimizedHost.style.display = state.settings.show_minimized_stub
-					? "block"
-					: "none";
-				this.validateAndRepositionMinimizedStub();
+				
+				// If stub is disabled, we show nothing (hidden state)
+				// unless we want to force maximize. 
+				// But let's respect the "Show Minimized Stub" setting.
+				if (state.settings.show_minimized_stub === false) {
+					this.ui.minimizedHost.style.display = "none";
+				} else {
+					this.ui.minimizedHost.style.display = "block";
+					
+					// Reset position if it's somehow stuck or hidden
+					if (!this.ui.minimizedHost.style.top || this.ui.minimizedHost.style.top.startsWith("-")) {
+						Object.assign(this.ui.minimizedHost.style, {
+							top: "15px",
+							left: "15px",
+							right: "auto",
+							bottom: "auto"
+						});
+					}
+					this.validateAndRepositionMinimizedStub();
+				}
 			} else {
 				this.ui.minimizedHost.style.display = "none";
 				this.ui.controllerHost.style.display = "block";
@@ -461,6 +482,29 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 				const prefs = response?.preferences || {};
 
+				// Dynamic mapping: Ensure all global keys from background are available in internal state
+				const mappedSettings = {
+					enable_active_item_highlight: true,
+					enable_smart_resume: true,
+					show_minimized_stub: true,
+					show_play_new_button: false,
+					enable_anilist_integration: true,
+					lockAnilistPanel: false,
+					forcePanelAttached: false,
+					anilistAttachOnOpen: true,
+					show_watched_status_gui: true,
+					enable_dblclick_copy: false,
+					show_copy_title_button: false,
+					confirm_clear_playlist: true,
+					confirm_close_mpv: true,
+					confirm_play_new: true,
+					confirm_folder_switch: true,
+					auto_append_on_add: true,
+					live_removal: true,
+					one_click_add: false,
+					...prefs // Overwrite with actual values from background
+				};
+
 				this.state.update(
 					{
 						kb_add_playlist: prefs.kb_add_playlist,
@@ -470,24 +514,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						kb_switch_playlist: prefs.kb_switch_playlist,
 						anilistVisible: prefs.anilistPanelVisible ?? false,
 						anilistImageHeight: prefs.anilist_image_height ?? 126,
-						settings: {
-							enable_active_item_highlight:
-								prefs.enable_active_item_highlight ?? true,
-							enable_smart_resume: prefs.enable_smart_resume ?? true,
-							show_minimized_stub: prefs.show_minimized_stub ?? true,
-							show_play_new_button: prefs.show_play_new_button ?? false,
-							enable_anilist_integration:
-								prefs.enable_anilist_integration ?? true,
-							lockAnilistPanel: prefs.lockAnilistPanel ?? false,
-							forcePanelAttached: prefs.forcePanelAttached ?? false,
-							anilistAttachOnOpen: prefs.anilistAttachOnOpen ?? true,
-							show_watched_status_gui: prefs.show_watched_status_gui ?? true,
-							enable_dblclick_copy: prefs.enable_dblclick_copy ?? false,
-							show_copy_title_button: prefs.show_copy_title_button ?? false,
-							confirm_clear_playlist: prefs.confirm_clear_playlist ?? true,
-							confirm_close_mpv: prefs.confirm_close_mpv ?? true,
-							confirm_play_new: prefs.confirm_play_new ?? true,
-						},
+						settings: mappedSettings,
 						pinned: prefs.pinned ?? false,
 						logVisible: prefs.logVisible ?? true,
 						logFilters: prefs.logFilters ?? { info: true, error: true },
@@ -543,6 +570,48 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this._syncUiToState(this.state.state);
 			} catch (e) {
 				console.error("[UI][Controller] Error applying initial state:", e);
+			}
+		}
+
+		applyPreferences(prefs) {
+			if (!this.ui.shadowRoot || !this.ui.controllerHost) return;
+
+			// Update internal state settings
+			const currentSettings = this.state.state.settings;
+			const newSettings = { ...currentSettings, ...prefs };
+
+			const updateDelta = { settings: newSettings };
+
+			// Handle specific UI changes that need immediate reaction in the state
+			if (prefs.minimized !== undefined) updateDelta.minimized = prefs.minimized;
+			if (prefs.pinned !== undefined) updateDelta.pinned = prefs.pinned;
+			if (prefs.mode !== undefined) {
+				updateDelta.uiMode =
+					prefs.mode === "minimized" ? "full" : prefs.mode || "full";
+			}
+			if (prefs.anilistPanelVisible !== undefined)
+				updateDelta.anilistVisible = prefs.anilistPanelVisible;
+			if (prefs.anilist_image_height !== undefined)
+				updateDelta.anilistImageHeight = prefs.anilist_image_height;
+
+			this.state.update(updateDelta);
+
+			// Re-render playlist if rendering-related settings changed
+			const renderingRelated = [
+				"enable_active_item_highlight",
+				"show_watched_status_gui",
+				"show_copy_title_button",
+				"enable_dblclick_copy",
+			];
+			if (
+				renderingRelated.some((key) => prefs[key] !== undefined) &&
+				this.playlistUI?.currentPlaylist
+			) {
+				this.playlistUI.render(
+					this.playlistUI.currentPlaylist,
+					this.state.state.lastPlayedId,
+					this.state.state.isFolderActive,
+				);
 			}
 		}
 

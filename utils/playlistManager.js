@@ -6,12 +6,14 @@ import { debouncedSyncToNativeHostFile } from "../background/core_services.js";
 import { findM3u8InUrl } from "../background/handlers/m3u8_scanner.js";
 import {
 	getMpvPlaylistCompletedExitCode,
-	getVisualPlaybackState,
 	handleAppend,
-	isFolderActive,
-	broadcastPlaybackState,
-	broadcastPlaylistState,
 } from "../background/handlers/playback.js";
+import {
+	broadcastPlaylistState,
+	broadcastPlaybackState,
+	getVisualPlaybackState,
+	isFolderActive,
+} from "../background/ui_broadcaster.js";
 import { broadcastLog, broadcastToTabs } from "../background/messaging.js";
 import { storage } from "../background/storage_instance.js";
 import {
@@ -19,6 +21,7 @@ import {
 	sanitizeString,
 	sendMessageAsync,
 } from "./commUtils.module.js";
+import { processPlaylistItem } from "./item_processor.js";
 import { nativeLink } from "./nativeLink.js";
 import { createHandler } from "../background/handler_factory.js";
 
@@ -33,18 +36,14 @@ async function addUrlToFolder(
 	sender = null,
 ) {
 	try {
-		const sanitizedUrl = sanitizeString(url);
-		const normalizedUrl = normalizeYouTubeUrl(sanitizedUrl);
-		const sanitizedTitle = sanitizeString(title);
-
 		let data = await storage.get();
 		if (!data.folders[folderId]) {
 			data.folders[folderId] = { playlist: [], last_played_id: null };
 		}
 
 		const playlist = data.folders[folderId].playlist;
-		const duplicateBehavior =
-			data.settings.ui_preferences.global.duplicate_url_behavior || "ask";
+		const duplicateBehavior = data.settings.ui_preferences.global.duplicate_url_behavior || "ask";
+		const normalizedUrl = normalizeYouTubeUrl(sanitizeString(url));
 
 		const isDuplicate = playlist.some(
 			(item) => normalizeYouTubeUrl(item.url) === normalizedUrl,
@@ -72,13 +71,9 @@ async function addUrlToFolder(
 						confirmed = true;
 					}
 				} else {
-					// Try to find target tab for confirmation
 					let targetTabId = originalTab?.id;
 					if (!targetTabId) {
-						const [activeTab] = await chrome.tabs.query({
-							active: true,
-							currentWindow: true,
-						});
+						const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 						targetTabId = activeTab?.id;
 					}
 
@@ -107,42 +102,20 @@ async function addUrlToFolder(
 					return { success: true, message: logMessage };
 				}
 
-				// IMPORTANT: Re-fetch data after async confirmation to avoid race conditions
 				data = await storage.get();
 				if (!data.folders[folderId]) data.folders[folderId] = { playlist: [] };
 			}
 		}
 
-		// Generate a robust unique ID
-		const itemId =
-			typeof crypto !== "undefined" && crypto.randomUUID
-				? crypto.randomUUID()
-				: "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-						const r = (Math.random() * 16) | 0;
-						const v = c === "x" ? r : (r & 0x3) | 0x8;
-						return v.toString(16);
-					});
+		const newItem = processPlaylistItem({ url, title });
+		if (!newItem) return { success: false, error: "Failed to process item." };
 
-		const newItem = {
-			url: normalizedUrl,
-			title: sanitizedTitle,
-			id: itemId,
-			settings: {},
-		};
-
-		// Add to the confirmed fresh data structure
 		data.folders[folderId].playlist.push(newItem);
-
-		// Persist to storage
 		await storage.set(data, folderId);
 
-		// Immediate sync to native host file
 		debouncedSyncToNativeHostFile(folderId, true);
-
-		// Notify all UIs to refresh with unified broadcast
 		await broadcastPlaylistState(folderId, data.folders[folderId].playlist);
 
-		// Trigger live append if MPV is running
 		const { mpv_playback_cache: playbackCache } = await chrome.storage.local.get("mpv_playback_cache");
 		const isMpvAlive = playbackCache && playbackCache.folderId === folderId && (playbackCache.is_running || !playbackCache.isIdle);
 
@@ -153,7 +126,7 @@ async function addUrlToFolder(
 			}).catch(() => {});
 		}
 
-		const logMessage = `[Background]: Added "${sanitizedTitle}" to folder '${folderId}'.`;
+		const logMessage = `[Background]: Added "${newItem.title}" to folder '${folderId}'.`;
 		broadcastLog({ text: logMessage, type: "info" });
 		return { success: true, message: logMessage };
 	} catch (e) {

@@ -5,6 +5,7 @@ import {
 	_syncToNativeHostFile,
 	debouncedSyncToNativeHostFile,
 } from "./background/core_services.js";
+import { createHandler } from "./background/handler_factory.js";
 import * as dependency_anilist_handlers from "./background/handlers/dependency_anilist.js";
 import * as folder_management_handlers from "./background/handlers/folder_management.js";
 import * as import_export_handlers from "./background/handlers/import_export.js";
@@ -13,6 +14,7 @@ import * as playback_handlers from "./background/handlers/playback.js";
 
 // --- Handler Imports ---
 import * as ui_state_handlers from "./background/handlers/ui_state.js";
+import { broadcastPlaylistState, getVisualPlaybackState } from "./background/ui_broadcaster.js";
 import { broadcastLog, broadcastToTabs } from "./background/messaging.js";
 import { storage } from "./background/storage_instance.js";
 import { updateContextMenus } from "./utils/contextMenu.js";
@@ -41,13 +43,11 @@ const actionHandlers = {
 	report_page_url: ui_state_handlers.handleReportPageUrl,
 	set_last_folder_id: ui_state_handlers.handleSetLastFolderId,
 	switch_playlist: ui_state_handlers.handleSwitchPlaylist,
-	get_last_folder_id: async () => {
-		const data = await storage.get();
+	get_last_folder_id: createHandler(async ({ data }) => {
 		return {
-			folderId:
-				data.settings.last_used_folder_id || Object.keys(data.folders)[0],
+			folderId: data.settings.last_used_folder_id || Object.keys(data.folders)[0],
 		};
-	},
+	}),
 	set_ui_preferences: ui_state_handlers.handleSetUiPreferences,
 	get_ui_preferences: ui_state_handlers.handleGetUiPreferences,
 	get_default_automatic_flags: ui_state_handlers.handleGetDefaultAutomaticFlags,
@@ -74,7 +74,7 @@ const actionHandlers = {
 		const folderId = request.folderId;
 		const data = await storage.get();
 		const playlist = folderId ? data.folders[folderId]?.playlist : null;
-		return playback_handlers.getVisualPlaybackState(folderId, playlist);
+		return getVisualPlaybackState(folderId, playlist);
 	},
 	update_item_resume_time: playback_handlers.handleUpdateItemResumeTime,
 	update_item_marked_as_watched:
@@ -303,7 +303,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 		const currentStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
 		
 		if (currentStatus?.is_running) {
-			await playback_handlers.broadcastPlaylistState(currentStatus.folderId);
+			await broadcastPlaylistState(currentStatus.folderId);
 		}
 	} catch (e) {}
 });

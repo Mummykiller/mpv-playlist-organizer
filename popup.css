@@ -300,6 +300,12 @@ button:disabled {
 	border-color: var(--accent-inactive); /* Neutral highlight on hover */
 }
 
+#mini-controller-actions button.active-toggle,
+.control-group button.active-toggle {
+	background-color: var(--accent-primary) !important;
+	color: white;
+}
+
 #mini-controller-actions button:active {
 	transform: scale(0.96);
 	transition-duration: 0.05s;
