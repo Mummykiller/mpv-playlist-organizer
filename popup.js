@@ -122,7 +122,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 				);
 				this.placeholders.status[mode].appendChild(this.sharedElements.status);
 
-				this.sharedElements.settings.style.display = "block";
+				// Only show settings if it was already visible or if we are in full mode
+				if (mode === "full") {
+					this.sharedElements.settings.style.display = "block";
+				}
 			}
 
 			isMiniView() {
@@ -213,16 +216,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const miniFolderManagementControls = document.getElementById(
 			"mini-folder-management-controls",
 		);
-		const btnMiniToggleSettings = document.getElementById(
-			"btn-mini-toggle-settings",
-		);
-		const miniSettingsControls = document.getElementById(
-			"mini-settings-controls",
-		);
+		const btnMiniToggleSettings = document.getElementById("btn-mini-toggle-settings");
+		const miniSettingsControls = document.getElementById("mini-settings-controls");
 		const btnMiniToggleStub = document.getElementById("btn-mini-toggle-stub");
-		const miniNewFolderNameInput = document.getElementById(
-			"mini-new-folder-name",
-		);
+		const miniNewFolderNameInput = document.getElementById("mini-new-folder-name");
 		const miniCreateFolderBtn = document.getElementById(
 			"btn-mini-create-folder",
 		);
@@ -970,19 +967,27 @@ document.addEventListener("DOMContentLoaded", async () => {
 			miniFolderManagementControls.style.display = isVisible ? "none" : "block";
 		});
 		btnMiniToggleSettings.addEventListener("click", () => {
-			const isVisible = miniSettingsControls.style.display === "block";
+			const isVisible = miniSettingsControls.style.display !== "none";
 			miniSettingsControls.style.display = isVisible ? "none" : "block";
+			
+			// Ensure shared elements are visible when container opens
+			if (!isVisible) {
+				uiManager.sharedElements.settings.style.display = "block";
+			}
 		});
 		if (btnMiniToggleStub) {
 			btnMiniToggleStub.addEventListener("click", async () => {
-				const prefs = await sendMessageAsync({ action: "get_ui_preferences" });
-				const currentVal = prefs?.preferences?.show_minimized_stub ?? true;
+				const currentVal = cachedPrefs?.show_minimized_stub ?? true;
 				const newVal = !currentVal;
+				
+				// Optimistic local update
+				if (cachedPrefs) cachedPrefs.show_minimized_stub = newVal;
+				btnMiniToggleStub.classList.toggle("active-toggle", newVal);
+
 				await sendMessageAsync({
 					action: "set_ui_preferences",
 					preferences: { show_minimized_stub: newVal },
 				});
-				// UI update will happen via preferences_changed listener
 			});
 		}
 
@@ -1895,7 +1900,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					optionsManager.updateAllPreferencesUI(prefs);
 					if (btnMiniToggleStub) {
 						const isStubEnabled = prefs.show_minimized_stub ?? true;
-						btnMiniToggleStub.style.opacity = isStubEnabled ? "1" : "0.5";
+						btnMiniToggleStub.classList.toggle("active-toggle", isStubEnabled);
 					}
 					if (prefs.kb_open_popup)
 						popupKeybinds.openPopup = prefs.kb_open_popup;
@@ -2005,6 +2010,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 							});
 							uiState = uiStateResponse?.state;
 							uiManager.determineAndSetInitialMode(isHttp, uiState, prefs);
+
+							if (uiState?.preferences) {
+								cachedPrefs = uiState.preferences;
+								optionsManager.updateAllPreferencesUI(uiState.preferences);
+								
+								// Update quick toggles
+								if (btnMiniToggleStub) {
+									const isStubEnabled = uiState.preferences.show_minimized_stub ?? true;
+									btnMiniToggleStub.classList.toggle("active-toggle", isStubEnabled);
+								}
+							}
 
 							// Update on-page buttons visibility
 							showOnPageControllerBtn.style.display = "block";
@@ -2143,7 +2159,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			// If preferences changed in another context (e.g., dragging the anilist panel), update our UI.
 			if (request.action === "preferences_changed") {
-				sendMessageAsync({ action: "get_ui_preferences" })
+				const getPrefs = async () => {
+					const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+					const tabId = tabs && tabs.length > 0 ? tabs[0].id : null;
+					return sendMessageAsync({ action: "get_ui_preferences", tabId });
+				};
+
+				getPrefs()
 					.then((response) => {
 						if (response?.success && response.preferences) {
 							cachedPrefs = response.preferences;
@@ -2152,7 +2174,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 						if (btnMiniToggleStub && response?.preferences) {
 							const isStubEnabled =
 								response.preferences.show_minimized_stub ?? true;
-							btnMiniToggleStub.style.opacity = isStubEnabled ? "1" : "0.5";
+							btnMiniToggleStub.classList.toggle("active-toggle", isStubEnabled);
 						}
 					})
 					.catch((e) =>

@@ -3,6 +3,7 @@
 import { sanitizeString } from "../../utils/commUtils.module.js";
 import { storage } from "../storage_instance.js";
 import { createHandler } from "../handler_factory.js";
+import { broadcastPlaylistState } from "../ui_broadcaster.js";
 
 export const handleCreateFolder = createHandler(async ({ request, data }) => {
 	let { folderId } = request;
@@ -29,14 +30,13 @@ export const handleCreateFolder = createHandler(async ({ request, data }) => {
 	syncToNative: true
 });
 
-export async function handleGetAllFolderIds() {
-	const data = await storage.get();
+export const handleGetAllFolderIds = createHandler(async ({ data }) => {
 	return {
 		success: true,
 		folderIds: data.folderOrder || Object.keys(data.folders),
 		lastUsedFolderId: data.settings.last_used_folder_id,
 	};
-}
+});
 
 export const handleRemoveFolder = createHandler(async ({ request, data }) => {
 	const { folderId } = request;
@@ -45,21 +45,35 @@ export const handleRemoveFolder = createHandler(async ({ request, data }) => {
 	if (!data.folders[folderId])
 		return { success: false, error: "Folder not found." };
 
-	delete data.folders[folderId];
-	if (data.folderOrder)
-		data.folderOrder = data.folderOrder.filter((id) => id !== folderId);
+	const wasActive = data.settings.last_used_folder_id === folderId;
 
-	if (data.settings.last_used_folder_id === folderId) {
-		data.settings.last_used_folder_id = data.folderOrder
+	delete data.folders[folderId];
+	if (data.folderOrder) {
+		data.folderOrder = data.folderOrder.filter((id) => id !== folderId);
+	}
+
+	// Ensure at least one folder exists
+	if (Object.keys(data.folders).length === 0) {
+		const defaultId = "Playlist 1";
+		data.folders[defaultId] = { playlist: [] };
+		data.folderOrder = [defaultId];
+		data.settings.last_used_folder_id = defaultId;
+	} else if (wasActive) {
+		data.settings.last_used_folder_id = data.folderOrder && data.folderOrder.length > 0
 			? data.folderOrder[0]
 			: Object.keys(data.folders)[0];
 	}
 
-	return { success: true };
+	return { success: true, folderChanged: wasActive, newFolderId: data.settings.last_used_folder_id };
 }, {
 	broadcastFolders: true,
 	updateMenus: true,
-	syncToNative: true
+	syncToNative: true,
+	onSuccess: async (result) => {
+		if (result.folderChanged) {
+			await broadcastPlaylistState(result.newFolderId, null, "last_folder_changed");
+		}
+	}
 });
 
 export const handleRenameFolder = createHandler(async ({ request, data }) => {
