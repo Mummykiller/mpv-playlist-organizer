@@ -178,10 +178,9 @@ export async function handleSetLastFolderId(request) {
 		const data = await storage.get();
 		data.settings.last_used_folder_id = request.folderId;
 		await storage.set(data);
-		broadcastToTabs({
-			action: "last_folder_changed",
-			folderId: request.folderId,
-		});
+		
+		await playback_handlers.broadcastPlaylistState(request.folderId, null, "last_folder_changed");
+		
 		await updateContextMenus(storage);
 		return { success: true };
 	}
@@ -203,23 +202,7 @@ export async function handleSwitchPlaylist() {
 	data.settings.last_used_folder_id = nextFolderId;
 	await storage.set(data);
 
-	const folder = data.folders[nextFolderId] || { playlist: [] };
-	const mpvStatus = await playback_handlers
-		.handleIsMpvRunning()
-		.catch(() => ({ is_running: false }));
-	const isFolderActive = !!(
-		mpvStatus?.is_running &&
-		(mpvStatus.folderId === nextFolderId ||
-			playback_handlers.isFolderActive(nextFolderId))
-	);
-
-	broadcastToTabs({
-		action: "last_folder_changed",
-		folderId: nextFolderId,
-		playlist: folder.playlist,
-		lastPlayedId: folder.last_played_id,
-		isFolderActive: isFolderActive,
-	});
+	await playback_handlers.broadcastPlaylistState(nextFolderId, null, "last_folder_changed");
 
 	updateContextMenus(storage).catch((e) =>
 		console.error("Failed to update context menus:", e),

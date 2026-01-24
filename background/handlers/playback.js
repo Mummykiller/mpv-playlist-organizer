@@ -274,11 +274,7 @@ export async function handleMpvQuitting(data) {
 	
 	broadcastPlaybackState(folderId, { isClosing: true, isRunning: false });
 
-	broadcastToTabs({
-		action: "render_playlist",
-		folderId: folderId,
-		isClosing: true,
-	});
+	await broadcastPlaylistState(folderId, null, "render_playlist");
 
 	// --- Early Clear/Confirm Logic ---
 	if (isNaturalCompletion && folderId) {
@@ -485,15 +481,7 @@ export async function handleMpvExited(data) {
 	}
 
 	// ALWAYS broadcast a refresh to all tabs after an exit to ensure UI state (like active highlight) is updated.
-	const finalData = await storage.get();
-	const folder = finalData.folders[folderId] || { playlist: [] };
-	broadcastToTabs({
-		action: "render_playlist",
-		folderId: folderId,
-		playlist: folder.playlist,
-		lastPlayedId: folder.last_played_id,
-		isFolderActive: false,
-	});
+	await broadcastPlaylistState(folderId);
 }
 
 async function clearFolderPlaylist(folderId, options = {}) {
@@ -529,12 +517,7 @@ async function clearFolderPlaylist(folderId, options = {}) {
 
 		await storage.set(storageData, folderId);
 		debouncedSyncToNativeHostFile(true);
-		broadcastToTabs({
-			action: "render_playlist",
-			folderId: folderId,
-			playlist: folder.playlist,
-			isFolderActive: false,
-		});
+		await broadcastPlaylistState(folderId, folder.playlist);
 		return true;
 	}
 	return false;
@@ -877,11 +860,7 @@ export async function handlePlayM3U(request) {
 						response.playlist_items[0].id;
 				}
 				await storage.set(storageData, folderId);
-				broadcastToTabs({
-					action: "render_playlist",
-					folderId: folderId,
-					playlist: response.playlist_items,
-				});
+				await broadcastPlaylistState(folderId, response.playlist_items);
 			}
 		}
 
@@ -930,24 +909,7 @@ export async function handleUpdateLastPlayed(data) {
 
 	const finalData = await storage.get();
 	if (finalData.folders[folderId]) {
-		// Calculate full visual state for a complete broadcast
-		const {
-			isActive,
-			isPaused,
-			needsAppend,
-			lastPlayedId,
-		} = await getVisualPlaybackState(folderId, finalData.folders[folderId].playlist);
-
-		// Broadcast the update so the UI highlights the new item immediately
-		broadcastToTabs({
-			action: "render_playlist",
-			folderId: folderId,
-			playlist: finalData.folders[folderId].playlist,
-			lastPlayedId: lastPlayedId || itemId,
-			isFolderActive: isActive,
-			isPaused: isPaused,
-			needsAppend: needsAppend,
-		});
+		await broadcastPlaylistState(folderId, finalData.folders[folderId].playlist);
 	}
 }
 
@@ -969,6 +931,30 @@ export async function handleUpdateItemResumeTime(data) {
 			}
 		}
 	}
+}
+
+/**
+ * Broadcasts a full playlist update to all UI components.
+ * Standardizes the payload structure to prevent UI flicker/mismatches.
+ */
+export async function broadcastPlaylistState(folderId, playlist = null, action = "render_playlist") {
+	const data = await storage.get();
+	const targetPlaylist = playlist || data.folders[folderId]?.playlist || [];
+	
+	const { isActive, isPaused, needsAppend, lastPlayedId } = 
+		await getVisualPlaybackState(folderId, targetPlaylist);
+
+	broadcastToTabs({
+		action: action,
+		folderId: folderId,
+		playlist: targetPlaylist,
+		lastPlayedId: lastPlayedId || data.folders[folderId]?.last_played_id,
+		isFolderActive: isActive,
+		isPaused: isPaused,
+		needsAppend: needsAppend,
+	});
+
+	broadcastPlaybackState(folderId, { needsAppend });
 }
 
 /**
@@ -1042,22 +1028,7 @@ export async function handlePlaybackStatusChanged(data) {
 	const storageData = await storage.get();
 	const folder = storageData.folders[folderId];
 	if (folder) {
-		const {
-			isActive,
-			isPaused: vPaused,
-			needsAppend,
-			lastPlayedId: vLastPlayedId,
-		} = await getVisualPlaybackState(folderId, folder.playlist);
-
-		broadcastToTabs({
-			action: "render_playlist",
-			folderId: folderId,
-			playlist: folder.playlist,
-			lastPlayedId: vLastPlayedId || folder.last_played_id,
-			isFolderActive: isActive,
-			isPaused: vPaused,
-			needsAppend: needsAppend,
-		});
+		await broadcastPlaylistState(folderId, folder.playlist);
 	}
 }
 
@@ -1078,22 +1049,7 @@ export async function handleUpdateItemMarkedAsWatched(data) {
 				await storage.set(storageData, folderId);
 
 				// Broadcast update so all UI instances refresh (Tabs + Popup)
-				const {
-					isActive,
-					isPaused,
-					needsAppend,
-					lastPlayedId,
-				} = await getVisualPlaybackState(folderId, folder.playlist);
-
-				broadcastToTabs({
-					action: "render_playlist",
-					folderId: folderId,
-					playlist: folder.playlist,
-					lastPlayedId: lastPlayedId || folder.last_played_id,
-					isFolderActive: isActive,
-					isPaused: isPaused,
-					needsAppend: needsAppend,
-				});
+				await broadcastPlaylistState(folderId, folder.playlist);
 				break;
 			}
 		}
@@ -1128,11 +1084,7 @@ export async function handleAppend(request) {
 export async function handleCloseMpv(request) {
 	const folderId = request?.folderId;
 	// Immediate UI feedback
-	broadcastToTabs({
-		action: "render_playlist",
-		folderId: folderId,
-		isClosing: true,
-	});
+	await broadcastPlaylistState(folderId, null, "render_playlist");
 	return nativeLink.closeMpv(folderId);
 }
 
@@ -1241,14 +1193,7 @@ export function handleSessionRestored(request) {
 				storage.set(storageData, folderId); // Save async
 			}
 
-			broadcastToTabs({
-				action: "render_playlist",
-				folderId: folderId,
-				playlist: folder.playlist,
-				lastPlayedId: lastPlayedId,
-				isFolderActive: true,
-				isClosing: false,
-			});
+			broadcastPlaylistState(folderId, folder.playlist);
 		});
 	}
 }

@@ -1,12 +1,10 @@
 // background/handlers/folder_management.js
 
 import { sanitizeString } from "../../utils/commUtils.module.js";
-import { updateContextMenus } from "../../utils/contextMenu.js";
-import { debouncedSyncToNativeHostFile } from "../core_services.js";
-import { broadcastToTabs } from "../messaging.js";
 import { storage } from "../storage_instance.js";
+import { createHandler } from "../handler_factory.js";
 
-export async function handleCreateFolder(request) {
+export const handleCreateFolder = createHandler(async ({ request, data }) => {
 	let { folderId } = request;
 	if (!folderId) return { success: false, error: "No folder name provided." };
 
@@ -14,7 +12,6 @@ export async function handleCreateFolder(request) {
 	if (!folderId)
 		return { success: false, error: "Invalid folder name after sanitization." };
 
-	const data = await storage.get();
 	if (data.folders[folderId])
 		return { success: false, error: "Folder already exists." };
 
@@ -22,13 +19,15 @@ export async function handleCreateFolder(request) {
 	if (!data.folderOrder) data.folderOrder = Object.keys(data.folders);
 	if (!data.folderOrder.includes(folderId)) data.folderOrder.push(folderId);
 
-	await storage.set(data);
-	broadcastToTabs({ action: "foldersChanged", folderId: folderId });
-	await updateContextMenus(storage);
-	debouncedSyncToNativeHostFile(folderId);
+	// Ensure the UI stays on the newly created folder
+	data.settings.last_used_folder_id = folderId;
 
 	return { success: true, folderId };
-}
+}, {
+	broadcastFolders: true,
+	updateMenus: true,
+	syncToNative: true
+});
 
 export async function handleGetAllFolderIds() {
 	const data = await storage.get();
@@ -39,11 +38,10 @@ export async function handleGetAllFolderIds() {
 	};
 }
 
-export async function handleRemoveFolder(request) {
+export const handleRemoveFolder = createHandler(async ({ request, data }) => {
 	const { folderId } = request;
 	if (!folderId) return { success: false, error: "No folder ID provided." };
 
-	const data = await storage.get();
 	if (!data.folders[folderId])
 		return { success: false, error: "Folder not found." };
 
@@ -57,24 +55,23 @@ export async function handleRemoveFolder(request) {
 			: Object.keys(data.folders)[0];
 	}
 
-	await storage.set(data);
-	broadcastToTabs({ action: "foldersChanged" });
-	await updateContextMenus(storage);
-
-	// For removal, we trigger a full sync to ensure the host is aware of the deletion
-	debouncedSyncToNativeHostFile();
-
 	return { success: true };
-}
+}, {
+	broadcastFolders: true,
+	updateMenus: true,
+	syncToNative: true
+});
 
-export async function handleRenameFolder(request) {
-	let { oldId, newId } = request;
+export const handleRenameFolder = createHandler(async ({ request, data }) => {
+	let { oldFolderId, newFolderId } = request;
+	let oldId = oldFolderId || request.oldId;
+	let newId = newFolderId || request.newId;
+
 	if (!oldId || !newId) return { success: false, error: "Missing folder IDs." };
 
 	newId = sanitizeString(newId, true);
 	if (!newId) return { success: false, error: "Invalid new folder name." };
 
-	const data = await storage.get();
 	if (!data.folders[oldId])
 		return { success: false, error: "Folder not found." };
 	if (data.folders[newId])
@@ -92,25 +89,21 @@ export async function handleRenameFolder(request) {
 		data.settings.last_used_folder_id = newId;
 	}
 
-	await storage.set(data);
-	broadcastToTabs({ action: "foldersChanged", folderId: newId });
-	await updateContextMenus(storage);
-	debouncedSyncToNativeHostFile();
-
 	return { success: true, folderId: newId };
-}
+}, {
+	broadcastFolders: true,
+	updateMenus: true,
+	syncToNative: true
+});
 
-export async function handleSetFolderOrder(request) {
+export const handleSetFolderOrder = createHandler(async ({ request, data }) => {
 	const { order } = request;
 	if (!order) return { success: false, error: "No order provided." };
 
-	const data = await storage.get();
 	data.folderOrder = order;
-
-	await storage.set(data);
-	broadcastToTabs({ action: "foldersChanged" });
-	await updateContextMenus(storage);
-	debouncedSyncToNativeHostFile();
-
 	return { success: true };
-}
+}, {
+	broadcastFolders: true,
+	updateMenus: true,
+	syncToNative: true
+});
