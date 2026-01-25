@@ -1812,6 +1812,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		);
 		miniCloseMpvBtn.addEventListener("click", handleMiniCloseMpv);
 
+		// Quick Action Bar Listeners
+		document.querySelectorAll(".quick-action-btn").forEach((btn) => {
+			btn.addEventListener("click", () => {
+				console.log(`Quick Action ${btn.textContent} clicked`);
+			});
+		});
+
 		const popupKeybinds = { openPopup: null };
 
 		/**
