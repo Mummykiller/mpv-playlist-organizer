@@ -70,6 +70,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.fullContainer.removeChild(this.fullContainer.lastChild);
 			}
 
+			this._renderQuickActions();
+
 			if (playlist && playlist.length > 0) {
 				const highlightEnabled =
 					this.controller.state.state.settings?.enable_active_item_highlight ??
@@ -175,6 +177,25 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.fullContainer.scrollTop = scrollPosition;
 			}
 			this.controller.updateAddButtonState();
+		}
+
+		_renderQuickActions() {
+			const bar = this.uiManager.shadowRoot?.getElementById("quick-actions-bar");
+			if (!bar) return;
+			
+			bar.innerHTML = "";
+			bar.className = "quick-actions-bar";
+			["A", "B", "C", "D"].forEach((label) => {
+				const btn = document.createElement("button");
+				btn.className = "quick-action-btn";
+				btn.textContent = label;
+				btn.title = "Placeholder " + label;
+				btn.onclick = (e) => {
+					e.stopPropagation();
+					console.log(`Quick Action ${label} clicked`);
+				};
+				bar.appendChild(btn);
+			});
 		}
 
 		/**

@@ -1318,6 +1318,44 @@ button:disabled {
 	padding-left: 12px;
 }
 
+/* --- Quick Action Bar --- */
+.quick-actions-bar {
+	display: flex;
+	gap: 6px;
+	margin-bottom: 8px;
+	justify-content: space-between;
+	align-items: center;
+}
+
+.quick-action-btn {
+	background-color: var(--bg-tertiary);
+	color: var(--text-secondary);
+	border: 1px solid var(--border-primary);
+	border-radius: 4px;
+	padding: 4px 8px;
+	font-size: 11px;
+	font-weight: 700;
+	cursor: pointer;
+	transition: all var(--transition-speed) ease;
+	box-shadow: none;
+	min-width: 24px;
+	flex: 1; /* Stretch buttons */
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.quick-action-btn:hover {
+	background-color: var(--bg-tertiary);
+	border-color: var(--accent-primary);
+	color: var(--text-primary);
+	box-shadow: 0 0 4px rgba(88, 101, 242, 0.4);
+}
+
+.quick-action-btn:active {
+	transform: scale(0.95);
+}
+
 /* --- New Playlist Styles for Popup --- */
 .playlist-container {
 	border: 1px solid var(--border-primary);
