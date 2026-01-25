@@ -76,6 +76,7 @@ class VolatileCookieManager:
         extracts cookies, then cleans up the shadow copy.
         """
         import shutil
+        import glob
         
         system = platform.system()
         user_home = os.path.expanduser("~")
@@ -83,25 +84,93 @@ class VolatileCookieManager:
         # Determine the database path based on OS and browser
         db_rel_path = None
         if system == "Linux":
-            base = os.path.join(user_home, ".config")
-            mapping = {
-                "chrome": "google-chrome/Default/Cookies",
-                "brave": "BraveSoftware/Brave-Browser/Default/Cookies",
-                "edge": "microsoft-edge/Default/Cookies",
-                "chromium": "chromium/Default/Cookies",
-                "vivaldi": "vivaldi/Default/Cookies",
-                "opera": "opera/Cookies"
-            }
-            db_rel_path = os.path.join(base, mapping.get(browser.lower(), ""))
+            # Search candidates for Linux (Standard, Flatpak, Snap)
+            bases = []
+            if browser.lower() == "chrome":
+                bases = [
+                    os.path.join(user_home, ".config/google-chrome"),
+                    os.path.join(user_home, ".var/app/com.google.Chrome/config/google-chrome")
+                ]
+            elif browser.lower() == "brave":
+                bases = [
+                    os.path.join(user_home, ".config/BraveSoftware/Brave-Browser"),
+                    os.path.join(user_home, ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser")
+                ]
+            elif browser.lower() == "chromium":
+                bases = [
+                    os.path.join(user_home, ".config/chromium"),
+                    os.path.join(user_home, "snap/chromium/common/chromium"),
+                    os.path.join(user_home, ".var/app/org.chromium.Chromium/config/chromium")
+                ]
+            elif browser.lower() == "edge":
+                bases = [
+                    os.path.join(user_home, ".config/microsoft-edge"),
+                    os.path.join(user_home, ".var/app/com.microsoft.Edge/config/microsoft-edge")
+                ]
+            
+            # Find all potential Cookies files in Default or Profile *
+            candidates = []
+            for base in bases:
+                for profile_pat in ["Default", "Profile *"]:
+                    # Profile-relative path to Cookies
+                    pat = os.path.join(base, profile_pat, "Cookies")
+                    matches = glob.glob(pat)
+                    candidates.extend(matches)
+            
+            # Use the first one that exists
+            for path in candidates:
+                if os.path.exists(path):
+                    db_rel_path = path
+                    break
+                    
+            if not db_rel_path:
+                # Fallback to the old simple mapping if no specific candidate matched
+                base = os.path.join(user_home, ".config")
+                mapping = {
+                    "chrome": "google-chrome/Default/Cookies",
+                    "brave": "BraveSoftware/Brave-Browser/Default/Cookies",
+                    "edge": "microsoft-edge/Default/Cookies",
+                    "chromium": "chromium/Default/Cookies",
+                    "vivaldi": "vivaldi/Default/Cookies",
+                    "opera": "opera/Cookies"
+                }
+                db_rel_path = os.path.join(base, mapping.get(browser.lower(), ""))
         elif system == "Windows":
             base = os.environ.get('LOCALAPPDATA', "")
-            mapping = {
-                "chrome": "Google/Chrome/User Data/Default/Network/Cookies",
-                "brave": "BraveSoftware/Brave-Browser/User Data/Default/Network/Cookies",
-                "edge": "Microsoft/Edge/User Data/Default/Network/Cookies",
-                "vivaldi": "Vivaldi/User Data/Default/Network/Cookies"
-            }
-            db_rel_path = os.path.join(base, mapping.get(browser.lower(), ""))
+            
+            # Windows Profile Patterns
+            win_bases = []
+            if browser.lower() == "chrome":
+                win_bases = [os.path.join(base, "Google/Chrome/User Data")]
+            elif browser.lower() == "brave":
+                win_bases = [os.path.join(base, "BraveSoftware/Brave-Browser/User Data")]
+            elif browser.lower() == "edge":
+                win_bases = [os.path.join(base, "Microsoft/Edge/User Data")]
+            elif browser.lower() == "vivaldi":
+                win_bases = [os.path.join(base, "Vivaldi/User Data")]
+            
+            candidates = []
+            for w_base in win_bases:
+                for profile_pat in ["Default", "Profile *"]:
+                    # Windows paths often have Cookies under Network subfolder in newer versions
+                    pat_new = os.path.join(w_base, profile_pat, "Network/Cookies")
+                    pat_old = os.path.join(w_base, profile_pat, "Cookies")
+                    candidates.extend(glob.glob(pat_new))
+                    candidates.extend(glob.glob(pat_old))
+
+            for path in candidates:
+                if os.path.exists(path):
+                    db_rel_path = path
+                    break
+
+            if not db_rel_path:
+                mapping = {
+                    "chrome": "Google/Chrome/User Data/Default/Network/Cookies",
+                    "brave": "BraveSoftware/Brave-Browser/User Data/Default/Network/Cookies",
+                    "edge": "Microsoft/Edge/User Data/Default/Network/Cookies",
+                    "vivaldi": "Vivaldi/User Data/Default/Network/Cookies"
+                }
+                db_rel_path = os.path.join(base, mapping.get(browser.lower(), ""))
 
         if not db_rel_path or not os.path.exists(db_rel_path):
             logging.debug(f"Shadow Copy: Could not locate database for {browser} at {db_rel_path}")

@@ -61,7 +61,12 @@ SAFE_MPV_FLAGS_ALLOWLIST = {
 }
 
 def is_safe_url(url):
-    """Validates a URL against SSRF attacks and unsafe protocols."""
+    """
+    Validates a URL against SSRF attacks and unsafe protocols.
+    NOTE: This check is subject to TOCTOU (DNS Rebinding) if the caller resolves 
+    the hostname again during the actual fetch. Secure implementations should 
+    pin the resolved IP or use a fetcher that respects the validated IP.
+    """
     if not url or not isinstance(url, str):
         return False
         
@@ -80,7 +85,17 @@ def is_safe_url(url):
         if not hostname:
             return True # Local file or similar
 
-        # Resolve hostname to IP
+        # 1. Direct IP Check
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                logging.warning(f"Security: Direct IP SSRF Block for {hostname}")
+                return False
+        except ValueError:
+            # Not a direct IP, continue to resolution
+            pass
+
+        # 2. Resolution Check
         try:
             ip_str = socket.gethostbyname(hostname)
         except socket.gaierror:
@@ -138,7 +153,10 @@ def sanitize_ytdlp_options(options_str):
         clean_key = key.strip().lower().lstrip('-')
         
         if clean_key in YTDLP_SAFE_FLAGS_ALLOWLIST:
-            safe_options.append(f"{key.strip()}={value}")
+            # Sanitize value to prevent shell injection or option breaking
+            # We strip characters that could be used to chain commands or break out of strings
+            clean_value = value.replace('"', '').replace("'", "").replace(';', '').replace('&', '').replace('|', '').replace('`', '').replace('\n', '').replace('\r', '')
+            safe_options.append(f"{key.strip()}={clean_value}")
         else:
             logging.warning(f"Security: Removed unsafe yt-dlp flag '{clean_key}'")
         
@@ -210,15 +228,18 @@ def validate_payload(data):
     
     return True, None
 
-def mask_path(text, data_dir, script_dir):
+def mask_path(text, data_dir, script_dir, home_dir=None):
     """Masks system paths in logs/errors to prevent info leakage."""
     if not text or not isinstance(text, str):
         return text
     
+    if home_dir is None:
+        home_dir = os.path.expanduser("~")
+    
     replacements = [
         (data_dir, "<DATA_DIR>"),
         (script_dir, "<APP_DIR>"),
-        (os.path.expanduser("~"), "<HOME>")
+        (home_dir, "<HOME>")
     ]
     # Replace longest paths first to avoid partial masking
     for original, placeholder in sorted(replacements, key=lambda x: len(x[0]), reverse=True):

@@ -34,7 +34,8 @@ class PlaybackHandler(BaseHandler):
         elif input_type == 'm3u':
             m3u_data = request.m3u_data
             if not m3u_data or 'value' not in m3u_data:
-                return native_link.failure("Missing M3U data.")
+                msg = "Missing M3U data."
+                return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
             raw_input = m3u_data['value']
         
         # Resolve to standard list of items
@@ -43,7 +44,8 @@ class PlaybackHandler(BaseHandler):
         )
         
         if not items:
-            return native_link.failure("Could not resolve any playable items.")
+            msg = "Could not resolve any playable items."
+            return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
 
         # 2. Active Session Pre-check (Already Active / Pause Cycle)
         if not request.play_new_instance and self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id:
@@ -154,11 +156,18 @@ class PlaybackHandler(BaseHandler):
             def process_wrapper(item):
                 # Direct enrichment without folder context overhead
                 return self.item_processor.enrich_single_item(
-                    item, folder_id, settings=settings, session=self.mpv_session
+                    item, folder_id, 
+                    session_cookies=self.mpv_session.session_cookies, 
+                    sync_lock=self.mpv_session.sync_lock,
+                    settings=settings, 
+                    session=self.mpv_session
                 )
             results = list(executor.map(process_wrapper, items_to_process))
             for processed_list in results:
                 final_processed_items.extend(processed_list)
+        
+        # Filter out empty results (e.g. enrichment failures that returned empty list)
+        final_processed_items = [i for i in final_processed_items if i]
 
         if not final_processed_items:
             return native_link.success(message="No new items to append.")
@@ -251,7 +260,8 @@ class PlaybackHandler(BaseHandler):
         last_played_id = None
         if self.mpv_session.playlist_tracker:
             last_played_id = getattr(self.mpv_session.playlist_tracker, 'last_played_id', None)
-        if not last_played_id and self.mpv_session.playlist:
+        
+        if not last_played_id:
             last_played_id = getattr(self.mpv_session, 'last_played_id_cache', None)
 
         return native_link.success({

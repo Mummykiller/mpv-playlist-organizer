@@ -194,6 +194,36 @@ const DOMAIN_SPECIFIC_KEYS = [
 	"anilistPanelSize",
 ];
 
+// Settings that are strictly UI-side and should not be synced to the native host
+const UI_ONLY_KEYS = [
+	...DOMAIN_SPECIFIC_KEYS,
+	"logVisible",
+	"show_play_new_button",
+	"duplicate_url_behavior",
+	"auto_append_on_add",
+	"live_removal",
+	"confirm_remove_folder",
+	"confirm_clear_playlist",
+	"confirm_close_mpv",
+	"confirm_play_new",
+	"confirm_folder_switch",
+	"enable_dblclick_copy",
+	"anilist_image_height",
+	"lockAnilistPanel",
+	"forcePanelAttached",
+	"anilistAttachOnOpen",
+	"popup_width",
+	"show_watched_status_gui",
+	"show_minimized_stub",
+	"restricted_domains",
+	"kb_add_playlist",
+	"kb_play_playlist",
+	"kb_toggle_controller",
+	"kb_switch_playlist",
+	"kb_open_popup",
+	"dependencyStatus",
+];
+
 export const handleGetUiPreferences = createHandler(async ({ request, data, sender }) => {
 	const globalPrefs = { ...data.settings.ui_preferences.global };
 
@@ -312,28 +342,15 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 		const { domain, newPreferences } = result;
 		if (!domain) {
 			try {
-				const nativeSyncKeys = [
-					"mpv_path", "mpv_decoder", "enable_url_analysis", "browser_for_url_analysis",
-					"enable_youtube_analysis", "user_agent_string", "enable_smart_resume",
-					"enable_active_item_highlight", "disable_network_overrides", "enable_cache",
-					"http_persistence", "demuxer_max_bytes", "demuxer_max_back_bytes",
-					"cache_secs", "demuxer_readahead_secs", "stream_buffer_size",
-					"ytdlp_concurrent_fragments", "enable_reconnect", "reconnect_delay",
-					"performance_profile", "ffmpeg_path", "node_path", "automatic_mpv_flags",
-					"ultra_scalers", "ultra_video_sync", "ultra_interpolation", "ultra_deband",
-					"ultra_fbo", "ytdl_quality", "enable_precise_resume", "yt_use_cookies",
-					"yt_mark_watched", "yt_ignore_config", "other_sites_use_cookies",
-					"targeted_defaults", "enable_per_item_mark_watched", 
-					"clear_on_item_finish", "clear_on_completion",
-					"clear_scope", "force_terminal", "launch_geometry", "custom_geometry_width",
-					"custom_geometry_height", "custom_mpv_flags",
-				];
-
 				const syncPrefs = {};
-				nativeSyncKeys.forEach((key) => {
-					if (newPreferences[key] !== undefined) syncPrefs[key] = newPreferences[key];
-					else if (data.settings.ui_preferences.global[key] !== undefined) syncPrefs[key] = data.settings.ui_preferences.global[key];
-				});
+				const globalPrefs = data.settings.ui_preferences.global;
+
+				// Sync all global keys that are not UI-exclusive
+				for (const key in globalPrefs) {
+					if (!UI_ONLY_KEYS.includes(key)) {
+						syncPrefs[key] = globalPrefs[key];
+					}
+				}
 
 				if (Object.keys(syncPrefs).length > 0) await nativeLink.setUiPreferences(syncPrefs);
 			} catch (e) {

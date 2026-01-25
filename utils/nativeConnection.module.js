@@ -134,12 +134,27 @@ function connectToNativeHost() {
 			if (request_id && requestPromises[request_id]) {
 				requestPromises[request_id].resolve(normalizedResponse);
 				delete requestPromises[request_id];
+				
+				// CATCH-ALL: Notify user of silent failures
+				if (normalizedResponse.success === false && !normalizedResponse.log) {
+					broadcastLog({
+						text: `[Native Host]: ${normalizedResponse.error || "Operation failed."}`,
+						type: "error",
+					});
+				}
 				return;
 			}
 			if (normalizedResponse.action)
 				dispatchNativeEvent(normalizedResponse.action, normalizedResponse);
+			
 			if (normalizedResponse.log) {
 				dispatchNativeEvent("log", { action: "log", log: normalizedResponse.log });
+			} else if (normalizedResponse.success === false) {
+				// CATCH-ALL for unsolicited events that failed
+				broadcastLog({
+					text: `[Native Host]: ${normalizedResponse.error || "Operation failed."}`,
+					type: "error",
+				});
 			}
 		});
 

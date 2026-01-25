@@ -413,6 +413,11 @@ class MpvSessionManager:
                     from playlist_tracker import PlaylistTracker
                     self.playlist_tracker = PlaylistTracker(owner_folder_id, self.playlist, file_io, file_io.get_settings(), self.ipc_path, self.send_message)
                     self.playlist_tracker.start_tracking()
+                    
+                    # Ensure tracker authoritative state is reflected
+                    if last_played_id:
+                        self.playlist_tracker.current_id = last_played_id
+                        self.playlist_tracker.last_played_id = last_played_id
 
                     self.launcher.start_restored_process_watcher(self.pid, ipc_path, owner_folder_id)
 
@@ -499,14 +504,14 @@ class MpvSessionManager:
             logging.error(f"[PY][Session] Reality Sync Failed: {e}")
             return False
 
-    def append_batch(self, items, mode="append", folder_id=None):
+    def append_batch(self, items, mode="append", folder_id=None, quiet=False):
         """Appends (or prepends) multiple items with mandatory real-time sync."""
         if not items:
             return {"success": True}
         with self.sync_lock:
-            return self._append_batch_internal(items, mode, folder_id)
+            return self._append_batch_internal(items, mode, folder_id, quiet=quiet)
 
-    def _append_batch_internal(self, items, mode="append", folder_id=None):
+    def _append_batch_internal(self, items, mode="append", folder_id=None, quiet=False):
         """Internal append logic with strict MPV-state filtering."""
         if not self.is_alive or not self.ipc_manager:
             return {"success": False, "error": "No active session."}
@@ -538,6 +543,7 @@ class MpvSessionManager:
             return {"success": True, "message": "Items already in playlist."}
 
         logging.info(f"[PY][Session] Appending {len(items_to_add)} unique items to MPV.")
+        self._remote_log(f"Session: Appending {len(items_to_add)} items to live playlist.")
         
         # 3. Map Metadata to FUTURE indices
         import file_io
@@ -589,7 +595,8 @@ class MpvSessionManager:
                     self.ipc_manager.send({"command": ["set_property", "pause", False]})
                     self.ipc_manager.send({"command": ["playlist-next", "weak"]})
                 
-                self.ipc_manager.send({"command": ["show-text", f"Added {len(items_to_add)} items", 3000]})
+                if not quiet:
+                    self.ipc_manager.send({"command": ["show-text", f"Added {len(items_to_add)} items", 3000]})
                 return {"success": True, "message": f"Added {len(items_to_add)} items."}
             else:
                 return {"success": False, "error": f"MPV rejected loadlist: {res}"}

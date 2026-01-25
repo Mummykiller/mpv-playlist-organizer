@@ -22,16 +22,18 @@ class Janitor:
     def clean_temp_dir(self):
         """
         Smart cleanup for temp playlists and cookies.
-        - Only removes files that are older than 72 hours.
-        - Even if older than 72 hours, it preserves files for PIDs that are still running.
+        - Removes cookie files older than 24 hours.
+        - Removes other temp files older than 72 hours.
+        - Even if older, it preserves files for PIDs that are still running.
         """
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir, exist_ok=True)
             return
 
-        logging.info(f"Janitor: Running smart cleanup for {self.temp_dir} (72h threshold)")
+        logging.info(f"Janitor: Running smart cleanup for {self.temp_dir}")
         now = time.time()
         three_days_ago = now - (72 * 3600)
+        one_day_ago = now - (24 * 3600)
 
         # mpv_cookies_PID_uuid.txt
         cookie_re = re.compile(re.escape(url_analyzer.COOKIE_PREFIX) + r'(?P<pid>\d+)_')
@@ -43,9 +45,9 @@ class Janitor:
         server_re = re.compile(re.escape(m3u_server.SERVER_PREFIX) + r'(?P<pid>\d+)' + re.escape(m3u_server.SERVER_EXT) + r'$')
 
         PATTERNS = [
-            (cookie_re, url_analyzer.COOKIE_EXT),
-            (delta_re, mpv_session.DELTA_EXT),
-            (server_re, m3u_server.SERVER_EXT)
+            (cookie_re, url_analyzer.COOKIE_EXT, one_day_ago),
+            (delta_re, mpv_session.DELTA_EXT, three_days_ago),
+            (server_re, m3u_server.SERVER_EXT, three_days_ago)
         ]
 
         # Use topdown=False to allow cleaning empty directories after their content
@@ -54,7 +56,7 @@ class Janitor:
                 file_path = os.path.join(root, filename)
                 matched = False
                 
-                for pattern, ext in PATTERNS:
+                for pattern, ext, threshold in PATTERNS:
                     if not filename.lower().endswith(ext):
                         continue
                     
@@ -63,8 +65,8 @@ class Janitor:
                         matched = True
                         try:
                             file_mtime = os.path.getmtime(file_path)
-                            # ONLY consider files older than 72 hours
-                            if file_mtime < three_days_ago:
+                            # ONLY consider files older than the threshold
+                            if file_mtime < threshold:
                                 pid = int(match.group('pid'))
                                 is_running = is_pid_running(pid)
 
@@ -95,75 +97,82 @@ class Janitor:
     def cleanup_stale_ipc(self):
         """
         Scans for stale IPC sockets and flags.
-        Only deletes resources older than 72 hours that are confirmed to be dead.
+        Checks both the standard Linux IPC dir and the home-directory fallback.
         """
         if platform.system() == "Windows":
             return
 
-        if not os.path.exists(IPC_DIR_LINUX):
-            return
+        targets = [IPC_DIR_LINUX]
+        fallback_ipc_dir = os.path.realpath(os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc"))
+        if os.path.exists(fallback_ipc_dir):
+            targets.append(fallback_ipc_dir)
 
-        if not os.access(IPC_DIR_LINUX, os.R_OK | os.W_OK):
-            logging.debug(f"Janitor: Skipping IPC cleanup due to lack of permissions on {IPC_DIR_LINUX}")
-            return
+        for ipc_dir in targets:
+            if not os.path.exists(ipc_dir) or not os.access(ipc_dir, os.R_OK | os.W_OK):
+                continue
 
-        logging.info(f"Janitor: Checking for stale IPC resources in {IPC_DIR_LINUX} (72h threshold)")
-        now = time.time()
-        three_days_ago = now - (72 * 3600)
-        
-        socket_re = re.compile(r'^mpv-socket-(?P<pid>\d+)$')
-        flag_re = re.compile(re.escape(mpv_session.NATURAL_COMPLETION_FLAG) + r'(?P<pid>\d+)\.flag$')
-        
-        try:
-            for item in os.listdir(IPC_DIR_LINUX):
-                item_path = os.path.join(IPC_DIR_LINUX, item)
-                
-                # Sockets
-                s_match = socket_re.match(item)
-                if s_match:
-                    try:
-                        file_mtime = os.path.getmtime(item_path)
-                        if file_mtime < three_days_ago:
-                            # Smart check: even if > 72h, only delete if unresponsive
-                            is_socket_responsive = False
-                            try:
-                                manager = IPCSocketManager()
-                                if manager.connect(item_path, timeout=0.5):
-                                    resp = manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=0.5)
-                                    manager.close()
-                                    if resp and resp.get("error") == "success":
-                                        mpv_pid = resp.get("data")
-                                        if mpv_pid and is_pid_running(mpv_pid):
-                                            is_socket_responsive = True
-                            except Exception:
-                                pass
+            logging.info(f"Janitor: Checking for stale IPC resources in {ipc_dir} (72h threshold)")
+            now = time.time()
+            three_days_ago = now - (72 * 3600)
+            
+            socket_re = re.compile(r'^mpv-socket-(?P<pid>\d+)$')
+            flag_re = re.compile(re.escape(mpv_session.NATURAL_COMPLETION_FLAG) + r'(?P<pid>\d+)\.flag$')
+            
+            try:
+                for item in os.listdir(ipc_dir):
+                    item_path = os.path.join(ipc_dir, item)
+                    
+                    # Sockets
+                    s_match = socket_re.match(item)
+                    if s_match:
+                        try:
+                            file_mtime = os.path.getmtime(item_path)
+                            if file_mtime < three_days_ago:
+                                # Smart check: even if > 72h, only delete if unresponsive
+                                is_socket_responsive = False
+                                try:
+                                    manager = IPCSocketManager()
+                                    if manager.connect(item_path, timeout=0.5):
+                                        resp = manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=0.5)
+                                        manager.close()
+                                        if resp and resp.get("error") == "success":
+                                            mpv_pid = resp.get("data")
+                                            if mpv_pid and is_pid_running(mpv_pid):
+                                                is_socket_responsive = True
+                                except Exception:
+                                    pass
 
-                            if not is_socket_responsive:
-                                logging.info(f"Janitor: Removing stale socket older than 72h: {item}")
-                                os.remove(item_path)
-                    except FileNotFoundError:
-                        pass
-                    except OSError as e:
-                        logging.warning(f"Janitor: Error removing stale socket {item}: {e}")
-                    continue
+                                if not is_socket_responsive:
+                                    logging.info(f"Janitor: Removing stale socket older than 72h: {item}")
+                                    os.remove(item_path)
+                        except FileNotFoundError:
+                            pass
+                        except OSError as e:
+                            logging.warning(f"Janitor: Error removing stale socket {item}: {e}")
+                        continue
 
-                # Flags
-                f_match = flag_re.match(item)
-                if f_match:
-                    try:
-                        if os.path.getmtime(item_path) < three_days_ago:
-                            pid = int(f_match.group('pid'))
-                            if not is_pid_running(pid):
-                                logging.info(f"Janitor: Removing stale flag older than 72h: {item}")
-                                os.remove(item_path)
-                    except FileNotFoundError:
-                        pass
-                    except OSError as e:
-                        logging.warning(f"Janitor: Error removing stale flag {item}: {e}")
-                    continue
+                    # Flags
+                    f_match = flag_re.match(item)
+                    if f_match:
+                        try:
+                            if os.path.getmtime(item_path) < three_days_ago:
+                                pid = int(f_match.group('pid'))
+                                if not is_pid_running(pid):
+                                    logging.info(f"Janitor: Removing stale flag older than 72h: {item}")
+                                    os.remove(item_path)
+                        except FileNotFoundError:
+                            pass
+                        except OSError as e:
+                            logging.warning(f"Janitor: Error removing stale flag {item}: {e}")
+                        continue
 
-        except Exception as e:
-            logging.warning(f"Janitor: Error during IPC cleanup: {e}")
+                # Cleanup the directory itself if it's the fallback and now empty
+                if ipc_dir == fallback_ipc_dir and not os.listdir(ipc_dir):
+                    os.rmdir(ipc_dir)
+                    logging.info(f"Janitor: Removed empty fallback IPC directory: {ipc_dir}")
+
+            except Exception as e:
+                logging.warning(f"Janitor: Error during IPC cleanup in {ipc_dir}: {e}")
 
     def cleanup_pycache(self, root_path):
         """

@@ -27,7 +27,10 @@ class PlaylistTracker:
         # New: Track playback duration in the current session
         self.current_session_duration = 0
         self.last_time_pos = None
-        self.last_disk_save_time = 0 # Throttle for disk writes
+        self.last_disk_save_time = time.time() # Throttle for disk writes
+        self.resume_cache = {} # Map of item_id -> resume_time for pending disk writes
+        self.watched_status_cache = {} # Map of item_id -> bool for pending disk writes
+        self.dirty_last_played_id = None # Pending last_played_id for disk commit
         
         self.file_io = file_io
         self.ipc_path = ipc_path # Store the IPC path to create a dedicated connection
@@ -238,11 +241,7 @@ class PlaylistTracker:
                             # 3. Notify the MPV terminal that we are tracking this new video
                             self._remote_log(f"AdaptiveHeaders: Tracking: {display_name}{status_info}")
                             
-                            # 4. VISIBLE OSD FEEDBACK: Notify the user on screen
-                            if self.ipc_manager and self.ipc_manager.is_connected():
-                                self.ipc_manager.send({"command": ["show-text", f"Tracking: {display_name}{status_info}", 2000]})
-
-                            # 5. Immediately notify the extension to update the UI highlight (Visual only)
+                            # 4. Immediately notify the extension to update the UI highlight (Visual only)
                             logging.info(f"[PY][Tracker] Active episode changed to ID {self.current_id}. Notifying UI (Visual).")
                             self.send_message({
                                 "action": "update_last_played",
@@ -284,16 +283,15 @@ class PlaylistTracker:
                                 self.threshold_met_ids.add(self.current_id)
                                 self._check_mark_watched(self.current_id)
 
-                            # 2. Throttled periodic save (Every 5s of video time, but NO MORE THAN once every 5s of real time)
+                            # 2. Throttled periodic save (Every 5s of video time)
                             if int(current_time) > 0 and int(current_time) % 5 == 0:
+                                self._update_resume_time(self.current_id, current_time)
+                                
+                                # Periodically commit to disk every 30s
                                 now = time.time()
-                                if now - getattr(self, 'last_disk_save_time', 0) >= 5:
-                                    self._update_resume_time(self.current_id, current_time)
+                                if now - self.last_disk_save_time >= 30:
+                                    self._commit_to_disk()
                                     self.last_disk_save_time = now
-                                else:
-                                    # Optional: still notify the UI so the progress bar moves, 
-                                    # but don't hit the disk.
-                                    pass
 
                 elif event.get('event') == 'end-file':
                     reason = event.get('reason')
@@ -333,6 +331,10 @@ class PlaylistTracker:
 
                 elif event.get('event') == 'shutdown':
                     logging.info(f"[PY][Tracker] MPV shutdown detected for folder '{self.folder_id}'. Notifying UI.")
+                    
+                    # Final commit before exiting
+                    self._commit_to_disk()
+
                     # 1. IMMEDIATE notification with early clear hint
                     self.send_message({
                         "action": "mpv_quitting",
@@ -403,85 +405,84 @@ class PlaylistTracker:
             logging.error(f"[PY][Tracker] Error handling item completion: {e}")
 
     def _update_last_played(self, item_id):
-        """Saves the last played item ID to the folder's metadata and shard, and notifies the extension."""
+        """Notifies extension and queues last_played_id for disk commit."""
         if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
             return
         
-        try:
-            # 1. Update the local index file (lightweight metadata)
-            index = self.file_io.get_index()
-            if self.folder_id in index:
-                index[self.folder_id]["last_played_id"] = item_id
-                self.file_io.save_index(index)
-                logging.debug(f"[PY][Tracker] Updated last_played_id to '{item_id}' for folder '{self.folder_id}'.")
+        self.dirty_last_played_id = item_id
+
+        # Notify the extension so it can update its internal storage
+        self.send_message({
+            "action": "update_last_played",
+            "folder_id": self.folder_id,
+            "item_id": item_id
+        })
+
+    def _update_resume_time(self, item_id, resume_time):
+        """Notifies extension and queues resume_time for throttled disk commit."""
+        if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
+            return
+        
+        # 1. Update Cache
+        self.resume_cache[item_id] = int(resume_time)
             
-            # 2. Update the playlist shard with 'currently_playing' marker
+        # 2. Notify the extension (Real-time UI update)
+        self.send_message({
+            "action": "update_item_resume_time",
+            "folder_id": self.folder_id,
+            "item_id": item_id,
+            "resume_time": int(resume_time)
+        })
+
+    def _commit_to_disk(self):
+        """Performs a single read-modify-write to the playlist shard with all cached changes."""
+        if not self.folder_id or (not self.resume_cache and not self.watched_status_cache and not self.dirty_last_played_id):
+            return
+
+        try:
+            logging.debug(f"[PY][Tracker] Committing throttled updates to disk for folder '{self.folder_id}'...")
+            
+            # 1. Update Index Metadata if last_played_id changed
+            if self.dirty_last_played_id:
+                index = self.file_io.get_index()
+                if self.folder_id in index:
+                    index[self.folder_id]["last_played_id"] = self.dirty_last_played_id
+                    self.file_io.save_index(index)
+                    self.dirty_last_played_id = None
+            
+            # 2. Update Playlist Shard
             playlist = self.file_io.get_playlist_shard(self.folder_id)
             if playlist:
                 changed = False
                 for item in playlist:
-                    is_current = (item.get("id") == item_id)
+                    item_id = item.get("id")
+                    
+                    # Sync currently_playing
+                    is_current = (item_id == self.current_id)
                     if item.get("currently_playing") != is_current:
                         item["currently_playing"] = is_current
+                        changed = True
+                    
+                    # Sync resume_time from cache
+                    if item_id in self.resume_cache:
+                        item["resume_time"] = self.resume_cache[item_id]
+                        changed = True
+
+                    # Sync marked_as_watched from cache
+                    if item_id in self.watched_status_cache:
+                        item["marked_as_watched"] = self.watched_status_cache[item_id]
                         changed = True
                 
                 if changed:
                     self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
-                    logging.debug(f"[PY][Tracker] Marked item '{item_id}' as currently_playing in shard.")
-
-            # 3. Notify the extension so it can update its internal storage
-            self.send_message({
-                "action": "update_last_played",
-                "folder_id": self.folder_id,
-                "item_id": item_id
-            })
+                    self.resume_cache.clear()
+                    self.watched_status_cache.clear()
+                    logging.info(f"[PY][Tracker] Throttled shard commit complete for '{self.folder_id}'.")
         except Exception as e:
-            logging.error(f"[PY][Tracker] Failed to update last_played_id: {e}")
-
-    def _update_resume_time(self, item_id, resume_time):
-        """Saves the current playback time for a specific item to the folder's playlist metadata."""
-        if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
-            return
-        
-        try:
-            # 1. Update the specific playlist shard
-            playlist = self.file_io.get_playlist_shard(self.folder_id)
-            if playlist:
-                changed = False
-                for item in playlist:
-                    if item.get("id") == item_id:
-                        # Ensure 'currently_playing' is set for the active item
-                        if not item.get("currently_playing"):
-                            item["currently_playing"] = True
-                            changed = True
-
-                        # Only update if the difference is significant or it's a reset
-                        old_time = item.get("resume_time", 0)
-                        if abs(resume_time - old_time) > 2 or resume_time == 0:
-                            item["resume_time"] = int(resume_time)
-                            changed = True
-                            
-                            # 2. Notify the extension
-                            self.send_message({
-                                "action": "update_item_resume_time",
-                                "folder_id": self.folder_id,
-                                "item_id": item_id,
-                                "resume_time": int(resume_time)
-                            })
-                    else:
-                        # Clear 'currently_playing' for other items if it was accidentally left on
-                        if item.get("currently_playing"):
-                            item["currently_playing"] = False
-                            changed = True
-                
-                if changed:
-                    self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
-                    logging.debug(f"[PY][Tracker] Shard updated for item '{item_id}' (Time: {int(resume_time)}s).")
-        except Exception as e:
-            logging.error(f"[PY][Tracker] Failed to update resume_time: {e}")
+            logging.error(f"[PY][Tracker] Throttled disk commit failed: {e}")
 
     def _update_marked_as_watched(self, item_id, status, persist=True):
-        """Saves the marked_as_watched status for a specific item to the folder's playlist metadata."""
+        """Notifies extension and queues marked_as_watched status for disk commit."""
         if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
             return
         
@@ -493,28 +494,9 @@ class PlaylistTracker:
                         item["marked_as_watched"] = status
                         break
 
-            # 2. Update the local playlist shard
+            # 2. Queue for throttled commit
             if persist:
-                playlist = self.file_io.get_playlist_shard(self.folder_id)
-                if playlist:
-                    changed = False
-                    for item in playlist:
-                        is_target = (item.get("id") == item_id)
-                        
-                        # Sync marked_as_watched
-                        if is_target and item.get("marked_as_watched") != status:
-                            item["marked_as_watched"] = status
-                            changed = True
-                        
-                        # Sync currently_playing
-                        is_current = (item.get("id") == self.current_id)
-                        if item.get("currently_playing") != is_current:
-                            item["currently_playing"] = is_current
-                            changed = True
-                    
-                    if changed:
-                        self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
-                        logging.debug(f"[PY][Tracker] Shard updated for item '{item_id}' (Watched: {status}).")
+                self.watched_status_cache[item_id] = status
             
             # 3. Notify the extension (always notify to keep UI in sync)
             self.send_message({
