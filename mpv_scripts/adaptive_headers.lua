@@ -4,6 +4,7 @@ local id_options = {}
 local indexed_options = {}
 local session_timestamps = {} -- Internal memory for the current session
 local primed_resume_time = nil
+local unmanaged_fallback_opts = nil -- Global fallback for disconnected launches
 
 -- Store initial global states
 local initial_ua = mp.get_property("user-agent") or "libmpv"
@@ -62,6 +63,25 @@ local function apply_adaptive_settings()
     local path = mp.get_property("path")
     if not path or path == "" then return end
 
+    -- 0. Static Metadata Handshake (for unmanaged instances)
+    local meta_file = mp.get_opt("mpv_organizer-metadata_file")
+    if meta_file and meta_file ~= "" then
+        local content = utils.read_file(meta_file)
+        if content and content ~= "" then
+            local ok, static_opts = pcall(utils.parse_json, content)
+            if ok and static_opts then
+                if static_opts.id then id_options[static_opts.id] = static_opts end
+                url_options[path] = static_opts
+                unmanaged_fallback_opts = static_opts -- Set global fallback
+                debug_log("Static metadata file handshake successful for " .. (static_opts.title or path))
+            else
+                mp.msg.warn("AdaptiveHeaders: Failed to parse metadata file: " .. meta_file)
+            end
+        else
+            mp.msg.warn("AdaptiveHeaders: Metadata file is missing or empty: " .. meta_file)
+        end
+    end
+
     -- 1. Extract Solid ID
     local solid_id = path:match("[#&]mpv_organizer_id=([^#&]+)")
     if solid_id then mp.set_property_native("user-data/id", solid_id) end
@@ -114,9 +134,11 @@ local function apply_adaptive_settings()
     local pos = mp.get_property_number("playlist-pos")
     local stripped_path = path:gsub("[#&]mpv_organizer_id=[^#&]+", "")
     
-    -- Strictly use ID or URL. Removed indexed_options fallback as it's prone to sync issues.
+    -- Strictly use ID or URL. Fallback to unmanaged_fallback_opts for unmanaged instances.
     local opts = (item_id and id_options[item_id]) or 
-                 url_options[stripped_path] or url_options[path]
+                 url_options[stripped_path] or 
+                 url_options[path] or 
+                 unmanaged_fallback_opts
 
     if not opts then
         debug_log("No options found for path: " .. path .. " (ID: " .. tostring(item_id) .. ")")

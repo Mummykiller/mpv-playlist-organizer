@@ -28,6 +28,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			);
 			this.draggedItem = null;
 			this.currentPlaylist = [];
+			this.isSelectionModeActive = false;
 		}
 
 		bindEvents() {
@@ -185,15 +186,33 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			
 			bar.innerHTML = "";
 			bar.className = "quick-actions-bar";
-			["A", "B", "C", "D"].forEach((label) => {
+			if (this.isSelectionModeActive) bar.classList.add("selection-mode-active");
+
+			const labels = ["A", "B", "C", "⚡"];
+			labels.forEach((label, index) => {
 				const btn = document.createElement("button");
 				btn.className = "quick-action-btn";
 				btn.textContent = label;
-				btn.title = "Placeholder " + label;
-				btn.onclick = (e) => {
-					e.stopPropagation();
-					console.log(`Quick Action ${label} clicked`);
-				};
+				
+				const isLast = index === labels.length - 1;
+				if (isLast) {
+					btn.title = "Toggle Disconnected Launch (Selection Mode)";
+					btn.classList.add("btn-disconnected-toggle");
+					if (this.isSelectionModeActive) btn.classList.add("selection-mode-active");
+					btn.onclick = (e) => {
+						e.stopPropagation();
+						this.isSelectionModeActive = !this.isSelectionModeActive;
+						this.fullContainer?.classList.toggle("selection-mode-active", this.isSelectionModeActive);
+						btn.classList.toggle("selection-mode-active", this.isSelectionModeActive);
+						bar.classList.toggle("selection-mode-active", this.isSelectionModeActive);
+					};
+				} else {
+					btn.title = "Placeholder " + label;
+					btn.onclick = (e) => {
+						e.stopPropagation();
+						console.log(`Quick Action ${label} clicked`);
+					};
+				}
 				bar.appendChild(btn);
 			});
 		}
@@ -257,16 +276,40 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				handleFolderChange(this.compactFolderSelect.value),
 			);
 			this.fullContainer.addEventListener("click", (e) => {
+				const listItem = e.target.closest(".list-item");
+				if (!listItem) return;
+
 				const removeBtn = e.target.closest(".btn-remove-item");
 				const copyBtn = e.target.closest(".btn-copy-item");
+				const watchedCheckbox = e.target.closest(".item-watched-checkbox");
 
+				// Handle Selection Mode (Disconnected Launch)
+				if (this.isSelectionModeActive && !removeBtn && !copyBtn && !watchedCheckbox) {
+					const id = listItem.dataset.id;
+					const fullItem = this.currentPlaylist.find(i => i.id === id);
+
+					if (fullItem) {
+						chrome.runtime.sendMessage({
+							action: "play_new_instance",
+							url_item: fullItem,
+							play_new_instance: true,
+							folderId: this.folderSelect.value
+						});
+						this.isSelectionModeActive = false;
+						this.fullContainer?.classList.remove("selection-mode-active");
+						this.uiManager.shadowRoot?.querySelectorAll(".quick-action-btn.selection-mode-active").forEach(el => el.classList.remove("selection-mode-active"));
+						this.uiManager.shadowRoot?.getElementById("quick-actions-bar")?.classList.remove("selection-mode-active");
+					}
+					return;
+				}
+
+				// Standard Actions
 				if (removeBtn) {
-					const listItem = removeBtn.closest(".list-item");
 					const index = parseInt(removeBtn.dataset.index, 10);
-					const itemId = listItem?.dataset.id;
+					const itemId = listItem.dataset.id;
 					const folderId = this.folderSelect.value;
 
-					if (!isNaN(index) && listItem) {
+					if (!isNaN(index)) {
 						// Optimistic UI update: fade out immediately
 						listItem.classList.add("removing");
 
