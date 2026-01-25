@@ -27,15 +27,21 @@ class DataHandler(BaseHandler):
                 meta = {k: v for k, v in folder_content.items() if k != "playlist"}
                 index[folder_id] = {**meta, "item_count": len(playlist)}
             self.file_io.save_index(index)
-            return native_link.success(message="Incremental sync complete.")
+            return native_link.success(message="Incremental sync complete.", log={"text": "[Native Host]: Incremental sync complete.", "type": "info"})
         else:
-            return self.file_io.write_folders_file(data)
+            res = self.file_io.write_folders_file(data)
+            if res["success"]:
+                res["log"] = {"text": "[Native Host]: Data export successful.", "type": "info"}
+            return res
 
     @command('export_playlists')
     def handle_export_playlists(self, request: native_link.DataSyncRequest):
         if not request.data or not request.filename:
             return native_link.failure("Missing data or filename.")
-        return self.file_io.write_export_file(request.filename, request.data, subfolder=request.subfolder)
+        res = self.file_io.write_export_file(request.filename, request.data, subfolder=request.subfolder)
+        if res["success"]:
+            res["log"] = {"text": f"[Native Host]: Playlist '{request.filename}' exported successfully.", "type": "info"}
+        return res
 
     @command('export_all_playlists_separately')
     def handle_export_all_separately(self, request: native_link.DataSyncRequest):
@@ -63,11 +69,13 @@ class DataHandler(BaseHandler):
             filepath = os.path.abspath(target_path)
             export_dir_abs = os.path.abspath(self.file_io.EXPORT_DIR)
             if not filepath.startswith(export_dir_abs):
-                return native_link.failure("Access denied: Path outside export directory.")
+                msg = "Access denied: Path outside export directory."
+                return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
             with open(filepath, 'r', encoding='utf-8') as f:
                 return native_link.success(f.read())
         except Exception as e:
-            return native_link.failure(f"Failed to read file: {e}")
+            msg = f"Failed to read file: {e}"
+            return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
 
     @command('open_export_folder')
     def handle_open_export_folder(self, request: native_link.BaseRequest):
@@ -83,8 +91,5 @@ class DataHandler(BaseHandler):
                 subprocess.run(['xdg-open', path], check=True)
             return native_link.success(message="Opening export folder.")
         except Exception as e:
-            return native_link.failure(f"Failed to open folder: {e}")
-
-    @command('get_all_folders')
-    def handle_get_all_folders(self, request: native_link.BaseRequest):
-        return native_link.success({"folders": self.file_io.get_all_folders_from_file()})
+            msg = f"Failed to open folder: {e}"
+            return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})

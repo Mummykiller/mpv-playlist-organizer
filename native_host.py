@@ -97,6 +97,7 @@ try:
     # --- Configuration ---
     import file_io
     DATA_DIR = file_io.DATA_DIR
+    HOME_DIR = os.path.expanduser("~")
     
     # Ensure standard Linux binary paths are in the environment PATH
     # This helps sub-processes like yt-dlp find ffmpeg and JS runtimes (node/deno)
@@ -255,20 +256,18 @@ try:
         """Encodes and sends a message to stdout."""
         try:
             with print_lock:
-                # Selective Path Masking: Only mask logs and errors to avoid corrupting functional URLs
+                # Recursive Path Masking: Masks all strings in the payload to prevent info leaks
                 if isinstance(message_content, dict):
-                    if 'log' in message_content:
-                        log_data = message_content['log']
-                        if isinstance(log_data, dict) and 'text' in log_data:
-                            log_data['text'] = security.mask_path(log_data['text'], DATA_DIR, SCRIPT_DIR)
-                        elif isinstance(log_data, str):
-                            message_content['log'] = security.mask_path(log_data, DATA_DIR, SCRIPT_DIR)
+                    def mask_recursive(obj):
+                        if isinstance(obj, str):
+                            return security.mask_path(obj, DATA_DIR, SCRIPT_DIR, HOME_DIR)
+                        elif isinstance(obj, list):
+                            return [mask_recursive(item) for item in obj]
+                        elif isinstance(obj, dict):
+                            return {k: mask_recursive(v) for k, v in obj.items()}
+                        return obj
                     
-                    if 'error' in message_content and isinstance(message_content['error'], str):
-                        message_content['error'] = security.mask_path(message_content['error'], DATA_DIR, SCRIPT_DIR)
-                    
-                    if 'message' in message_content and isinstance(message_content['message'], str):
-                         message_content['message'] = security.mask_path(message_content['message'], DATA_DIR, SCRIPT_DIR)
+                    message_content = mask_recursive(message_content)
 
                 # Standardize output for JS bridge
                 translated_content = native_link.responder._translate_keys(message_content)
@@ -323,12 +322,22 @@ try:
                     logging.info(f"[PY] Cleaned up IPC socket: {session_manager.ipc_path}")
                 except OSError as e:
                     logging.warning(f"[PY] Error removing IPC socket file {session_manager.ipc_path}: {e}")
+            
             if os.path.exists(ipc_dir) and not os.listdir(ipc_dir):
                 try:
                     os.rmdir(ipc_dir)
                     logging.info(f"[PY] Cleaned up empty IPC directory: {ipc_dir}")
                 except OSError as e:
-                        logging.warning(f"[PY] Error removing IPC directory {ipc_dir}: {e}")
+                    logging.warning(f"[PY] Error removing IPC directory {ipc_dir}: {e}")
+        
+        # Also clean up the home-directory fallback if it's empty
+        fallback_ipc_dir = os.path.realpath(os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc"))
+        if os.path.exists(fallback_ipc_dir) and not os.listdir(fallback_ipc_dir):
+            try:
+                os.rmdir(fallback_ipc_dir)
+                logging.info(f"[PY] Cleaned up empty fallback IPC directory: {fallback_ipc_dir}")
+            except OSError:
+                pass
 
     def signal_handler(sig, frame):
         """Handles termination signals from the browser."""
@@ -357,6 +366,15 @@ try:
     def main():
         """Main message loop for native messaging from the browser."""
         set_process_name()
+
+        # --- Pre-emptive Cleanup ---
+        # Resolve volatile leaks from previous crashes/SIGKILLs that bypassed atexit.
+        try:
+            from utils.url_analyzer import VolatileCookieManager
+            VolatileCookieManager.cleanup_volatile_dir()
+            logging.info("[PY][MAIN] Pre-emptive cleanup of volatile directory complete.")
+        except Exception as e:
+            logging.warning(f"[PY][MAIN] Pre-emptive cleanup failed: {e}")
 
         # --- Windows Graceful Shutdown Handler ---
         if sys.platform == "win32":
@@ -396,8 +414,8 @@ try:
             res = mpv_session.restore()
             return native_link.success(res, action="session_restored")
 
-        @HandlerRegistry.command('get_diagnostics')
-        def handle_get_diagnostics(request: native_link.BaseRequest):
+        @HandlerRegistry.command('get_native_diagnostics')
+        def handle_get_native_diagnostics(request: native_link.BaseRequest):
             return {"success": True, "errors": diagnostic_collector.get_errors()}
 
         def task_wrapper(message):
@@ -438,29 +456,6 @@ try:
                     send_message(error_resp)
                 except Exception:
                     pass
-
-        # --- Automatic Session Restoration ---
-        try:
-            restore_data = mpv_session.restore()
-            if restore_data:
-                logging.info(f"[PY][MAIN] Automatic restoration successful for folder '{mpv_session.owner_folder_id}'.")
-                def notify_restore():
-                    time.sleep(0.2)
-                    send_message(native_link.success(restore_data, action="session_restored"))
-                threading.Thread(target=notify_restore, daemon=True).start()
-        except Exception as e:
-            logging.error(f"[PY][MAIN] Error during automatic session restoration: {e}")
-
-        while True:
-            try:
-                message = get_message()
-                logging.info(f"[PY][RECV] (ID: {message.get('request_id')}): {message.get('action')}")
-                executor.submit(task_wrapper, message)
-            except Exception as e:
-                logging.error(f"[PY][MAIN] Error in main loop: {e}", exc_info=True)
-                if not sys.stdin or sys.stdin.closed:
-                    break
-
 
         # --- Automatic Session Restoration ---
         # Attempt to reconnect to an existing MPV session immediately upon startup.

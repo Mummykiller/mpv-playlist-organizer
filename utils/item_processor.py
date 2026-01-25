@@ -148,6 +148,12 @@ class ItemProcessor:
     def _fetch_remote_m3u(self, url, headers):
         """Fetches M3U content from a remote URL."""
         from urllib.request import urlopen, Request
+        from .url_analyzer import is_safe_url
+        
+        if not is_safe_url(url):
+            logging.error(f"SSRF Protection: Blocked fetch of unsafe M3U URL: {url}")
+            return None
+
         try:
             fetch_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
             if headers:

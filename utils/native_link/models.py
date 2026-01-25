@@ -74,6 +74,7 @@ class LiveUpdateRequest(BaseRequest):
     folder_id: Optional[str] = None
     item_id: Optional[str] = None
     played_ids: Optional[List[str]] = None
+    watched_ids: Optional[List[str]] = None
     session_ids: Optional[List[str]] = None
     new_order: Optional[List[str]] = None
 

@@ -25,19 +25,28 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
     current_headers: Dict[str, str] = {}
     current_ytdl_options: List[str] = []
 
-    def split_pairs(s):
-        # Prefer pipe, then comma if no pipe found
+    def extract_pairs(s):
+        """Extracts Key=Value or Key:Value pairs, supporting quoted values and pipes."""
+        if not s:
+            return []
+            
+        # If pipes are present, we use a simple split as they are considered safe delimiters
         if '|' in s:
-            return s.split('|')
-        return s.split(',')
+            pairs = []
+            for segment in s.split('|'):
+                if '=' in segment:
+                    pairs.append(segment.split('=', 1))
+                elif ':' in segment:
+                    pairs.append(segment.split(':', 1))
+            return pairs
 
-    def parse_pair(p):
-        # Support both ':' and '=' as separators
-        if '=' in p:
-            return p.split('=', 1)
-        if ':' in p:
-            return p.split(':', 1)
-        return None, None
+        # Otherwise, use regex to find pairs, supporting optional quotes for values
+        # Pattern: Key followed by : or = followed by (quoted string OR non-comma string)
+        pattern = r'([a-zA-Z0-9_-]+)\s*[:=]\s*("[^"]*"|[^,]+)'
+        matches = re.findall(pattern, s)
+        
+        # Clean up quotes from values
+        return [(k.strip(), v.strip().strip('"')) for k, v in matches]
 
     for line in lines:
         line = line.strip()
@@ -54,26 +63,28 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
         elif line.startswith('#EXTHTTPHEADERS:') or line.startswith('#EXT-X-HEADERS:'):
             tag = '#EXTHTTPHEADERS:' if line.startswith('#EXTHTTPHEADERS:') else '#EXT-X-HEADERS:'
             headers_str = line[len(tag):].strip()
-            for pair in split_pairs(headers_str):
-                k, v = parse_pair(pair)
-                if k:
-                    current_headers[k.strip()] = v.strip()
+            for k, v in extract_pairs(headers_str):
+                current_headers[k] = v
         elif line.startswith('#EXTYTDLOPTIONS:') or line.startswith('#EXT-X-YTDL-OPTIONS:'):
             tag = '#EXTYTDLOPTIONS:' if line.startswith('#EXTYTDLOPTIONS:') else '#EXT-X-YTDL-OPTIONS:'
             options_str = line[len(tag):].strip()
-            for pair in split_pairs(options_str):
-                if pair:
-                    k, v = parse_pair(pair)
-                    if k:
-                        # Sanitize key/value if needed, but we sanitize ytdl options later too
-                        current_ytdl_options.append(f"{k.strip()}={v.strip()}")
-                    else:
-                        # For boolean flags, append as key=
-                        current_ytdl_options.append(f"{pair.strip()}=")
+            for k, v in extract_pairs(options_str):
+                current_ytdl_options.append(f"{k}={v}")
         elif not line.startswith('#'):
             # This is a URL - sanitize it
             sanitized_url = file_io.sanitize_string(line)
             
+            # --- Basic Validation ---
+            # Prevent "Ghost" items from malformed files (must have a scheme or look like a path)
+            # We enforce that a URL must not contain spaces (unless it's a local path with quotes, 
+            # but M3U URLs are typically encoded or plain) and must look like a resource.
+            is_valid_url = re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', sanitized_url)
+            is_valid_path = sanitized_url.startswith(('/', './', '../')) or (len(sanitized_url) > 2 and sanitized_url[1:3] == ':\\')
+            
+            if not (is_valid_url or is_valid_path) or ' ' in sanitized_url:
+                logging.debug(f"M3U Parser: Skipping invalid URL/Path: {sanitized_url}")
+                continue
+
             # --- ID Extraction ---
             # Look for the #mpv_organizer_id= fragment we inject in mpv_session.py
             extracted_id = None

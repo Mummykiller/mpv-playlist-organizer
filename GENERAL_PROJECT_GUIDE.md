@@ -81,7 +81,7 @@ The project is a hybrid media management application consisting of three distinc
 - **Frontend Reload:** `chrome://extensions` -> Reload.
 - **Backend Reload:** **Restart the Browser** (Native Host persists until browser exit).
 - **MPV Reload:** Restart the player instance or reload the script in MPV.
-- **Diagnostics:** Use `installer.py` -> "Run Diagnostics" or the `get_diagnostics` action via the bridge to inspect `DiagnosticCollector` logs.
+- **Diagnostics:** Use `installer.py` -> "Run Diagnostics" or the `get_native_diagnostics` action via the bridge to inspect `DiagnosticCollector` logs.
 - **Legacy Tests:** `testing_tools/test_bridge_protocol.py` is deprecated.
 
 ## 9. JavaScript Build Process

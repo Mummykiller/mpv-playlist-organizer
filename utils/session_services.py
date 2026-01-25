@@ -64,7 +64,7 @@ class EnrichmentService(ItemProcessor):
                     
                     if enriched_future and session.is_alive:
                         logging.info(f"[PY][Session] Background: Appending batch of {len(enriched_future)} future items.")
-                        session.append_batch(enriched_future, mode="append", folder_id=folder_id)
+                        session.append_batch(enriched_future, mode="append", folder_id=folder_id, quiet=True)
 
                 # 2. Enrich and Batch Append History Items
                 if history_items:
@@ -79,7 +79,7 @@ class EnrichmentService(ItemProcessor):
                     
                     if enriched_history and session.is_alive:
                         logging.info(f"[PY][Session] Background: Prepending batch of {len(enriched_history)} history items.")
-                        session.append_batch(enriched_history, mode="prepend", folder_id=folder_id)
+                        session.append_batch(enriched_history, mode="prepend", folder_id=folder_id, quiet=True)
 
                 if session.playlist_tracker:
                     session.playlist_tracker.update_playlist_order(session.playlist)
@@ -92,6 +92,9 @@ class EnrichmentService(ItemProcessor):
                             item, settings, session.SCRIPT_DIR, index=idx
                         )
                         session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
+                    
+                    # Single consolidated OSD message
+                    session.ipc_manager.send({"command": ["show-text", "Playlist restored", 2000]})
 
                 logging.info("[PY][Session] Background: Batched restoration complete.")
             except Exception as e:
