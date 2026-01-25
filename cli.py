@@ -18,6 +18,8 @@ def inject_dependencies(deps):
     ipc_utils = deps['ipc_utils']
     time = deps['time']
 
+from utils.cli_base import BaseCLI
+
 def _cli_list_folders(args):
     """CLI command to list all available folders and their item counts."""
     folders_data = file_io.get_all_folders_from_file()
@@ -90,8 +92,9 @@ def handle_cli():
         return False
 
     logging.info(f"Native host started in CLI mode with args: {sys.argv}")
-    parser = argparse.ArgumentParser(description="Command-line interface for MPV Playlist Organizer.")
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    cli = BaseCLI(description="Command-line interface for MPV Playlist Organizer.", setup_logging=False)
+    subparsers = cli.add_subparsers(dest='command', help='Available commands')
 
     # Note: We don't set required=True for subparsers so we can manually handle 
     # the empty-argument case and print help gracefully.
@@ -105,13 +108,13 @@ def handle_cli():
 
     # If no arguments provided, print help and exit.
     if len(sys.argv) == 1:
-        parser.print_help()
+        cli.parser.print_help()
         return True
 
-    args = parser.parse_args()
+    args = cli.parse_args()
     if args.command:
         args.func(args)
     else:
-        parser.print_help()
+        cli.parser.print_help()
     
     return True

@@ -37,6 +37,7 @@ class PlaylistTracker:
         self.send_message = send_message_func
         self.ipc_manager = None
         self.tracking_thread = None
+        self.pending_threads = [] # Track async mark-watched threads
         self.is_tracking = False
         self.clear_behavior = settings.get('playlist_clear_behavior', 'full_on_completion') # 'full_on_completion' or 'on_item_finish'
         self.is_naturally_completed = False
@@ -75,6 +76,14 @@ class PlaylistTracker:
 
         if self.tracking_thread:
             self.tracking_thread.join()
+        
+        # Join any pending mark-watched threads to ensure disk persistence
+        if self.pending_threads:
+            logging.info(f"[PY][Tracker] Waiting for {len(self.pending_threads)} pending mark-watched threads to finish...")
+            for t in self.pending_threads:
+                if t.is_alive():
+                    t.join(timeout=5.0)
+            self.pending_threads.clear()
         
         return stats
 
@@ -576,25 +585,37 @@ class PlaylistTracker:
             logging.info(f"[PY][Tracker] Triggering watch history update for: {watch_url}")
             self.send_message({"log": {"text": "[Tracker]: Mark-as-watched triggered for YouTube video.", "type": "info"}})
             self._remote_log(f"AdaptiveHeaders: Threshold met or EOF reached. Marking {title} as watched.")
-            self.ipc_manager.send({"command": ["show-text", "YouTube: Marking as watched...", 2000]})
+            
+            if self.ipc_manager and self.ipc_manager.is_connected():
+                self.ipc_manager.send({"command": ["show-text", "YouTube: Marking as watched...", 2000]})
 
             def on_done(success, msg):
+                # 1. Update Internal Tracker State & Extension UI (Always)
+                if success:
+                    # We pass persist=False because mark_video_as_watched_threaded calls sync_state 
+                    # which already writes to disk upon success.
+                    self._update_marked_as_watched(item_id, True, persist=False)
+                    self.send_message({"log": {"text": "[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
+                else:
+                    self.send_message({"log": {"text": f"[Tracker]: Failed to mark YouTube video as watched: {msg}", "type": "error"}})
+
+                # 2. Update MPV Feedback (Only if still connected)
                 if self.ipc_manager and self.ipc_manager.is_connected():
                     if success:
                         self.ipc_manager.send({"command": ["show-text", "YouTube: Video marked as watched", 2000]})
                         self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {title}")
-                        self.send_message({"log": {"text": "[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
-                        # We pass persist=False because mark_video_as_watched_threaded calls sync_state 
-                        # which already writes to disk upon success.
-                        self._update_marked_as_watched(item_id, True, persist=False)
                         # Sync property to MPV so Lua knows we've done it
                         self.ipc_manager.send({"command": ["set_property", "user-data/marked-as-watched", "yes"]})
                     else:
                         self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched failed ({msg})", 3000]})
                         self._remote_log(f"AdaptiveHeaders: Mark watched failed for {title}: {msg}")
-                        self.send_message({"log": {"text": f"[Tracker]: Failed to mark YouTube video as watched: {msg}", "type": "error"}})
 
-            mark_video_as_watched_threaded(watch_url, cookies, user_agent=ua, folder_id=self.folder_id, item_id=item_id, on_done=on_done)
+            # Prune finished threads
+            self.pending_threads = [t for t in self.pending_threads if t.is_alive()]
+            
+            # Start and track the thread
+            thread = mark_video_as_watched_threaded(watch_url, cookies, user_agent=ua, folder_id=self.folder_id, item_id=item_id, on_done=on_done)
+            self.pending_threads.append(thread)
         else:
             # Report why it was skipped
             reasons = []

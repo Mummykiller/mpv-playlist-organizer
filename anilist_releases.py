@@ -3,11 +3,12 @@ import json
 import urllib.request
 import ssl
 import sys
-import argparse
 import os
+import logging
 
-os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
-sys.dont_write_bytecode = True
+from utils.cli_base import BaseCLI, setup_script_env
+
+setup_script_env()
 
 # AniList GraphQL API endpoint
 ANILIST_API_URL = "https://graphql.anilist.co"
@@ -80,7 +81,7 @@ def get_today_airing_anime(start_timestamp, end_timestamp, page=1, per_page=50):
 
     try:
         if os.path.exists(custom_ca_file):
-            print("Info: Using custom 'ca.pem' for SSL verification.", file=sys.stderr)
+            logging.info("Using custom 'ca.pem' for SSL verification.")
             secure_context = ssl.create_default_context(cafile=custom_ca_file)
         else:
             # ssl.create_default_context() uses the system's trusted CAs for verification.
@@ -88,7 +89,7 @@ def get_today_airing_anime(start_timestamp, end_timestamp, page=1, per_page=50):
 
         with urllib.request.urlopen(req, context=secure_context, timeout=15) as response:
             if response.status != 200:
-                print(f"Error: Received status code {response.status}", file=sys.stderr)
+                logging.error(f"Received status code {response.status}")
                 return None
             return json.loads(response.read().decode('utf-8'))
     except urllib.error.URLError as e:
@@ -103,15 +104,15 @@ def get_today_airing_anime(start_timestamp, end_timestamp, page=1, per_page=50):
                 f"inside the 'data' directory located at: {os.path.join(script_dir, 'data')}\n"
                 "The connection was aborted to protect your security."
             )
-            print(error_message, file=sys.stderr)
+            logging.error(error_message)
             return None
         else:
             # The error was not SSL-related (e.g., DNS failure, connection refused).
-            print(f"Error fetching data: {e}", file=sys.stderr)
+            logging.error(f"Error fetching data: {e}")
             return None
     except Exception as e:
         # Catch any other unexpected errors (e.g., JSON decoding).
-        print(f"An unexpected error occurred: {e}", file=sys.stderr)
+        logging.error(f"An unexpected error occurred: {e}")
         return None
 
 def convert_utc_to_local(utc_timestamp):
@@ -127,16 +128,16 @@ def convert_utc_to_local(utc_timestamp):
     return local_dt.strftime("%H:%M")
 
 def main():
-    parser = argparse.ArgumentParser(description="Fetch AniList airing schedule.")
-    parser.add_argument('--ping', action='store_true', help='Only fetch the total count of releases.')
-    parser.add_argument('--days', type=int, default=0, help='Day offset from today (e.g., 1 for tomorrow).')
-    args = parser.parse_args()
+    cli = BaseCLI(description="Fetch AniList airing schedule.")
+    cli.add_argument('--ping', action='store_true', help='Only fetch the total count of releases.')
+    cli.add_argument('--days', type=int, default=0, help='Day offset from today (e.g., 1 for tomorrow).')
+    args = cli.parse_args()
 
     if args.ping:
         # In ping mode, we don't need to print this verbose message.
         pass
     else:
-        print(f"Fetching anime episodes releasing (Offset: {args.days} days)...", file=sys.stderr)
+        logging.info(f"Fetching anime episodes releasing (Offset: {args.days} days)...")
     
     # Get the current time in the user's local timezone
     local_tz = datetime.now().astimezone().tzinfo

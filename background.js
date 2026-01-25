@@ -110,6 +110,11 @@ const actionHandlers = {
 
 actionHandlers["session_restored"] = playback_handlers.handleSessionRestored;
 
+// Centralized Python Log Listener
+addNativeListener("log", (data) => {
+	if (data.log) broadcastLog(data.log);
+});
+
 async function performNativeHostHeartbeat() {
 	try {
 		const response = await nativeLink.ping();

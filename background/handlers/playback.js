@@ -2,6 +2,7 @@ import {
 	addNativeListener,
 } from "../../utils/nativeConnection.module.js";
 import { nativeLink } from "../../utils/nativeLink.js";
+import { normalizeYouTubeUrl } from "../../utils/commUtils.module.js";
 import { debouncedSyncToNativeHostFile } from "../core_services.js";
 import { broadcastLog, broadcastToTabs } from "../messaging.js";
 import { storage } from "../storage_instance.js";
@@ -52,8 +53,10 @@ export async function handleItemNaturalCompletion(data) {
 		if (clearMode === "yes") {
 			// Mode: "yes" -> Clear immediately and silently
 			broadcastLog({
-				text: `[Background]: Item '${itemId}' finished. Auto-clearing from '${folderId}'.`,
+				text: `[Background]: Item ${itemId} finished. Auto-clearing from '${folderId}'.`,
 				type: "info",
+				itemId: itemId,
+				folderId: folderId
 			});
 			await clearFolderPlaylist(folderId, {
 				playedIds: [itemId],
@@ -66,6 +69,8 @@ export async function handleItemNaturalCompletion(data) {
 			broadcastLog({
 				text: `[Background]: Item finished. Staging for batch clear (Items in stack: ${session.completedItemIds.size}).`,
 				type: "info",
+				itemId: itemId,
+				folderId: folderId
 			});
 
 			// 1. Refresh UI to hide the completed items visually
@@ -282,24 +287,39 @@ async function clearFolderPlaylist(folderId, options = {}) {
 	if (storageData.folders[folderId]) {
 		const folder = storageData.folders[folderId];
 		const originalCount = folder.playlist.length;
+		let removedUrls = new Set();
 
 		// Correctly handle the scope to avoid clearing the whole folder
 		if (scope === "played" && Array.isArray(playedIds) && playedIds.length > 0) {
 			const playedSet = new Set(playedIds);
 			console.log(`[Background] clearFolderPlaylist: Removing ${playedIds.length} items from storage:`, playedIds);
+			
+			// Capture URLs before removing (Normalized)
+			folder.playlist.forEach(item => {
+				if (playedSet.has(item.id)) removedUrls.add(normalizeYouTubeUrl(item.url));
+			});
+
 			folder.playlist = folder.playlist.filter(
 				(item) => !playedSet.has(item.id),
 			);
 		} else if (scope === "session" && Array.isArray(sessionIds) && sessionIds.length > 0) {
 			const sessionSet = new Set(sessionIds);
+			
+			// Capture URLs before removing (Normalized)
+			folder.playlist.forEach(item => {
+				if (sessionSet.has(item.id)) removedUrls.add(normalizeYouTubeUrl(item.url));
+			});
+
 			folder.playlist = folder.playlist.filter(
 				(item) => !sessionSet.has(item.id),
 			);
 		} else if (scope === "all") {
+			// For full clear, capture all URLs if global sync is on.
+			if (storageData.settings.ui_preferences.global.sync_global_removals === true) {
+				folder.playlist.forEach(item => removedUrls.add(normalizeYouTubeUrl(item.url)));
+			}
 			folder.playlist = [];
 		} else {
-			// If scope is unknown or IDs are missing, DO NOT clear everything.
-			// This prevents accidental wiping of the whole playlist.
 			console.warn(`[Background] clearFolderPlaylist: Aborted clear. Scope '${scope}' was requested but no valid IDs were provided.`);
 			return false;
 		}
@@ -310,12 +330,62 @@ async function clearFolderPlaylist(folderId, options = {}) {
 				text: `[Background]: Removed ${removedCount} item(s) from '${folderId}' based on clear scope '${scope}'.`,
 				type: "info",
 			});
-		}
 
-		await storage.set(storageData, folderId);
-		debouncedSyncToNativeHostFile(true);
-		await broadcastPlaylistState(folderId, folder.playlist);
-		return true;
+			let globalSyncPerformed = false;
+			// --- Global URL Synchronization ---
+			if (storageData.settings.ui_preferences.global.sync_global_removals === true && removedUrls.size > 0) {
+				const affectedFolders = new Set();
+				
+				for (const [fId, otherFolder] of Object.entries(storageData.folders)) {
+					if (fId === folderId) continue;
+
+					const itemsToRemoveFromThisFolder = otherFolder.playlist.filter(
+						(item) => removedUrls.has(normalizeYouTubeUrl(item.url))
+					);
+					
+					if (itemsToRemoveFromThisFolder.length > 0) {
+						otherFolder.playlist = otherFolder.playlist.filter(
+							(item) => !removedUrls.has(normalizeYouTubeUrl(item.url))
+						);
+						affectedFolders.add(fId);
+
+						// Handle live removal for synchronized folders if they are active
+						const { mpv_playback_cache: playbackCache } = await chrome.storage.local.get("mpv_playback_cache");
+						if (playbackCache && playbackCache.folderId === fId && (playbackCache.is_running || !playbackCache.isIdle)) {
+							for (const syncItem of itemsToRemoveFromThisFolder) {
+								nativeLink.call("remove_item_live", {
+									folderId: fId,
+									item_id: syncItem.id,
+								}).catch(() => {});
+							}
+						}
+					}
+				}
+
+				if (affectedFolders.size > 0) {
+					globalSyncPerformed = true;
+					broadcastLog({
+						text: `[Background]: Globally removed ${removedUrls.size} unique URL(s) from ${affectedFolders.size} other folder(s).`,
+						type: "info"
+					});
+					
+					// Save the entire library since multiple folders were modified
+					await storage.set(storageData);
+
+					for (const fId of affectedFolders) {
+						await broadcastPlaylistState(fId, storageData.folders[fId].playlist);
+					}
+				}
+			}
+
+			if (!globalSyncPerformed) {
+				await storage.set(storageData, folderId);
+			}
+			
+			debouncedSyncToNativeHostFile(true);
+			await broadcastPlaylistState(folderId, folder.playlist);
+			return true;
+		}
 	}
 	return false;
 }
@@ -484,6 +554,8 @@ export const handlePlay = createHandler(async ({ request, folderId, data }) => {
 		broadcastLog({
 			text: `[Background]: Received 'play' request for single item: ${url_item.title || url_item.url}${play_new_instance ? " (New Instance)" : ""}`,
 			type: "info",
+			itemId: url_item.id,
+			folderId: folderId
 		});
 
 		const options = {
@@ -656,6 +728,8 @@ export async function handleUpdateLastPlayed(data) {
 		broadcastLog({
 			text: `[Background]: Tracker reported last_played_id update for folder '${folderId}': ${itemId}`,
 			type: "info",
+			itemId: itemId,
+			folderId: folderId
 		});
 
 		const storageData = await storage.get();
@@ -754,6 +828,8 @@ export const handleAppend = createHandler(async ({ request, folderId }) => {
 	broadcastLog({
 		text: `[Background]: Received 'queue' request for (${folderId}): ${url_item.title || url_item.url}`,
 		type: "info",
+		itemId: url_item.id,
+		folderId: folderId
 	});
 
 	session.processQueue();
