@@ -42,22 +42,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						return resolve({ success: false, error: msg });
 					}
 
-					if (response) {
-						const silentActions = ["play", "get_playlist", "heartbeat"];
-						if (response.message && !silentActions.includes(action)) {
-							this.onLog({
-								text: `[Background]: ${response.message}`,
-								type: "info",
-							});
-						}
-						if (response.error && !silentActions.includes(action)) {
-							this.onLog({
-								text: `[Background]: ${response.error}`,
-								type: "error",
-							});
-						}
-					}
-					resolve(response || { success: false, error: "No response" });
+					resolve(response || { success: false, error: "No response from background." });
 				});
 			});
 		}

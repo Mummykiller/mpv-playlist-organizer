@@ -1678,6 +1678,24 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const entry = document.createElement("div");
 			entry.className = `log-item log-item-${log.type || "info"}`;
 
+			let logText = log.text;
+
+			// Safety Lookup: If log contains a UUID but no resolved title, try local lookup
+			if (this.playlistUI?.currentPlaylist) {
+				const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+				const match = logText.match(uuidPattern);
+				if (match) {
+					const id = match[0];
+					const item = this.playlistUI.currentPlaylist.find(i => i.id === id);
+					if (item && item.title) {
+						logText = logText.replace(id, `'[${item.title}]'`);
+					} else {
+						// If no title found, at least shorten the ID for readability
+						logText = logText.replace(id, id.substring(0, 8));
+					}
+				}
+			}
+
 			const isError = log.type === "error";
 			if (!this.state.state.logFilters[isError ? "error" : "info"]) {
 				entry.classList.add("hidden-by-filter");
@@ -1689,7 +1707,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				minute: "2-digit",
 				second: "2-digit",
 			});
-			entry.innerHTML = `<span class="log-time">[${timestamp}]</span> <span class="log-text">${log.text}</span>`;
+			entry.innerHTML = `<span class="log-time">[${timestamp}]</span> <span class="log-text">${logText}</span>`;
 
 			container.appendChild(entry);
 			container.scrollTop = container.scrollHeight;

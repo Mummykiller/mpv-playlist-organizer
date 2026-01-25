@@ -42,6 +42,11 @@ export class OptionsManager {
 				type: "select",
 			},
 			{
+				key: "sync_global_removals",
+				elementId: "sync-global-removals-checkbox",
+				type: "checkbox",
+			},
+			{
 				key: "one_click_add",
 				elementId: "one-click-add-checkbox",
 				type: "checkbox",

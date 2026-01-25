@@ -184,11 +184,13 @@ async function _scrapeAndAddUrl(
 		let scanResult;
 		try {
 			scanResult = await findM3u8InUrl(urlToAdd, tab);
+			// Refinement 4: Only fail if the URL is missing.
+			// findM3u8InUrl already handles fallback titles.
 			if (scanResult.url) {
 				return await addUrlToFolder(
 					folderId,
 					scanResult.url,
-					scanResult.title,
+					scanResult.title || "Scanned Stream",
 					tab,
 					sender,
 				);

@@ -214,6 +214,7 @@ export class StorageManager {
 						],
 						show_play_new_button: false,
 						duplicate_url_behavior: "ask",
+						sync_global_removals: false,
 						auto_append_on_add: true,
 						live_removal: true,
 						confirm_remove_folder: true,

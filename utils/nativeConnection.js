@@ -142,6 +142,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 				if (normalizedResponse.action)
 					dispatchNativeEvent(normalizedResponse.action, normalizedResponse);
+				
 				if (normalizedResponse.log) {
 					dispatchNativeEvent("log", { action: "log", log: normalizedResponse.log });
 				}

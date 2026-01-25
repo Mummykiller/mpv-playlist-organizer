@@ -128,7 +128,9 @@ mp.register_event("end-file", function(event)
     local time = mp.get_property_number("time-pos")
     
     if event.reason == "eof" then
-        run_fallback_sync({mark_watched = true, time = 0, force = true}) -- Reset time on completion
+        -- REMOVED force=true: We trust the primary Python tracker to handle EOF if active.
+        -- If Python is dead (hb > 12s), fallback will still trigger.
+        run_fallback_sync({mark_watched = true, time = 0}) 
     elseif event.reason == "stop" or event.reason == "quit" then
         run_fallback_sync({time = time, force = true})
     end

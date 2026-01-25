@@ -4,15 +4,15 @@ import logging
 import os
 import threading
 import time
-import argparse 
 import sys 
 import json
 
+from utils.cli_base import BaseCLI, setup_script_env
 
-sys.dont_write_bytecode = True # Prevent __pycache__ generation for this script
+setup_script_env()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure logging (will be handled by BaseCLI if not set, but we can set defaults here)
+# BaseCLI uses default basicConfig. We'll rely on that or existing config.
 
 class PlaylistHandler(http.server.SimpleHTTPRequestHandler):
     """
@@ -143,10 +143,10 @@ def stop_playlist_server(httpd):
         logging.info("Playlist server shut down.")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Simple M3U Playlist HTTP Server")
-    parser.add_argument("--port", type=int, default=8000, help="Starting port to bind to")
-    parser.add_argument("--file", type=str, default="test_playlist.m3u", help="Path to the M3U file to serve")
-    args = parser.parse_args()
+    cli = BaseCLI(description="Simple M3U Playlist HTTP Server")
+    cli.add_argument("--port", type=int, default=8000, help="Starting port to bind to")
+    cli.add_argument("--file", type=str, default="test_playlist.m3u", help="Path to the M3U file to serve")
+    args = cli.parse_args()
 
     # The main execution block now uses the start_playlist_server function
     server, thread, actual_port = start_playlist_server(start_port=args.port, m3u_file_to_serve=args.file)

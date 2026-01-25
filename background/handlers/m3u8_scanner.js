@@ -150,6 +150,11 @@ async function _createScannerWindow(url) {
  * @returns {Promise<string>} A promise that resolves with the detected M3U8 URL.
  */
 async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
+	// Refinement 1: Check if already detected during the tab's loading phase
+	if (_detectedUrlsState[tabId]) {
+		return _detectedUrlsState[tabId];
+	}
+
 	return new Promise((resolve, reject) => {
 		const timeoutDuration = timeoutInSeconds * 1000;
 
@@ -179,6 +184,46 @@ async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
 			timeoutId: timeoutId, // Store the initial timeout ID
 		};
 	});
+}
+
+/**
+ * Safely attempts to scrape details from a tab with retries and readiness checks.
+ */
+async function _safeScrapeDetails(tabId, detectedUrl, fallbackTitle) {
+	const maxRetries = 2;
+	for (let i = 0; i <= maxRetries; i++) {
+		try {
+			// Verify tab exists and is ready
+			const tab = await new Promise((resolve) => {
+				chrome.tabs.get(tabId, (tab) => {
+					if (chrome.runtime.lastError) resolve(null);
+					else resolve(tab);
+				});
+			});
+
+			if (!tab) return { title: fallbackTitle, url: detectedUrl };
+
+			// If tab is still loading, wait briefly (only on first try)
+			if (i === 0 && tab.status === "loading") {
+				await new Promise((r) => setTimeout(r, 1000));
+			}
+
+			// Attempt message
+			const response = await chrome.tabs.sendMessage(tabId, {
+				action: "scrape_and_get_details",
+				detectedUrl: detectedUrl,
+			});
+
+			if (response && response.title) {
+				return response;
+			}
+		} catch (e) {
+			if (i < maxRetries) {
+				await new Promise((r) => setTimeout(r, 800)); // Wait before retry
+			}
+		}
+	}
+	return { title: fallbackTitle, url: detectedUrl };
 }
 
 /**
@@ -255,26 +300,23 @@ export async function findM3u8InUrl(url, originalTab) {
 		let scrapedDetails = { title: url, url: url };
 		try {
 			detectedStreamUrl = await streamPromise;
-			// Only scrape title AFTER the stream is detected.
-			// This ensures the content script has the detectedUrl in its state for better cleaning.
-			scrapedDetails = await chrome.tabs
-				.sendMessage(scannerTab.id, {
-					action: "scrape_and_get_details",
-					detectedUrl: detectedStreamUrl,
-				})
-				.catch(() => ({ title: url, url: url }));
+
+			// Refinement 3: Settling delay after detection
+			await new Promise((r) => setTimeout(r, 500));
+
+			// Refinement 2: Safe scraping with fallback
+			scrapedDetails = await _safeScrapeDetails(
+				scannerTab.id,
+				detectedStreamUrl,
+				"Scanned Stream",
+			);
 		} catch (error) {
 			broadcastLog({
 				text: `[Scanner]: Stream detection failed or timed out: ${error.message}`,
 				type: "warning",
 			});
 			// Fallback scrape if detection fails
-			scrapedDetails = await chrome.tabs
-				.sendMessage(scannerTab.id, {
-					action: "scrape_and_get_details",
-					detectedUrl: null,
-				})
-				.catch(() => ({ title: url, url: url }));
+			scrapedDetails = await _safeScrapeDetails(scannerTab.id, null, url);
 		}
 
 		const finalUrl = detectedStreamUrl; // Only use the detected stream.
