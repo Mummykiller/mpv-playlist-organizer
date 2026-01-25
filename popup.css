@@ -1356,6 +1356,31 @@ button:disabled {
 	transform: scale(0.95);
 }
 
+.quick-action-btn.selection-mode-active {
+	background-color: var(--accent-primary) !important;
+	color: white !important;
+	border-color: white !important;
+	box-shadow: 0 0 10px var(--accent-primary) !important;
+	animation: sparkle 1.5s infinite;
+}
+
+.playlist-container.selection-mode-active .list-item {
+	border-color: var(--accent-inactive);
+	cursor: alias; /* Indicate special action */
+}
+
+.playlist-container.selection-mode-active .list-item:hover {
+	border-color: var(--accent-primary);
+	background-color: rgba(88, 101, 242, 0.1);
+	box-shadow: 0 0 8px var(--accent-primary);
+}
+
+@keyframes sparkle {
+	0% { opacity: 1; }
+	50% { opacity: 0.7; }
+	100% { opacity: 1; }
+}
+
 /* --- New Playlist Styles for Popup --- */
 .playlist-container {
 	border: 1px solid var(--border-primary);

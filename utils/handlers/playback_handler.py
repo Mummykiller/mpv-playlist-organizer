@@ -275,26 +275,72 @@ class PlaybackHandler(BaseHandler):
 
     @command('play_new_instance')
     def handle_play_new_instance(self, request: native_link.PlaybackRequest):
+        settings = self._get_merged_settings(request.settings)
         return self._launch_unmanaged_mpv(
             request.playlist or [], request.geometry, request.custom_width,
-            request.custom_height, request.custom_mpv_flags, request.automatic_mpv_flags
+            request.custom_height, request.custom_mpv_flags, request.automatic_mpv_flags,
+            settings=settings
         )
 
-    def _launch_unmanaged_mpv(self, playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags):
+    def _launch_unmanaged_mpv(self, playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, settings=None):
         mpv_exe = self.file_io.get_mpv_executable()
-        settings = self.file_io.get_settings()
+        if settings is None:
+            settings = self.file_io.get_settings()
+        
+        # 1. Enrich the items
+        enriched_playlist = []
+        for item in playlist:
+            item_to_enrich = item if isinstance(item, dict) else {"url": item}
+            try:
+                # enrich_single_item returns a list (handles expansions)
+                results = self.item_processor.enrich_single_item(item_to_enrich, settings=settings)
+                enriched_playlist.extend(results)
+            except Exception as e:
+                logging.warning(f"Failed to enrich item for unmanaged launch: {e}")
+                enriched_playlist.append(item_to_enrich)
+
+        if not enriched_playlist:
+            return native_link.failure("Could not resolve any items for unmanaged launch.")
+
+        # Extract metadata from enriched first item
+        first_item = enriched_playlist[0]
+        headers = first_item.get('headers')
+        cookies_browser = first_item.get('cookies_browser')
+        cookies_file = first_item.get('cookies_file')
+        ytdl_raw_options = first_item.get('ytdl_raw_options')
+        is_youtube = first_item.get('is_youtube', False)
+        use_ytdl_mpv = first_item.get('use_ytdl_mpv', False)
+
         try:
             full_command, has_terminal_flag = self.services.construct_mpv_command(
-                mpv_exe=mpv_exe, url=playlist, geometry=geometry,
-                custom_width=custom_width, custom_height=custom_height,
-                custom_mpv_flags=custom_mpv_flags, automatic_mpv_flags=automatic_mpv_flags,
-                settings=settings, playlist_start_index=0
+                mpv_exe=mpv_exe, 
+                url=enriched_playlist, 
+                geometry=geometry,
+                custom_width=custom_width, 
+                custom_height=custom_height,
+                custom_mpv_flags=custom_mpv_flags, 
+                automatic_mpv_flags=automatic_mpv_flags,
+                settings=settings, 
+                playlist_start_index=0,
+                headers=headers, 
+                cookies_browser=cookies_browser,
+                cookies_file=cookies_file,
+                ytdl_raw_options=ytdl_raw_options, 
+                is_youtube=is_youtube,
+                use_ytdl_mpv=use_ytdl_mpv,
+                script_dir=self.ctx.script_dir,
+                metadata_item=first_item,
+                temp_dir=self.ctx.temp_playlists_dir
             )
+            
+            import subprocess
+            import threading
             process = subprocess.Popen(full_command, **self.services.get_mpv_popen_kwargs(has_terminal_flag))
             threading.Thread(target=self.ctx.log_stream, args=(process.stderr, logging.warning, None), daemon=True).start()
             return native_link.success(message="New MPV instance launched.")
         except Exception as e:
-            logging.error(f"Error launching unmanaged mpv: {e}")
+            import traceback
+            logging.error(f"Error launching unmanaged mpv: {e}\n{traceback.format_exc()}")
             return native_link.failure(f"Error launching new mpv instance: {e}")
 
     def _stop_local_m3u_server(self):

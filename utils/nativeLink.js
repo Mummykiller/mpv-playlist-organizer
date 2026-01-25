@@ -65,7 +65,7 @@ class NativeLink {
 		};
 
 		if (isPlayNew && item) {
-			payload.playlist = [item.url];
+			payload.playlist = [payload.url_item];
 		}
 
 		return this.call(action, payload);
@@ -89,7 +89,9 @@ class NativeLink {
 		};
 
 		if (isPlayNew && m3uData.type === "items") {
-			payload.playlist = m3uData.value.map((item) => item.url);
+			payload.playlist = m3uData.value.map((item) =>
+				this._injectItemSettings(item, globalPrefs),
+			);
 		}
 
 		return this.call(action, payload);

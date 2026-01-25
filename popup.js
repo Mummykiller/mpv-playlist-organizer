@@ -315,6 +315,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		});
 
+		// Selection Mode State
+		let isSelectionModeActive = false;
+
 		// Reorder Elements
 		const reorderContainer = document.getElementById("reorder-container");
 		const miniReorderContainer = document.getElementById(
@@ -1741,11 +1744,36 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		// --- Playlist Event Binding ---
 		playlistContainer.addEventListener("click", (e) => {
+			const listItem = e.target.closest(".list-item");
+			if (!listItem) return;
+
 			const removeBtn = e.target.closest(".btn-remove-item");
 			const copyBtn = e.target.closest(".btn-copy-item");
+			const watchedCheckbox = e.target.closest(".item-watched-checkbox");
 
+			// Handle Selection Mode (Disconnected Launch)
+			if (isSelectionModeActive && !removeBtn && !copyBtn && !watchedCheckbox) {
+				const id = listItem.dataset.id;
+				const fullItem = popupState.currentPlaylist.find(i => i.id === id);
+
+				if (fullItem) {
+					sendMessageAsync({
+						action: "play_new_instance",
+						url_item: fullItem,
+						play_new_instance: true,
+						folderId: miniFolderSelect.value
+					});
+					
+					isSelectionModeActive = false;
+					playlistContainer.classList.remove("selection-mode-active");
+					document.querySelectorAll(".quick-action-btn.selection-mode-active").forEach(el => el.classList.remove("selection-mode-active"));
+					document.getElementById("quick-actions-bar")?.classList.remove("selection-mode-active");
+				}
+				return;
+			}
+
+			// Standard Actions
 			if (removeBtn) {
-				const listItem = removeBtn.closest(".list-item");
 				const index = parseInt(removeBtn.dataset.index, 10);
 				const itemId = listItem?.dataset.id;
 				const folderId = miniFolderSelect.value;
@@ -1813,9 +1841,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 		miniCloseMpvBtn.addEventListener("click", handleMiniCloseMpv);
 
 		// Quick Action Bar Listeners
-		document.querySelectorAll(".quick-action-btn").forEach((btn) => {
+		const quickActionButtons = document.querySelectorAll(".quick-action-btn");
+		quickActionButtons.forEach((btn, index) => {
+			// Identify the toggle button (it's the last one)
+			const isLast = index === quickActionButtons.length - 1;
+			if (isLast) {
+				btn.textContent = "⚡";
+				btn.title = "Toggle Disconnected Launch (Selection Mode)";
+				btn.classList.add("btn-disconnected-toggle");
+			}
+
 			btn.addEventListener("click", () => {
-				console.log(`Quick Action ${btn.textContent} clicked`);
+				if (btn.classList.contains("btn-disconnected-toggle")) {
+					isSelectionModeActive = !isSelectionModeActive;
+					btn.classList.toggle("selection-mode-active", isSelectionModeActive);
+					document.getElementById("quick-actions-bar")?.classList.toggle("selection-mode-active", isSelectionModeActive);
+					playlistContainer.classList.toggle("selection-mode-active", isSelectionModeActive);
+				} else {
+					console.log(`Quick Action ${btn.textContent} clicked`);
+				}
 			});
 		});
 
