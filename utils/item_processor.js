@@ -36,8 +36,8 @@ export function processPlaylistItem(rawItem, options = {}) {
 	let title = "";
 	let id = forceNewId ? null : (rawItem.id || null);
 	let settings = rawItem.settings || {};
-	let resumeTime = preserveResumeTime ? rawItem.resume_time : undefined;
-    let markedAsWatched = rawItem.marked_as_watched;
+	let resumeTime = preserveResumeTime ? rawItem.resumeTime : undefined;
+    let markedAsWatched = rawItem.markedAsWatched;
 
 	if (typeof rawItem === "string") {
 		url = rawItem;
@@ -58,8 +58,8 @@ export function processPlaylistItem(rawItem, options = {}) {
 		title: sanitizedTitle,
 		id: id || generateItemId(),
 		settings: settings,
-		...(resumeTime !== undefined && { resume_time: resumeTime }),
-        ...(markedAsWatched !== undefined && { marked_as_watched: markedAsWatched })
+		...(resumeTime !== undefined && { resumeTime: resumeTime }),
+        ...(markedAsWatched !== undefined && { markedAsWatched: markedAsWatched })
 	};
 }
 

@@ -484,7 +484,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					action: "get_ui_preferences",
 				});
 				const prefs = prefsResponse?.preferences;
-				if (prefs?.confirm_remove_folder ?? true) {
+				if (prefs?.confirmRemoveFolder ?? true) {
 					const confirmed = await showPopupConfirmation(
 						`Are you sure you want to remove the folder "${folderId}"? This action cannot be undone.`,
 					);
@@ -741,8 +741,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			if (effectivePlaylist && effectivePlaylist.length > 0) {
 				const prefs = cachedPrefs || {};
-				const highlightEnabled = prefs.enable_active_item_highlight ?? true;
-				const showWatchedGUI = prefs.show_watched_status_gui ?? true;
+				const highlightEnabled = prefs.enableActiveItemHighlight ?? true;
+				const showWatchedGUI = prefs.showWatchedStatusGui ?? true;
 
 				const fragment = document.createDocumentFragment();
 
@@ -770,7 +770,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
 
 					// 1. Copy URL Button
-					if (prefs.show_copy_title_button) {
+					if (prefs.showCopyTitleButton) {
 						const copyBtn = document.createElement("button");
 						copyBtn.className = "btn-copy-item";
 						copyBtn.dataset.url = item.url;
@@ -798,7 +798,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 						const watchedCheckbox = document.createElement("input");
 						watchedCheckbox.type = "checkbox";
 						watchedCheckbox.className = "item-watched-checkbox";
-						watchedCheckbox.checked = !item.marked_as_watched;
+						watchedCheckbox.checked = !item.markedAsWatched;
 						watchedCheckbox.title = watchedCheckbox.checked
 							? "Will mark as watched on YouTube"
 							: "Already marked or skipped";
@@ -988,16 +988,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 		});
 		if (btnMiniToggleStub) {
 			btnMiniToggleStub.addEventListener("click", async () => {
-				const currentVal = cachedPrefs?.show_minimized_stub ?? true;
+				const currentVal = cachedPrefs?.showMinimizedStub ?? true;
 				const newVal = !currentVal;
 				
 				// Optimistic local update
-				if (cachedPrefs) cachedPrefs.show_minimized_stub = newVal;
+				if (cachedPrefs) cachedPrefs.showMinimizedStub = newVal;
 				btnMiniToggleStub.classList.toggle("active-toggle", newVal);
 
 				await sendMessageAsync({
 					action: "set_ui_preferences",
-					preferences: { show_minimized_stub: newVal },
+					preferences: { showMinimizedStub: newVal },
 				});
 			});
 		}
@@ -1635,10 +1635,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (!statusResponse?.success)
 					return showStatus("Could not check MPV status.", true);
 				
-				if (!statusResponse.is_running && !isPlaybackLoading)
+				if (!statusResponse.isRunning && !isPlaybackLoading)
 					return showStatus("MPV is not running.", false);
 
-				if (prefsResponse?.preferences?.confirm_close_mpv ?? true) {
+				if (prefsResponse?.preferences?.confirmCloseMpv ?? true) {
 					const confirmed = await showPopupConfirmation(
 						"Are you sure you want to close MPV?",
 					);
@@ -1665,7 +1665,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					const prefs = await sendMessageAsync({
 						action: "get_ui_preferences",
 					});
-					if (prefs?.preferences?.confirm_clear_playlist ?? true) {
+					if (prefs?.preferences?.confirmClearPlaylist ?? true) {
 						const confirmed = await showPopupConfirmation(
 							`Are you sure you want to clear the playlist in "${folderId}"?`,
 						);
@@ -1759,8 +1759,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (fullItem) {
 					sendMessageAsync({
 						action: "play_new_instance",
-						url_item: fullItem,
-						play_new_instance: true,
+						urlItem: fullItem,
+						playNewInstance: true,
 						folderId: miniFolderSelect.value
 					});
 					
@@ -1928,7 +1928,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				]);
 
 				// Reconstruct minimal baseline data for instant render
-				const prefs = initialStorage.mpv_settings?.ui_preferences?.global;
+				const prefs = initialStorage.mpv_settings?.uiPreferences?.global;
 				cachedPrefs = prefs;
 				const folderIds = initialStorage.mpv_folder_index || ["Default"];
 				const playbackCache = initialStorage.mpv_playback_cache || {};
@@ -1936,8 +1936,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 				// Priority for initial folder:
 				// 1. If MPV is running (active/not idle), show THAT folder instantly.
 				// 2. Otherwise use last used folder.
-				const isCacheActive = playbackCache.folderId && (playbackCache.is_running || !playbackCache.isIdle);
-				const lastUsedFolderId = (isCacheActive ? playbackCache.folderId : (initialStorage.mpv_settings?.last_used_folder_id || folderIds[0]));
+				const isCacheActive = playbackCache.folderId && (playbackCache.isRunning || !playbackCache.isIdle);
+				const lastUsedFolderId = (isCacheActive ? playbackCache.folderId : (initialStorage.mpv_settings?.lastUsedFolderId || folderIds[0]));
 
 				// Get initial playlist for the target folder instantly
 				const initialPlaylistData = await chrome.storage.local.get(
@@ -1948,7 +1948,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 						?.playlist || [];
 				const lastPlayedId =
 					initialPlaylistData[`mpv_folder_data_${lastUsedFolderId}`]
-						?.last_played_id;
+						?.lastPlayedId;
 
 				// Set initial mode optimistically based on prefs
 				const showMiniView = prefs?.mode === "minimized";
@@ -1958,11 +1958,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (prefs) {
 					optionsManager.updateAllPreferencesUI(prefs);
 					if (btnMiniToggleStub) {
-						const isStubEnabled = prefs.show_minimized_stub ?? true;
+						const isStubEnabled = prefs.showMinimizedStub ?? true;
 						btnMiniToggleStub.classList.toggle("active-toggle", isStubEnabled);
 					}
-					if (prefs.kb_open_popup)
-						popupKeybinds.openPopup = prefs.kb_open_popup;
+					if (prefs.kbOpenPopup)
+						popupKeybinds.openPopup = prefs.kbOpenPopup;
 				}
 
 				populateFolderDropdowns({ success: true, folderIds, lastUsedFolderId });
@@ -1970,7 +1970,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				// Seed the playback manager with the cache instantly
 				MPV.playbackStateManager.update({
 					folderId: playbackCache.folderId,
-					isRunning: playbackCache.is_running || !playbackCache.isIdle,
+					isRunning: playbackCache.isRunning || !playbackCache.isIdle,
 					isPaused: playbackCache.isPaused,
 					isIdle: playbackCache.isIdle,
 					lastPlayedId: playbackCache.lastPlayedId
@@ -1980,7 +1980,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					// Render playlist instantly from storage (Static state + Playback cache)
 					const isFolderActive =
 						playbackCache.folderId === lastUsedFolderId &&
-						(playbackCache.is_running || !playbackCache.isIdle);
+						(playbackCache.isRunning || !playbackCache.isIdle);
 					const isPaused = (playbackCache.isPaused || playbackCache.isIdle) || false;
 
 					// Priority for lastPlayedId: Cache (real-time) > Storage (backup)
@@ -2017,8 +2017,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 					if (miniAddBtn) miniAddBtn.focus();
 				} else {
-					if (prefs?.autofocus_new_folder) newFolderNameInput.focus();
-				}
+					                if (prefs?.autofocusNewFolder) newFolderNameInput.focus();				}
 
 				// 2. DEEP SYNC: Now fetch live/contextual data (Can be slow)
 				(async () => {
@@ -2076,7 +2075,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 								
 								// Update quick toggles
 								if (btnMiniToggleStub) {
-									const isStubEnabled = uiState.preferences.show_minimized_stub ?? true;
+									const isStubEnabled = uiState.preferences.showMinimizedStub ?? true;
 									btnMiniToggleStub.classList.toggle("active-toggle", isStubEnabled);
 								}
 							}
@@ -2155,7 +2154,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					isPaused: request.isPaused,
 					isIdle: request.isIdle,
 					isClosing: request.isClosing,
-					lastPlayedId: request.lastPlayedId || request.last_played_id,
+					lastPlayedId: request.lastPlayedId,
 					needsAppend: request.needsAppend
 				});
 
@@ -2164,7 +2163,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					if (isMiniView) {
 						renderPlaylist(
 							request.playlist,
-							request.lastPlayedId || request.last_played_id,
+							request.lastPlayedId,
 							request.isFolderActive,
 							request.isPaused,
 							request.needsAppend,
@@ -2233,7 +2232,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 						}
 						if (btnMiniToggleStub && response?.preferences) {
 							const isStubEnabled =
-								response.preferences.show_minimized_stub ?? true;
+								response.preferences.showMinimizedStub ?? true;
 							btnMiniToggleStub.classList.toggle("active-toggle", isStubEnabled);
 						}
 					})

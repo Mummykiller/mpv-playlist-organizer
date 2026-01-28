@@ -74,9 +74,9 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 		};
 	} else if (importedData && Array.isArray(importedData.playlist)) {
 		const folder = { playlist: processPlaylist(importedData.playlist, processorOptions) };
-		if (options.preserveLastPlayed && importedData.last_played_id) {
-			if (folder.playlist.some((i) => i.id === importedData.last_played_id)) {
-				folder.last_played_id = importedData.last_played_id;
+		if (options.preserveLastPlayed && importedData.lastPlayedId) {
+			if (folder.playlist.some((i) => i.id === importedData.lastPlayedId)) {
+				folder.lastPlayedId = importedData.lastPlayedId;
 			}
 		}
 		foldersToImport[baseFolderName] = folder;
@@ -86,9 +86,9 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 			const folderContent = source[key];
 			if (folderContent && Array.isArray(folderContent.playlist)) {
 				const folder = { playlist: processPlaylist(folderContent.playlist, processorOptions) };
-				if (options.preserveLastPlayed && folderContent.last_played_id) {
-					if (folder.playlist.some((i) => i.id === folderContent.last_played_id)) {
-						folder.last_played_id = folderContent.last_played_id;
+				if (options.preserveLastPlayed && folderContent.lastPlayedId) {
+					if (folder.playlist.some((i) => i.id === folderContent.lastPlayedId)) {
+						folder.lastPlayedId = folderContent.lastPlayedId;
 					}
 				}
 				foldersToImport[key] = folder;
@@ -128,16 +128,16 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 
 async function _importSettingsLogic(importedData, localData) {
 	const importedSettings = importedData.settings;
-	const excludeKeys = ["last_used_folder_id", "anilist_cache"];
+	const excludeKeys = ["lastUsedFolderId", "anilist_cache"];
 
 	let restoredCount = 0;
 	for (const key in importedSettings) {
 		if (excludeKeys.includes(key)) continue;
 
-		if (key === "ui_preferences") {
-			// Deep merge for ui_preferences to preserve domains and positions if they were missing in backup
+		if (key === "ui_preferences" || key === "uiPreferences") {
+			// Deep merge for uiPreferences to preserve domains and positions if they were missing in backup
 			const importedPrefs = importedSettings[key];
-			const localPrefs = localData.settings[key] || { global: {}, domains: {} };
+			const localPrefs = localData.settings.uiPreferences || { global: {}, domains: {} };
 
 			// Restore global prefs but preserve existing keys if not present in backup
 			localPrefs.global = {
@@ -153,7 +153,7 @@ async function _importSettingsLogic(importedData, localData) {
 				};
 			}
 			
-			localData.settings[key] = localPrefs;
+			localData.settings.uiPreferences = localPrefs;
 			restoredCount++;
 		} else {
 			localData.settings[key] = importedSettings[key];
@@ -164,16 +164,16 @@ async function _importSettingsLogic(importedData, localData) {
 	// Sync to native host
 	try {
 		const nativeSyncKeys = [
-			"mpv_path", "mpv_decoder", "enable_url_analysis", "browser_for_url_analysis",
-			"enable_youtube_analysis", "user_agent_string", "enable_smart_resume",
-			"enable_active_item_highlight", "disable_network_overrides", "enable_cache",
-			"http_persistence", "demuxer_max_bytes", "demuxer_max_back_bytes",
-			"cache_secs", "demuxer_readahead_secs", "stream_buffer_size",
-			"ytdlp_concurrent_fragments", "enable_reconnect", "reconnect_delay",
-			"automatic_mpv_flags",
+			"mpvPath", "mpvDecoder", "enableUrlAnalysis", "browserForUrlAnalysis",
+			"enableYoutubeAnalysis", "userAgentString", "enableSmartResume",
+			"enableActiveItemHighlight", "disableNetworkOverrides", "enableCache",
+			"httpPersistence", "demuxerMaxBytes", "demuxerMaxBackBytes",
+			"cacheSecs", "demuxerReadaheadSecs", "streamBufferSize",
+			"ytdlpConcurrentFragments", "enableReconnect", "reconnectDelay",
+			"automaticMpvFlags",
 		];
 		const syncPrefs = {};
-		const globalPrefs = localData.settings.ui_preferences?.global || {};
+		const globalPrefs = localData.settings.uiPreferences?.global || {};
 		nativeSyncKeys.forEach((key) => {
 			if (globalPrefs[key] !== undefined) syncPrefs[key] = globalPrefs[key];
 		});
@@ -192,8 +192,8 @@ export const handleExportSettings = createHandler(async ({ data, request }) => {
 	const filename = request.filename || "mpv_settings_backup";
 	const filteredSettings = JSON.parse(JSON.stringify(data.settings));
 
-	if (filteredSettings.ui_preferences?.global) {
-		const global = filteredSettings.ui_preferences.global;
+	if (filteredSettings.uiPreferences?.global) {
+		const global = filteredSettings.uiPreferences.global;
 		// We only remove dynamic status info, but keep positions and modes for a better restore experience
 		[
 			"dependencyStatus",
@@ -227,7 +227,7 @@ export const handleExportAllPlaylistsSeparately = createHandler(async ({ data, r
 			preserveTitle: options.preserveTitle,
 			preserveResumeTime: options.preserveLastPlayed
 		});
-		if (!options.preserveLastPlayed) delete folder.last_played_id;
+		if (!options.preserveLastPlayed) delete folder.lastPlayedId;
 	}
 
 	return nativeLink.fileSystem.call("export_all_playlists_separately", {
@@ -251,7 +251,7 @@ export const handleExportFolderPlaylist = createHandler(async ({ data, request }
 			preserveResumeTime: options.preserveLastPlayed
 		})
 	};
-	if (!options.preserveLastPlayed) delete folderToExport.last_played_id;
+	if (!options.preserveLastPlayed) delete folderToExport.lastPlayedId;
 
 	return nativeLink.fileSystem.call("export_playlists", {
 		data: folderToExport,

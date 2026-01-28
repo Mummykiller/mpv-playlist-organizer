@@ -45,7 +45,7 @@ const actionHandlers = {
 	switch_playlist: ui_state_handlers.handleSwitchPlaylist,
 	get_last_folder_id: createHandler(async ({ data }) => {
 		return {
-			folderId: data.settings.last_used_folder_id || Object.keys(data.folders)[0],
+			folderId: data.settings.lastUsedFolderId || Object.keys(data.folders)[0],
 		};
 	}),
 	set_ui_preferences: ui_state_handlers.handleSetUiPreferences,
@@ -123,7 +123,7 @@ async function performNativeHostHeartbeat() {
 			nativeHostStatus = {
 				status: "online",
 				lastCheck: Date.now(),
-				info: { python: response.python_version, platform: response.platform },
+				info: { python: response.pythonVersion, platform: response.platform },
 			};
 		} else {
 			nativeHostStatus.status = "error";
@@ -194,7 +194,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 		if (menuItemId.startsWith("add-playlist-to-folder-"))
 			return menuItemId.substring("add-playlist-to-folder-".length);
 		const data = await storage.get();
-		return data.settings.last_used_folder_id;
+		return data.settings.lastUsedFolderId;
 	};
 
 	const folderId = await getFolderId();
@@ -232,7 +232,7 @@ async function injectIntoTab(tab) {
 	try {
 		const data = await storage.get();
 		const restrictedDomains =
-			data.settings.ui_preferences.global.restricted_domains || [];
+			data.settings.uiPreferences.global.restrictedDomains || [];
 		try {
 			const url = new URL(tab.url);
 			if (
@@ -306,9 +306,9 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 		// Proactive broadcast: Even if the script is already there,
 		// tell it to refresh its view of the global playback state.
 		const data = await storage.get();
-		const currentStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
+		const currentStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ isRunning: false }));
 		
-		if (currentStatus?.is_running) {
+		if (currentStatus?.isRunning) {
 			await broadcastPlaylistState(currentStatus.folderId);
 		}
 	} catch (e) {}

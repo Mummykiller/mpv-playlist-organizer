@@ -51,7 +51,9 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
 
     # 1. Validation & Pre-Sync Operations (No file locks yet)
     index = file_io.get_index()
-    if folder_id not in index:
+    canonical_id = file_io._get_canonical_folder_id(folder_id, index)
+    
+    if canonical_id not in index:
         return False, f"Aborted: Folder '{folder_id}' not found in index.json"
 
     settings = file_io.get_settings()
@@ -68,7 +70,7 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
     # 3. Atomic Read-Modify-Write
     # We load the shard only now, AFTER the slow network call.
     needs_shard_save = False
-    playlist = file_io.get_playlist_shard(folder_id)
+    playlist = file_io.get_playlist_shard(canonical_id)
     
     if playlist:
         for item in playlist:
@@ -96,13 +98,13 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
 
     # 4. Handle Saves
     if needs_shard_save:
-        file_io.save_playlist_shard(folder_id, playlist, update_index=False)
+        file_io.save_playlist_shard(canonical_id, playlist, update_index=False)
 
     if update_last_played:
         # get_index/save_index are already atomic in file_io.py
         index = file_io.get_index()
-        if folder_id in index:
-            index[folder_id]["last_played_id"] = item_id
+        if canonical_id in index:
+            index[canonical_id]["last_played_id"] = item_id
             file_io.save_index(index)
             logging.info(f"Disk: Updated last played item to {item_id}.")
 

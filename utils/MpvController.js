@@ -87,7 +87,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						isPaused: req.isPaused,
 						isIdle: req.isIdle,
 						isClosing: req.isClosing,
-						lastPlayedId: req.lastPlayedId || req.last_played_id,
+						lastPlayedId: req.lastPlayedId,
 						needsAppend: req.needsAppend
 					});
 
@@ -99,7 +99,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					if (playlistToRender) {
 						this.playlistUI?.render(
 							playlistToRender,
-							req.lastPlayedId || req.last_played_id || this.state.state.lastPlayedId,
+							req.lastPlayedId || this.state.state.lastPlayedId,
 							req.isFolderActive ?? this.state.state.isFolderActive,
 							req.completedIds || []
 						);
@@ -163,8 +163,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						this.bridge.send("confirm_clear_playlist", null, {
 							confirmed,
 							folderId: finalReq.folderId,
-							played_ids: finalReq.playedIds || finalReq.played_ids,
-							session_ids: finalReq.sessionIds || finalReq.session_ids,
+							playedIds: finalReq.playedIds,
+							sessionIds: finalReq.sessionIds,
 							scope: finalReq.scope,
 						});
 					}
@@ -207,7 +207,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		async init() {
 			const initialPrefs = await this.bridge.send("get_ui_preferences");
 			const restrictedDomains =
-				initialPrefs?.preferences?.restricted_domains || [];
+				initialPrefs?.preferences?.restrictedDomains || [];
 			const currentHostname = window.location.hostname;
 
 			const isRestricted = restrictedDomains.some(
@@ -330,8 +330,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				anilistVisible: state.anilistVisible,
 				anilistHeight: state.anilistImageHeight,
 				detected: !!state.detectedUrl,
-				showStub: state.settings.show_minimized_stub,
-				highlight: state.settings.enable_active_item_highlight,
+				showStub: state.settings.showMinimizedStub,
+				highlight: state.settings.enableActiveItemHighlight,
 			};
 			const currentHash = JSON.stringify(relevantState);
 			if (currentHash === this._lastUpdateHash) return;
@@ -349,7 +349,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				// If stub is disabled, we show nothing (hidden state)
 				// unless we want to force maximize. 
 				// But let's respect the "Show Minimized Stub" setting.
-				if (state.settings.show_minimized_stub === false) {
+				if (state.settings.showMinimizedStub === false) {
 					this.ui.minimizedHost.style.display = "none";
 				} else {
 					this.ui.minimizedHost.style.display = "block";
@@ -423,7 +423,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					);
 				}
 
-				this.anilistUI.isEnabled = state.settings.enable_anilist_integration;
+				this.anilistUI.isEnabled = state.settings.enableAnilistIntegration;
 				this.anilistUI.isLocked = state.settings.lockAnilistPanel;
 				this.anilistUI.updateDynamicStyles();
 			}
@@ -464,7 +464,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const playbackControls =
 				this.ui.shadowRoot.getElementById("playback-controls");
 			if (playNewBtn && playbackControls) {
-				const showPlayNew = state.settings.show_play_new_button;
+				const showPlayNew = state.settings.showPlayNewButton;
 				playNewBtn.style.display = showPlayNew ? "flex" : "none";
 				playbackControls.style.gridTemplateColumns = showPlayNew
 					? "1fr 1fr auto"
@@ -474,7 +474,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const stubBtn = this.ui.shadowRoot.getElementById("btn-toggle-stub");
 			stubBtn?.classList.toggle(
 				"active-toggle",
-				state.settings.show_minimized_stub,
+				state.settings.showMinimizedStub,
 			);
 		}
 
@@ -487,36 +487,36 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 				// Dynamic mapping: Ensure all global keys from background are available in internal state
 				const mappedSettings = {
-					enable_active_item_highlight: true,
-					enable_smart_resume: true,
-					show_minimized_stub: true,
-					show_play_new_button: false,
-					enable_anilist_integration: true,
+					enableActiveItemHighlight: true,
+					enableSmartResume: true,
+					showMinimizedStub: true,
+					showPlayNewButton: false,
+					enableAnilistIntegration: true,
 					lockAnilistPanel: false,
 					forcePanelAttached: false,
 					anilistAttachOnOpen: true,
-					show_watched_status_gui: true,
-					enable_dblclick_copy: false,
-					show_copy_title_button: false,
-					confirm_clear_playlist: true,
-					confirm_close_mpv: true,
-					confirm_play_new: true,
-					confirm_folder_switch: true,
-					auto_append_on_add: true,
-					live_removal: true,
-					one_click_add: false,
+					showWatchedStatusGui: true,
+					enableDblclickCopy: false,
+					showCopyTitleButton: false,
+					confirmClearPlaylist: true,
+					confirmCloseMpv: true,
+					confirmPlayNew: true,
+					confirmFolderSwitch: true,
+					autoAppendOnAdd: true,
+					liveRemoval: true,
+					oneClickAdd: false,
 					...prefs // Overwrite with actual values from background
 				};
 
 				this.state.update(
 					{
-						kb_add_playlist: prefs.kb_add_playlist,
-						kb_toggle_controller: prefs.kb_toggle_controller,
-						kb_open_popup: prefs.kb_open_popup,
-						kb_play_playlist: prefs.kb_play_playlist,
-						kb_switch_playlist: prefs.kb_switch_playlist,
+						kbAddPlaylist: prefs.kbAddPlaylist,
+						kbToggleController: prefs.kbToggleController,
+						kbOpenPopup: prefs.kbOpenPopup,
+						kbPlayPlaylist: prefs.kbPlayPlaylist,
+						kbSwitchPlaylist: prefs.kbSwitchPlaylist,
 						anilistVisible: prefs.anilistPanelVisible ?? false,
-						anilistImageHeight: prefs.anilist_image_height ?? 126,
+						anilistImageHeight: prefs.anilistImageHeight ?? 126,
 						settings: mappedSettings,
 						pinned: prefs.pinned ?? false,
 						logVisible: prefs.logVisible ?? true,
@@ -526,8 +526,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					true,
 				);
 
-				if (prefs.scraper_filter_words) {
-					this.pageScraper.updateFilterWords(prefs.scraper_filter_words);
+				if (prefs.scraperFilterWords) {
+					this.pageScraper.updateFilterWords(prefs.scraperFilterWords);
 				}
 
 				const position = positionOverride || prefs.position;
@@ -550,7 +550,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 					this.anilistUI.isLocked = prefs.lockAnilistPanel ?? false;
 					this.anilistUI.forceAttached = prefs.forcePanelAttached ?? false;
-					this.anilistUI.isEnabled = prefs.enable_anilist_integration ?? true;
+					this.anilistUI.isEnabled = prefs.enableAnilistIntegration ?? true;
 					this.anilistUI.toggleVisibility(
 						this.state.state.anilistVisible,
 						false,
@@ -594,17 +594,17 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 			if (prefs.anilistPanelVisible !== undefined)
 				updateDelta.anilistVisible = prefs.anilistPanelVisible;
-			if (prefs.anilist_image_height !== undefined)
-				updateDelta.anilistImageHeight = prefs.anilist_image_height;
+			if (prefs.anilistImageHeight !== undefined)
+				updateDelta.anilistImageHeight = prefs.anilistImageHeight;
 
 			this.state.update(updateDelta);
 
 			// Re-render playlist if rendering-related settings changed
 			const renderingRelated = [
-				"enable_active_item_highlight",
-				"show_watched_status_gui",
-				"show_copy_title_button",
-				"enable_dblclick_copy",
+				"enableActiveItemHighlight",
+				"showWatchedStatusGui",
+				"showCopyTitleButton",
+				"enableDblclickCopy",
 			];
 			if (
 				renderingRelated.some((key) => prefs[key] !== undefined) &&
@@ -991,7 +991,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						// Update unified manager first
 						MPV.playbackStateManager.update({
 							folderId: folderId,
-							lastPlayedId: targetLastPlayed || response.lastPlayedId || response.last_played_id,
+							lastPlayedId: targetLastPlayed || response.lastPlayedId,
 							isRunning: targetIsActive !== undefined ? targetIsActive : response.isRunning,
 							isPaused: targetIsPaused !== undefined ? targetIsPaused : response.isPaused,
 							isIdle: response.isIdle,
@@ -1171,7 +1171,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				action === "play" &&
 				this.state.state.isFolderActive &&
 				!needsAppend &&
-				!data.play_new_instance;
+				!data.playNewInstance;
 
 			if (action === "play" && !isToggle) {
 				MPV.playbackStateManager.setLoading(folderId);
@@ -1197,23 +1197,24 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						"get_playlist",
 					];
 					if (response?.success && stateModifyingActions.includes(action)) {
-						// Always update the manager with whatever state the bridge returns
-						MPV.playbackStateManager.update({
-							folderId: folderId,
-							isRunning: response.isFolderActive ?? response.isRunning,
-							isPaused: response.isPaused,
-							needsAppend: response.needsAppend,
-							lastPlayedId: response.last_played_id || response.lastPlayedId
-						});
-
-						// Prefer using the list returned in the response if available (faster)
-						if (response.list) {
-							this.playlistUI?.render(
-								response.list,
-								response.last_played_id || response.lastPlayedId,
-								this.state.state.isFolderActive,
-							);
-						} else {
+												// Always update the manager with whatever state the bridge returns
+												MPV.playbackStateManager.update({
+													folderId: folderId,
+													isRunning: response.isFolderActive ?? response.isRunning,
+													isPaused: response.isPaused,
+													needsAppend: response.needsAppend,
+													lastPlayedId: response.lastPlayedId
+												});
+						
+												// Prefer using the list returned in the response if available (faster)
+												if (response.list) {
+													this.playlistUI?.render(
+														response.list,
+														response.lastPlayedId,
+														this.state.state.isFolderActive,
+													);
+												}
+						 else {
 							// Fallback to a full refresh if the response is generic
 							this.refreshPlaylist();
 						}
@@ -1292,14 +1293,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					this.setPinState(!this.state.state.pinned),
 				);
 			root.getElementById("btn-toggle-stub")?.addEventListener("click", () => {
-				const newVal = !this.state.state.settings.show_minimized_stub;
+				const newVal = !this.state.state.settings.showMinimizedStub;
 				this.state.update({
 					settings: {
 						...this.state.state.settings,
-						show_minimized_stub: newVal,
+						showMinimizedStub: newVal,
 					},
 				});
-				this.savePreference({ show_minimized_stub: newVal });
+				this.savePreference({ showMinimizedStub: newVal });
 			});
 			root
 				.getElementById("btn-toggle-ui-mode")
@@ -1323,13 +1324,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const fid = getFolderId();
 					if (!fid) return;
 					const confirmed =
-						!this.state.state.settings.confirm_play_new ||
+						!this.state.state.settings.confirmPlayNew ||
 						(await this.showPageLevelConfirmation(
 							"Launching a new MPV instance while another is running may cause issues. Continue?",
 						));
 					if (confirmed) {
 						this.sendCommandToBackground("play", fid, {
-							play_new_instance: true,
+							playNewInstance: true,
 						});
 					}
 				});
@@ -1344,7 +1345,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						?.classList.contains("btn-loading");
 
 					const confirmed =
-						!this.state.state.settings.confirm_close_mpv ||
+						!this.state.state.settings.confirmCloseMpv ||
 						(await this.showPageLevelConfirmation(
 							"Are you sure you want to close MPV?",
 						));
@@ -1367,7 +1368,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				const fid = getFolderId();
 				if (!fid) return;
 				const confirmed =
-					!this.state.state.settings.confirm_clear_playlist ||
+					!this.state.state.settings.confirmClearPlaylist ||
 					(await this.showPageLevelConfirmation(
 						`Are you sure you want to clear the playlist in "${fid}"?`,
 					));
@@ -1400,7 +1401,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const fid = root.getElementById("compact-folder-select")?.value;
 					if (!fid) return;
 					const confirmed =
-						!this.state.state.settings.confirm_clear_playlist ||
+						!this.state.state.settings.confirmClearPlaylist ||
 						(await this.showPageLevelConfirmation(
 							`Are you sure you want to clear the playlist in "${fid}"?`,
 						));
@@ -1417,7 +1418,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						?.classList.contains("btn-loading");
 
 					const confirmed =
-						!this.state.state.settings.confirm_close_mpv ||
+						!this.state.state.settings.confirmCloseMpv ||
 						(await this.showPageLevelConfirmation(
 							"Are you sure you want to close MPV?",
 						));
@@ -1651,16 +1652,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const state = this.state.state;
 			const leftAniBtn = this.ui.shadowRoot.getElementById(
 				"btn-toggle-anilist-left",
-			);
-			const rightAniBtn = this.ui.shadowRoot.getElementById(
-				"btn-toggle-anilist-right",
-			);
-
-			const showAnilistButtons = state.settings.enable_anilist_integration;
-			if (leftAniBtn)
-				leftAniBtn.style.display =
-					showAnilistButtons && state.uiMode === "compact" ? "flex" : "none";
-			if (rightAniBtn)
+							);
+						const rightAniBtn = this.ui.shadowRoot.getElementById(
+							"btn-toggle-anilist-right",
+						);
+			
+						const showAnilistButtons = state.settings.enableAnilistIntegration;
+						if (leftAniBtn)
+							leftAniBtn.style.display =
+								showAnilistButtons && state.uiMode === "compact" ? "flex" : "none";			if (rightAniBtn)
 				rightAniBtn.style.display =
 					showAnilistButtons && state.uiMode === "full" ? "flex" : "none";
 
@@ -1845,7 +1845,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					.replace("command", "meta")
 					.replace("option", "alt");
 
-			if (state.kb_add_playlist && combo === normalize(state.kb_add_playlist)) {
+			if (state.kbAddPlaylist && combo === normalize(state.kbAddPlaylist)) {
 				e.preventDefault();
 				e.stopPropagation();
 				const folderId =
@@ -1855,15 +1855,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						data: this.pageScraper.scrapePageDetails(state.detectedUrl),
 					});
 			} else if (
-				state.kb_toggle_controller &&
-				combo === normalize(state.kb_toggle_controller)
+				state.kbToggleController &&
+				combo === normalize(state.kbToggleController)
 			) {
 				e.preventDefault();
 				e.stopPropagation();
 				this.setMinimizedState(!state.minimized);
 			} else if (
-				state.kb_play_playlist &&
-				combo === normalize(state.kb_play_playlist)
+				state.kbPlayPlaylist &&
+				combo === normalize(state.kbPlayPlaylist)
 			) {
 				e.preventDefault();
 				e.stopPropagation();
@@ -1871,15 +1871,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					this.ui.shadowRoot?.getElementById("folder-select")?.value;
 				if (folderId) this.sendCommandToBackground("play", folderId);
 			} else if (
-				state.kb_switch_playlist &&
-				combo === normalize(state.kb_switch_playlist)
+				state.kbSwitchPlaylist &&
+				combo === normalize(state.kbSwitchPlaylist)
 			) {
 				e.preventDefault();
 				e.stopPropagation();
 				this.bridge.send("switch_playlist");
 			} else if (
-				state.kb_open_popup &&
-				combo === normalize(state.kb_open_popup)
+				state.kbOpenPopup &&
+				combo === normalize(state.kbOpenPopup)
 			) {
 				e.preventDefault();
 				e.stopPropagation();

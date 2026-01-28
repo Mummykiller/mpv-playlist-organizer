@@ -17,7 +17,7 @@ function setupListeners() {
 				// Respect user preference for timeout instead of hardcoded 15s
 				storage.get().then((data) => {
 					const timeoutMs =
-						(data.settings.ui_preferences.global.stream_scanner_timeout || 60) *
+						(data.settings.uiPreferences.global.streamScannerTimeout || 60) *
 						1000;
 					clearTimeout(promiseInfo.timeoutId);
 					promiseInfo.timeoutId = setTimeout(() => {
@@ -277,7 +277,7 @@ export async function findM3u8InUrl(url, originalTab) {
 	try {
 		const data = await storage.get();
 		const timeoutInSeconds =
-			data.settings.ui_preferences.global.stream_scanner_timeout || 60;
+			data.settings.uiPreferences.global.streamScannerTimeout || 60;
 
 		scannerTab = await _createScannerWindow(url);
 

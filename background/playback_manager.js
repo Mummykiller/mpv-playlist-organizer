@@ -18,9 +18,10 @@ export class PlaybackSession {
 	/**
 	 * Sends a single URL item to the native host for playback.
 	 */
-	async _playSingleUrlItem(url_item, globalPrefs) {
-		return nativeLink.play(url_item, this.folderId, {
-			start_paused: false,
+	async _playSingleUrlItem(urlItem, globalPrefs) {
+		return nativeLink.play(urlItem, this.folderId, {
+			startPaused: false,
+			playlistStartId: urlItem.id,
 		});
 	}
 
@@ -33,7 +34,7 @@ export class PlaybackSession {
 
 		try {
 			const data = await storage.get();
-			const globalPrefs = data.settings.ui_preferences.global;
+			const globalPrefs = data.settings.uiPreferences.global;
 
 			while (this.queue.length > 0) {
 				if (this.isPlaying) {
@@ -148,7 +149,7 @@ export class PlaybackManager {
 		if (!session.isPlaying && this.syncCache) {
 			if (
 				this.syncCache.folderId === folderId &&
-				(this.syncCache.isRunning || this.syncCache.is_running !== false) &&
+				this.syncCache.isRunning !== false &&
 				!this.syncCache.isIdle
 			) {
 				session.isPlaying = true;

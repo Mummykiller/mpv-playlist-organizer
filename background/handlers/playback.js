@@ -40,10 +40,10 @@ export async function handleItemNaturalCompletion(data) {
 	if (!folderId || !itemId) return;
 
 	const storageData = await storage.get();
-	const globalPrefs = storageData.settings.ui_preferences.global;
-	const clearMode = globalPrefs.clear_on_completion || "no";
+	const globalPrefs = storageData.settings.uiPreferences.global;
+	const clearMode = globalPrefs.clearOnCompletion || "no";
 	
-	if (globalPrefs.clear_on_item_finish && clearMode !== "no") {
+	if (globalPrefs.clearOnItemFinish && clearMode !== "no") {
 		const session = playbackManager.getSession(folderId);
 		session.completedItemIds.add(itemId);
 		
@@ -124,10 +124,10 @@ export async function handleMpvQuitting(data) {
 		// If everything currently in the folder was "watched" (not just touched), we clear all.
 		const isFullFolderComplete = folderIds.length > 0 && folderIds.every(id => watchedSet.has(id));
 		
-		const globalPrefs = storageData.settings.ui_preferences.global;
-		const clearMode = globalPrefs.clear_on_completion || "no";
+		const globalPrefs = storageData.settings.uiPreferences.global;
+		const clearMode = globalPrefs.clearOnCompletion || "no";
 		// Default to 'session' scope for natural completion if not a full clear
-		const clearScope = isFullFolderComplete ? "all" : (globalPrefs.clear_scope || "session");
+		const clearScope = isFullFolderComplete ? "all" : (globalPrefs.clearScope || "session");
 
 		if (clearMode !== "no") {
 			broadcastLog({
@@ -222,13 +222,13 @@ export async function handleMpvExited(data) {
 		const isNaturalCompletion = returnCode === MPV_PLAYLIST_COMPLETED_EXIT_CODE;
 
 		if (isNaturalCompletion && folder && folder.playlist) {
-			const globalPrefs = storageData.settings.ui_preferences.global;
-			const clearMode = globalPrefs.clear_on_completion || "no";
+			const globalPrefs = storageData.settings.uiPreferences.global;
+			const clearMode = globalPrefs.clearOnCompletion || "no";
 			
 			const watchedSet = new Set(data.watchedIds || data.playedIds || []);
 			const folderIds = folder.playlist.map(i => i.id);
 			const isFullFolderComplete = folderIds.length > 0 && folderIds.every(id => watchedSet.has(id));
-			const clearScope = isFullFolderComplete ? "all" : (globalPrefs.clear_scope || "session");
+			const clearScope = isFullFolderComplete ? "all" : (globalPrefs.clearScope || "session");
 
 			if (clearMode === "yes") {
 				broadcastLog({
@@ -261,7 +261,7 @@ export async function handleMpvExited(data) {
 						.catch(() => {});
 				}
 			}
-		} else if (isNaturalCompletion === false && (storageData?.settings?.ui_preferences?.global?.clear_on_completion || "no") !== "no") {
+		} else if (isNaturalCompletion === false && (storageData?.settings?.uiPreferences?.global?.clearOnCompletion || "no") !== "no") {
 			broadcastLog({
 				text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion).`,
 				type: "info",
@@ -315,7 +315,7 @@ async function clearFolderPlaylist(folderId, options = {}) {
 			);
 		} else if (scope === "all") {
 			// For full clear, capture all URLs if global sync is on.
-			if (storageData.settings.ui_preferences.global.sync_global_removals === true) {
+			if (storageData.settings.uiPreferences.global.syncGlobalRemovals === true) {
 				folder.playlist.forEach(item => removedUrls.add(normalizeYouTubeUrl(item.url)));
 			}
 			folder.playlist = [];
@@ -333,7 +333,7 @@ async function clearFolderPlaylist(folderId, options = {}) {
 
 			let globalSyncPerformed = false;
 			// --- Global URL Synchronization ---
-			if (storageData.settings.ui_preferences.global.sync_global_removals === true && removedUrls.size > 0) {
+			if (storageData.settings.uiPreferences.global.syncGlobalRemovals === true && removedUrls.size > 0) {
 				const affectedFolders = new Set();
 				
 				for (const [fId, otherFolder] of Object.entries(storageData.folders)) {
@@ -351,11 +351,11 @@ async function clearFolderPlaylist(folderId, options = {}) {
 
 						// Handle live removal for synchronized folders if they are active
 						const { mpv_playback_cache: playbackCache } = await chrome.storage.local.get("mpv_playback_cache");
-						if (playbackCache && playbackCache.folderId === fId && (playbackCache.is_running || !playbackCache.isIdle)) {
+						if (playbackCache && playbackCache.folderId === fId && (playbackCache.isRunning || !playbackCache.isIdle)) {
 							for (const syncItem of itemsToRemoveFromThisFolder) {
 								nativeLink.call("remove_item_live", {
 									folderId: fId,
-									item_id: syncItem.id,
+									itemId: syncItem.id,
 								}).catch(() => {});
 							}
 						}
@@ -448,10 +448,9 @@ async function checkAndConfirmFolderSwitch(targetFolderId) {
 	try {
 		const statusResponse = await handleIsMpvRunning();
 		// If MPV is not running at all, proceed.
-		if (
-			statusResponse?.success === false ||
-			statusResponse?.is_running === false
-		)
+	if (
+		statusResponse?.isRunning === false
+	)
 			return true;
 
 		// If the target folder is already active in MPV, proceed.
@@ -463,7 +462,7 @@ async function checkAndConfirmFolderSwitch(targetFolderId) {
 		if (currentFolderId && currentFolderId !== targetFolderId) {
 			const data = await storage.get();
 			const shouldConfirm =
-				data.settings.ui_preferences.global.confirm_folder_switch ?? true;
+				data.settings.uiPreferences.global.confirmFolderSwitch ?? true;
 
 			if (shouldConfirm) {
 				broadcastLog({
@@ -544,129 +543,130 @@ const _sendMessageAsync = (payload) =>
 	});
 
 export const handlePlay = createHandler(async ({ request, folderId, data }) => {
-	const { url_item, play_new_instance } = request;
+	const { urlItem, playNewInstance } = request;
 
-	if (url_item) {
-		if (!play_new_instance && folderId && !(await checkAndConfirmFolderSwitch(folderId))) {
+	if (urlItem) {
+		if (!playNewInstance && folderId && !(await checkAndConfirmFolderSwitch(folderId))) {
 			return { success: true, message: "Folder switch cancelled by user." };
 		}
 
 		broadcastLog({
-			text: `[Background]: Received 'play' request for single item: ${url_item.title || url_item.url}${play_new_instance ? " (New Instance)" : ""}`,
+			text: `[Background]: Received 'play' request for single item: ${urlItem.title || urlItem.url}${playNewInstance ? " (New Instance)" : ""}`,
 			type: "info",
-			itemId: url_item.id,
+			itemId: urlItem.id,
 			folderId: folderId
 		});
 
-		const options = {
-			play_new_instance: request.play_new_instance,
-			geometry: request.geometry,
-			custom_width: request.custom_width,
-			custom_height: request.custom_height,
-			custom_mpv_flags: request.custom_mpv_flags,
-			start_paused: request.start_paused,
-			clear_on_completion: request.clear_on_completion,
-		};
-
-		console.log("[BG] handlePlay: Calling nativeLink.play with folderId:", folderId);
-		const response = await nativeLink.play(url_item, folderId, options);
-
-		if (response.success && !play_new_instance) {
-			const { mpv_playback_cache: current } = await chrome.storage.local.get("mpv_playback_cache");
-			if (current && current.folderId === folderId) {
-				await chrome.storage.local.set({
-					mpv_playback_cache: { ...current, isLaunching: false }
-				});
-			}
-
-			const session = playbackManager.getSession(folderId);
-			session.isPlaying = true;
-
-			let isLast = true;
-			if (folderId && data.folders[folderId]) {
-				const playlist = data.folders[folderId].playlist;
-				if (playlist.length > 0) {
-					const lastItem = playlist[playlist.length - 1];
-					isLast = lastItem.id === url_item.id;
-				}
-			}
-
-			session.currentPlayingItem = {
-				urlItem: url_item,
-				folderId: folderId,
-				isLastInFolder: isLast,
-			};
-		}
-		return response;
-	} else if (folderId) {
-		const folder = data.folders[folderId];
-		if (!folder || !folder.playlist || folder.playlist.length === 0) {
-			return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
-		}
-
-		return handlePlayM3U({
-			action: "play_m3u",
-			m3u_data: { type: "items", value: folder.playlist },
-			folderId: folderId,
-			custom_mpv_flags: request.custom_mpv_flags,
-			geometry: request.geometry,
-			custom_width: request.custom_width,
-			custom_height: request.custom_height,
-			start_paused: request.start_paused,
-			clear_on_completion: request.clear_on_completion,
-			play_new_instance: play_new_instance,
+		        const options = {
+		            playNewInstance: request.playNewInstance,
+		            playlistStartId: request.playlistStartId,
+		            geometry: request.geometry,
+		            customWidth: request.customWidth,
+		            customHeight: request.customHeight,
+		            customMpvFlags: request.customMpvFlags,
+		            startPaused: request.startPaused,
+		            clearOnCompletion: request.clearOnCompletion,
+		        };
+		
+		        console.log("[BG] handlePlay: Calling nativeLink.play with folderId:", folderId);
+		        const response = await nativeLink.play(urlItem, folderId, options);
+		
+		        if (response.success && !playNewInstance) {
+		            const { mpv_playback_cache: current } = await chrome.storage.local.get("mpv_playback_cache");
+		            if (current && current.folderId === folderId) {
+		                await chrome.storage.local.set({
+		                    mpv_playback_cache: { ...current, isLaunching: false }
+		                });
+		            }
+		
+		            const session = playbackManager.getSession(folderId);
+		            session.isPlaying = true;
+		
+		            let isLast = true;
+		            if (folderId && data.folders[folderId]) {
+		                const playlist = data.folders[folderId].playlist;
+		                if (playlist.length > 0) {
+		                    const lastItem = playlist[playlist.length - 1];
+		                    isLast = lastItem.id === urlItem.id;
+		                }
+		            }
+		
+		            session.currentPlayingItem = {
+		                urlItem: urlItem,
+		                folderId: folderId,
+		                isLastInFolder: isLast,
+		            };
+		        }
+		        return response;
+		    } else if (folderId) {
+		        const folder = data.folders[folderId];
+		        if (!folder || !folder.playlist || folder.playlist.length === 0) {
+		            return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
+		        }
+		
+		        return handlePlayM3U({
+		            action: "play_m3u",
+		            m3uData: { type: "items", value: folder.playlist },
+		            folderId: folderId,
+		            customMpvFlags: request.customMpvFlags,
+		            geometry: request.geometry,
+		            customWidth: request.customWidth,
+		            customHeight: request.customHeight,
+		            startPaused: request.startPaused,
+		            clearOnCompletion: request.clearOnCompletion,
+		            playNewInstance: playNewInstance,
+		        });
+		    }
+		    return { success: false, error: "No URL item or Folder ID provided to play." };
+		}, {
+		    broadcastPlaylist: true,
+		    onBefore: async ({ request, folderId }) => {
+		        if (!request.playNewInstance && folderId) {
+		            const session = playbackManager.findSessionByFolderId(folderId);
+		            if (!session || !session.isPlaying) {
+		                const cacheData = {
+		                    folderId,
+		                    isRunning: true,
+		                    isLaunching: true,
+		                    timestamp: Date.now(),
+		                };
+		                await chrome.storage.local.set({ mpv_playback_cache: cacheData });
+		                broadcastPlaybackState(folderId, { isLaunching: true, isRunning: true });
+		            }
+		        }
+		    }
 		});
-	}
-	return { success: false, error: "No URL item or Folder ID provided to play." };
-}, {
-	broadcastPlaylist: true,
-	onBefore: async ({ request, folderId }) => {
-		if (!request.play_new_instance && folderId) {
-			const session = playbackManager.findSessionByFolderId(folderId);
-			if (!session || !session.isPlaying) {
-				const cacheData = {
-					folderId,
-					is_running: true,
-					isLaunching: true,
-					timestamp: Date.now(),
-				};
-				await chrome.storage.local.set({ mpv_playback_cache: cacheData });
-				broadcastPlaybackState(folderId, { isLaunching: true, isRunning: true });
-			}
-		}
-	}
-});
+		
+		export const handlePlayM3U = createHandler(async ({ request, folderId, data }) => {
+		    const { m3uData, playNewInstance } = request;
+		
+		    if (!playNewInstance && folderId && !(await checkAndConfirmFolderSwitch(folderId))) {
+		        return { success: true, message: "Folder switch cancelled by user." };
+		    }
+		
+		    if (!playNewInstance) {
+		        const session = playbackManager.getSession(folderId);
+		        session.queue = [];
+		        if (session.folderId !== folderId || !session.isPlaying) {
+		            session.isPlaying = false;
+		            session.currentPlayingItem = null;
+		        }
+		        session.isProcessingQueue = false;
+		    }
+		
+		    const options = {
+		        playNewInstance: request.playNewInstance,
+		        playlistStartId: request.playlistStartId,
+		        geometry: request.geometry,
+		        customWidth: request.customWidth,
+		        customHeight: request.customHeight,
+		        customMpvFlags: request.customMpvFlags,
+		        startPaused: request.startPaused,
+		        clearOnCompletion: request.clearOnCompletion,
+		    };
+	const response = await nativeLink.playM3U(m3uData, folderId, options);
 
-export const handlePlayM3U = createHandler(async ({ request, folderId, data }) => {
-	const { m3u_data, play_new_instance } = request;
-
-	if (!play_new_instance && folderId && !(await checkAndConfirmFolderSwitch(folderId))) {
-		return { success: true, message: "Folder switch cancelled by user." };
-	}
-
-	if (!play_new_instance) {
-		const session = playbackManager.getSession(folderId);
-		session.queue = [];
-		if (session.folderId !== folderId || !session.isPlaying) {
-			session.isPlaying = false;
-			session.currentPlayingItem = null;
-		}
-		session.isProcessingQueue = false;
-	}
-
-	const options = {
-		play_new_instance: request.play_new_instance,
-		geometry: request.geometry,
-		custom_width: request.custom_width,
-		custom_height: request.custom_height,
-		custom_mpv_flags: request.custom_mpv_flags,
-		start_paused: request.start_paused,
-		clear_on_completion: request.clear_on_completion,
-	};
-
-	const response = await nativeLink.playM3U(m3u_data, folderId, options);
-
-	if (response.success && !play_new_instance) {
+	if (response.success && !playNewInstance) {
 		const { mpv_playback_cache: current } = await chrome.storage.local.get("mpv_playback_cache");
 		if (current && current.folderId === folderId) {
 			await chrome.storage.local.set({
@@ -678,38 +678,37 @@ export const handlePlayM3U = createHandler(async ({ request, folderId, data }) =
 		session.isPlaying = true;
 		session.currentPlayingItem = { folderId: folderId, isLastInFolder: true };
 
-		if (response.playlist_items && folderId && data.folders[folderId]) {
+		if (response.playlistItems && folderId && data.folders[folderId]) {
 			broadcastLog({
 				text: `[Background]: Syncing Smart Resume reordering for folder '${folderId}'.`,
 				type: "info",
 			});
-			data.folders[folderId].playlist = response.playlist_items;
-			if (response.playlist_items.length > 0) {
-				data.folders[folderId].last_played_id = response.playlist_items[0].id;
+			data.folders[folderId].playlist = response.playlistItems;
+			if (response.playlistItems.length > 0) {
+				data.folders[folderId].lastPlayedId = response.playlistItems[0].id;
 			}
-			await broadcastPlaylistState(folderId, response.playlist_items);
+			await broadcastPlaylistState(folderId, response.playlistItems);
 		}
 
-		const successMessage = (response.already_active || response.handled_directly)
+		const successMessage = (response.alreadyActive || response.handledDirectly)
 			? null
 			: response.message || `Playback initiated for playlist '${folderId}'.`;
 		
 		return {
 			success: true,
 			message: successMessage,
-			playlist_items: response.playlist_items,
+			playlistItems: response.playlistItems,
 		};
 	}
-	return response;
 }, {
 	broadcastPlaylist: true,
 	onBefore: async ({ request, folderId }) => {
-		if (!request.play_new_instance && folderId) {
+		if (!request.playNewInstance && folderId) {
 			const session = playbackManager.findSessionByFolderId(folderId);
 			if (!session || !session.isPlaying) {
 				const cacheData = {
 					folderId,
-					is_running: true,
+					isRunning: true,
 					isLaunching: true,
 					timestamp: Date.now(),
 				};
@@ -721,34 +720,37 @@ export const handlePlayM3U = createHandler(async ({ request, folderId, data }) =
 });
 
 export async function handleUpdateLastPlayed(data) {
-	const { folderId, itemId, is_pending } = data;
+	let { folderId, itemId, isPending } = data;
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
-	if (!is_pending) {
+	if (!isPending) {
+		const storageData = await storage.get();
+		
+		// Case-insensitive lookup for folder
+		const actualFolderId = Object.keys(storageData.folders).find(
+			(id) => id.toLowerCase() === folderId.toLowerCase()
+		) || folderId;
+
 		broadcastLog({
-			text: `[Background]: Tracker reported last_played_id update for folder '${folderId}': ${itemId}`,
+			text: `[Background]: Tracker reported lastPlayedId update for folder '${actualFolderId}': ${itemId}`,
 			type: "info",
 			itemId: itemId,
-			folderId: folderId
+			folderId: actualFolderId
 		});
 
-		const storageData = await storage.get();
-		if (storageData.folders[folderId]) {
-			storageData.folders[folderId].last_played_id = itemId;
-			await storage.set(storageData, folderId);
+		if (storageData.folders[actualFolderId]) {
+			storageData.folders[actualFolderId].lastPlayedId = itemId;
+			await storage.set(storageData, actualFolderId);
 
 			const currentCache = (await chrome.storage.local.get("mpv_playback_cache")).mpv_playback_cache || {};
-			if (currentCache.folderId === folderId) {
+			if (currentCache.folderId?.toLowerCase() === folderId.toLowerCase()) {
 				currentCache.isIdle = false;
-				currentCache.is_running = true;
+				currentCache.isRunning = true;
 				await chrome.storage.local.set({ mpv_playback_cache: currentCache });
 			}
 		}
-	}
-
-	const finalData = await storage.get();
-	if (finalData.folders[folderId]) {
-		await broadcastPlaylistState(folderId, finalData.folders[folderId].playlist);
+		
+		await broadcastPlaylistState(actualFolderId, storageData.folders[actualFolderId]?.playlist);
 	}
 }
 
@@ -757,12 +759,16 @@ export async function handleUpdateItemResumeTime(data) {
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
 	const storageData = await storage.get();
-	if (storageData.folders[folderId]) {
-		const folder = storageData.folders[folderId];
+	const actualFolderId = Object.keys(storageData.folders).find(
+		(id) => id.toLowerCase() === folderId.toLowerCase()
+	);
+
+	if (actualFolderId && storageData.folders[actualFolderId]) {
+		const folder = storageData.folders[actualFolderId];
 		for (const item of folder.playlist) {
 			if (item.id === itemId) {
-				item.resume_time = resumeTime;
-				await storage.set(storageData, folderId);
+				item.resumeTime = resumeTime;
+				await storage.set(storageData, actualFolderId);
 				break;
 			}
 		}
@@ -775,7 +781,7 @@ export async function handlePlaybackStatusChanged(data) {
 
 	const cacheData = {
 		folderId,
-		is_running: true, // If we got a status update, it's definitely running
+		isRunning: true, // If we got a status update, it's definitely running
 		isPaused: isPaused,
 		isIdle: isIdle,
 		lastPlayedId: lastPlayedId,
@@ -801,13 +807,17 @@ export async function handleUpdateItemMarkedAsWatched(data) {
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
 	const storageData = await storage.get();
-	if (storageData.folders[folderId]) {
-		const folder = storageData.folders[folderId];
+	const actualFolderId = Object.keys(storageData.folders).find(
+		(id) => id.toLowerCase() === folderId.toLowerCase()
+	);
+
+	if (actualFolderId && storageData.folders[actualFolderId]) {
+		const folder = storageData.folders[actualFolderId];
 		for (const item of folder.playlist) {
 			if (item.id === itemId) {
-				item.marked_as_watched = markedAsWatched;
-				await storage.set(storageData, folderId);
-				await broadcastPlaylistState(folderId, folder.playlist);
+				item.markedAsWatched = markedAsWatched;
+				await storage.set(storageData, actualFolderId);
+				await broadcastPlaylistState(actualFolderId, folder.playlist);
 				break;
 			}
 		}
@@ -815,27 +825,27 @@ export async function handleUpdateItemMarkedAsWatched(data) {
 }
 
 export const handleAppend = createHandler(async ({ request, folderId }) => {
-	const { url_item } = request;
-	if (!url_item) return { success: false, error: "No URL item provided to append." };
+	const { urlItem } = request;
+	if (!urlItem) return { success: false, error: "No URL item provided to append." };
 
 	const session = playbackManager.getSession(folderId);
 	session.queue.push({
-		urlItem: url_item,
+		urlItem: urlItem,
 		folderId: folderId,
 		isLastInFolder: false,
 	});
 
 	broadcastLog({
-		text: `[Background]: Received 'queue' request for (${folderId}): ${url_item.title || url_item.url}`,
+		text: `[Background]: Received 'queue' request for (${folderId}): ${urlItem.title || urlItem.url}`,
 		type: "info",
-		itemId: url_item.id,
+		itemId: urlItem.id,
 		folderId: folderId
 	});
 
 	session.processQueue();
 	return {
 		success: true,
-		message: `Queued ${url_item.title || url_item.url} to playlist`,
+		message: `Queued ${urlItem.title || urlItem.url} to playlist`,
 	};
 }, { 
 	requireFolder: true,
@@ -847,7 +857,7 @@ export const handleIsMpvRunning = createHandler(async () => {
 	if (mpv_playback_cache && mpv_playback_cache.folderId && !mpv_playback_cache.isIdle) {
 		return { 
 			success: true, 
-			is_running: true, 
+			isRunning: true, 
 			folderId: mpv_playback_cache.folderId,
 			isPaused: mpv_playback_cache.isPaused,
 			lastPlayedId: mpv_playback_cache.lastPlayedId
@@ -887,7 +897,7 @@ export function handleSessionRestored(request) {
 
 		const cacheData = {
 			folderId: result.folderId,
-			is_running: true,
+			isRunning: true,
 			isPaused: false,
 			isIdle: false,
 			lastPlayedId: result.lastPlayedId,
@@ -910,8 +920,8 @@ export function handleSessionRestored(request) {
 			broadcastLog({ text: `Reconnected to mpv playlist (${folder.name || folderId})`, type: "info" });
 
 			let needsSave = false;
-			if (result.lastPlayedId && result.lastPlayedId !== folder.last_played_id) {
-				folder.last_played_id = result.lastPlayedId;
+			if (result.lastPlayedId && result.lastPlayedId !== folder.lastPlayedId) {
+				folder.lastPlayedId = result.lastPlayedId;
 				needsSave = true;
 			}
 
@@ -919,8 +929,8 @@ export function handleSessionRestored(request) {
 				const diskPlaylistMap = new Map(result.playlist.map((item) => [item.id, item]));
 				folder.playlist.forEach((item) => {
 					const diskItem = diskPlaylistMap.get(item.id);
-					if (diskItem && diskItem.resume_time !== undefined && item.resume_time !== diskItem.resume_time) {
-						item.resume_time = diskItem.resume_time;
+					if (diskItem && diskItem.resumeTime !== undefined && item.resumeTime !== diskItem.resumeTime) {
+						item.resumeTime = diskItem.resumeTime;
 						needsSave = true;
 					}
 				});

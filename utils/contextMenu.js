@@ -31,7 +31,7 @@ export async function updateContextMenus(storage) {
 		return;
 	}
 
-	const lastUsedFolderId = data.settings.last_used_folder_id;
+	const lastUsedFolderId = data.settings.lastUsedFolderId;
 
 	// Create the main parent menu item.
 	chrome.contextMenus.create({

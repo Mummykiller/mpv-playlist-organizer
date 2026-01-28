@@ -21,7 +21,7 @@ export const handleCreateFolder = createHandler(async ({ request, data }) => {
 	if (!data.folderOrder.includes(folderId)) data.folderOrder.push(folderId);
 
 	// Ensure the UI stays on the newly created folder
-	data.settings.last_used_folder_id = folderId;
+	data.settings.lastUsedFolderId = folderId;
 
 	return { success: true, folderId };
 }, {
@@ -34,7 +34,7 @@ export const handleGetAllFolderIds = createHandler(async ({ data }) => {
 	return {
 		success: true,
 		folderIds: data.folderOrder || Object.keys(data.folders),
-		lastUsedFolderId: data.settings.last_used_folder_id,
+		lastUsedFolderId: data.settings.lastUsedFolderId,
 	};
 });
 
@@ -45,7 +45,7 @@ export const handleRemoveFolder = createHandler(async ({ request, data }) => {
 	if (!data.folders[folderId])
 		return { success: false, error: "Folder not found." };
 
-	const wasActive = data.settings.last_used_folder_id === folderId;
+	const wasActive = data.settings.lastUsedFolderId === folderId;
 
 	delete data.folders[folderId];
 	if (data.folderOrder) {
@@ -57,14 +57,14 @@ export const handleRemoveFolder = createHandler(async ({ request, data }) => {
 		const defaultId = "Playlist 1";
 		data.folders[defaultId] = { playlist: [] };
 		data.folderOrder = [defaultId];
-		data.settings.last_used_folder_id = defaultId;
+		data.settings.lastUsedFolderId = defaultId;
 	} else if (wasActive) {
-		data.settings.last_used_folder_id = data.folderOrder && data.folderOrder.length > 0
+		data.settings.lastUsedFolderId = data.folderOrder && data.folderOrder.length > 0
 			? data.folderOrder[0]
 			: Object.keys(data.folders)[0];
 	}
 
-	return { success: true, folderChanged: wasActive, newFolderId: data.settings.last_used_folder_id };
+	return { success: true, folderChanged: wasActive, newFolderId: data.settings.lastUsedFolderId };
 }, {
 	broadcastFolders: true,
 	updateMenus: true,
@@ -99,8 +99,8 @@ export const handleRenameFolder = createHandler(async ({ request, data }) => {
 		if (index !== -1) data.folderOrder[index] = newId;
 	}
 
-	if (data.settings.last_used_folder_id === oldId) {
-		data.settings.last_used_folder_id = newId;
+	if (data.settings.lastUsedFolderId === oldId) {
+		data.settings.lastUsedFolderId = newId;
 	}
 
 	return { success: true, folderId: newId };

@@ -25,8 +25,8 @@ class PlaybackHandler(BaseHandler):
         raw_input = None
         if input_type == 'single':
             # Direct User Click: Strip any existing resume_time to ensure it starts at 0s
-            # unless the request explicitly provided a fresh one (rare).
-            if request.url_item and 'resume_time' in request.url_item:
+            # unless the request explicitly provided a fresh one or a specific start ID.
+            if request.url_item and 'resume_time' in request.url_item and not request.playlist_start_id:
                 request.url_item['resume_time'] = None
             raw_input = [request.url_item]
         elif input_type == 'batch':
@@ -126,13 +126,13 @@ class PlaybackHandler(BaseHandler):
     @command('play')
     def handle_play(self, request: native_link.PlaybackRequest):
         if not request.folder_id or not request.url_item:
-            return native_link.failure("Missing folderId or url_item for play action.")
+            return native_link.failure("Missing folder_id or url_item for play action.")
         return self._orchestrate_playback(request, 'single')
 
     @command('play_batch')
     def handle_play_batch(self, request: native_link.PlaybackRequest):
         if not request.folder_id or not request.playlist:
-            return native_link.failure("Missing folderId or playlist for play_batch action.")
+            return native_link.failure("Missing folder_id or playlist for play_batch action.")
         return self._orchestrate_playback(request, 'batch')
 
     @command('play_m3u')
@@ -145,8 +145,9 @@ class PlaybackHandler(BaseHandler):
         url_items_list = request.url_items
         folder_id = request.folder_id 
         if not folder_id or (not url_item and not url_items_list):
-            return native_link.failure("Missing folderId or items for append action.")
+            return native_link.failure("Missing folder_id or items for append action.")
         
+        canonical_id = self.file_io._get_canonical_folder_id(folder_id)
         items_to_process = url_items_list if url_items_list else [url_item]
         settings = self._get_merged_settings(request.settings)
         
@@ -156,7 +157,7 @@ class PlaybackHandler(BaseHandler):
             def process_wrapper(item):
                 # Direct enrichment without folder context overhead
                 return self.item_processor.enrich_single_item(
-                    item, folder_id, 
+                    item, canonical_id, 
                     session_cookies=self.mpv_session.session_cookies, 
                     sync_lock=self.mpv_session.sync_lock,
                     settings=settings, 
@@ -174,34 +175,44 @@ class PlaybackHandler(BaseHandler):
 
         # Update the local shard so that tracker and UI refreshes see the new data.
         # Use a Set to prevent duplicates if the shard already has these IDs.
-        playlist = self.file_io.get_playlist_shard(folder_id)
+        playlist = self.file_io.get_playlist_shard(canonical_id)
         existing_ids = {itm.get('id') for itm in playlist if itm.get('id')}
         unique_new_items = [itm for itm in final_processed_items if itm.get('id') not in existing_ids]
         
         if unique_new_items:
             playlist.extend(unique_new_items)
-            self.file_io.save_playlist_shard(folder_id, playlist)
+            self.file_io.save_playlist_shard(canonical_id, playlist)
 
         # Pass to session manager which handles internal list synchronization
-        return self.mpv_session.append_batch(final_processed_items, folder_id=folder_id)
+        return self.mpv_session.append_batch(final_processed_items, folder_id=canonical_id)
 
     @command('remove_item_live')
     def handle_remove_item_live(self, request: native_link.LiveUpdateRequest):
         if not request.folder_id or not request.item_id:
-            return native_link.failure("Missing folderId or item_id.")
-        return self.mpv_session.remove(request.item_id, request.folder_id)
+            return native_link.failure("Missing folder_id or item_id.")
+        canonical_id = self.file_io._get_canonical_folder_id(request.folder_id)
+        return self.mpv_session.remove(request.item_id, canonical_id)
 
     @command('reorder_live')
     def handle_reorder_live(self, request: native_link.LiveUpdateRequest):
         if not request.folder_id or not request.new_order:
-            return native_link.failure("Missing folderId or new_order.")
-        return self.mpv_session.reorder(request.folder_id, request.new_order)
+            return native_link.failure("Missing folder_id or new_order.")
+        canonical_id = self.file_io._get_canonical_folder_id(request.folder_id)
+        return self.mpv_session.reorder(canonical_id, request.new_order)
+
+    @command('reorder_live')
+    def handle_reorder_live(self, request: native_link.LiveUpdateRequest):
+        if not request.folder_id or not request.new_order:
+            return native_link.failure("Missing folder_id or new_order.")
+        canonical_id = self.file_io._get_canonical_folder_id(request.folder_id)
+        return self.mpv_session.reorder(canonical_id, request.new_order)
 
     @command('clear_live')
     def handle_clear_live(self, request: native_link.LiveUpdateRequest):
         if not request.folder_id:
-            return native_link.failure("Missing folderId.")
-        return self.mpv_session.clear_live(request.folder_id)
+            return native_link.failure("Missing folder_id.")
+        canonical_id = self.file_io._get_canonical_folder_id(request.folder_id)
+        return self.mpv_session.clear_live(canonical_id)
 
     @command('close_mpv')
     def handle_close_mpv(self, request: native_link.LiveUpdateRequest):
@@ -231,7 +242,7 @@ class PlaybackHandler(BaseHandler):
 
         return native_link.success({
             "is_running": is_running,
-            "folderId": self.mpv_session.owner_folder_id if is_running else None
+            "folder_id": self.file_io._get_canonical_folder_id(self.mpv_session.owner_folder_id) if is_running else None
         })
 
     @command('get_playback_status')
@@ -268,8 +279,8 @@ class PlaybackHandler(BaseHandler):
             "is_running": True,
             "is_paused": is_paused,
             "is_idle": is_idle,
-            "folderId": self.mpv_session.owner_folder_id,
-            "lastPlayedId": last_played_id,
+            "folder_id": self.mpv_session.owner_folder_id,
+            "last_played_id": last_played_id,
             "session_ids": session_ids
         })
 

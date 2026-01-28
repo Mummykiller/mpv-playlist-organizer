@@ -17,10 +17,47 @@ export class StorageManager {
 			const versionData = await chrome.storage.local.get("mpv_storage_version");
 			const version = versionData.mpv_storage_version || 1;
 			if (version < 2) await this._migrateToGranularStorage();
+			await this._migrateToCamelCaseSettings();
 			await this._runDataMigrations();
 			await this.runJanitorTasks();
 		})();
 		return this.initPromise;
+	}
+
+	async _migrateToCamelCaseSettings() {
+		const keys = await chrome.storage.local.get(["mpv_settings", "mpv_camel_migrated"]);
+		if (!keys.mpv_settings || keys.mpv_camel_migrated) return;
+
+		console.log("[Storage] Migrating settings to camelCase...");
+		const settings = keys.mpv_settings;
+		
+		const snakeToCamel = (str) => str.replace(/([-_][a-z])/g, group => group.toUpperCase().replace("-", "").replace("_", ""));
+
+		const migrateObject = (obj) => {
+			if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
+			const newObj = {};
+			for (const key in obj) {
+				const newKey = snakeToCamel(key);
+				newObj[newKey] = migrateObject(obj[key]);
+			}
+			return newObj;
+		};
+
+		if (settings.ui_preferences) {
+			settings.uiPreferences = migrateObject(settings.ui_preferences);
+			delete settings.ui_preferences;
+		}
+		
+		if (settings.lastUsedFolderId === undefined && settings.last_used_folder_id !== undefined) {
+			settings.lastUsedFolderId = settings.last_used_folder_id;
+			delete settings.last_used_folder_id;
+		}
+
+		await chrome.storage.local.set({ 
+			mpv_settings: settings,
+			mpv_camel_migrated: true 
+		});
+		console.log("[Storage] camelCase migration complete.");
 	}
 
 	async _migrateToGranularStorage() {
@@ -71,7 +108,7 @@ export class StorageManager {
 			folderOrder.forEach((id) => {
 				folders[id] = foldersData[`mpv_folder_data_${id}`] || {
 					playlist: [],
-					last_played_id: null,
+					lastPlayedId: null,
 				};
 			});
 
@@ -90,7 +127,7 @@ export class StorageManager {
 		const folderKey = `mpv_folder_data_${folderId}`;
 		const result = await chrome.storage.local.get([folderKey, "mpv_settings"]);
 		return {
-			folder: result[folderKey] || { playlist: [], last_played_id: null },
+			folder: result[folderKey] || { playlist: [], lastPlayedId: null },
 			settings: result.mpv_settings,
 		};
 	}
@@ -187,11 +224,11 @@ export class StorageManager {
 
 	_getDefaultData() {
 		return {
-			folders: { Default: { playlist: [], last_played_id: null } },
+			folders: { Default: { playlist: [], lastPlayedId: null } },
 			folderOrder: ["Default"],
 			settings: {
-				last_used_folder_id: "Default",
-				ui_preferences: {
+				lastUsedFolderId: "Default",
+				uiPreferences: {
 					global: {
 						minimized: false,
 						mode: "full",
@@ -203,62 +240,62 @@ export class StorageManager {
 							right: "10px",
 							bottom: "auto",
 						},
-						launch_geometry: "",
-						custom_geometry_width: "",
-						custom_geometry_height: "",
-						custom_mpv_flags: "",
-						mpv_decoder: "auto",
-						automatic_mpv_flags: [
+						launchGeometry: "",
+						customGeometryWidth: "",
+						customGeometryHeight: "",
+						customMpvFlags: "",
+						mpvDecoder: "auto",
+						automaticMpvFlags: [
 							{ flag: "--force-window=yes", enabled: true },
 							{ flag: "--save-position-on-quit", enabled: true },
 						],
-						show_play_new_button: false,
-						duplicate_url_behavior: "ask",
-						sync_global_removals: false,
-						auto_append_on_add: true,
-						live_removal: true,
-						confirm_remove_folder: true,
-						confirm_clear_playlist: true,
-						confirm_close_mpv: true,
-						confirm_play_new: true,
-						confirm_folder_switch: true,
-						clear_on_item_finish: false,
-						clear_on_completion: "no",
-						clear_scope: "session",
+						showPlayNewButton: false,
+						duplicateUrlBehavior: "ask",
+						syncGlobalRemovals: false,
+						autoAppendOnAdd: true,
+						liveRemoval: true,
+						confirmRemoveFolder: true,
+						confirmClearPlaylist: true,
+						confirmCloseMpv: true,
+						confirmPlayNew: true,
+						confirmFolderSwitch: true,
+						clearOnItemFinish: false,
+						clearOnCompletion: "no",
+						clearScope: "session",
 						anilistPanelVisible: false,
-						enable_dblclick_copy: false,
-						anilist_image_height: 126,
+						enableDblclickCopy: false,
+						anilistImageHeight: 126,
 						lockAnilistPanel: false,
 						forcePanelAttached: false,
 						anilistAttachOnOpen: true,
-						popup_width: 600,
-						yt_use_cookies: true,
-						yt_mark_watched: true,
-						yt_ignore_config: true,
-						other_sites_use_cookies: true,
-						show_watched_status_gui: true,
+						popupWidth: 600,
+						ytUseCookies: true,
+						ytMarkWatched: true,
+						ytIgnoreConfig: true,
+						otherSitesUseCookies: true,
+						showWatchedStatusGui: true,
 						minimizedStubPosition: { top: "15px", left: "15px" },
-						show_minimized_stub: true,
-						enable_smart_resume: true,
-						enable_active_item_highlight: true,
-						disable_network_overrides: false,
-						enable_cache: true,
-						http_persistence: "auto",
-						demuxer_max_bytes: "1G",
-						demuxer_max_back_bytes: "500M",
-						cache_secs: 500,
-						demuxer_readahead_secs: 500,
-						stream_buffer_size: "10M",
-						ytdlp_concurrent_fragments: 4,
-						enable_reconnect: true,
-						reconnect_delay: 4,
-						performance_profile: "default",
-						restricted_domains: [],
-						kb_add_playlist: "Shift+A",
-						kb_play_playlist: "Shift+P",
-						kb_toggle_controller: "Shift+S",
-						kb_switch_playlist: "Shift+Tab",
-						kb_open_popup: "Alt+P",
+						showMinimizedStub: true,
+						enableSmartResume: true,
+						enableActiveItemHighlight: true,
+						disableNetworkOverrides: false,
+						enableCache: true,
+						httpPersistence: "auto",
+						demuxerMaxBytes: "1G",
+						demuxerMaxBackBytes: "500M",
+						cacheSecs: 500,
+						demuxerReadaheadSecs: 500,
+						streamBufferSize: "10M",
+						ytdlpConcurrentFragments: 4,
+						enableReconnect: true,
+						reconnectDelay: 4,
+						performanceProfile: "default",
+						restrictedDomains: [],
+						kbAddPlaylist: "Shift+A",
+						kbPlayPlaylist: "Shift+P",
+						kbToggleController: "Shift+S",
+						kbSwitchPlaylist: "Shift+Tab",
+						kbOpenPopup: "Alt+P",
 						dependencyStatus: {
 							mpv: { found: null, path: null },
 							ytdlp: { found: null, path: null },
@@ -316,19 +353,41 @@ export class StorageManager {
 		const data = await this.get();
 		let needsUpdate = false;
 
-		// Ensure all items have unique IDs and settings
+		// Ensure all items have unique IDs, settings, and camelCase keys
 		for (const folderId in data.folders) {
 			const folder = data.folders[folderId];
 			if (folder.playlist) {
 				folder.playlist = folder.playlist.map((item) => {
 					if (typeof item === "object" && item !== null) {
-						if (!item.id || !item.settings) {
+						let modified = false;
+						const newItem = { ...item };
+
+						if (!newItem.id) {
+							newItem.id = crypto.randomUUID();
+							modified = true;
+						}
+						if (!newItem.settings) {
+							newItem.settings = {};
+							modified = true;
+						}
+
+						// Migration: resume_time -> resumeTime
+						if (newItem.resume_time !== undefined && newItem.resumeTime === undefined) {
+							newItem.resumeTime = newItem.resume_time;
+							delete newItem.resume_time;
+							modified = true;
+						}
+
+						// Migration: marked_as_watched -> markedAsWatched
+						if (newItem.marked_as_watched !== undefined && newItem.markedAsWatched === undefined) {
+							newItem.markedAsWatched = newItem.marked_as_watched;
+							delete newItem.marked_as_watched;
+							modified = true;
+						}
+
+						if (modified) {
 							needsUpdate = true;
-							return {
-								...item,
-								id: item.id || crypto.randomUUID(),
-								settings: item.settings || {},
-							};
+							return newItem;
 						}
 					}
 					return item;

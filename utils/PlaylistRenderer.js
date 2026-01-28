@@ -47,7 +47,7 @@
             }
 
             const fragment = document.createDocumentFragment();
-            const highlightEnabled = this.prefs.enable_active_item_highlight !== false;
+            const highlightEnabled = this.prefs.enableActiveItemHighlight !== false;
 
             playlist.forEach((item, index) => {
                 this.lastRenderedIds.add(item.id);
@@ -98,7 +98,7 @@
 
             // Restore Double-Click to Copy Title
             div.ondblclick = (e) => {
-                if (this.prefs.enable_dblclick_copy) {
+                if (this.prefs.enableDblclickCopy) {
                     navigator.clipboard.writeText(item.title)
                         .then(() => {
                             if (this.callbacks.onLog) this.callbacks.onLog({ text: "Copied title to clipboard.", type: "info" });
@@ -108,7 +108,7 @@
                 }
             };
 
-            if (this.prefs.show_copy_title_button) {
+            if (this.prefs.showCopyTitleButton) {
                 div.appendChild(this._createIconButton("copy", item.url));
             }
 
@@ -123,7 +123,7 @@
             div.appendChild(titleSpan);
 
             const isYouTube = item.url.indexOf("youtube.com/") !== -1 || item.url.indexOf("youtu.be/") !== -1 || item.url.indexOf("youtube.com/shorts/") !== -1;
-            if (this.prefs.show_watched_status_gui && isYouTube) {
+            if (this.prefs.showWatchedStatusGui && isYouTube) {
                 div.appendChild(this._createWatchedCheckbox(item));
             }
 
@@ -151,7 +151,7 @@
             const input = document.createElement("input");
             input.type = "checkbox";
             input.className = "item-watched-checkbox";
-            input.checked = !item.marked_as_watched;
+            input.checked = !item.markedAsWatched;
             input.title = input.checked ? "Will mark as watched on YouTube" : "Already marked or skipped";
             
             input.onclick = (e) => e.stopPropagation();
@@ -198,66 +198,3 @@
 // Export for module environments
 const root = typeof globalThis !== "undefined" ? globalThis : (typeof self !== "undefined" ? self : window);
 export const PlaylistRenderer = root.MPV_INTERNAL.PlaylistRenderer;
-
-        _createIconButton(type, value) {
-            const btn = document.createElement("button");
-            btn.className = "btn-" + type + "-item";
-            btn.title = type === "copy" ? "Copy URL" : type;
-            
-            if (type === "copy") {
-                btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-                btn.onclick = (e) => {
-                    e.stopPropagation();
-                    if (this.callbacks.onCopy) this.callbacks.onCopy(value);
-                };
-            }
-            return btn;
-        }
-
-        _createWatchedCheckbox(item) {
-            const input = document.createElement("input");
-            input.type = "checkbox";
-            input.className = "item-watched-checkbox";
-            input.checked = !item.marked_as_watched;
-            input.title = input.checked ? "Will mark as watched on YouTube" : "Already marked or skipped";
-            
-            input.onclick = (e) => e.stopPropagation();
-            input.onchange = (e) => {
-                if (this.callbacks.onWatchedToggle) this.callbacks.onWatchedToggle(item.id, !e.target.checked);
-            };
-            return input;
-        }
-
-        _createRemoveButton(index, id) {
-            const btn = document.createElement("button");
-            btn.className = "btn-remove-item";
-            btn.textContent = "×";
-            btn.title = "Remove Item";
-            btn.onclick = (e) => {
-                e.stopPropagation();
-                const listItem = btn.closest(".list-item");
-                if (listItem) listItem.classList.add("removing");
-                if (this.callbacks.onRemove) this.callbacks.onRemove(index, id);
-            };
-            return btn;
-        }
-
-        _formatTitle(span, item) {
-            const titleParts = item.title.split(" - ");
-            const isYT = item.url.indexOf("youtube.com/") !== -1 || item.url.indexOf("youtu.be/") !== -1;
-            const isEp = titleParts.length > 1 && /^(s\d+)?e\d+(\.\d+)?$/i.test(titleParts[0].trim());
-
-            if (isEp || (isYT && titleParts.length > 1)) {
-                const prefix = document.createElement("span");
-                prefix.textContent = titleParts.shift() + " - ";
-                const main = document.createElement("span");
-                main.className = "main-title-highlight";
-                main.textContent = titleParts.join(" - ");
-                span.appendChild(prefix);
-                span.appendChild(main);
-            } else {
-                span.textContent = item.title;
-            }
-        }
-    };
-})();

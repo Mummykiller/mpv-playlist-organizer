@@ -37,12 +37,16 @@ async function addUrlToFolder(
 ) {
 	try {
 		let data = await storage.get();
-		if (!data.folders[folderId]) {
-			data.folders[folderId] = { playlist: [], last_played_id: null };
+		const actualFolderId = Object.keys(data.folders).find(
+			(id) => id.toLowerCase() === folderId.toLowerCase()
+		) || folderId;
+
+		if (!data.folders[actualFolderId]) {
+			data.folders[actualFolderId] = { playlist: [], lastPlayedId: null };
 		}
 
-		const playlist = data.folders[folderId].playlist;
-		const duplicateBehavior = data.settings.ui_preferences.global.duplicate_url_behavior || "ask";
+		const playlist = data.folders[actualFolderId].playlist;
+		const duplicateBehavior = data.settings.uiPreferences.global.duplicateUrlBehavior || "ask";
 		const normalizedUrl = normalizeYouTubeUrl(sanitizeString(url));
 
 		const isDuplicate = playlist.some(
@@ -51,7 +55,7 @@ async function addUrlToFolder(
 
 		if (isDuplicate) {
 			if (duplicateBehavior === "never") {
-				const logMessage = `[Background]: URL already in folder '${folderId}'. "Never Add" is on.`;
+				const logMessage = `[Background]: URL already in folder '${actualFolderId}'. "Never Add" is on.`;
 				broadcastLog({ text: logMessage, type: "info" });
 				return { success: true, message: logMessage };
 			}
@@ -63,7 +67,7 @@ async function addUrlToFolder(
 					try {
 						const response = await sendMessageAsync({
 							action: "show_popup_confirmation",
-							message: `This URL is already in the playlist for "${folderId}". Add it again?`,
+							message: `This URL is already in the playlist for "${actualFolderId}". Add it again?`,
 						});
 						confirmed = !!response?.confirmed;
 					} catch (e) {
@@ -81,7 +85,7 @@ async function addUrlToFolder(
 						try {
 							const response = await chrome.tabs.sendMessage(targetTabId, {
 								action: "show_confirmation",
-								message: `This URL is already in the playlist for "${folderId}". Add it again?`,
+								message: `This URL is already in the playlist for "${actualFolderId}". Add it again?`,
 							});
 							confirmed = !!response?.confirmed;
 						} catch (e) {
@@ -97,36 +101,35 @@ async function addUrlToFolder(
 				}
 
 				if (!confirmed) {
-					const logMessage = `[Background]: Add action cancelled by user for folder '${folderId}'.`;
+					const logMessage = `[Background]: Add action cancelled by user for folder '${actualFolderId}'.`;
 					broadcastLog({ text: logMessage, type: "info" });
 					return { success: true, message: logMessage };
 				}
 
 				data = await storage.get();
-				if (!data.folders[folderId]) data.folders[folderId] = { playlist: [] };
+				if (!data.folders[actualFolderId]) data.folders[actualFolderId] = { playlist: [] };
 			}
 		}
 
 		const newItem = processPlaylistItem({ url, title });
 		if (!newItem) return { success: false, error: "Failed to process item." };
 
-		data.folders[folderId].playlist.push(newItem);
-		await storage.set(data, folderId);
+		data.folders[actualFolderId].playlist.push(newItem);
+		await storage.set(data, actualFolderId);
 
-		debouncedSyncToNativeHostFile(folderId, true);
-		await broadcastPlaylistState(folderId, data.folders[folderId].playlist);
+		debouncedSyncToNativeHostFile(actualFolderId, true);
+		await broadcastPlaylistState(actualFolderId, data.folders[actualFolderId].playlist);
 
 		const { mpv_playback_cache: playbackCache } = await chrome.storage.local.get("mpv_playback_cache");
-		const isMpvAlive = playbackCache && playbackCache.folderId === folderId && (playbackCache.is_running || !playbackCache.isIdle);
+		const isMpvAlive = playbackCache && playbackCache.folderId?.toLowerCase() === folderId.toLowerCase() && (playbackCache.isRunning || !playbackCache.isIdle);
 
-		if (isMpvAlive && data.settings.ui_preferences.global.auto_append_on_add !== false) {
-			handleAppend({
-				url_item: newItem,
-				folderId: folderId,
-			}).catch(() => {});
-		}
-
-		const logMessage = `[Background]: Added "${newItem.title}" to folder '${folderId}'.`;
+		        if (isMpvAlive && data.settings.uiPreferences.global.autoAppendOnAdd !== false) {
+		            handleAppend({
+		                urlItem: newItem,
+		                folderId: actualFolderId,
+		            }).catch(() => {});
+		        }
+		const logMessage = `[Background]: Added "${newItem.title}" to folder '${actualFolderId}'.`;
 		broadcastLog({ text: logMessage, type: "info" });
 		return { success: true, message: logMessage };
 	} catch (e) {
@@ -267,13 +270,17 @@ export async function handleAdd(request, sender) {
 }
 
 export const handleClear = createHandler(async ({ folderId, data }) => {
-	if (!data.folders[folderId])
+	const actualFolderId = Object.keys(data.folders).find(
+		(id) => id.toLowerCase() === folderId.toLowerCase()
+	);
+
+	if (!actualFolderId || !data.folders[actualFolderId])
 		return { success: false, error: "Folder not found." };
 
-	data.folders[folderId].playlist = [];
-	nativeLink.clearLive(folderId).catch(() => {});
+	data.folders[actualFolderId].playlist = [];
+	nativeLink.clearLive(actualFolderId).catch(() => {});
 	
-	return { success: true, message: `Playlist for '${folderId}' cleared.` };
+	return { success: true, message: `Playlist for '${actualFolderId}' cleared.` };
 }, {
 	requireFolder: true,
 	syncToNative: true,
@@ -285,8 +292,12 @@ export const handleRemoveItem = createHandler(async ({ request, folderId, data }
 	const indexToRemove = request.data?.index;
 	const idToRemove = request.data?.id;
 
-	if (data.folders[folderId]) {
-		const playlist = data.folders[folderId].playlist;
+	const actualFolderId = Object.keys(data.folders).find(
+		(id) => id.toLowerCase() === folderId.toLowerCase()
+	);
+
+	if (actualFolderId && data.folders[actualFolderId]) {
+		const playlist = data.folders[actualFolderId].playlist;
 		let finalIndex = -1;
 
 		if (idToRemove) {
@@ -299,10 +310,10 @@ export const handleRemoveItem = createHandler(async ({ request, folderId, data }
 			const itemToRemove = playlist[finalIndex];
 			playlist.splice(finalIndex, 1);
 
-			if (data.settings.ui_preferences.global.live_removal !== false) {
+			if (data.settings.uiPreferences.global.liveRemoval !== false) {
 				nativeLink.call("remove_item_live", {
-					folderId,
-					item_id: itemToRemove.id,
+					folderId: actualFolderId,
+					itemId: itemToRemove.id,
 				}).catch(() => {});
 			}
 			return { success: true, message: "Item removed." };
@@ -318,10 +329,14 @@ export const handleRemoveItem = createHandler(async ({ request, folderId, data }
 
 export const handleSetPlaylistOrder = createHandler(async ({ request, folderId, data }) => {
 	const { order } = request.data;
-	if (!data.folders[folderId]) return { success: false };
+	const actualFolderId = Object.keys(data.folders).find(
+		(id) => id.toLowerCase() === folderId.toLowerCase()
+	);
 
-	data.folders[folderId].playlist = order;
-	nativeLink.reorderLive(folderId, order).catch(() => {});
+	if (!actualFolderId || !data.folders[actualFolderId]) return { success: false };
+
+	data.folders[actualFolderId].playlist = order;
+	nativeLink.reorderLive(actualFolderId, order).catch(() => {});
 	
 	return { success: true };
 }, {
@@ -351,8 +366,8 @@ export async function handleGetPlaylist(request) {
 	let finalStatus = null;
 	if (mpv_playback_cache && mpv_playback_cache.folderId === request.folderId) {
 		finalStatus = {
-			is_running: mpv_playback_cache.is_running !== false,
-			is_paused: mpv_playback_cache.isPaused,
+			isRunning: mpv_playback_cache.isRunning !== false,
+			isPaused: mpv_playback_cache.isPaused,
 			isIdle: mpv_playback_cache.isIdle,
 			sessionIds: mpv_playback_cache.sessionIds,
 			lastPlayedId: mpv_playback_cache.lastPlayedId,
@@ -361,7 +376,7 @@ export async function handleGetPlaylist(request) {
 	}
 
 	// Deep Check: Only query native host if cache is missing or says it's running (to get latest readahead/sessionIds)
-	if (!finalStatus || finalStatus.is_running) {
+	if (!finalStatus || finalStatus.isRunning) {
 		const statusResponse = await nativeLink.getPlaybackStatus().catch(() => null);
 		
 		if (statusResponse?.success) {
@@ -370,10 +385,10 @@ export async function handleGetPlaylist(request) {
 	}
 
 	let isActive = !!(
-		(finalStatus?.is_running || finalStatus?.isRunning) && finalStatus.folderId === request.folderId
+		finalStatus?.isRunning && finalStatus.folderId === request.folderId
 	);
 	let needsAppend = false;
-	const lastPlayedId = finalStatus?.lastPlayedId || folder.last_played_id;
+	const lastPlayedId = finalStatus?.lastPlayedId || folder.lastPlayedId;
 
 	// Calculate if we need append based on session IDs in cache vs current playlist
 	if (isActive && finalStatus.sessionIds) {
@@ -387,7 +402,8 @@ export async function handleGetPlaylist(request) {
 		lastPlayedId: lastPlayedId,
 		isRunning: isActive,
 		needsAppend: needsAppend,
-		isPaused: (finalStatus?.isPaused || finalStatus?.is_paused || finalStatus?.isIdle || finalStatus?.is_idle) ?? false,
-		isIdle: (finalStatus?.isIdle || finalStatus?.is_idle) ?? false
-	};
-}
+				isPaused: (finalStatus?.isPaused || finalStatus?.isIdle) ?? false,
+				isIdle: finalStatus?.isIdle ?? false
+			};
+		}
+		

@@ -11,10 +11,13 @@ class SettingsHandler(BaseHandler):
 
     @command('get_anilist_releases')
     def handle_get_anilist_releases(self, request: native_link.ServiceRequest):
-        return self.services.get_anilist_releases_with_cache(
+        res = self.services.get_anilist_releases_with_cache(
             request.force, request.delete_cache, request.is_cache_disabled, 
             request.days, self.ctx.anilist_cache_file, self.ctx.script_dir, self.send_message
         )
+        if res.get('success'):
+            return native_link.success(output=res.get('output'))
+        return native_link.failure(res.get('error', 'Unknown AniList error'))
 
     @command('run_ytdlp_update')
     def handle_run_ytdlp_update(self, request: native_link.BaseRequest):
