@@ -33,9 +33,34 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
     'check_dependencies': ServiceRequest,
 }
 
+import re
+
+def _camel_to_snake(camel_str: str) -> str:
+    """Converts camelCase to snake_case."""
+    if camel_str == "request_id":
+        return "request_id"
+    # Handle acronyms and standard camelCase
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', camel_str)
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+def _normalize_message(data: Any) -> Any:
+    """Recursively normalizes camelCase keys to snake_case for Python logic."""
+    if isinstance(data, dict):
+        new_dict = {}
+        for k, v in data.items():
+            new_key = _camel_to_snake(k) if isinstance(k, str) else k
+            new_dict[new_key] = _normalize_message(v)
+        return new_dict
+    elif isinstance(data, list):
+        return [_normalize_message(i) for i in data]
+    return data
+
 def translate(message: Dict[str, Any]) -> BaseRequest:
-    action = message.get('action')
-    request_id = message.get('request_id')
+    # 1. Pre-normalize all keys to snake_case
+    norm_message = _normalize_message(message)
+    
+    action = norm_message.get('action')
+    request_id = norm_message.get('request_id')
     
     req_class = ACTION_MAP.get(action, BaseRequest)
     
@@ -43,56 +68,56 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
         return PlaybackRequest(
             action=action,
             request_id=request_id,
-            folder_id=message.get('folderId'),
-            url_item=message.get('url_item'),
-            url_items=message.get('url_items'),
-            playlist=message.get('playlist'),
-            playlist_start_id=message.get('playlist_start_id'),
-            m3u_data=message.get('m3u_data'),
-            geometry=message.get('geometry'),
-            custom_width=message.get('custom_width'),
-            custom_height=message.get('custom_height'),
-            custom_mpv_flags=message.get('custom_mpv_flags'),
-            automatic_mpv_flags=message.get('automatic_mpv_flags'),
-            start_paused=message.get('start_paused', False),
-            force_terminal=message.get('force_terminal', False),
-            play_new_instance=message.get('play_new_instance', False),
-            settings=SettingsOverrides.from_dict(message)
+            folder_id=norm_message.get('folder_id'),
+            url_item=norm_message.get('url_item'),
+            url_items=norm_message.get('url_items'),
+            playlist=norm_message.get('playlist'),
+            playlist_start_id=norm_message.get('playlist_start_id'),
+            m3u_data=norm_message.get('m3u_data'),
+            geometry=norm_message.get('geometry'),
+            custom_width=norm_message.get('custom_width'),
+            custom_height=norm_message.get('custom_height'),
+            custom_mpv_flags=norm_message.get('custom_mpv_flags'),
+            automatic_mpv_flags=norm_message.get('automatic_mpv_flags'),
+            start_paused=norm_message.get('start_paused', False),
+            force_terminal=norm_message.get('force_terminal', False),
+            play_new_instance=norm_message.get('play_new_instance', False),
+            settings=SettingsOverrides.from_dict(norm_message)
         )
     
     elif req_class == LiveUpdateRequest:
         return LiveUpdateRequest(
             action=action,
             request_id=request_id,
-            folder_id=message.get('folderId'),
-            item_id=message.get('item_id') or message.get('itemId'),
-            played_ids=message.get('playedIds') or message.get('played_ids'),
-            watched_ids=message.get('watchedIds') or message.get('watched_ids'),
-            session_ids=message.get('sessionIds') or message.get('session_ids'),
-            new_order=message.get('new_order')
+            folder_id=norm_message.get('folder_id'),
+            item_id=norm_message.get('item_id'),
+            played_ids=norm_message.get('played_ids'),
+            watched_ids=norm_message.get('watched_ids'),
+            session_ids=norm_message.get('session_ids'),
+            new_order=norm_message.get('new_order')
         )
     
     elif req_class == DataSyncRequest:
         return DataSyncRequest(
             action=action,
             request_id=request_id,
-            data=message.get('data'),
-            is_incremental=message.get('is_incremental', False),
-            filename=message.get('filename'),
-            subfolder=message.get('subfolder'),
-            custom_names=message.get('customNames'),
-            preferences=message.get('preferences')
+            data=norm_message.get('data'),
+            is_incremental=norm_message.get('is_incremental', False),
+            filename=norm_message.get('filename'),
+            subfolder=norm_message.get('subfolder'),
+            custom_names=norm_message.get('custom_names'),
+            preferences=norm_message.get('preferences')
         )
         
     elif req_class == ServiceRequest:
         return ServiceRequest(
             action=action,
             request_id=request_id,
-            force=message.get('force', False),
-            delete_cache=message.get('delete_cache', False),
-            is_cache_disabled=message.get('is_cache_disabled', False),
-            days=message.get('days', 0),
-            force_refresh=message.get('force_refresh', False)
+            force=norm_message.get('force', False),
+            delete_cache=norm_message.get('delete_cache', False),
+            is_cache_disabled=norm_message.get('is_cache_disabled', False),
+            days=norm_message.get('days', 0),
+            force_refresh=norm_message.get('force_refresh', False)
         )
     
     return BaseRequest(action=action, request_id=request_id)
