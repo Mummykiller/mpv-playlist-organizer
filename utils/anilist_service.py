@@ -138,7 +138,13 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
             if now - LAST_ANILIST_FRESH_LOG_TIME > 300:
                 send_message_func({"log": {"text": f"[AniList]: Loaded from local cache (Day Offset: {days}).", "type": "info"}})
                 LAST_ANILIST_FRESH_LOG_TIME = now
-            return {"success": True, "output": json.dumps(day_cache['data'])}
+            return {"success": True, "output": day_cache['data']}
 
     logging.info(f"AniList Cache: Fetching fresh data for offset {days}.")
-    return perform_full_fetch_and_cache(days)
+    res = perform_full_fetch_and_cache(days)
+    if res['success'] and isinstance(res['output'], str):
+        try:
+            res['output'] = json.loads(res['output'])
+        except Exception:
+            pass
+    return res

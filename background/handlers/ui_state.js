@@ -32,7 +32,7 @@ export async function handleContentScriptInit(request, sender) {
 
 	if (tabId && origin && sender.tab) {
 		const data = await storage.get();
-		const globalPrefs = data.settings.ui_preferences.global;
+		const globalPrefs = data.settings.uiPreferences.global;
 
 		let domain = null;
 		if (origin && (origin.startsWith("http:") || origin.startsWith("https:"))) {
@@ -42,7 +42,7 @@ export async function handleContentScriptInit(request, sender) {
 		}
 
 		// Defensive check for domains object
-		const domains = data.settings.ui_preferences.domains || {};
+		const domains = data.settings.uiPreferences.domains || {};
 		const domainPrefs = domain ? domains[domain] || {} : {};
 
 		let isMinimized;
@@ -52,14 +52,14 @@ export async function handleContentScriptInit(request, sender) {
 			isMinimized = globalPrefs.mode === "minimized";
 		}
 
-		const mpvStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ is_running: false }));
-		const currentMpvFolderId = (mpvStatus?.success && mpvStatus.is_running && mpvStatus.folderId) ? mpvStatus.folderId : null;
+		const mpvStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ isRunning: false }));
+		const currentMpvFolderId = (mpvStatus?.success && mpvStatus.isRunning && mpvStatus.folderId) ? mpvStatus.folderId : null;
 		
-		const folderId = currentMpvFolderId || data.settings.last_used_folder_id || Object.keys(data.folders)[0];
+		const folderId = currentMpvFolderId || data.settings.lastUsedFolderId || Object.keys(data.folders)[0];
 		const isFolderActive = !!(currentMpvFolderId && currentMpvFolderId === folderId);
 		const folder = data.folders[folderId];
 		
-		let lastPlayedId = folder?.last_played_id;
+		let lastPlayedId = folder?.lastPlayedId;
 		let isPaused = false;
 		let needsAppend = false;
 
@@ -95,7 +95,7 @@ export const handleGetUiStateForTab = createHandler(async ({ request }) => {
 	const tabId = request.tabId;
 	const tab = await chrome.tabs.get(tabId);
 	const data = await storage.get();
-	const globalPrefs = data.settings.ui_preferences.global;
+	const globalPrefs = data.settings.uiPreferences.global;
 
 	let domain = null;
 	if (tab.url && (tab.url.startsWith("http:") || tab.url.startsWith("https:"))) {
@@ -104,7 +104,7 @@ export const handleGetUiStateForTab = createHandler(async ({ request }) => {
 		} catch (e) {}
 	}
 
-	const domains = data.settings.ui_preferences.domains || {};
+	const domains = data.settings.uiPreferences.domains || {};
 	const domainPrefsRaw = domain ? domains[domain] || {} : {};
 	
 	const domainPrefs = {};
@@ -156,7 +156,7 @@ export const handleSetLastFolderId = createHandler(async ({ request, data }) => 
 	const { folderId } = request;
 	if (!folderId) return { success: false, error: "No folderId provided." };
 
-	data.settings.last_used_folder_id = folderId;
+	data.settings.lastUsedFolderId = folderId;
 	return { success: true };
 }, {
 	onSuccess: async (result, { folderId }) => {
@@ -169,11 +169,11 @@ export const handleSwitchPlaylist = createHandler(async ({ data }) => {
 	const folderOrder = data.folderOrder || Object.keys(data.folders);
 	if (folderOrder.length <= 1) return { success: true };
 
-	const currentFolderId = data.settings.last_used_folder_id || folderOrder[0];
+	const currentFolderId = data.settings.lastUsedFolderId || folderOrder[0];
 	const currentIndex = folderOrder.indexOf(currentFolderId);
 	const nextFolderId = folderOrder[(currentIndex + 1) % folderOrder.length];
 
-	data.settings.last_used_folder_id = nextFolderId;
+	data.settings.lastUsedFolderId = nextFolderId;
 	return { success: true, folderId: nextFolderId };
 }, {
 	onSuccess: async (result) => {
@@ -198,56 +198,56 @@ const DOMAIN_SPECIFIC_KEYS = [
 const UI_ONLY_KEYS = [
 	...DOMAIN_SPECIFIC_KEYS,
 	"logVisible",
-	"show_play_new_button",
-	"duplicate_url_behavior",
-	"auto_append_on_add",
-	"live_removal",
-	"confirm_remove_folder",
-	"confirm_clear_playlist",
-	"confirm_close_mpv",
-	"confirm_play_new",
-	"confirm_folder_switch",
-	"enable_dblclick_copy",
-	"anilist_image_height",
+	"showPlayNewButton",
+	"duplicateUrlBehavior",
+	"autoAppendOnAdd",
+	"liveRemoval",
+	"confirmRemoveFolder",
+	"confirmClearPlaylist",
+	"confirmCloseMpv",
+	"confirmPlayNew",
+	"confirmFolderSwitch",
+	"enableDblclickCopy",
+	"anilistImageHeight",
 	"lockAnilistPanel",
 	"forcePanelAttached",
 	"anilistAttachOnOpen",
-	"popup_width",
-	"show_watched_status_gui",
-	"show_minimized_stub",
-	"restricted_domains",
-	"kb_add_playlist",
-	"kb_play_playlist",
-	"kb_toggle_controller",
-	"kb_switch_playlist",
-	"kb_open_popup",
+	"popupWidth",
+	"showWatchedStatusGui",
+	"showMinimizedStub",
+	"restrictedDomains",
+	"kbAddPlaylist",
+	"kbPlayPlaylist",
+	"kbToggleController",
+	"kbSwitchPlaylist",
+	"kbOpenPopup",
 	"dependencyStatus",
 ];
 
 export const handleGetUiPreferences = createHandler(async ({ request, data, sender }) => {
-	const globalPrefs = { ...data.settings.ui_preferences.global };
+	const globalPrefs = { ...data.settings.uiPreferences.global };
 
 	const now = Date.now();
 	if (_nativeInfoCache.timestamp && now - _nativeInfoCache.timestamp < CACHE_TTL_MS) {
-		if (_nativeInfoCache.decoder) globalPrefs.mpv_decoder = _nativeInfoCache.decoder;
-		if (_nativeInfoCache.ffmpeg_path && !globalPrefs.ffmpeg_path) globalPrefs.ffmpeg_path = _nativeInfoCache.ffmpeg_path;
-		if (_nativeInfoCache.node_path && !globalPrefs.node_path) globalPrefs.node_path = _nativeInfoCache.node_path;
+		if (_nativeInfoCache.decoder) globalPrefs.mpvDecoder = _nativeInfoCache.decoder;
+		if (_nativeInfoCache.ffmpegPath && !globalPrefs.ffmpegPath) globalPrefs.ffmpegPath = _nativeInfoCache.ffmpegPath;
+		if (_nativeInfoCache.nodePath && !globalPrefs.nodePath) globalPrefs.nodePath = _nativeInfoCache.nodePath;
 	} else {
 		try {
 			const nativeSettings = await nativeLink.getUiPreferences();
 			if (nativeSettings?.success && nativeSettings.preferences) {
 				const np = nativeSettings.preferences;
-				if (np.mpv_decoder) {
-					globalPrefs.mpv_decoder = np.mpv_decoder;
-					_nativeInfoCache.decoder = np.mpv_decoder;
+				if (np.mpvDecoder) {
+					globalPrefs.mpvDecoder = np.mpvDecoder;
+					_nativeInfoCache.decoder = np.mpvDecoder;
 				}
-				if (np.ffmpeg_path) {
-					if (!globalPrefs.ffmpeg_path) globalPrefs.ffmpeg_path = np.ffmpeg_path;
-					_nativeInfoCache.ffmpeg_path = np.ffmpeg_path;
+				if (np.ffmpegPath) {
+					if (!globalPrefs.ffmpegPath) globalPrefs.ffmpegPath = np.ffmpegPath;
+					_nativeInfoCache.ffmpegPath = np.ffmpegPath;
 				}
-				if (np.node_path) {
-					if (!globalPrefs.node_path) globalPrefs.node_path = np.node_path;
-					_nativeInfoCache.node_path = np.node_path;
+				if (np.nodePath) {
+					if (!globalPrefs.nodePath) globalPrefs.nodePath = np.nodePath;
+					_nativeInfoCache.nodePath = np.nodePath;
 				}
 				_nativeInfoCache.timestamp = now;
 			}
@@ -271,7 +271,7 @@ export const handleGetUiPreferences = createHandler(async ({ request, data, send
 	}
 
 	if (domain) {
-		const domains = data.settings.ui_preferences.domains || {};
+		const domains = data.settings.uiPreferences.domains || {};
 		const domainPrefsRaw = domains[domain] || {};
 		
 		// Only merge allowed domain-specific overrides
@@ -311,8 +311,8 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 
 	// Update Global Preferences
 	if (Object.keys(globalPrefs).length > 0) {
-		data.settings.ui_preferences.global = { 
-			...data.settings.ui_preferences.global, 
+		data.settings.uiPreferences.global = { 
+			...data.settings.uiPreferences.global, 
 			...globalPrefs 
 		};
 		_nativeInfoCache.decoder = null;
@@ -321,9 +321,9 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 
 	// Update Domain Preferences
 	if (domain && Object.keys(domainPrefs).length > 0) {
-		if (!data.settings.ui_preferences.domains) data.settings.ui_preferences.domains = {};
-		const existingDomainPrefs = data.settings.ui_preferences.domains[domain] || {};
-		data.settings.ui_preferences.domains[domain] = { 
+		if (!data.settings.uiPreferences.domains) data.settings.uiPreferences.domains = {};
+		const existingDomainPrefs = data.settings.uiPreferences.domains[domain] || {};
+		data.settings.uiPreferences.domains[domain] = { 
 			...existingDomainPrefs, 
 			...domainPrefs 
 		};
@@ -343,7 +343,7 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 		if (!domain) {
 			try {
 				const syncPrefs = {};
-				const globalPrefs = data.settings.ui_preferences.global;
+				const globalPrefs = data.settings.uiPreferences.global;
 
 				// Sync all global keys that are not UI-exclusive
 				for (const key in globalPrefs) {
@@ -369,7 +369,7 @@ export const handleGetDefaultAutomaticFlags = createHandler(async () => {
 	}
 
 	const defaultData = storage._getDefaultData();
-	return { success: true, flags: defaultData.settings.ui_preferences.global.automatic_mpv_flags };
+	return { success: true, flags: defaultData.settings.uiPreferences.global.automaticMpvFlags };
 });
 
 export const handleSetMinimizedState = createHandler(async ({ request }) => {
@@ -396,15 +396,15 @@ export function handleForceReloadSettings() {
 export const handleForceRefreshDependencies = createHandler(async ({ data }) => {
 	_nativeInfoCache.decoder = null;
 	_nativeInfoCache.timestamp = 0;
-	const response = await nativeLink.call("check_dependencies", { force_refresh: true });
+	const response = await nativeLink.call("check_dependencies", { forceRefresh: true });
 
 	if (response.success) {
-		data.settings.ui_preferences.global.dependencyStatus = {
+		data.settings.uiPreferences.global.dependencyStatus = {
 			mpv: response.mpv, ytdlp: response.ytdlp, ffmpeg: response.ffmpeg, node: response.node,
 		};
 		broadcastToTabs({
 			action: "preferences_changed",
-			preferences: { dependencyStatus: data.settings.ui_preferences.global.dependencyStatus },
+			preferences: { dependencyStatus: data.settings.uiPreferences.global.dependencyStatus },
 		});
 		broadcastLog({ text: "[Background]: Dependency status refreshed successfully.", type: "info" });
 	}

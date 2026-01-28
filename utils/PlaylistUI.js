@@ -75,10 +75,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			if (playlist && playlist.length > 0) {
 				const highlightEnabled =
-					this.controller.state.state.settings?.enable_active_item_highlight ??
+					this.controller.state.state.settings?.enableActiveItemHighlight ??
 					true;
 				const showWatchedGUI =
-					this.controller.state.state.settings?.show_watched_status_gui ?? true;
+					this.controller.state.state.settings?.showWatchedStatusGui ?? true;
 
 				// Use DocumentFragment to minimize reflows during bulk DOM updates
 				const fragment = document.createDocumentFragment();
@@ -87,7 +87,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const itemDiv = document.createElement("div");
 					itemDiv.className = "list-item";
 					
-					const isCurrent = item.currently_playing || (lastPlayedId && item.id === lastPlayedId);
+					const isCurrent = item.currentlyPlaying || (lastPlayedId && item.id === lastPlayedId);
 					if (highlightEnabled && isCurrent) {
 						itemDiv.classList.add(
 							isFolderActive ? "active-item" : "last-played-item",
@@ -100,7 +100,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					itemDiv.dataset.id = item.id || "";
 
 					// 1. Copy URL Button
-					if (this.controller.state.state.settings.show_copy_title_button) {
+					if (this.controller.state.state.settings.showCopyTitleButton) {
 						const copyBtn = document.createElement("button");
 						copyBtn.className = "btn-copy-item";
 						copyBtn.dataset.url = item.url;
@@ -128,7 +128,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						const watchedCheckbox = document.createElement("input");
 						watchedCheckbox.type = "checkbox";
 						watchedCheckbox.className = "item-watched-checkbox";
-						watchedCheckbox.checked = !item.marked_as_watched;
+						watchedCheckbox.checked = !item.markedAsWatched;
 						watchedCheckbox.title = watchedCheckbox.checked
 							? "Will mark as watched on YouTube"
 							: "Already marked or skipped";
@@ -224,7 +224,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (!this.fullContainer) return;
 
 			const highlightEnabled =
-				this.controller.state.state.settings?.enable_active_item_highlight ??
+				this.controller.state.state.settings?.enableActiveItemHighlight ??
 				true;
 
 			this.fullContainer.querySelectorAll(".list-item").forEach((item) => {
@@ -291,8 +291,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					if (fullItem) {
 						chrome.runtime.sendMessage({
 							action: "play_new_instance",
-							url_item: fullItem,
-							play_new_instance: true,
+							urlItem: fullItem,
+							playNewInstance: true,
 							folderId: this.folderSelect.value
 						});
 						this.isSelectionModeActive = false;
@@ -349,7 +349,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			});
 
 			this.fullContainer.addEventListener("dblclick", (e) => {
-				if (!this.controller.state.state.settings.enable_dblclick_copy) return;
+				if (!this.controller.state.state.settings.enableDblclickCopy) return;
 				const listItem = e.target.closest(".list-item");
 				if (listItem && listItem.dataset.title) {
 					navigator.clipboard

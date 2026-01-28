@@ -52,20 +52,21 @@ class NativeLink {
 	 */
 	async play(item, folderId, options = {}) {
 		const data = await storage.get();
-		const globalPrefs = data.settings.ui_preferences.global;
+		const globalPrefs = data.settings.uiPreferences.global;
 
-		const isPlayNew = options.play_new_instance || false;
+		const isPlayNew = options.playNewInstance || false;
 		const action = isPlayNew ? "play_new_instance" : "play";
 
 		const payload = {
 			action,
-			url_item: this._injectItemSettings(item, globalPrefs),
+			urlItem: this._injectItemSettings(item, globalPrefs),
 			folderId,
+			playlistStartId: options.playlistStartId,
 			...this._enrichPayload(globalPrefs, options),
 		};
 
 		if (isPlayNew && item) {
-			payload.playlist = [payload.url_item];
+			payload.playlist = [payload.urlItem];
 		}
 
 		return this.call(action, payload);
@@ -76,15 +77,16 @@ class NativeLink {
 	 */
 	async playM3U(m3uData, folderId, options = {}) {
 		const data = await storage.get();
-		const globalPrefs = data.settings.ui_preferences.global;
+		const globalPrefs = data.settings.uiPreferences.global;
 
-		const isPlayNew = options.play_new_instance || false;
+		const isPlayNew = options.playNewInstance || false;
 		const action = isPlayNew ? "play_new_instance" : "play_m3u";
 
 		const payload = {
 			action,
-			m3u_data: m3uData,
+			m3uData: m3uData,
 			folderId,
+			playlistStartId: options.playlistStartId,
 			...this._enrichPayload(globalPrefs, options),
 		};
 
@@ -102,7 +104,7 @@ class NativeLink {
 	 */
 	async append(items, folderId) {
 		const data = await storage.get();
-		const globalPrefs = data.settings.ui_preferences.global;
+		const globalPrefs = data.settings.uiPreferences.global;
 
 		const itemList = Array.isArray(items) ? items : [items];
 		const processedItems = itemList.map((item) =>
@@ -110,7 +112,7 @@ class NativeLink {
 		);
 
 		return this.call("append", {
-			url_items: processedItems,
+			urlItems: processedItems,
 			folderId,
 		});
 	}
@@ -120,7 +122,7 @@ class NativeLink {
 	}
 
 	async reorderLive(folderId, newOrder) {
-		return this.call("reorder_live", { folderId, new_order: newOrder });
+		return this.call("reorder_live", { folderId, newOrder: newOrder });
 	}
 
 	// --- UI State & Preferences ---
@@ -136,10 +138,10 @@ class NativeLink {
 
 		if (folderId && data.folders[folderId]) {
 			payload.data = { [folderId]: data.folders[folderId] };
-			payload.is_incremental = true;
+			payload.isIncremental = true;
 		} else {
 			payload.data = data.folders;
-			payload.is_incremental = false;
+			payload.isIncremental = false;
 		}
 
 		return this.call("export_data", payload);
@@ -186,10 +188,10 @@ class NativeLink {
 			...item,
 			settings: {
 				...settings,
-				yt_use_cookies: globalPrefs.yt_use_cookies ?? true,
-				yt_mark_watched: globalPrefs.yt_mark_watched ?? true,
-				yt_ignore_config: globalPrefs.yt_ignore_config ?? true,
-				other_sites_use_cookies: globalPrefs.other_sites_use_cookies ?? true,
+				ytUseCookies: globalPrefs.ytUseCookies ?? true,
+				ytMarkWatched: globalPrefs.ytMarkWatched ?? true,
+				ytIgnoreConfig: globalPrefs.ytIgnoreConfig ?? true,
+				otherSitesUseCookies: globalPrefs.otherSitesUseCookies ?? true,
 			},
 		};
 	}
@@ -201,47 +203,47 @@ class NativeLink {
 		return {
 			geometry:
 				overrides.geometry ||
-				(globalPrefs.launch_geometry === "custom"
+				(globalPrefs.launchGeometry === "custom"
 					? null
-					: globalPrefs.launch_geometry),
-			custom_width:
-				overrides.custom_width ||
-				(globalPrefs.launch_geometry === "custom"
-					? globalPrefs.custom_geometry_width
+					: globalPrefs.launchGeometry),
+			customWidth:
+				overrides.customWidth ||
+				(globalPrefs.launchGeometry === "custom"
+					? globalPrefs.customGeometryWidth
 					: null),
-			custom_height:
-				overrides.custom_height ||
-				(globalPrefs.launch_geometry === "custom"
-					? globalPrefs.custom_geometry_height
+			customHeight:
+				overrides.customHeight ||
+				(globalPrefs.launchGeometry === "custom"
+					? globalPrefs.customGeometryHeight
 					: null),
-			custom_mpv_flags:
-				overrides.custom_mpv_flags || globalPrefs.custom_mpv_flags || "",
-			automatic_mpv_flags: globalPrefs.automatic_mpv_flags || [],
-			force_terminal: globalPrefs.force_terminal ?? false,
-			clear_on_completion:
-				overrides.clear_on_completion ?? globalPrefs.clear_on_completion ?? false,
-			start_paused: overrides.start_paused ?? false,
+			customMpvFlags:
+				overrides.customMpvFlags || globalPrefs.customMpvFlags || "",
+			automaticMpvFlags: globalPrefs.automaticMpvFlags || [],
+			forceTerminal: globalPrefs.forceTerminal ?? false,
+			clearOnCompletion:
+				overrides.clearOnCompletion ?? globalPrefs.clearOnCompletion ?? false,
+			startPaused: overrides.startPaused ?? false,
 			// Networking & Performance Sync
-			disable_network_overrides: globalPrefs.disable_network_overrides ?? false,
-			enable_cache: globalPrefs.enable_cache ?? true,
-			http_persistence: globalPrefs.http_persistence || "auto",
-			demuxer_max_bytes: globalPrefs.demuxer_max_bytes || "1G",
-			demuxer_max_back_bytes: globalPrefs.demuxer_max_back_bytes || "500M",
-			cache_secs: globalPrefs.cache_secs || 500,
-			demuxer_readahead_secs: globalPrefs.demuxer_readahead_secs || 500,
-			stream_buffer_size: globalPrefs.stream_buffer_size || "10M",
-			ytdlp_concurrent_fragments: globalPrefs.ytdlp_concurrent_fragments || 4,
-			enable_reconnect: globalPrefs.enable_reconnect ?? true,
-			reconnect_delay: globalPrefs.reconnect_delay || 4,
-			mpv_decoder: globalPrefs.mpv_decoder || "auto",
-			ytdl_quality: globalPrefs.ytdl_quality || "best",
-			performance_profile: globalPrefs.performance_profile || "default",
-			enable_precise_resume: globalPrefs.enable_precise_resume ?? true,
-			ultra_scalers: globalPrefs.ultra_scalers ?? true,
-			ultra_video_sync: globalPrefs.ultra_video_sync ?? true,
-			ultra_interpolation: globalPrefs.ultra_interpolation || "oversample",
-			ultra_deband: globalPrefs.ultra_deband ?? true,
-			ultra_fbo: globalPrefs.ultra_fbo ?? true,
+			disableNetworkOverrides: globalPrefs.disableNetworkOverrides ?? false,
+			enableCache: globalPrefs.enableCache ?? true,
+			httpPersistence: globalPrefs.httpPersistence || "auto",
+			demuxerMaxBytes: globalPrefs.demuxerMaxBytes || "1G",
+			demuxerMaxBackBytes: globalPrefs.demuxerMaxBackBytes || "500M",
+			cacheSecs: globalPrefs.cacheSecs || 500,
+			demuxerReadaheadSecs: globalPrefs.demuxerReadaheadSecs || 500,
+			streamBufferSize: globalPrefs.streamBufferSize || "10M",
+			ytdlpConcurrentFragments: globalPrefs.ytdlpConcurrentFragments || 4,
+			enableReconnect: globalPrefs.enableReconnect ?? true,
+			reconnectDelay: globalPrefs.reconnectDelay || 4,
+			mpvDecoder: globalPrefs.mpvDecoder || "auto",
+			ytdlQuality: globalPrefs.ytdlQuality || "best",
+			performanceProfile: globalPrefs.performanceProfile || "default",
+			enablePreciseResume: globalPrefs.enablePreciseResume ?? true,
+			ultraScalers: globalPrefs.ultraScalers ?? true,
+			ultraVideoSync: globalPrefs.ultraVideoSync ?? true,
+			ultraInterpolation: globalPrefs.ultraInterpolation || "oversample",
+			ultraDeband: globalPrefs.ultraDeband ?? true,
+			ultraFbo: globalPrefs.ultraFbo ?? true,
 		};
 	}
 }

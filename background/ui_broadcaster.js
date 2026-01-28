@@ -32,8 +32,8 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 			);
 			if (mpv_playback_cache && mpv_playback_cache.folderId === folderId) {
 				finalStatus = {
-					is_running: mpv_playback_cache.is_running !== false,
-					is_paused: mpv_playback_cache.isPaused,
+					isRunning: mpv_playback_cache.isRunning !== false,
+					isPaused: mpv_playback_cache.isPaused,
 					sessionIds: mpv_playback_cache.sessionIds,
 					lastPlayedId: mpv_playback_cache.lastPlayedId,
 					folderId: mpv_playback_cache.folderId,
@@ -44,18 +44,17 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 		if (!finalStatus)
 			return { isActive: false, isPaused: false, needsAppend: false };
 
-		// Handle both JS camelCase and Python snake_case from native host
-		const isProcessRunning = !!(finalStatus.isRunning || finalStatus.is_running);
+		// Rely on automated normalization
+		const isProcessRunning = !!finalStatus.isRunning;
 		const isManagerActive = isFolderActive(folderId);
 		
 		let isActive = (isProcessRunning || isManagerActive) && (finalStatus.folderId === folderId || !finalStatus.folderId);
 		
-		const isPaused =
-			(finalStatus.isPaused || finalStatus.is_paused || finalStatus.isIdle || finalStatus.is_idle) ?? false;
+		const isPaused = (finalStatus.isPaused || finalStatus.isIdle) ?? false;
 		let needsAppend = false;
 		const lastPlayedId = finalStatus.lastPlayedId;
 
-		const rawSessionIds = finalStatus.sessionIds || finalStatus.session_ids;
+		const rawSessionIds = finalStatus.sessionIds;
 		if (isActive && rawSessionIds && playlist) {
 			const sessionIdsSet = new Set(rawSessionIds);
 			needsAppend = playlist.some((item) => !sessionIdsSet.has(item.id));
@@ -87,7 +86,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 		action: action,
 		folderId: folderId,
 		playlist: targetPlaylist,
-		lastPlayedId: lastPlayedId || data.folders[folderId]?.last_played_id,
+		lastPlayedId: lastPlayedId || data.folders[folderId]?.lastPlayedId,
 		isFolderActive: isActive,
 		isPaused: isPaused,
 		needsAppend: needsAppend,
@@ -108,13 +107,13 @@ export async function broadcastPlaybackState(folderId, statusOverride = {}) {
 	if (!targetFolderId) return;
 
 	const isActive = isFolderActive(targetFolderId);
-	const cacheIsActive = !!(mpv_playback_cache && mpv_playback_cache.is_running !== false && mpv_playback_cache.folderId === targetFolderId);
+	const cacheIsActive = !!(mpv_playback_cache && mpv_playback_cache.isRunning !== false && mpv_playback_cache.folderId === targetFolderId);
 	
 	let needsAppend = false;
 	if (isActive || cacheIsActive) {
 		const storageData = await storage.get();
 		const folder = storageData.folders[targetFolderId];
-		const rawSessionIds = mpv_playback_cache?.sessionIds || mpv_playback_cache?.session_ids;
+		const rawSessionIds = mpv_playback_cache?.sessionIds;
 		
 		if (folder && folder.playlist && rawSessionIds) {
 			const sessionSet = new Set(rawSessionIds);

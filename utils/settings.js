@@ -14,132 +14,132 @@ export class OptionsManager {
 		this.fetchAniListReleases = dependencies.fetchAniListReleases;
 
 		this.preferenceMappings = [
-			{ key: "launch_geometry", elementId: "geometry-select", type: "select" },
+			{ key: "launchGeometry", elementId: "geometry-select", type: "select" },
 			{
-				key: "custom_geometry_width",
+				key: "customGeometryWidth",
 				elementId: "custom-width",
 				type: "input",
 			},
 			{
-				key: "custom_geometry_height",
+				key: "customGeometryHeight",
 				elementId: "custom-height",
 				type: "input",
 			},
-			{ key: "mpv_decoder", elementId: "mpv-decoder-select", type: "select" },
+			{ key: "mpvDecoder", elementId: "mpv-decoder-select", type: "select" },
 			{
-				key: "force_terminal",
+				key: "forceTerminal",
 				elementId: "force-terminal-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "show_play_new_button",
+				key: "showPlayNewButton",
 				elementId: "show-play-new-button-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "duplicate_url_behavior",
+				key: "duplicateUrlBehavior",
 				elementId: "duplicate-behavior-select",
 				type: "select",
 			},
 			{
-				key: "sync_global_removals",
+				key: "syncGlobalRemovals",
 				elementId: "sync-global-removals-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "one_click_add",
+				key: "oneClickAdd",
 				elementId: "one-click-add-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "auto_append_on_add",
+				key: "autoAppendOnAdd",
 				elementId: "auto-append-on-add-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "live_removal",
+				key: "liveRemoval",
 				elementId: "live-removal-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "stream_scanner_timeout",
+				key: "streamScannerTimeout",
 				elementId: "scanner-timeout-input",
 				type: "input",
 				transform: Number,
 			},
 			{
-				key: "confirm_remove_folder",
+				key: "confirmRemoveFolder",
 				elementId: "confirm-remove-folder-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "confirm_clear_playlist",
+				key: "confirmClearPlaylist",
 				elementId: "confirm-clear-playlist-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "confirm_close_mpv",
+				key: "confirmCloseMpv",
 				elementId: "confirm-close-mpv-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "confirm_play_new",
+				key: "confirmPlayNew",
 				elementId: "confirm-play-new-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "confirm_folder_switch",
+				key: "confirmFolderSwitch",
 				elementId: "confirm-folder-switch-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "clear_on_item_finish",
+				key: "clearOnItemFinish",
 				elementId: "clear-on-item-finish-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "clear_on_completion",
+				key: "clearOnCompletion",
 				elementId: "clear-on-completion-select",
 				type: "select",
 			},
-			{ key: "clear_scope", elementId: "clear-scope-select", type: "select" },
+			{ key: "clearScope", elementId: "clear-scope-select", type: "select" },
 			{
-				key: "yt_use_cookies",
+				key: "ytUseCookies",
 				elementId: "yt-use-cookies-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "yt_mark_watched",
+				key: "ytMarkWatched",
 				elementId: "yt-mark-watched-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "yt_ignore_config",
+				key: "ytIgnoreConfig",
 				elementId: "yt-ignore-config-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "other_sites_use_cookies",
+				key: "otherSitesUseCookies",
 				elementId: "other-sites-use-cookies-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "autofocus_new_folder",
+				key: "autofocusNewFolder",
 				elementId: "autofocus-new-folder-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "enable_dblclick_copy",
+				key: "enableDblclickCopy",
 				elementId: "enable-dblclick-copy-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "show_copy_title_button",
+				key: "showCopyTitleButton",
 				elementId: "show-copy-title-button-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "show_watched_status_gui",
+				key: "showWatchedStatusGui",
 				elementId: "show-watched-status-gui-checkbox",
 				type: "checkbox",
 			},
@@ -159,172 +159,172 @@ export class OptionsManager {
 				type: "checkbox",
 			},
 			{
-				key: "enable_anilist_integration",
+				key: "enableAnilistIntegration",
 				elementId: "enable-anilist-integration-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "disable_anilist_cache",
+				key: "disableAnilistCache",
 				elementId: "disable-anilist-cache-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "anilist_image_height",
+				key: "anilistImageHeight",
 				elementId: "anilist-image-height-slider",
 				type: "slider",
 				transform: Number,
 			},
-			{ key: "ytdl_quality", elementId: "ytdl-quality-select", type: "select" },
+			{ key: "ytdlQuality", elementId: "ytdl-quality-select", type: "select" },
 			{
-				key: "show_minimized_stub",
+				key: "showMinimizedStub",
 				elementId: "show-minimized-stub-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "ytdlp_update_behavior",
+				key: "ytdlpUpdateBehavior",
 				elementId: "ytdlp-update-behavior-select",
 				type: "select",
 			},
 			{ key: "mode", elementId: "default-ui-mode-select", type: "select" },
 			{
-				key: "kb_add_playlist",
+				key: "kbAddPlaylist",
 				elementId: "kb-add-playlist-input",
 				type: "input",
 			},
 			{
-				key: "kb_play_playlist",
+				key: "kbPlayPlaylist",
 				elementId: "kb-play-playlist-input",
 				type: "input",
 			},
 			{
-				key: "kb_toggle_controller",
+				key: "kbToggleController",
 				elementId: "kb-toggle-ui-input",
 				type: "input",
 			},
 			{
-				key: "kb_switch_playlist",
+				key: "kbSwitchPlaylist",
 				elementId: "kb-switch-playlist-input",
 				type: "input",
 			},
-			{ key: "kb_open_popup", elementId: "kb-open-popup-input", type: "input" },
+			{ key: "kbOpenPopup", elementId: "kb-open-popup-input", type: "input" },
 			{
-				key: "enable_smart_resume",
+				key: "enableSmartResume",
 				elementId: "enable-smart-resume-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "enable_precise_resume",
+				key: "enablePreciseResume",
 				elementId: "enable-precise-resume-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "enable_active_item_highlight",
+				key: "enableActiveItemHighlight",
 				elementId: "enable-active-highlight-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "disable_network_overrides",
+				key: "disableNetworkOverrides",
 				elementId: "disable-network-overrides-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "targeted_defaults",
+				key: "targetedDefaults",
 				elementId: "targeted-defaults-select",
 				type: "select",
 			},
 			{
-				key: "enable_cache",
+				key: "enableCache",
 				elementId: "enable-cache-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "http_persistence",
+				key: "httpPersistence",
 				elementId: "http-persistence-select",
 				type: "select",
 			},
 			{
-				key: "demuxer_max_bytes",
+				key: "demuxerMaxBytes",
 				elementId: "demuxer-max-bytes-input",
 				type: "input",
 			},
 			{
-				key: "demuxer_max_back_bytes",
+				key: "demuxerMaxBackBytes",
 				elementId: "demuxer-max-back-bytes-input",
 				type: "input",
 			},
 			{
-				key: "cache_secs",
+				key: "cacheSecs",
 				elementId: "cache-secs-input",
 				type: "input",
 				transform: Number,
 			},
 			{
-				key: "demuxer_readahead_secs",
+				key: "demuxerReadaheadSecs",
 				elementId: "demuxer-readahead-secs-input",
 				type: "input",
 				transform: Number,
 			},
 			{
-				key: "stream_buffer_size",
+				key: "streamBufferSize",
 				elementId: "stream-buffer-size-input",
 				type: "input",
 			},
 			{
-				key: "ytdlp_concurrent_fragments",
+				key: "ytdlpConcurrentFragments",
 				elementId: "ytdlp-concurrent-fragments-input",
 				type: "input",
 				transform: Number,
 			},
 			{
-				key: "enable_reconnect",
+				key: "enableReconnect",
 				elementId: "enable-reconnect-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "reconnect_delay",
+				key: "reconnectDelay",
 				elementId: "reconnect-delay-input",
 				type: "input",
 				transform: Number,
 			},
 			{
-				key: "performance_profile",
+				key: "performanceProfile",
 				elementId: "performance-profile-select",
 				type: "select",
 			},
-			{ key: "ffmpeg_path", elementId: "ffmpeg-path-input", type: "input" },
-			{ key: "node_path", elementId: "node-path-input", type: "input" },
+			{ key: "ffmpegPath", elementId: "ffmpeg-path-input", type: "input" },
+			{ key: "nodePath", elementId: "node-path-input", type: "input" },
 			{
-				key: "popup_width",
+				key: "popupWidth",
 				elementId: "popup-width-slider",
 				type: "slider",
 				transform: Number,
 			},
 			{
-				key: "popup_width_locked",
+				key: "popupWidthLocked",
 				elementId: "btn-lock-popup-width",
 				type: "custom",
 			},
 			{
-				key: "ultra_scalers",
+				key: "ultraScalers",
 				elementId: "ultra-scalers-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "ultra_video_sync",
+				key: "ultraVideoSync",
 				elementId: "ultra-video-sync-checkbox",
 				type: "checkbox",
 			},
 			{
-				key: "ultra_interpolation",
+				key: "ultraInterpolation",
 				elementId: "ultra-interpolation-select",
 				type: "select",
 			},
 			{
-				key: "ultra_deband",
+				key: "ultraDeband",
 				elementId: "ultra-deband-checkbox",
 				type: "checkbox",
 			},
-			{ key: "ultra_fbo", elementId: "ultra-fbo-checkbox", type: "checkbox" },
+			{ key: "ultraFbo", elementId: "ultra-fbo-checkbox", type: "checkbox" },
 		];
 
 		this.debouncedSaveAllPreferences = this._debounce(
@@ -346,8 +346,8 @@ export class OptionsManager {
 	}
 
 	updateAllPreferencesUI(prefs) {
-		const isCustom = prefs.launch_geometry === "custom";
-		const isUltra = prefs.performance_profile === "ultra";
+		const isCustom = prefs.launchGeometry === "custom";
+		const isUltra = prefs.performanceProfile === "ultra";
 		document.getElementById("ultra-options-container").style.display = isUltra
 			? "block"
 			: "none";
@@ -376,7 +376,7 @@ export class OptionsManager {
 
 		document.getElementById("custom-geometry-container").style.display =
 			isCustom ? "flex" : "none";
-		const enableAnilist = prefs.enable_anilist_integration ?? true;
+		const enableAnilist = prefs.enableAnilistIntegration ?? true;
 		document.getElementById("anilist-options-container").style.display =
 			enableAnilist ? "block" : "none";
 		document.getElementById("shared-anilist-section").style.display =
@@ -409,7 +409,7 @@ export class OptionsManager {
 			}
 		}
 
-		const customFlagsRaw = prefs.custom_mpv_flags || [];
+		const customFlagsRaw = prefs.customMpvFlags || [];
 		const customFlags = Array.isArray(customFlagsRaw)
 			? customFlagsRaw
 			: typeof customFlagsRaw === "string"
@@ -421,15 +421,15 @@ export class OptionsManager {
 		);
 		this._renderMpvFlagsList(normalizedCustomFlags);
 
-		const automaticFlags = prefs.automatic_mpv_flags || [];
+		const automaticFlags = prefs.automaticMpvFlags || [];
 		this._renderAutomaticMpvFlagsList(automaticFlags);
 
-		this._updateAnilistImageSize(prefs.anilist_image_height || 126);
-		this._updatePopupWidth(prefs.popup_width || 600);
-		this._updatePopupWidthLock(prefs.popup_width_locked || false);
+		this._updateAnilistImageSize(prefs.anilistImageHeight || 126);
+		this._updatePopupWidth(prefs.popupWidth || 600);
+		this._updatePopupWidthLock(prefs.popupWidthLocked || false);
 
-		this._renderScraperFilterList(prefs.scraper_filter_words || []);
-		this._renderRestrictedDomainsList(prefs.restricted_domains || []);
+		this._renderScraperFilterList(prefs.scraperFilterWords || []);
+		this._renderRestrictedDomainsList(prefs.restrictedDomains || []);
 		this._renderBuiltInFilterList();
 		this._renderDependencyStatus(prefs.dependencyStatus);
 	}
@@ -472,14 +472,14 @@ export class OptionsManager {
 		const response = await this.sendMessageAsync({
 			action: "get_ui_preferences",
 		});
-		const currentDomains = response?.preferences?.restricted_domains || [];
+		const currentDomains = response?.preferences?.restrictedDomains || [];
 
 		if (!currentDomains.includes(newDomain)) {
 			const newDomains = [...currentDomains, newDomain];
 			this._renderRestrictedDomainsList(newDomains);
 			await this.sendMessageAsync({
 				action: "set_ui_preferences",
-				preferences: { restricted_domains: newDomains },
+				preferences: { restrictedDomains: newDomains },
 			});
 			this.showStatus(`Domain "${newDomain}" restricted.`);
 		} else {
@@ -492,11 +492,11 @@ export class OptionsManager {
 		const response = await this.sendMessageAsync({
 			action: "get_ui_preferences",
 		});
-		const currentDomains = response?.preferences?.restricted_domains || [];
+		const currentDomains = response?.preferences?.restrictedDomains || [];
 		const newDomains = currentDomains.filter((d) => d !== domainToRemove);
 		await this.sendMessageAsync({
 			action: "set_ui_preferences",
-			preferences: { restricted_domains: newDomains },
+			preferences: { restrictedDomains: newDomains },
 		});
 		this._renderRestrictedDomainsList(newDomains);
 	}
@@ -609,19 +609,19 @@ export class OptionsManager {
 			"#mpv-flags-list-container .filter-pill",
 		);
 		if (flagPills.length > 0) {
-			preferences.custom_mpv_flags = Array.from(flagPills).map((p) => ({
+			preferences.customMpvFlags = Array.from(flagPills).map((p) => ({
 				flag: p.dataset.flag,
 				enabled: !p.classList.contains("disabled"),
 			}));
 		} else {
-			preferences.custom_mpv_flags = [];
+			preferences.customMpvFlags = [];
 		}
 
 		const automaticFlagPills = document.querySelectorAll(
 			"#automatic-mpv-flags-list-container .filter-pill",
 		);
 		if (automaticFlagPills.length > 0) {
-			preferences.automatic_mpv_flags = Array.from(automaticFlagPills).map(
+			preferences.automaticMpvFlags = Array.from(automaticFlagPills).map(
 				(p) => {
 					return {
 						flag: p.dataset.flag,
@@ -632,8 +632,8 @@ export class OptionsManager {
 			);
 		}
 
-		preferences.stream_scanner_timeout =
-			Number(preferences.stream_scanner_timeout) || 60;
+		preferences.streamScannerTimeout =
+			Number(preferences.streamScannerTimeout) || 60;
 
 		this.sendMessageAsync({
 			action: "set_ui_preferences",
@@ -819,13 +819,13 @@ export class OptionsManager {
 		const response = await this.sendMessageAsync({
 			action: "get_ui_preferences",
 		});
-		const currentWords = response?.preferences?.scraper_filter_words || [];
+		const currentWords = response?.preferences?.scraperFilterWords || [];
 
 		if (!currentWords.includes(newWord)) {
 			const newWords = [...currentWords, newWord];
 			await this.sendMessageAsync({
 				action: "set_ui_preferences",
-				preferences: { scraper_filter_words: newWords },
+				preferences: { scraperFilterWords: newWords },
 			});
 			this._renderScraperFilterList(newWords);
 		}
@@ -836,11 +836,11 @@ export class OptionsManager {
 		const response = await this.sendMessageAsync({
 			action: "get_ui_preferences",
 		});
-		const currentWords = response?.preferences?.scraper_filter_words || [];
+		const currentWords = response?.preferences?.scraperFilterWords || [];
 		const newWords = currentWords.filter((word) => word !== wordToRemove);
 		await this.sendMessageAsync({
 			action: "set_ui_preferences",
-			preferences: { scraper_filter_words: newWords },
+			preferences: { scraperFilterWords: newWords },
 		});
 		this._renderScraperFilterList(newWords);
 	}

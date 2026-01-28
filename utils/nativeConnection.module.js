@@ -192,7 +192,7 @@ export async function callNativeHost(message, shouldThrow = false) {
 		if (message.url && !security.isValidUrl(message.url)) {
 			throw new Error(`Security Block: Unsafe URL protocol or length.`);
 		}
-		if (message.url_item?.url && !security.isValidUrl(message.url_item.url)) {
+		if (message.urlItem?.url && !security.isValidUrl(message.urlItem.url)) {
 			throw new Error(`Security Block: Unsafe URL in item.`);
 		}
 

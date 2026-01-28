@@ -38,23 +38,23 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	 */
 	function normalizePayload(data) {
 		if (!data || typeof data !== "object") return data;
-		
-		const mapping = {
-			folder_id: "folderId",
-			item_id: "itemId",
-			is_running: "isRunning",
-			is_paused: "isPaused",
-			is_idle: "isIdle",
-			last_played_id: "lastPlayedId",
-			session_ids: "sessionIds",
-			played_ids: "playedIds",
-			playlist_items: "playlistItems"
+
+		if (Array.isArray(data)) {
+			return data.map(normalizePayload);
+		}
+
+		const snakeToCamel = (str) => {
+			if (str === "request_id") return "request_id";
+			return str.replace(/([-_][a-z])/g, (group) =>
+				group.toUpperCase().replace("-", "").replace("_", "")
+			);
 		};
 
-		const normalized = { ...data };
-		for (const [snake, camel] of Object.entries(mapping)) {
-			if (data[snake] !== undefined && data[camel] === undefined) {
-				normalized[camel] = data[snake];
+		const normalized = {};
+		for (const key in data) {
+			if (Object.prototype.hasOwnProperty.call(data, key)) {
+				const camelKey = snakeToCamel(key);
+				normalized[camelKey] = normalizePayload(data[key]);
 			}
 		}
 		return normalized;
@@ -196,7 +196,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (message.url && !security.isValidUrl(message.url)) {
 				throw new Error(`Security Block: Unsafe URL protocol or length.`);
 			}
-			if (message.url_item?.url && !security.isValidUrl(message.url_item.url)) {
+			if (message.urlItem?.url && !security.isValidUrl(message.urlItem.url)) {
 				throw new Error(`Security Block: Unsafe URL in item.`);
 			}
 

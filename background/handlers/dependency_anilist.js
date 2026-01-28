@@ -10,7 +10,7 @@ let _inFlightReleasesRequest = null;
 export const handleGetAnilistReleases = createHandler(async ({ request, data }) => {
 	const forceRefresh = request.force ?? false;
 	const daysOffset = request.days ?? 0;
-	const isCacheDisabled = data.settings.ui_preferences.global.disable_anilist_cache ?? false;
+	const isCacheDisabled = data.settings.uiPreferences.global.disableAnilistCache ?? false;
 
 	const requestKey = `anilist_${daysOffset}_${forceRefresh}`;
 	if (_inFlightReleasesRequest === requestKey && !isCacheDisabled) {
@@ -22,19 +22,11 @@ export const handleGetAnilistReleases = createHandler(async ({ request, data }) 
 	try {
 		const nativeResponse = await nativeLink.getAnilistReleases({
 			force: forceRefresh || isCacheDisabled,
-			delete_cache: isCacheDisabled,
-			is_cache_disabled: isCacheDisabled,
+			deleteCache: isCacheDisabled,
+			isCacheDisabled: isCacheDisabled,
 			days: daysOffset,
 		});
 
-		if (nativeResponse.success && nativeResponse.output) {
-			try {
-				const outputData = JSON.parse(nativeResponse.output);
-				return { success: true, output: outputData };
-			} catch (e) {
-				return { success: false, error: `JSON Parse failed: ${e.message}` };
-			}
-		}
 		return nativeResponse;
 	} finally {
 		_inFlightReleasesRequest = null;
@@ -45,7 +37,7 @@ export const handleYtdlpUpdateCheck = createHandler(async ({ request, data, send
 	if (request.log) broadcastLog(request.log);
 
 	const tabId = sender.tab?.id;
-	const updateBehavior = data.settings.ui_preferences.global.ytdlp_update_behavior || "manual";
+	const updateBehavior = data.settings.uiPreferences.global.ytdlpUpdateBehavior || "manual";
 
 	if (updateBehavior === "manual") return { success: true, message: "Manual mode." };
 

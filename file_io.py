@@ -253,7 +253,9 @@ def save_index(index_data):
 
 def get_playlist_shard(folder_id):
     """Loads a specific playlist shard (Lazy Loading)."""
-    shard_path = os.path.join(PLAYLISTS_DIR, f"{folder_id}.json")
+    # Note: caller should ideally pass canonical ID, but we normalize here for safety
+    canonical_id = _get_canonical_folder_id(folder_id)
+    shard_path = os.path.join(PLAYLISTS_DIR, f"{canonical_id}.json")
     if not os.path.exists(shard_path):
         return []
     
@@ -263,7 +265,9 @@ def get_playlist_shard(folder_id):
 
 def save_playlist_shard(folder_id, playlist, update_index=True):
     """Saves a specific playlist shard and optionally updates the index count."""
-    shard_path = os.path.join(PLAYLISTS_DIR, f"{folder_id}.json")
+    index = get_index()
+    canonical_id = _get_canonical_folder_id(folder_id, index)
+    shard_path = os.path.join(PLAYLISTS_DIR, f"{canonical_id}.json")
     
     # 1. Save the Shard
     with FileLock(shard_path):
@@ -271,9 +275,8 @@ def save_playlist_shard(folder_id, playlist, update_index=True):
     
     if success and update_index:
         # 2. Update Index Metadata (Item Count)
-        index = get_index()
-        if folder_id in index:
-            index[folder_id]["item_count"] = len(playlist)
+        if canonical_id in index:
+            index[canonical_id]["item_count"] = len(playlist)
             save_index(index)
             
     return success
@@ -520,14 +523,38 @@ def get_all_folders_from_file():
     
     return full_data
 
+def _get_canonical_folder_id(folder_id, index=None):
+    """
+    Returns the exact casing of the folder_id as stored in the index.
+    If not found, returns the provided folder_id.
+    """
+    if not folder_id:
+        return folder_id
+    
+    if index is None:
+        index = get_index()
+        
+    # 1. Try exact match
+    if folder_id in index:
+        return folder_id
+        
+    # 2. Try case-insensitive match
+    lower_id = folder_id.lower()
+    for actual_id in index.keys():
+        if actual_id.lower() == lower_id:
+            return actual_id
+            
+    return folder_id
+
 def get_folder_data(folder_id):
     """Retrieves metadata and playlist for a single folder efficiently."""
     index = get_index()
-    meta = index.get(folder_id)
+    canonical_id = _get_canonical_folder_id(folder_id, index)
+    meta = index.get(canonical_id)
     if not meta:
         return None
     
-    playlist = get_playlist_shard(folder_id)
+    playlist = get_playlist_shard(canonical_id)
     return {**meta, "playlist": playlist}
 
 def write_folders_file(data):
