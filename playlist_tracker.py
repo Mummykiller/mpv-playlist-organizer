@@ -512,7 +512,7 @@ class PlaylistTracker:
                 "action": "update_item_marked_as_watched",
                 "folder_id": self.folder_id,
                 "item_id": item_id,
-                "markedAsWatched": status
+                "marked_as_watched": status
             })
 
         except Exception as e:
@@ -659,11 +659,11 @@ class PlaylistTracker:
             # Send status update back to Python Host
             self.send_message({
                 "action": "playback_status_changed",
-                "folderId": self.folder_id,
-                "isPaused": is_paused,
-                "isIdle": is_idle,
-                "lastPlayedId": self.current_id,
-                "sessionIds": [item.get('id') for item in self.playlist if item.get('id')]
+                "folder_id": self.folder_id,
+                "is_paused": is_paused,
+                "is_idle": is_idle,
+                "last_played_id": self.current_id,
+                "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
             })
         except Exception as e:
             logging.debug(f"[PY][Tracker] Failed to update playback status: {e}")

@@ -2,7 +2,7 @@
 
 > **🤖 AGENT INSTRUCTIONS:**
 > *   **Context Awareness:** Use sections relevant to your task (e.g., Ignore "Native Protocol" if fixing CSS).
-> *   **Explicit Key Matching:** The system does **NOT** automate case conversion. You must use the exact keys expected by the other side.
+> *   **Automated Key Matching:** The system **automatically** handles case conversion (camelCase ↔ snake_case). You should still use idiomatic cases (snake in Python, camel in JS).
 > *   **Scope:** Strict security/architecture rules apply to the *Core App*. Standalone scripts or tools may use simpler patterns where appropriate.
 
 ## 1. System Overview
@@ -26,18 +26,18 @@ The project is a hybrid media management application consisting of three distinc
 
 | Context | Style | Agent Action |
 | :--- | :--- | :--- |
-| **Python** | `snake_case` | Use `snake_case` for internal Python logic. |
-| **JavaScript** | `camelCase` | Use `camelCase` for internal JS logic. |
-| **The Bridge** | **Manual Matching** | Action names are strictly `snake_case` (e.g., `play_batch`). Payload keys vary. |
+| **Python** | `snake_case` | Use `snake_case` for all Python logic. |
+| **JavaScript** | `camelCase` | Use `camelCase` for all JS logic. |
+| **The Bridge** | **Automated** | The system automatically translates between cases recursively. |
 
-*Note:* Bridge Actions (the `action` key) are strictly `snake_case`. Payload keys vary; always check `native_host_handlers.py` or the JS caller to see what the other side expects (e.g., Python looks for `folderId` and `request_id`).
+*Note:* Bridge Actions (the `action` key) remain `snake_case`. All payload keys are automatically converted: `camelCase` (JS) ↔ `snake_case` (Python).
 
 ## 3. Communication Protocol
 - **Schema:** Responses are `{ success, request_id, result?, error?, log? }`.
-- **Requests:** JS sends `request_id` (the key name is strictly snake_case in the message object to match Python).
-- **Request ID Preservation:** The key `request_id` is explicitly excluded from `camelCase` conversion in both `native_link/responder.py` and `nativeConnection.module.js` to ensure the asynchronous promise-matching logic never fails.
-- **Logs:** Python can include a `log: { text, type }` object in any response to trigger a UI notification via `nativeConnection.js`.
-- **Events:** Python sends unsolicited events (e.g., `mpv_exited`) which JS listeners dispatch to handlers.
+- **Requests:** JS sends `request_id` (preserved during conversion).
+- **Request ID Preservation:** The key `request_id` is explicitly excluded from case conversion to ensure promise-matching logic functions correctly.
+- **Logs:** Python can include a `log: { text, type }` object in any response to trigger a UI notification.
+- **Events:** Python sends unsolicited events which JS listeners dispatch after automatic normalization.
 
 ## 4. Playback Architecture (Hybrid Mode)
 *Crucial for tasks involving playback logic or `mpv_scripts/`.*
@@ -96,15 +96,14 @@ The system uses centralized "Translators" to handle the bridge between `snake_ca
 
 ### Internal JS-to-JS (UI -> Background)
 - **Location:** `background/handler_factory.js` -> `normalizeRequest()`.
-- **Purpose:** Converts keys like `played_ids` to `playedIds` before they reach background logic. All handlers created via `createHandler` benefit from this automatically.
+- **Purpose:** Recursively converts keys (e.g., `played_ids` to `playedIds`) so background handlers always receive clean `camelCase`.
 
 ### Outgoing JS-to-Python (Background -> Native Host)
 - **Location:** `utils/native_link/translator.py` -> `translate()`.
-- **Purpose:** Maps incoming JSON messages to Python Dataclasses and ensures `folderId` (JS) is correctly read as `folder_id` (Python).
+- **Purpose:** Recursively normalizes all incoming keys to `snake_case` before they reach Python logic or Dataclasses.
 
 ### Incoming Python-to-JS (Native Host -> UI)
 - **Location:** `utils/nativeConnection.module.js` -> `normalizePayload()`.
-- **Purpose:** Converts Python's response keys back into JS-friendly `camelCase`. 
-- **Outgoing Python Responses:** `utils/native_link/responder.py` uses `_translate_keys` to recursively convert all Python `snake_case` keys to `camelCase` before sending them to the browser.
-- **Implementation Detail:** If adding a new payload key that doesn't follow standard conversion (e.g., an abbreviation like `m3u_url`), ensure it is explicitly mapped in `translator.py`'s `translate()` function.
+- **Purpose:** Recursively converts Python's `snake_case` keys back into JS-friendly `camelCase`.
+- **Outgoing Python Responses:** `utils/native_link/responder.py` uses `_translate_keys` to recursively convert all keys to `camelCase` before sending.
 - **Source of Truth:** Edit the `.module.js` file and run the generator.

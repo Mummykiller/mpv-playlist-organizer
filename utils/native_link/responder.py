@@ -1,5 +1,3 @@
-from typing import Any, Dict, Optional
-
 import re
 from typing import Any, Dict, Optional
 
