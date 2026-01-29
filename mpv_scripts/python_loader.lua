@@ -37,11 +37,24 @@ end)
 
 -- Central Sync Trigger (Dumb Trigger, Smart Python)
 local function run_fallback_sync(params)
-    -- Check if Python manager is active (within last 12 seconds)
-    local time_since_hb = mp.get_time() - last_heartbeat
-    
-    -- Shutdown Shield: Always allow if forced (used for shutdown/emergency)
-    if not params.force and time_since_hb < 12 then return end
+    local is_unmanaged_raw = mp.get_property("user-data/is-unmanaged")
+    local is_unmanaged = clean_value(is_unmanaged_raw) == "yes"
+    local ipc_server = mp.get_property("input-ipc-server")
+    local has_ipc = ipc_server and ipc_server ~= ""
+
+    -- Managed Session Logic
+    if has_ipc and not is_unmanaged then
+        -- Check if primary Python manager is active (within last 12 seconds)
+        local time_since_hb = mp.get_time() - last_heartbeat
+        -- If manager is alive, block fallback sync unless forced
+        if not params.force and time_since_hb < 12 then return end
+    end
+
+    -- Unmanaged (Disconnected) Session Isolation:
+    -- ONLY allowed to mark-as-watched. Block all other sync actions.
+    if is_unmanaged and not params.mark_watched then
+        return 
+    end
 
     local project_root = clean_value(mp.get_property("user-data/project-root"))
     local folder_id = clean_value(mp.get_property("user-data/folder-id"))

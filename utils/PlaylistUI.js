@@ -289,8 +289,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const fullItem = this.currentPlaylist.find(i => i.id === id);
 
 					if (fullItem) {
-						chrome.runtime.sendMessage({
-							action: "play_new_instance",
+						this.controller.sendCommandToBackground("play_new_instance", this.folderSelect.value, {
 							urlItem: fullItem,
 							playNewInstance: true,
 							folderId: this.folderSelect.value

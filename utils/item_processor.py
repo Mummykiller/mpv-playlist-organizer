@@ -15,7 +15,7 @@ class ItemProcessor:
             item['id'] = str(uuid.uuid4())
         return item
 
-    def enrich_single_item(self, item, folder_id=None, session_cookies=None, sync_lock=None, settings=None, session=None):
+    def enrich_single_item(self, item, folder_id=None, session_cookies=None, sync_lock=None, settings=None, session=None, quiet=False):
         """
         Enriches a single item using bypass scripts and sanitization.
         Returns a list of items (can be more than one if it's a playlist expansion).
@@ -36,7 +36,7 @@ class ItemProcessor:
             settings = self.file_io.get_settings()
 
         # Run bypass analysis
-        res = self.services.apply_bypass_script(item, self.send_message, settings=settings, session=session)
+        res = self.services.apply_bypass_script(item, self.send_message, settings=settings, session=session, quiet=quiet)
         (
             processed_url, headers, ytdl_opts, use_ytdl, is_yt, entries, 
             disable_http, cookies_file, mark_watched, ytdl_fmt, cookies_browser
@@ -90,7 +90,7 @@ class ItemProcessor:
         """Enriches a batch of items in parallel."""
         final_items = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(self.enrich_single_item, item, folder_id, settings=settings, session=session) for item in items]
+            futures = [executor.submit(self.enrich_single_item, item, folder_id, settings=settings, session=session, quiet=True) for item in items]
             for future in futures:
                 try:
                     final_items.extend(future.result())

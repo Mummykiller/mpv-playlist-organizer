@@ -38,6 +38,7 @@ class MpvSessionManager:
         self.session_cookies = set()
         self.launch_cancelled = False
         self.last_played_id_cache = None
+        self.handshake_path = None
 
         # --- Injected Dependencies ---
         self.get_all_folders_from_file = dependencies['get_all_folders_from_file']
@@ -225,6 +226,14 @@ class MpvSessionManager:
             self.owner_folder_id = None
             self.manual_quit = False
             self.last_played_id_cache = None
+
+            if self.handshake_path and os.path.exists(self.handshake_path):
+                try:
+                    os.remove(self.handshake_path)
+                    logging.info(f"Cleaned up handshake file: {self.handshake_path}")
+                except Exception as e:
+                    logging.warning(f"Failed to remove handshake file: {e}")
+            self.handshake_path = None
 
             if self.session_cookies:
                 logging.info(f"Cleaning up {len(self.session_cookies)} session cookies.")

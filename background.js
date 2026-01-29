@@ -80,7 +80,7 @@ const actionHandlers = {
 	update_item_marked_as_watched:
 		playback_handlers.handleUpdateItemMarkedAsWatched,
 	play: playback_handlers.handlePlay,
-	play_new_instance: playback_handlers.handlePlay,
+	play_new_instance: playback_handlers.handlePlayNewInstance,
 	play_m3u: playback_handlers.handlePlayM3U,
 	append: playback_handlers.handleAppend,
 	confirm_clear_playlist: playback_handlers.handleClearPlaylistConfirmation,

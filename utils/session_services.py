@@ -249,12 +249,41 @@ class LauncherService:
             return {"success": False, "error": "Launch cancelled by user."}
 
         try:
+            # 2.5 Generate Metadata Handshake File
+            handshake_data = {
+                "folder_id": folder_id,
+                "project_root": self.session.SCRIPT_DIR,
+                "flag_dir": self.session.FLAG_DIR,
+                "playlist_start_index": playlist_start_index,
+                "is_youtube": is_youtube,
+                "use_ytdl_mpv": use_ytdl_mpv,
+                "title": url_item.get('title'),
+                "id": url_item.get('id'),
+                "original_url": services.sanitize_url(url_item.get('original_url') or url_item.get('url', '')),
+                "headers": kwargs.get('headers') or url_item.get('headers'),
+                "cookies_browser": kwargs.get('cookies_browser') or url_item.get('cookies_browser'),
+                "lua_options": services.construct_lua_options(url_item, settings, self.session.SCRIPT_DIR)[0],
+                "is_unmanaged": kwargs.get('is_unmanaged', False)
+            }
+            
+            # Extract resume_time for CLI --start
+            start_time = handshake_data["lua_options"].get("resume_time")
+            
+            handshake_path = os.path.join(self.session.FLAG_DIR, f"handshake_{uuid.uuid4().hex}.json")
+            with open(handshake_path, 'w', encoding='utf-8') as f:
+                json.dump(handshake_data, f)
+            
+            # Ensure the flag is passed to the command builder
+            handshake_flag = f"--script-opts=mpv_organizer-handshake={handshake_path}"
+            current_custom_flags = kwargs.get('custom_mpv_flags') or ""
+            updated_custom_flags = f"{current_custom_flags} {handshake_flag}".strip()
+
             # 3. Construct Command
             full_command, has_terminal_flag = services.construct_mpv_command(
                 mpv_exe=mpv_exe, ipc_path=ipc_path, url=launch_url, is_youtube=is_youtube,
                 ytdl_raw_options=kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options'),
                 geometry=kwargs.get('geometry'), custom_width=kwargs.get('custom_width'),
-                custom_height=kwargs.get('custom_height'), custom_mpv_flags=kwargs.get('custom_mpv_flags'),
+                custom_height=kwargs.get('custom_height'), custom_mpv_flags=updated_custom_flags,
                 automatic_mpv_flags=kwargs.get('automatic_mpv_flags'),
                 headers=kwargs.get('headers') or url_item.get('headers'),
                 disable_http_persistent=kwargs.get('disable_http_persistent', False),
@@ -264,13 +293,16 @@ class LauncherService:
                 force_terminal=kwargs.get('force_terminal', False), settings=settings,
                 flag_dir=self.session.FLAG_DIR, playlist_start_index=playlist_start_index,
                 cookies_browser=kwargs.get('cookies_browser') or url_item.get('cookies_browser'),
-                force_bypass=force_bypass
+                force_bypass=force_bypass, start_time=start_time
             )
 
             # 4. Spawn Process
             env = self._prepare_launch_env(has_terminal_flag)
             process = subprocess.Popen(full_command, env=env, **services.get_mpv_popen_kwargs(has_terminal_flag))
             self.session.process, self.session.ipc_path = process, ipc_path
+            
+            # Record handshake path for cleanup
+            self.session.handshake_path = handshake_path
 
             if process.stdout:
                 threading.Thread(target=self.session.log_stream, args=(process.stdout, logging.warning, folder_id), daemon=True).start()

@@ -278,7 +278,6 @@ export const handleClear = createHandler(async ({ folderId, data }) => {
 		return { success: false, error: "Folder not found." };
 
 	data.folders[actualFolderId].playlist = [];
-	nativeLink.clearLive(actualFolderId).catch(() => {});
 	
 	return { success: true, message: `Playlist for '${actualFolderId}' cleared.` };
 }, {

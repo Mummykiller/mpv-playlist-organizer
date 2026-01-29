@@ -6,9 +6,49 @@ local function log(msg)
     mp.msg.info("on_completion_lua: " .. msg)
 end
 
+local function safe_read_file(path)
+    if utils.read_file then
+        local content = utils.read_file(path)
+        if content then return content end
+    end
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local content = f:read("*all")
+    f:close()
+    return content
+end
+
+-- Read Metadata Handshake
+local function load_handshake()
+    local handshake_path = mp.get_opt("mpv_organizer-handshake")
+    if handshake_path and handshake_path ~= "" then
+        log("Loading handshake from: " .. handshake_path)
+        local content = safe_read_file(handshake_path)
+        if content then
+            local ok, data = pcall(utils.parse_json, content)
+            if ok and data then
+                log("Handshake successful. Root: " .. (data.project_root or "unknown"))
+                return data
+            end
+        end
+    end
+    return nil
+end
+
+local handshake_data = load_handshake()
+
 -- Function to get the reliable flag directory
 local function get_flag_dir()
-    -- 1. Try script-opts passed from Python (highest priority)
+    -- 1. Try handshake data first (highest priority)
+    if handshake_data and handshake_data.flag_dir and handshake_data.flag_dir ~= "" then
+        local opt_dir = handshake_data.flag_dir
+        if not opt_dir:match("[/\\]$") then
+            opt_dir = opt_dir .. "/"
+        end
+        return opt_dir
+    end
+
+    -- 2. Try script-opts passed from Python (legacy priority)
     local script_name = mp.get_script_name()
     local opt_dir = mp.get_opt("flag_dir") or mp.get_opt(script_name .. "-flag_dir")
     

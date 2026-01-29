@@ -40,6 +40,15 @@ export async function handleItemNaturalCompletion(data) {
 	if (!folderId || !itemId) return;
 
 	const storageData = await storage.get();
+	const folder = storageData.folders[folderId];
+	if (!folder) return;
+
+	const item = folder.playlist.find(i => i.id === itemId);
+	if (!item) {
+		console.debug(`[Background]: Item ${itemId} finished but is no longer in playlist '${folderId}'. Ignoring.`);
+		return;
+	}
+
 	const globalPrefs = storageData.settings.uiPreferences.global;
 	const clearMode = globalPrefs.clearOnCompletion || "no";
 	
@@ -50,10 +59,12 @@ export async function handleItemNaturalCompletion(data) {
 		// Flag this folder so handleMpvExited knows a batch clear is already being managed
 		playbackManager.earlyClearsInProgress.add(folderId);
 
+		const itemTitle = item.title || item.url || itemId;
+
 		if (clearMode === "yes") {
 			// Mode: "yes" -> Clear immediately and silently
 			broadcastLog({
-				text: `[Background]: Item ${itemId} finished. Auto-clearing from '${folderId}'.`,
+				text: `[Background]: Item "${itemTitle}" finished. Auto-clearing from '${folderId}'.`,
 				type: "info",
 				itemId: itemId,
 				folderId: folderId
@@ -67,7 +78,7 @@ export async function handleItemNaturalCompletion(data) {
 		} else if (clearMode === "confirm") {
 			// Mode: "confirm" -> Visual clear nice + Stacked popup
 			broadcastLog({
-				text: `[Background]: Item finished. Staging for batch clear (Items in stack: ${session.completedItemIds.size}).`,
+				text: `[Background]: Item "${itemTitle}" finished. Staging for batch clear (Items in stack: ${session.completedItemIds.size}).`,
 				type: "info",
 				itemId: itemId,
 				folderId: folderId
@@ -83,7 +94,19 @@ export async function handleItemNaturalCompletion(data) {
 			});
 			
 			if (activeTab) {
-				const completedList = Array.from(session.completedItemIds);
+				const existingIds = new Set(folder.playlist.map(i => i.id));
+				const completedList = Array.from(session.completedItemIds).filter(id => existingIds.has(id));
+
+				if (completedList.length === 0) {
+					console.debug(`[Background]: No items in completion stack remain in playlist for '${folderId}'. Skipping prompt.`);
+					return;
+				}
+
+				const titles = completedList.map(id => {
+					const item = folder.playlist.find(i => i.id === id);
+					return item ? (item.title || item.url) : id;
+				});
+
 				chrome.tabs
 					.sendMessage(activeTab.id, {
 						action: "show_clear_confirmation",
@@ -91,7 +114,8 @@ export async function handleItemNaturalCompletion(data) {
 						playedIds: completedList,
 						sessionIds: completedList,
 						scope: "played",
-						count: completedList.length
+						count: completedList.length,
+						titles: titles
 					})
 					.catch(() => {});
 			}
@@ -148,13 +172,33 @@ export async function handleMpvQuitting(data) {
 					currentWindow: true,
 				});
 				if (activeTab) {
+					// Identify target IDs based on scope, but only if they still exist in the playlist
+					const existingIds = new Set(folder.playlist.map(i => i.id));
+					const rawTargetIds = clearScope === "all" 
+						? folder.playlist.map(i => i.id) 
+						: (clearScope === "session" ? sessionIds : playedIds);
+					
+					const targetIds = (rawTargetIds || []).filter(id => existingIds.has(id));
+
+					if (targetIds.length === 0) {
+						console.debug(`[Background]: No items from scope '${clearScope}' remain in playlist for '${folderId}'. Skipping prompt.`);
+						return;
+					}
+
+					const titles = targetIds.map(id => {
+						const item = folder.playlist.find(i => i.id === id);
+						return item ? (item.title || item.url) : id;
+					});
+
 					chrome.tabs
 						.sendMessage(activeTab.id, {
 							action: "show_clear_confirmation",
 							folderId: folderId,
-							playedIds,
-							sessionIds,
+							playedIds: targetIds, // Pass filtered list
+							sessionIds: targetIds, // Pass filtered list
 							scope: clearScope,
+							count: targetIds.length,
+							titles: titles
 						})
 						.catch(() => {});
 				}
@@ -250,13 +294,33 @@ export async function handleMpvExited(data) {
 					currentWindow: true,
 				});
 				if (activeTab) {
+					// Identify target IDs based on scope, but only if they still exist in the playlist
+					const existingIds = new Set(folder.playlist.map(i => i.id));
+					const rawTargetIds = clearScope === "all" 
+						? folder.playlist.map(i => i.id) 
+						: (clearScope === "session" ? sessionIds : playedIds);
+					
+					const targetIds = (rawTargetIds || []).filter(id => existingIds.has(id));
+
+					if (targetIds.length === 0) {
+						console.debug(`[Background]: No items from scope '${clearScope}' remain in playlist for '${folderId}'. Skipping prompt.`);
+						return;
+					}
+
+					const titles = targetIds.map(id => {
+						const item = folder.playlist.find(i => i.id === id);
+						return item ? (item.title || item.url) : id;
+					});
+
 					chrome.tabs
 						.sendMessage(activeTab.id, {
 							action: "show_clear_confirmation",
 							folderId: folderId,
-							playedIds,
-							sessionIds,
+							playedIds: targetIds, // Pass filtered list
+							sessionIds: targetIds, // Pass filtered list
 							scope: clearScope,
+							count: targetIds.length,
+							titles: titles
 						})
 						.catch(() => {});
 				}
@@ -823,6 +887,60 @@ export async function handleUpdateItemMarkedAsWatched(data) {
 		}
 	}
 }
+
+export const handlePlayNewInstance = createHandler(async ({ request, folderId }) => {
+	const { urlItem } = request;
+	if (!urlItem) return { success: false, error: "No URL item provided to play." };
+
+	broadcastLog({
+		text: `[Background]: Initiating disconnected session for: ${urlItem.title || urlItem.url}`,
+		type: "info",
+		itemId: urlItem.id,
+		folderId: folderId
+	});
+
+	const storageData = await storage.get();
+	const globalPrefs = storageData.settings.uiPreferences.global;
+
+	const options = {
+		playNewInstance: true,
+		isUnmanaged: true,
+		geometry: request.geometry || (globalPrefs.launchGeometry === "custom" ? null : globalPrefs.launchGeometry),
+		customWidth: request.customWidth || (globalPrefs.launchGeometry === "custom" ? globalPrefs.customGeometryWidth : null),
+		customHeight: request.customHeight || (globalPrefs.launchGeometry === "custom" ? globalPrefs.customGeometryHeight : null),
+		customMpvFlags: request.customMpvFlags || globalPrefs.customMpvFlags || "",
+		automaticMpvFlags: globalPrefs.automaticMpvFlags || [],
+		forceTerminal: globalPrefs.forceTerminal ?? false,
+		startPaused: request.startPaused ?? false,
+		// Networking & Performance Sync
+		disableNetworkOverrides: globalPrefs.disableNetworkOverrides ?? false,
+		enableCache: globalPrefs.enableCache ?? true,
+		httpPersistence: globalPrefs.httpPersistence || "auto",
+		demuxerMaxBytes: globalPrefs.demuxerMaxBytes || "1G",
+		demuxerMaxBackBytes: globalPrefs.demuxerMaxBackBytes || "500M",
+		cacheSecs: globalPrefs.cacheSecs || 500,
+		demuxerReadaheadSecs: globalPrefs.demuxerReadaheadSecs || 500,
+		streamBufferSize: globalPrefs.streamBufferSize || "10M",
+		ytdlpConcurrentFragments: globalPrefs.ytdlpConcurrentFragments || 4,
+		enableReconnect: globalPrefs.enableReconnect ?? true,
+		reconnectDelay: globalPrefs.reconnectDelay || 4,
+		mpvDecoder: globalPrefs.mpvDecoder || "auto",
+		ytdlQuality: globalPrefs.ytdlQuality || "best",
+		performanceProfile: globalPrefs.performanceProfile || "default",
+		enablePreciseResume: globalPrefs.enablePreciseResume ?? true,
+		ultraScalers: globalPrefs.ultraScalers ?? true,
+		ultraVideoSync: globalPrefs.ultraVideoSync ?? true,
+		ultraInterpolation: globalPrefs.ultraInterpolation || "oversample",
+		ultraDeband: globalPrefs.ultraDeband ?? true,
+		ultraFbo: globalPrefs.ultraFbo ?? true,
+	};
+
+	return nativeLink.call("play_new_instance", {
+		urlItem,
+		folderId,
+		...options
+	});
+});
 
 export const handleAppend = createHandler(async ({ request, folderId }) => {
 	const { urlItem } = request;

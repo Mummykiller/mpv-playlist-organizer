@@ -5,6 +5,7 @@ local indexed_options = {}
 local session_timestamps = {} -- Internal memory for the current session
 local primed_resume_time = nil
 local unmanaged_fallback_opts = nil -- Global fallback for disconnected launches
+local has_started = false
 
 -- Store initial global states
 local initial_ua = mp.get_property("user-agent") or "libmpv"
@@ -20,6 +21,13 @@ local initial_lavf_opts = mp.get_property("demuxer-lavf-o") or ""
 
 local function debug_log(msg)
     mp.msg.info("AdaptiveHeaders: " .. msg)
+end
+
+local function set_property_if_diff(name, val)
+    local current = mp.get_property(name)
+    if tostring(current) ~= tostring(val) then
+        mp.set_property(name, val)
+    end
 end
 
 local function url_decode(str)
@@ -59,26 +67,43 @@ mp.register_script_message("primed_resume_time", function(time)
     debug_log("Primed resume time received: " .. tostring(primed_resume_time))
 end)
 
+local function safe_read_file(path)
+    if utils.read_file then
+        return utils.read_file(path)
+    end
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local content = f:read("*all")
+    f:close()
+    return content
+end
+
 local function apply_adaptive_settings()
     local path = mp.get_property("path")
     if not path or path == "" then return end
 
-    -- 0. Static Metadata Handshake (for unmanaged instances)
-    local meta_file = mp.get_opt("mpv_organizer-metadata_file")
-    if meta_file and meta_file ~= "" then
-        local content = utils.read_file(meta_file)
+    -- 0. Metadata Handshake (Primary initialization source)
+    local handshake_path = mp.get_opt("mpv_organizer-handshake")
+    if handshake_path and handshake_path ~= "" then
+        local content = safe_read_file(handshake_path)
         if content and content ~= "" then
-            local ok, static_opts = pcall(utils.parse_json, content)
-            if ok and static_opts then
-                if static_opts.id then id_options[static_opts.id] = static_opts end
-                url_options[path] = static_opts
-                unmanaged_fallback_opts = static_opts -- Set global fallback
-                debug_log("Static metadata file handshake successful for " .. (static_opts.title or path))
-            else
-                mp.msg.warn("AdaptiveHeaders: Failed to parse metadata file: " .. meta_file)
+            local ok, data = pcall(utils.parse_json, content)
+            if ok and data then
+                local opts = data.lua_options
+                if opts then
+                    if opts.id then id_options[opts.id] = opts end
+                    url_options[path] = opts
+                    unmanaged_fallback_opts = opts -- Set global fallback
+                    debug_log("Handshake successful. Project root: " .. (data.project_root or "unknown"))
+                    
+                    -- Populate unmanaged context if needed
+                    if data.project_root then mp.set_property("user-data/project-root", data.project_root) end
+                    if data.folder_id then mp.set_property("user-data/folder-id", data.folder_id) end
+                    if data.original_url then mp.set_property_native("user-data/original-url", data.original_url) end
+                    if data.cookies_browser then mp.set_property("user-data/cookies-browser", data.cookies_browser) end
+                    if data.is_unmanaged ~= nil then mp.set_property("user-data/is-unmanaged", data.is_unmanaged and "yes" or "no") end
+                end
             end
-        else
-            mp.msg.warn("AdaptiveHeaders: Metadata file is missing or empty: " .. meta_file)
         end
     end
 
@@ -88,9 +113,9 @@ local function apply_adaptive_settings()
 
     -- 2. Hot-Swap / Race Condition Recovery
     local hs_json = mp.get_property("user-data/hot-swap-options")
-    local is_first_load = (hs_json and hs_json ~= "" and hs_json ~= "nil" and hs_json ~= "null" and hs_json ~= "undefined")
+    local is_hot_swap = (hs_json and hs_json ~= "" and hs_json ~= "nil" and hs_json ~= "null" and hs_json ~= "undefined")
     
-    if is_first_load then
+    if is_hot_swap then
         local ok, hs_opts = pcall(utils.parse_json, hs_json)
         if ok and hs_opts then
             if hs_opts.id then id_options[hs_opts.id] = hs_opts end
@@ -102,32 +127,33 @@ local function apply_adaptive_settings()
     end
 
     -- 3. Clean up previous state (Full Reset to Initial Defaults)
-    mp.set_property("user-agent", initial_ua)
-    mp.set_property("referrer", initial_referrer)
-    mp.set_property("http-header-fields", "")
-    mp.set_property("cookies-file", "")
-    
-    -- Only reset ytdl settings if this is NOT the initial hot-swap load.
-    -- This prevents race conditions where the initial launch flags are cleared too early.
-    if not is_first_load then
-        mp.set_property("ytdl-raw-options", initial_ytdl_raw)
-        mp.set_property("ytdl-format", initial_ytdl_format)
+    -- ONLY reset if this is NOT the very first load of the process, 
+    -- or if we are performing a hot-swap (item change).
+    -- This prevents wiping out command-line cookies/headers on startup.
+    if has_started or is_hot_swap then
+        set_property_if_diff("user-agent", initial_ua)
+        set_property_if_diff("referrer", initial_referrer)
+        set_property_if_diff("http-header-fields", "")
+        set_property_if_diff("cookies-file", "")
+        set_property_if_diff("ytdl-raw-options", initial_ytdl_raw)
+        set_property_if_diff("ytdl-format", initial_ytdl_format)
+        set_property_if_diff("demuxer-lavf-o", initial_lavf_opts)
+        
+        -- Reset metadata strictly
+        mp.set_property_native("user-data/original-url", nil)
+        set_property_if_diff("user-data/is-youtube", "no")
+        set_property_if_diff("user-data/marked-as-watched", "no")
+
+        -- Reset Buffering to Launch Defaults
+        set_property_if_diff("demuxer-max-bytes", initial_max_bytes)
+        set_property_if_diff("demuxer-max-back-bytes", initial_max_back_bytes)
+        set_property_if_diff("cache-secs", tostring(initial_cache_secs))
+        set_property_if_diff("demuxer-readahead-secs", tostring(initial_readahead))
+        set_property_if_diff("stream-buffer-size", initial_stream_buffer)
+        set_property_if_diff("cache", "auto")
     end
 
-    mp.set_property("demuxer-lavf-o", initial_lavf_opts)
-    
-    -- Reset metadata strictly
-    mp.set_property_native("user-data/original-url", nil)
-    mp.set_property("user-data/is-youtube", "no")
-    mp.set_property("user-data/marked-as-watched", "no")
-
-    -- Reset Buffering to Launch Defaults
-    mp.set_property("demuxer-max-bytes", initial_max_bytes)
-    mp.set_property("demuxer-max-back-bytes", initial_max_back_bytes)
-    mp.set_property("cache-secs", initial_cache_secs)
-    mp.set_property("demuxer-readahead-secs", initial_readahead)
-    mp.set_property("stream-buffer-size", initial_stream_buffer)
-    mp.set_property("cache", "auto")
+    has_started = true
 
     -- 4. Resolve Options
     local item_id = mp.get_property("user-data/id")
@@ -159,8 +185,8 @@ local function apply_adaptive_settings()
     local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
     if is_yt then
         debug_log("YouTube detected, enforcing ytdl=yes")
-        mp.set_property("ytdl", "yes")
-        mp.set_property("user-data/is-youtube", "yes")
+        set_property_if_diff("ytdl", "yes")
+        set_property_if_diff("user-data/is-youtube", "yes")
     end
 
     -- 4d. Session Memory Fallback
@@ -180,8 +206,8 @@ local function apply_adaptive_settings()
 
     -- 5. Always apply UI/State features (Titles & Resume)
     if opts and opts.title and opts.title ~= "" then
-        mp.set_property("title", opts.title)
-        mp.set_property("force-media-title", opts.title)
+        set_property_if_diff("title", opts.title)
+        set_property_if_diff("force-media-title", opts.title)
     end
 
     -- Priority: ONLY use primed_resume_time. 
@@ -189,7 +215,7 @@ local function apply_adaptive_settings()
     -- We check if primed_resume_time is NOT nil, allowing 0 to be a valid forced start.
     if primed_resume_time ~= nil then
         mp.set_property_number("file-local-options/start", primed_resume_time)
-        mp.set_property("file-local-options/resume-playback", "no")
+        set_property_if_diff("file-local-options/resume-playback", "no")
         debug_log("Applied primed resume time: " .. tostring(primed_resume_time))
         primed_resume_time = nil -- Consume it
     end
@@ -201,8 +227,8 @@ local function apply_adaptive_settings()
         local h_list = {}
         for k, v in pairs(opts.headers) do
             local kl = k:lower()
-            if kl == "user-agent" then mp.set_property("user-agent", v)
-            elseif kl == "referer" then mp.set_property("referrer", v)
+            if kl == "user-agent" then set_property_if_diff("user-agent", v)
+            elseif kl == "referer" then set_property_if_diff("referrer", v)
             else table.insert(h_list, k .. ": " .. v) end
         end
         if #h_list > 0 then mp.set_property_native("http-header-fields", h_list) end
@@ -231,7 +257,7 @@ local function apply_adaptive_settings()
         -- Use robust reconnect flags (excluding at_eof to avoid VOD loops)
         local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d,analyzeduration=%s,probesize=%s", 
                                  persistence, reconnect_val, r_delay, tostring(opts.analyzeduration or 0), tostring(opts.probesize or 32))
-        mp.set_property("demuxer-lavf-o", lp)
+        set_property_if_diff("demuxer-lavf-o", lp)
     else
         -- 8. Apply "Turbo" Networking Overrides (Only if NOT bypassed)
         local ytdl_opts = opts.ytdl_raw_options or initial_ytdl_raw
@@ -247,25 +273,25 @@ local function apply_adaptive_settings()
         end
 
         if opts.cookies_file and opts.cookies_file ~= "" then 
-            mp.set_property("cookies-file", opts.cookies_file) 
+            set_property_if_diff("cookies-file", opts.cookies_file) 
         end
         
         if ytdl_opts ~= "" then
-            mp.set_property("ytdl-raw-options", ytdl_opts)
+            set_property_if_diff("ytdl-raw-options", ytdl_opts)
         end
 
-        if opts.ytdl_format then mp.set_property("ytdl-format", opts.ytdl_format) end
+        if opts.ytdl_format then set_property_if_diff("ytdl-format", opts.ytdl_format) end
 
         -- Apply Buffering & Cache
         if opts.enable_cache == false then
-            mp.set_property("cache", "no")
+            set_property_if_diff("cache", "no")
             debug_log("Buffering disabled by user setting.")
         else
-            if opts.demuxer_max_bytes then mp.set_property("demuxer-max-bytes", opts.demuxer_max_bytes) end
-            if opts.demuxer_max_back_bytes then mp.set_property("demuxer-max-back-bytes", opts.demuxer_max_back_bytes) end
-            if opts.cache_secs then mp.set_property("cache-secs", tostring(opts.cache_secs)) end
-            if opts.demuxer_readahead_secs then mp.set_property("demuxer-readahead-secs", tostring(opts.demuxer_readahead_secs)) end
-            if opts.stream_buffer_size then mp.set_property("stream-buffer-size", opts.stream_buffer_size) end
+            if opts.demuxer_max_bytes then set_property_if_diff("demuxer-max-bytes", opts.demuxer_max_bytes) end
+            if opts.demuxer_max_back_bytes then set_property_if_diff("demuxer-max-back-bytes", opts.demuxer_max_back_bytes) end
+            if opts.cache_secs then set_property_if_diff("cache-secs", tostring(opts.cache_secs)) end
+            if opts.demuxer_readahead_secs then set_property_if_diff("demuxer-readahead-secs", tostring(opts.demuxer_readahead_secs)) end
+            if opts.stream_buffer_size then set_property_if_diff("stream-buffer-size", opts.stream_buffer_size) end
         end
 
         if not opts.disable_network_overrides then
@@ -275,13 +301,15 @@ local function apply_adaptive_settings()
             local reconnect_val = (opts.enable_reconnect ~= false) and "1" or "0"
             local r_delay = tonumber(opts.reconnect_delay) or 4
             local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d", persistence, reconnect_val, r_delay)
-            mp.set_property("demuxer-lavf-o", lp)
+            set_property_if_diff("demuxer-lavf-o", lp)
         end
     end
 
     -- 9. Misc context
-    if opts.project_root then mp.set_property("user-data/project-root", opts.project_root) end
-    if opts.cookies_browser then mp.set_property("user-data/cookies-browser", opts.cookies_browser) end
+    if opts.project_root then set_property_if_diff("user-data/project-root", opts.project_root) end
+    if opts.folder_id then set_property_if_diff("user-data/folder-id", opts.folder_id) end
+    if opts.is_unmanaged ~= nil then set_property_if_diff("user-data/is-unmanaged", opts.is_unmanaged and "yes" or "no") end
+    if opts.cookies_browser then set_property_if_diff("user-data/cookies-browser", opts.cookies_browser) end
     if opts.original_url then mp.set_property_native("user-data/original-url", opts.original_url) end
 end
 
