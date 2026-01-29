@@ -42,8 +42,11 @@ class PlaylistTracker:
         self.clear_behavior = settings.get('playlist_clear_behavior', 'full_on_completion') # 'full_on_completion' or 'on_item_finish'
         self.is_naturally_completed = False
         self.lock = threading.Lock()
+        self._stop_event = threading.Event()
         self.current_id = None
         self.last_played_id = None
+        self.last_commit_time = time.time()
+        self.commit_interval = 30 # Seconds between forced syncs if dirty
 
         for item in initial_playlist:
             self.add_item(item)
@@ -53,6 +56,8 @@ class PlaylistTracker:
         Starts tracking the playlist in a separate thread.
         """
         self.is_tracking = True
+        self._stop_event.clear()
+        self._start_heartbeat()
         self.tracking_thread = threading.Thread(target=self._track)
         self.tracking_thread.daemon = True
         self.tracking_thread.start()
@@ -66,6 +71,7 @@ class PlaylistTracker:
             return {}
 
         self.is_tracking = False
+        self._stop_event.set()
         logging.info(f"[PY][Tracker] Playlist tracker stopped for folder '{self.folder_id}'. Played item IDs: {self.played_item_ids}")
         
         # Capture stats before joining
@@ -415,10 +421,11 @@ class PlaylistTracker:
 
     def _update_last_played(self, item_id):
         """Notifies extension and queues last_played_id for disk commit."""
-        if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
+        if not item_id or item_id == -1 or item_id == "-1":
             return
         
-        self.dirty_last_played_id = item_id
+        if self.folder_id:
+            self.dirty_last_played_id = item_id
 
         # Notify the extension so it can update its internal storage
         self.send_message({
@@ -429,11 +436,12 @@ class PlaylistTracker:
 
     def _update_resume_time(self, item_id, resume_time):
         """Notifies extension and queues resume_time for throttled disk commit."""
-        if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
+        if not item_id or item_id == -1 or item_id == "-1":
             return
         
         # 1. Update Cache
-        self.resume_cache[item_id] = int(resume_time)
+        if self.folder_id:
+            self.resume_cache[item_id] = int(resume_time)
             
         # 2. Notify the extension (Real-time UI update)
         self.send_message({
@@ -443,8 +451,26 @@ class PlaylistTracker:
             "resume_time": int(resume_time)
         })
 
+    def _start_heartbeat(self):
+        """Background thread to ensure periodic disk persistence."""
+        def heartbeat_loop():
+            while not self._stop_event.is_set():
+                time.sleep(1)
+                if not self.is_tracking: 
+                    logging.debug("[PY][Tracker] Heartbeat stopping: is_tracking is False.")
+                    break
+                
+                if self.resume_cache or self.watched_status_cache or self.dirty_last_played_id:
+                    if time.time() - self.last_commit_time >= self.commit_interval:
+                        logging.debug("[PY][Tracker] Heartbeat triggering forced commit.")
+                        self._commit_to_disk()
+        
+        thread = threading.Thread(target=heartbeat_loop, daemon=True)
+        thread.start()
+
     def _commit_to_disk(self):
         """Performs a single read-modify-write to the playlist shard with all cached changes."""
+        self.last_commit_time = time.time()
         if not self.folder_id or (not self.resume_cache and not self.watched_status_cache and not self.dirty_last_played_id):
             return
 
@@ -492,7 +518,7 @@ class PlaylistTracker:
 
     def _update_marked_as_watched(self, item_id, status, persist=True):
         """Notifies extension and queues marked_as_watched status for disk commit."""
-        if not self.folder_id or not item_id or item_id == -1 or item_id == "-1":
+        if not item_id or item_id == -1 or item_id == "-1":
             return
         
         try:
@@ -503,8 +529,8 @@ class PlaylistTracker:
                         item["marked_as_watched"] = status
                         break
 
-            # 2. Queue for throttled commit
-            if persist:
+            # 2. Queue for throttled commit (Only if we have a folder)
+            if persist and self.folder_id:
                 self.watched_status_cache[item_id] = status
             
             # 3. Notify the extension (always notify to keep UI in sync)
@@ -592,9 +618,9 @@ class PlaylistTracker:
             def on_done(success, msg):
                 # 1. Update Internal Tracker State & Extension UI (Always)
                 if success:
-                    # We pass persist=False because mark_video_as_watched_threaded calls sync_state 
-                    # which already writes to disk upon success.
-                    self._update_marked_as_watched(item_id, True, persist=False)
+                    # We pass persist=True ONLY if we have a folder_id.
+                    # mark_video_as_watched_threaded calls sync_state which handles disk sync if folder exists.
+                    self._update_marked_as_watched(item_id, True, persist=bool(self.folder_id))
                     self.send_message({"log": {"text": "[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
                 else:
                     self.send_message({"log": {"text": f"[Tracker]: Failed to mark YouTube video as watched: {msg}", "type": "error"}})

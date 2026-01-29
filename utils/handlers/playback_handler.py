@@ -1,5 +1,7 @@
 import logging
 import uuid
+import os
+import time
 from .base_handler import BaseHandler
 from .registry import command
 from .. import native_link
@@ -75,6 +77,12 @@ class PlaybackHandler(BaseHandler):
                     logging.info(f"[PY][Handler] Active session for {folder_id}. Toggling pause.")
                     self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
                     return native_link.success(already_active=True)
+
+        # 2.5 Log batch preparation
+        if len(items) > 1:
+            folder_name = self.file_io.get_index().get(folder_id, {}).get("name")
+            display_name = f"'{folder_name}'" if folder_name else "detached playlist"
+            self.ctx.sender({"log": {"text": f"[Background]: Preparing {display_name} ({len(items)} items)...", "type": "info"}})
 
         # 3. Parallel Enrichment & Initial Launch
         launch_payload = items if len(items) > 1 else items[0]
@@ -236,8 +244,12 @@ class PlaybackHandler(BaseHandler):
             else:
                 is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
 
-        if not is_running and self.mpv_session.pid:
-            if not self.ipc_utils.is_pid_running(self.mpv_session.pid):
+        if not is_running:
+            if self.mpv_session.pid:
+                # PID is set but process is not alive
+                self.mpv_session.clear()
+            elif self.mpv_session.is_alive:
+                # is_alive is True but no PID, inconsistent state
                 self.mpv_session.clear()
 
         return native_link.success({
@@ -287,24 +299,34 @@ class PlaybackHandler(BaseHandler):
     @command('play_new_instance')
     def handle_play_new_instance(self, request: native_link.PlaybackRequest):
         settings = self._get_merged_settings(request.settings)
+        
+        # Support both 'playlist' and 'url_item' inputs
+        playlist = request.playlist
+        if not playlist and request.url_item:
+            playlist = [request.url_item]
+            
         return self._launch_unmanaged_mpv(
-            request.playlist or [], request.geometry, request.custom_width,
+            playlist or [], request.geometry, request.custom_width,
             request.custom_height, request.custom_mpv_flags, request.automatic_mpv_flags,
-            settings=settings
+            settings=settings, folder_id=request.folder_id
         )
 
-    def _launch_unmanaged_mpv(self, playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, settings=None):
+    def _launch_unmanaged_mpv(self, playlist, geometry, custom_width, custom_height, custom_mpv_flags, automatic_mpv_flags, settings=None, folder_id=None):
         mpv_exe = self.file_io.get_mpv_executable()
         if settings is None:
             settings = self.file_io.get_settings()
         
+        # 0.5 Log batch preparation
+        if len(playlist) > 1:
+            self.ctx.sender({"log": {"text": f"[Background]: Preparing detached playlist ({len(playlist)} items)...", "type": "info"}})
+
         # 1. Enrich the items
         enriched_playlist = []
         for item in playlist:
             item_to_enrich = item if isinstance(item, dict) else {"url": item}
             try:
                 # enrich_single_item returns a list (handles expansions)
-                results = self.item_processor.enrich_single_item(item_to_enrich, settings=settings)
+                results = self.item_processor.enrich_single_item(item_to_enrich, settings=settings, quiet=(len(playlist) > 1))
                 enriched_playlist.extend(results)
             except Exception as e:
                 logging.warning(f"Failed to enrich item for unmanaged launch: {e}")
@@ -315,6 +337,9 @@ class PlaybackHandler(BaseHandler):
 
         # Extract metadata from enriched first item
         first_item = enriched_playlist[0]
+        if not first_item.get('folder_id') and folder_id:
+            first_item['folder_id'] = folder_id
+            
         headers = first_item.get('headers')
         cookies_browser = first_item.get('cookies_browser')
         cookies_file = first_item.get('cookies_file')
@@ -323,13 +348,46 @@ class PlaybackHandler(BaseHandler):
         use_ytdl_mpv = first_item.get('use_ytdl_mpv', False)
 
         try:
+            # 2.5 Generate Metadata Handshake File
+            import uuid
+            import json
+            handshake_data = {
+                "folder_id": folder_id,
+                "project_root": self.ctx.script_dir,
+                "flag_dir": os.path.join(os.path.dirname(self.ctx.temp_playlists_dir), "flags"),
+                "playlist_start_index": 0,
+                "is_youtube": is_youtube,
+                "use_ytdl_mpv": use_ytdl_mpv,
+                "title": first_item.get('title'),
+                "id": first_item.get('id'),
+                "original_url": self.services.sanitize_url(first_item.get('original_url') or first_item.get('url', '')),
+                "headers": headers,
+                "cookies_browser": cookies_browser,
+                "lua_options": self.services.construct_lua_options(first_item, settings, self.ctx.script_dir)[0],
+                "is_unmanaged": True
+            }
+            
+            # Ensure flags directory exists
+            os.makedirs(handshake_data["flag_dir"], exist_ok=True)
+            
+            handshake_path = os.path.join(handshake_data["flag_dir"], f"handshake_unmanaged_{uuid.uuid4().hex}.json")
+            with open(handshake_path, 'w', encoding='utf-8') as f:
+                json.dump(handshake_data, f)
+            
+            # Extract resume_time for CLI --start
+            start_time = handshake_data["lua_options"].get("resume_time")
+            
+            # Inject handshake into custom flags
+            handshake_flag = f"--script-opts=mpv_organizer-handshake={handshake_path}"
+            updated_custom_flags = f"{custom_mpv_flags or ''} {handshake_flag}".strip()
+
             full_command, has_terminal_flag = self.services.construct_mpv_command(
                 mpv_exe=mpv_exe, 
                 url=enriched_playlist, 
                 geometry=geometry,
                 custom_width=custom_width, 
                 custom_height=custom_height,
-                custom_mpv_flags=custom_mpv_flags, 
+                custom_mpv_flags=updated_custom_flags, 
                 automatic_mpv_flags=automatic_mpv_flags,
                 settings=settings, 
                 playlist_start_index=0,
@@ -340,15 +398,30 @@ class PlaybackHandler(BaseHandler):
                 is_youtube=is_youtube,
                 use_ytdl_mpv=use_ytdl_mpv,
                 script_dir=self.ctx.script_dir,
-                metadata_item=first_item,
-                temp_dir=self.ctx.temp_playlists_dir
+                # metadata_item and temp_dir are now legacy, handshake handles it
+                flag_dir=handshake_data["flag_dir"],
+                start_time=start_time
             )
             
             import subprocess
             import threading
             process = subprocess.Popen(full_command, **self.services.get_mpv_popen_kwargs(has_terminal_flag))
+            
+            # Handshake cleanup for unmanaged instances needs a small delay or a thread
+            def delayed_cleanup(path, proc):
+                # Unmanaged sessions don't have a manager to clear them, 
+                # so we wait for the process to end or a reasonable timeout for the handshake to be read.
+                # Actually, MPV reads script-opts at startup. 5 seconds is plenty.
+                time.sleep(10)
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except: pass
+            
+            threading.Thread(target=delayed_cleanup, args=(handshake_path, process), daemon=True).start()
+            
             threading.Thread(target=self.ctx.log_stream, args=(process.stderr, logging.warning, None), daemon=True).start()
-            return native_link.success(message="New MPV instance launched.")
+            return native_link.success(message="Disconnected session launched.")
         except Exception as e:
             import traceback
             logging.error(f"Error launching unmanaged mpv: {e}\n{traceback.format_exc()}")

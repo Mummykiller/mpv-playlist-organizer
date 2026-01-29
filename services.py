@@ -183,7 +183,7 @@ def get_mpv_popen_kwargs(has_terminal_flag):
 
 # --- URL Bypass & Analysis ---
 
-def apply_bypass_script(url_item, send_message_func, settings=None, session=None):
+def apply_bypass_script(url_item, send_message_func, settings=None, session=None, quiet=False):
     """Applies URL analysis logic if enabled in settings."""
     if session and getattr(session, 'launch_cancelled', False):
         raise RuntimeError("Launch cancelled by user.")
@@ -216,7 +216,8 @@ def apply_bypass_script(url_item, send_message_func, settings=None, session=None
 
     try:
         logging.info(f"Executing URL analysis for URL: {original_url}")
-        send_message_func({"action": "log_from_native_host", "log": {"text": f"Running URL analysis for: {original_url}", "type": "info"}})
+        if not quiet:
+            send_message_func({"action": "log_from_native_host", "log": {"text": f"Running URL analysis for: {original_url}", "type": "info"}})
         
         result = url_analyzer.run_bypass_logic(
             original_url, 

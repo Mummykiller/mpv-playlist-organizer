@@ -5,12 +5,10 @@ import shlex
 import re
 import logging
 import shutil
+import sys
 from datetime import datetime
 import file_io
 from . import security
-
-# Prevent __pycache__ generation
-import sys
 sys.dont_write_bytecode = True
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
@@ -43,7 +41,16 @@ class MpvCommandBuilder:
         self.input_terminal = None
         self.has_terminal_flag = False
         self.is_forced_terminal = False
+        self.start_time = None
         self.properties = []
+
+    def with_start_time(self, start_time):
+        if start_time is not None:
+            try:
+                self.start_time = int(float(start_time))
+            except (ValueError, TypeError):
+                pass
+        return self
 
     def with_ipc_path(self, ipc_path):
         self.ipc_path = file_io.validate_safe_path(ipc_path)
@@ -152,42 +159,6 @@ class MpvCommandBuilder:
         self.ytdl_raw_options = raw_opts
         return self
 
-    def with_metadata_file(self, item_dict, temp_dir):
-        """
-        Encodes critical metadata into a temporary JSON file.
-        This avoids shell-quoting issues with large JSON strings.
-        """
-        if not isinstance(item_dict, dict) or not temp_dir:
-            return self
-            
-        import json
-        import uuid
-        meta = {
-            "id": item_dict.get("id"),
-            "title": item_dict.get("title"),
-            "headers": item_dict.get("headers"),
-            "original_url": item_dict.get("original_url"),
-            "cookies_file": item_dict.get("cookies_file"),
-            "ytdl_raw_options": item_dict.get("ytdl_raw_options"),
-            "ytdl_format": item_dict.get("ytdl_format"),
-            "targeted_defaults": self.settings.get("targeted_defaults", "none"),
-            "is_unmanaged": True
-        }
-        
-        # Use a very safe filename
-        file_name = f"meta_{uuid.uuid4().hex[:12]}.json"
-        file_path = os.path.abspath(os.path.join(temp_dir, file_name))
-        
-        try:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(meta, f)
-            # Use script-opts for better compatibility with older MPV versions (< 0.36)
-            self.script_opts.append(f"mpv_organizer-metadata_file={file_path}")
-        except Exception as e:
-            logging.error(f"Failed to write metadata file: {e}")
-            
-        return self
-
     def build(self):
         args = [self.mpv_exe]
         if self.ipc_path: args.append(f'--input-ipc-server={self.ipc_path}')
@@ -245,24 +216,61 @@ class MpvCommandBuilder:
             else: ytdl_format = f"bv*[height<=?{q}]+ba/best"
         args.append(f"--ytdl-format={ytdl_format}")
         
-        if self.cookies_browser:
-            browser_opt = f"cookies-from-browser={self.cookies_browser}"
-            self.ytdl_raw_options = f"{self.ytdl_raw_options},{browser_opt}" if self.ytdl_raw_options else browser_opt
+        # 1. Prepare Essential YTDL Options
+        existing_raw = str(self.ytdl_raw_options or "")
+        ytdl_opts_list = []
         
-        # Enable YouTube internal history tracking if cookies are available
-        if self.is_youtube and self.settings.get('yt_mark_watched', True):
-            if self.cookies_browser or self.cookies_file:
-                mw = "mark-watched="
-                if not self.ytdl_raw_options:
-                    self.ytdl_raw_options = mw
-                elif mw not in self.ytdl_raw_options:
-                    self.ytdl_raw_options = f"{self.ytdl_raw_options},{mw}"
+        # Security & Runtimes & Optimization
+        if "ignore-config" not in existing_raw:
+            ytdl_opts_list.append("ignore-config=")
+        
+        if "noplaylist" not in existing_raw:
+            ytdl_opts_list.append("noplaylist=")
+        
+        if "js-runtimes" not in existing_raw:
+            node_path = self.settings.get("node_path")
+            if node_path and os.path.exists(node_path):
+                ytdl_opts_list.append(f"js-runtimes=node:{node_path}")
+            else:
+                ytdl_opts_list.append("js-runtimes=node")
 
+        # Cookies
+        if self.cookies_browser and self.cookies_browser != "None" and "cookies-from-browser" not in existing_raw:
+            ytdl_opts_list.append(f"cookies-from-browser={self.cookies_browser}")
+        
+        # User-Agent (Sync with MPV to prevent 403)
+        if self.headers:
+            headers_lower = {k.lower(): v for k, v in self.headers.items()}
+            ua = headers_lower.get('user-agent')
+            if ua and "user-agent" not in existing_raw:
+                # yt-dlp expects --ytdl-raw-options="user-agent=VALUE"
+                # IMPORTANT: Commas break the mpv parser for ytdl-raw-options.
+                # We strip them to keep the list valid without complex escaping.
+                safe_ua = str(ua).replace(",", "")
+                ytdl_opts_list.append(f"user-agent={safe_ua}")
+
+        # Combine: Existing options first, then our injected essentials
+        final_list = []
+        if self.ytdl_raw_options:
+            final_list.append(self.ytdl_raw_options)
+        final_list.extend(ytdl_opts_list)
+
+        final_ytdl_raw = ",".join(final_list)
+        if final_ytdl_raw:
+            # We don't manually quote here, as build() handles argument quoting
+            args.append(f"--ytdl-raw-options={final_ytdl_raw}")
+        
+        if self.playlist_start is not None:
+            args.append(f"--playlist-start={self.playlist_start}")
+        
+        if self.start_time is not None:
+            args.append(f"--start={self.start_time}")
+        
         if self.cookies_file:
             args.append(f"--cookies-file={self.cookies_file}")
 
-        if self.ytdl_raw_options: args.append(f"--ytdl-raw-options={self.ytdl_raw_options}")
-        if self.use_ytdl_mpv or (self.is_youtube and not self.is_youtube_override): args.append('--ytdl=yes')
+        if self.use_ytdl_mpv or (self.is_youtube and not self.is_youtube_override):
+            args.append('--ytdl=yes')
 
         if self.automatic_flags:
             for f_info in self.automatic_flags:
@@ -326,22 +334,21 @@ class MpvCommandBuilder:
         except Exception: pass
         return full_command, self.has_terminal_flag
 
-def construct_mpv_command(mpv_exe, ipc_path=None, url=None, is_youtube=False, ytdl_raw_options=None, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, headers=None, disable_http_persistent=False, start_paused=False, script_dir=None, load_on_completion_script=False, title=None, use_ytdl_mpv=False, is_youtube_override=False, idle=False, force_terminal=False, input_terminal=None, settings=None, flag_dir=None, playlist_start_index=None, cookies_browser=None, force_bypass=False, metadata_item=None, temp_dir=None, cookies_file=None):
+def construct_mpv_command(mpv_exe, ipc_path=None, url=None, is_youtube=False, ytdl_raw_options=None, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, headers=None, disable_http_persistent=False, start_paused=False, script_dir=None, load_on_completion_script=False, title=None, use_ytdl_mpv=False, is_youtube_override=False, idle=False, force_terminal=False, input_terminal=None, settings=None, flag_dir=None, playlist_start_index=None, cookies_browser=None, force_bypass=False, cookies_file=None, start_time=None):
     b = MpvCommandBuilder(mpv_exe, use_ytdl_mpv, is_youtube_override, is_youtube, settings, cookies_browser, force_bypass=force_bypass, cookies_file=cookies_file)
     b.with_ipc_path(ipc_path).with_url(url).with_title(title).with_headers(headers)
     b.with_geometry(geometry, custom_width, custom_height).with_playlist_start(playlist_start_index)
+    b.with_start_time(start_time)
     b.with_automatic_flags(automatic_mpv_flags).with_custom_flags(custom_mpv_flags)
     b.with_force_terminal(force_terminal).with_input_terminal(input_terminal)
     b.with_disable_http_persistent(disable_http_persistent).with_start_paused(start_paused)
     b.with_idle(idle).with_youtube_options(is_youtube, ytdl_raw_options)
     
-    # Static Metadata Handshake for unmanaged instances
-    if metadata_item and temp_dir:
-        b.with_metadata_file(metadata_item, temp_dir)
-        
     if script_dir:
-        b.with_adaptive_headers_script(script_dir).with_python_interaction_script(script_dir)
-        if load_on_completion_script: b.with_completion_script(script_dir, flag_dir)
+        b.with_adaptive_headers_script(script_dir)
+        b.with_python_interaction_script(script_dir)
+        if load_on_completion_script:
+            b.with_completion_script(script_dir, flag_dir)
     return b.build()
 
 def get_mpv_popen_kwargs(has_terminal_flag):

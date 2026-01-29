@@ -150,8 +150,25 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				show_confirmation: (req, send) =>
 					this._handleAsyncConfirmation(req, send),
 				show_clear_confirmation: async (req) => {
-					const scopeText = req.count > 1 ? `${req.count} items` : "item";
-					const message = `MPV finished naturally. Clear ${scopeText} in "${req.folderId}"?`;
+					let message = "";
+					
+					if (req.scope === "all") {
+						message = `MPV finished naturally. Clear the entire folder "${req.folderId}"?`;
+					} else {
+						let scopeText = "";
+						if (req.titles && req.titles.length > 0) {
+							// List all titles in separate lanes (even if only one)
+							scopeText = "\n" + req.titles.map(t => ` • "${t}"`).join("\n");
+						} else {
+							scopeText = req.count > 1 ? `${req.count} items` : "item";
+						}
+						message = `MPV finished naturally. Clear ${scopeText}\nin "${req.folderId}"?`;
+					}
+					
+					// Add Live Warning Footer if applicable
+					if (this.state.state.isFolderActive && this.state.state.settings.liveRemoval) {
+						message += "\n\n(This will also remove them from the running MPV instance)";
+					}
 					
 					const result = await this.showStackedClearConfirmation(req.folderId, message, req);
 					
