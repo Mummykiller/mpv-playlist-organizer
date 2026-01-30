@@ -166,7 +166,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					}
 					
 					// Add Live Warning Footer if applicable
-					if (this.state.state.isFolderActive && this.state.state.settings.liveRemoval) {
+					// Only show if the folder is active, live removal is enabled, AND we aren't already quitting MPV
+					if (this.state.state.isFolderActive && this.state.state.settings.liveRemoval && !req.isQuitting) {
 						message += "\n\n(This will also remove them from the running MPV instance)";
 					}
 					

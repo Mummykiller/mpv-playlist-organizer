@@ -198,7 +198,8 @@ export async function handleMpvQuitting(data) {
 							sessionIds: targetIds, // Pass filtered list
 							scope: clearScope,
 							count: targetIds.length,
-							titles: titles
+							titles: titles,
+							isQuitting: true
 						})
 						.catch(() => {});
 				}
@@ -320,7 +321,8 @@ export async function handleMpvExited(data) {
 							sessionIds: targetIds, // Pass filtered list
 							scope: clearScope,
 							count: targetIds.length,
-							titles: titles
+							titles: titles,
+							isQuitting: true
 						})
 						.catch(() => {});
 				}
@@ -395,6 +397,29 @@ async function clearFolderPlaylist(folderId, options = {}) {
 				type: "info",
 			});
 
+			const { mpv_playback_cache: playbackCache } = await chrome.storage.local.get("mpv_playback_cache");
+			
+			// --- Local Live Removal (Mimic X-click) ---
+			// If the current folder is active in MPV, remove the items from the player too.
+			if (storageData.settings.uiPreferences.global.liveRemoval !== false && 
+				playbackCache && playbackCache.folderId === folderId && (playbackCache.isRunning || !playbackCache.isIdle)) {
+				
+				// Re-identify IDs that were removed based on the original scope
+				let idsToRemoveLive = [];
+				if (scope === "played") idsToRemoveLive = playedIds;
+				else if (scope === "session") idsToRemoveLive = sessionIds;
+				else if (scope === "all") idsToRemoveLive = []; // Handle all case if needed, but usually natural completion handles it
+
+				if (idsToRemoveLive && idsToRemoveLive.length > 0) {
+					for (const rId of idsToRemoveLive) {
+						nativeLink.call("remove_item_live", {
+							folderId: folderId,
+							itemId: rId,
+						}).catch(() => {});
+					}
+				}
+			}
+
 			let globalSyncPerformed = false;
 			// --- Global URL Synchronization ---
 			if (storageData.settings.uiPreferences.global.syncGlobalRemovals === true && removedUrls.size > 0) {
@@ -415,7 +440,8 @@ async function clearFolderPlaylist(folderId, options = {}) {
 
 						// Handle live removal for synchronized folders if they are active
 						const { mpv_playback_cache: playbackCache } = await chrome.storage.local.get("mpv_playback_cache");
-						if (playbackCache && playbackCache.folderId === fId && (playbackCache.isRunning || !playbackCache.isIdle)) {
+						if (storageData.settings.uiPreferences.global.syncGlobalRemovalsLive === true && 
+							playbackCache && playbackCache.folderId === fId && (playbackCache.isRunning || !playbackCache.isIdle)) {
 							for (const syncItem of itemsToRemoveFromThisFolder) {
 								nativeLink.call("remove_item_live", {
 									folderId: fId,
