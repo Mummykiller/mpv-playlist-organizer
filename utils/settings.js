@@ -47,6 +47,11 @@ export class OptionsManager {
 				type: "checkbox",
 			},
 			{
+				key: "syncGlobalRemovalsLive",
+				elementId: "sync-global-removals-live-checkbox",
+				type: "checkbox",
+			},
+			{
 				key: "oneClickAdd",
 				elementId: "one-click-add-checkbox",
 				type: "checkbox",
