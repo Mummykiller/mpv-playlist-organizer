@@ -138,15 +138,23 @@ export class StorageManager {
 
 		this.writeQueue = this.writeQueue.then(async () => {
 			try {
+				// 0. Change-Aware Optimization: Get existing data to compare
+				const keysToFetch = folderId ? [`mpv_folder_data_${folderId}`, "mpv_settings"] : ["mpv_settings", "mpv_folder_index"];
+				const existing = await chrome.storage.local.get(keysToFetch);
+
 				// If folderId is provided, we only validate and save that specific folder
-				// instead of validating the entire library structure.
 				if (folderId && data.folders[folderId]) {
 					this._validateFolder(folderId, data.folders[folderId]);
 
-					const update = {
-						[`mpv_folder_data_${folderId}`]: data.folders[folderId],
-						mpv_settings: data.settings,
-					};
+					const folderKey = `mpv_folder_data_${folderId}`;
+					const folderChanged = JSON.stringify(data.folders[folderId]) !== JSON.stringify(existing[folderKey]);
+					const settingsChanged = JSON.stringify(data.settings) !== JSON.stringify(existing.mpv_settings);
+
+					if (!folderChanged && !settingsChanged) return;
+
+					const update = {};
+					if (folderChanged) update[folderKey] = data.folders[folderId];
+					if (settingsChanged) update.mpv_settings = data.settings;
 
 					// Also ensure folder is in index
 					const currentOrder = data.folderOrder || [];
@@ -157,7 +165,7 @@ export class StorageManager {
 
 					await chrome.storage.local.set(update);
 				} else {
-					// Fallback to full validation and save if no specific folder targeted
+					// Full validation and save
 					this._validateData(data);
 					const update = {
 						mpv_storage_version: 2,

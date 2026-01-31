@@ -28,7 +28,31 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				isClosing: false,
 			};
 			this.listeners = new Set();
-			this._initGlobalListener();
+			this._initStorageListener();
+			this._loadInitialState();
+		}
+
+		async _loadInitialState() {
+			const data = await chrome.storage.local.get("active_playback_state");
+			if (data.active_playback_state) {
+				this.update(data.active_playback_state);
+			}
+		}
+
+		_initStorageListener() {
+			// PROACTIVE: Listen to storage changes instead of broadcast messages
+			chrome.storage.onChanged.addListener((changes, area) => {
+				if (area === "local" && changes.active_playback_state) {
+					this.update(changes.active_playback_state.newValue);
+				}
+			});
+
+			// FALLBACK: Still keep message listener for legacy/direct triggers
+			chrome.runtime.onMessage.addListener((msg) => {
+				if (msg.action === "playback_state_changed") {
+					this.update(msg.state);
+				}
+			});
 		}
 
 		/**
@@ -52,6 +76,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		 * Main logic to derive status from raw playback data.
 		 */
 		update(newData) {
+			if (!newData) return;
 			const oldStatus = this.state.status;
 			
 			// 1. Handle folder and ID tracking
@@ -70,21 +95,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.state.needsAppend = false;
 			}
 
-			// If we need to append AND the folder is active, we treat it as 'running' 
-			// so the Queue button shows instead of Play/Pause.
-			if (this.state.needsAppend && isRunning) {
-				isRunning = true;
-			}
-
 			let newStatus = PlaybackStatus.STOPPED;
 
 			if (isRunning) {
 				if (isPaused) {
 					newStatus = PlaybackStatus.PAUSED;
 				} else if (isIdle) {
-					// Graceful Idle Transition:
-					// If we were PLAYING or LOADING, don't drop to STOPPED during blips.
-					// Stay in the existing high-level state until playback resumes or process dies.
 					if (oldStatus === PlaybackStatus.PLAYING || oldStatus === PlaybackStatus.LOADING || oldStatus === PlaybackStatus.PAUSED) {
 						newStatus = oldStatus; 
 					} else {
@@ -120,41 +136,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		 */
 		async requestSync() {
 			try {
-				const response = await MPV.sendMessageAsync({ action: "get_playback_status" });
-				if (response) {
-					this.update(response);
-				}
+				// Use the existing bridge or global sendMessage
+				chrome.runtime.sendMessage({ action: "get_playback_status" }, (response) => {
+					if (response) this.update(response);
+				});
 			} catch (e) {
 				console.warn("[StateManager] Sync request failed:", e);
 			}
-		}
-
-		_initGlobalListener() {
-			chrome.runtime.onMessage.addListener((msg) => {
-				if (msg.action === "playback_state_changed") {
-					this.update({
-						folderId: msg.state.folderId,
-						isRunning: msg.state.isRunning,
-						isPaused: msg.state.isPaused,
-						isIdle: msg.state.isIdle,
-						isClosing: msg.state.isClosing,
-						lastPlayedId: msg.state.lastPlayedId,
-						needsAppend: msg.state.needsAppend
-					});
-				} else if (msg.action === "render_playlist") {
-					// Fallback support for the heavier event if it contains status
-					if (msg.isFolderActive !== undefined || msg.isClosing !== undefined) {
-						this.update({
-							folderId: msg.folderId,
-							isRunning: msg.isFolderActive,
-							isPaused: msg.isPaused,
-							isClosing: msg.isClosing,
-							lastPlayedId: msg.lastPlayedId,
-							needsAppend: msg.needsAppend
-						});
-					}
-				}
-			});
 		}
 	}
 
