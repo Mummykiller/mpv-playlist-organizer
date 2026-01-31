@@ -67,9 +67,17 @@ The project is a hybrid media management application consisting of three distinc
   "is_youtube": true,
   "settings": {},
   "resume_time": 0.0,
+  "watched": false,
   "marked_as_watched": false
 }
 ```
+
+### The "Watched" vs "Marked as Watched" Distinction
+To ensure local progress is never lost due to network or sync failures, these flags MUST remain decoupled:
+- **`watched` (Personal History):** A local fact. Set to `true` automatically after 30s of playback or natural completion. It controls UI "graying out" and the visual ✔ checkmark.
+- **`marked_as_watched` (Remote Sync):** A network status. Set to `true` ONLY if the `yt-dlp` script successfully syncs the video to the external service (YouTube). It controls the checked state of the UI checkbox.
+
+**Why they are separate:** If external sync fails (expired cookies, offline), the local `watched` flag preserves the user's history so the item still looks completed in the library. Manual UI toggles strictly affect `marked_as_watched` to allow pre-syncing without falsifying local history.
 
 ## 7. Security & Safety
 - **Command Execution:** Use `subprocess.Popen` with appropriate arguments and environment whitelisting (see `session_services.py`).

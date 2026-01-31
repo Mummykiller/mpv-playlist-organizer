@@ -29,6 +29,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.draggedItem = null;
 			this.currentPlaylist = [];
 			this.isSelectionModeActive = false;
+			this.isPickStartModeActive = false;
 		}
 
 		bindEvents() {
@@ -87,8 +88,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const itemDiv = document.createElement("div");
 					itemDiv.className = "list-item";
 					
-					const isWatched = item.watched || item.markedAsWatched;
-					if (isWatched) {
+					// UI Change: Only gray out if PERSONALLY watched
+					if (item.watched) {
 						itemDiv.classList.add("item-watched");
 					}
 					
@@ -122,7 +123,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 					const isYouTube = item.url.includes("youtube.com/") || item.url.includes("youtu.be/");
 
-					if (isWatched && !isYouTube) {
+					if (item.watched && !isYouTube) {
 						const check = document.createElement("span");
 						check.className = "watched-checkmark index-checkmark";
 						check.innerHTML = "✔";
@@ -142,10 +143,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						const watchedCheckbox = document.createElement("input");
 						watchedCheckbox.type = "checkbox";
 						watchedCheckbox.className = "item-watched-checkbox";
-						watchedCheckbox.checked = !item.markedAsWatched;
+						// UI Change: Checkbox only reflects SYNC status
+						watchedCheckbox.checked = !!item.markedAsWatched;
 						watchedCheckbox.title = watchedCheckbox.checked
-							? "Will mark as watched on YouTube"
-							: "Already marked or skipped";
+							? "Already marked as watched"
+							: "Click to mark as watched on YouTube";
 
 						watchedCheckbox.addEventListener("change", (e) => {
 							e.stopPropagation();
@@ -156,7 +158,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						});
 						itemDiv.appendChild(watchedCheckbox);
 
-						if (isWatched) {
+						if (item.watched) {
 							const check = document.createElement("span");
 							check.className = "watched-checkmark checkbox-checkmark";
 							check.innerHTML = "✔";
@@ -206,8 +208,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (!bar) return;
 			
 			bar.innerHTML = "";
+			// Reset classes to ensure mutual exclusivity
 			bar.className = "quick-actions-bar";
-			if (this.isSelectionModeActive) bar.classList.add("selection-mode-active");
 
 			const labels = ["A", "B", "C", "⚡"];
 			labels.forEach((label, index) => {
@@ -215,17 +217,51 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				btn.className = "quick-action-btn";
 				btn.textContent = label;
 				
-				const isLast = index === labels.length - 1;
-				if (isLast) {
-					btn.title = "Toggle Disconnected Launch (Selection Mode)";
-					btn.classList.add("btn-disconnected-toggle");
-					if (this.isSelectionModeActive) btn.classList.add("selection-mode-active");
+				const isA = label === "A";
+				const isLast = label === "⚡";
+
+				if (isA) {
+					btn.title = "Left-click: Play from start | Right-click: Pick start item";
+					btn.classList.add("btn-start-from-beginning");
+
 					btn.onclick = (e) => {
 						e.stopPropagation();
+						if (this.isPickStartModeActive) {
+							this.isPickStartModeActive = false;
+							this._refreshQuickActionsBar();
+							return;
+						}
+						
+						if (this.currentPlaylist.length > 0) {
+							const firstItem = this.currentPlaylist[0];
+							this.controller.sendCommandToBackground("play", this.folderSelect.value, {
+								urlItem: firstItem,
+								playlistStartId: firstItem.id
+							});
+						} else {
+							this.controller.addLogEntry({ text: "[UI]: Cannot play from start - Playlist is empty.", type: "warning" });
+						}
+					};
+
+					btn.oncontextmenu = (e) => {
+						e.preventDefault();
+						e.stopPropagation();
+						
+						// ENFORCE MUTUAL EXCLUSIVITY
+						this.isSelectionModeActive = false;
+						this.isPickStartModeActive = !this.isPickStartModeActive;
+						this._refreshQuickActionsBar();
+					};
+				} else if (isLast) {
+					btn.title = "Toggle Disconnected Launch (Selection Mode)";
+					btn.classList.add("btn-disconnected-toggle");
+					btn.onclick = (e) => {
+						e.stopPropagation();
+						
+						// ENFORCE MUTUAL EXCLUSIVITY
+						this.isPickStartModeActive = false;
 						this.isSelectionModeActive = !this.isSelectionModeActive;
-						this.fullContainer?.classList.toggle("selection-mode-active", this.isSelectionModeActive);
-						btn.classList.toggle("selection-mode-active", this.isSelectionModeActive);
-						bar.classList.toggle("selection-mode-active", this.isSelectionModeActive);
+						this._refreshQuickActionsBar();
 					};
 				} else {
 					btn.title = "Placeholder " + label;
@@ -235,6 +271,37 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					};
 				}
 				bar.appendChild(btn);
+			});
+
+			this._refreshQuickActionsBar();
+		}
+
+		/**
+		 * Helper to refresh the visual state of the quick actions bar and playlist container.
+		 */
+		_refreshQuickActionsBar() {
+			const bar = this.uiManager.shadowRoot?.getElementById("quick-actions-bar");
+			if (!bar) return;
+
+			// Handle Bar Classes
+			bar.classList.toggle("selection-mode-active", this.isSelectionModeActive);
+			bar.classList.toggle("pick-start-mode-active", this.isPickStartModeActive);
+			
+			// Handle Container Classes (Global observer for list items)
+			const container = this.fullContainer || this.uiManager.shadowRoot?.getElementById("playlist-container");
+			if (container) {
+				container.classList.toggle("selection-mode-active", this.isSelectionModeActive);
+				container.classList.toggle("pick-start-mode-active", this.isPickStartModeActive);
+			}
+
+			// Handle individual button active states
+			const buttons = bar.querySelectorAll(".quick-action-btn");
+			buttons.forEach(btn => {
+				if (btn.textContent === "A") {
+					btn.classList.toggle("active", this.isPickStartModeActive);
+				} else if (btn.textContent === "⚡") {
+					btn.classList.toggle("active", this.isSelectionModeActive);
+				}
 			});
 		}
 
@@ -303,6 +370,22 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				const removeBtn = e.target.closest(".btn-remove-item");
 				const copyBtn = e.target.closest(".btn-copy-item");
 				const watchedCheckbox = e.target.closest(".item-watched-checkbox");
+
+				// Handle Button A selection mode (Pick Start Item)
+				if (this.isPickStartModeActive && !removeBtn && !copyBtn && !watchedCheckbox) {
+					const id = listItem.dataset.id;
+					const fullItem = this.currentPlaylist.find(i => i.id === id);
+
+					if (fullItem) {
+						this.controller.sendCommandToBackground("play", this.folderSelect.value, {
+							urlItem: fullItem,
+							playlistStartId: fullItem.id
+						});
+						this.isPickStartModeActive = false;
+						this._refreshQuickActionsBar();
+					}
+					return;
+				}
 
 				// Handle Selection Mode (Disconnected Launch)
 				if (this.isSelectionModeActive && !removeBtn && !copyBtn && !watchedCheckbox) {
@@ -502,38 +585,48 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const internalItem = this.currentPlaylist.find(i => i.id === itemId);
 			if (internalItem) Object.assign(internalItem, delta);
 
-			if (delta.watched !== undefined || delta.markedAsWatched !== undefined) {
-				const isWatched = !!(delta.watched || delta.markedAsWatched);
-				itemDiv.classList.toggle("item-watched", isWatched);
+			const isYouTube = itemDiv.dataset.url?.includes("youtube.com") || itemDiv.dataset.url?.includes("youtu.be");
 
-				// Update/Toggle Checkmarks
-				const isYouTube = itemDiv.dataset.url?.includes("youtube.com") || itemDiv.dataset.url?.includes("youtu.be");
+			// 1. Gray out (watched)
+			if (delta.watched !== undefined) {
+				itemDiv.classList.toggle("item-watched", !!delta.watched);
 				
-				// 1. Index Checkmark (non-YT)
 				const existingIndexCheck = itemDiv.querySelector(".index-checkmark");
-				if (isWatched && !isYouTube && !existingIndexCheck) {
+				if (delta.watched && !isYouTube && !existingIndexCheck) {
 					const check = document.createElement("span");
 					check.className = "watched-checkmark index-checkmark";
 					check.innerHTML = "✔";
 					const indexSpan = itemDiv.querySelector(".url-index");
 					if (indexSpan) indexSpan.after(check);
-				} else if (!isWatched && existingIndexCheck) {
+				} else if (!delta.watched && existingIndexCheck) {
 					existingIndexCheck.remove();
 				}
+			}
 
-				// 2. Checkbox Checkmark (YT)
-				const existingCheckboxCheck = itemDiv.querySelector(".checkbox-checkmark");
+			// 2. Checkbox & Checkmark (markedAsWatched vs watched)
+			if (delta.markedAsWatched !== undefined || delta.watched !== undefined) {
 				const checkbox = itemDiv.querySelector(".item-watched-checkbox");
-				if (isWatched && isYouTube && checkbox && !existingCheckboxCheck) {
-					const check = document.createElement("span");
-					check.className = "watched-checkmark checkbox-checkmark";
-					check.innerHTML = "✔";
-					checkbox.after(check);
-				} else if (!isWatched && existingCheckboxCheck) {
-					existingCheckboxCheck.remove();
+				
+				// Checkbox strictly follows sync status
+				if (delta.markedAsWatched !== undefined && checkbox) {
+					checkbox.checked = !!delta.markedAsWatched;
+					checkbox.title = delta.markedAsWatched ? "Already marked as watched" : "Click to mark as watched on YouTube";
 				}
 
-				if (checkbox) checkbox.checked = !isWatched;
+				// Checkmark strictly follows local watched status
+				const existingCheckboxCheck = itemDiv.querySelector(".checkbox-checkmark");
+				if (isYouTube && checkbox) {
+					const currentlyWatched = delta.watched !== undefined ? delta.watched : !!itemDiv.classList.contains("item-watched");
+					
+					if (currentlyWatched && !existingCheckboxCheck) {
+						const check = document.createElement("span");
+						check.className = "watched-checkmark checkbox-checkmark";
+						check.innerHTML = "✔";
+						checkbox.after(check);
+					} else if (!currentlyWatched && existingCheckboxCheck) {
+						existingCheckboxCheck.remove();
+					}
+				}
 			}
 		}
 	};

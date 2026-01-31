@@ -40,6 +40,15 @@ class NativeLink {
 		return this.call("get_playback_status");
 	}
 
+	async updateItemMarkedAsWatched(folderId, itemId, status = {}) {
+		return this.call("update_item_marked_as_watched", {
+			folderId,
+			itemId,
+			markedAsWatched: status.markedAsWatched,
+			watched: status.watched,
+		});
+	}
+
 	// --- Lifecycle ---
 	async closeMpv(folderId = null) {
 		return this.call("close_mpv", { folderId });

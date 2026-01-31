@@ -141,8 +141,7 @@
             if (this.prefs.showWatchedStatusGui && isYouTube) {
                 div.appendChild(this._createWatchedCheckbox(item));
                 
-                const isWatched = item.markedAsWatched || item.watched;
-                if (isWatched) {
+                if (item.watched) {
                     const check = document.createElement("span");
                     check.className = "watched-checkmark checkbox-checkmark";
                     check.innerHTML = "✔";
@@ -176,13 +175,13 @@
             input.className = "item-watched-checkbox";
             // Check both flags - if either is true, it's watched.
             const isWatched = item.markedAsWatched || item.watched;
-            input.checked = !isWatched;
-            input.title = input.checked ? "Will mark as watched on YouTube" : "Already marked or watched locally";
+            input.checked = !!isWatched;
+            input.title = isWatched ? "Already marked as watched" : "Click to mark as watched on YouTube";
             
             input.onclick = (e) => e.stopPropagation();
             input.onchange = (e) => {
                 // When toggling manually, we update both for consistency
-                if (this.callbacks.onWatchedToggle) this.callbacks.onWatchedToggle(item.id, !e.target.checked);
+                if (this.callbacks.onWatchedToggle) this.callbacks.onWatchedToggle(item.id, e.target.checked);
             };
             return input;
         }
@@ -226,37 +225,48 @@
             const itemDiv = this.container.querySelector(`[data-id="${itemId}"]`);
             if (!itemDiv) return;
 
-            if (delta.watched !== undefined || delta.markedAsWatched !== undefined) {
-                const isWatched = !!(delta.watched || delta.markedAsWatched);
-                itemDiv.classList.toggle("item-watched", isWatched);
+            const isYouTube = itemDiv.dataset.url?.includes("youtube.com") || itemDiv.dataset.url?.includes("youtu.be");
 
-                const isYouTube = itemDiv.dataset.url?.includes("youtube.com") || itemDiv.dataset.url?.includes("youtu.be");
+            // 1. Gray out (watched)
+            if (delta.watched !== undefined) {
+                itemDiv.classList.toggle("item-watched", !!delta.watched);
                 
-                // 1. Index Checkmark (non-YT)
                 const existingIndexCheck = itemDiv.querySelector(".index-checkmark");
-                if (isWatched && !isYouTube && !existingIndexCheck) {
+                if (delta.watched && !isYouTube && !existingIndexCheck) {
                     const check = document.createElement("span");
                     check.className = "watched-checkmark index-checkmark";
                     check.innerHTML = "✔";
                     const indexSpan = itemDiv.querySelector(".url-index");
                     if (indexSpan) indexSpan.after(check);
-                } else if (!isWatched && existingIndexCheck) {
+                } else if (!delta.watched && existingIndexCheck) {
                     existingIndexCheck.remove();
                 }
+            }
 
-                // 2. Checkbox Checkmark (YT)
-                const existingCheckboxCheck = itemDiv.querySelector(".checkbox-checkmark");
+            // 2. Checkbox & Checkmark (markedAsWatched vs watched)
+            if (delta.markedAsWatched !== undefined || delta.watched !== undefined) {
                 const checkbox = itemDiv.querySelector(".item-watched-checkbox");
-                if (isWatched && isYouTube && checkbox && !existingCheckboxCheck) {
-                    const check = document.createElement("span");
-                    check.className = "watched-checkmark checkbox-checkmark";
-                    check.innerHTML = "✔";
-                    checkbox.after(check);
-                } else if (!isWatched && existingCheckboxCheck) {
-                    existingCheckboxCheck.remove();
+                
+                // Checkbox strictly follows sync status
+                if (delta.markedAsWatched !== undefined && checkbox) {
+                    checkbox.checked = !!delta.markedAsWatched;
+                    checkbox.title = delta.markedAsWatched ? "Already marked as watched" : "Click to mark as watched on YouTube";
                 }
 
-                if (checkbox) checkbox.checked = !isWatched;
+                // Checkmark strictly follows local watched status
+                const existingCheckboxCheck = itemDiv.querySelector(".checkbox-checkmark");
+                if (isYouTube && checkbox) {
+                    const currentlyWatched = delta.watched !== undefined ? delta.watched : !!itemDiv.classList.contains("item-watched");
+                    
+                    if (currentlyWatched && !existingCheckboxCheck) {
+                        const check = document.createElement("span");
+                        check.className = "watched-checkmark checkbox-checkmark";
+                        check.innerHTML = "✔";
+                        checkbox.after(check);
+                    } else if (!currentlyWatched && existingCheckboxCheck) {
+                        existingCheckboxCheck.remove();
+                    }
+                }
             }
         }
     };
