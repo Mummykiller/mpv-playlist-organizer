@@ -11,6 +11,7 @@ import { playbackManager } from "../playback_manager.js";
 import { 
 	broadcastPlaylistState, 
 	broadcastPlaybackState, 
+	broadcastItemUpdate,
 	getVisualPlaybackState, 
 	isFolderActive 
 } from "../ui_broadcaster.js";
@@ -756,7 +757,14 @@ export const handlePlay = createHandler(async ({ request, folderId, data }) => {
 		                broadcastPlaybackState(folderId, { isLaunching: true, isRunning: true });
 		            }
 		        }
-		    }
+		    },
+			onError: async (error, { folderId }) => {
+				// Revert optimistic state if playback failed to start
+				if (folderId) {
+					await chrome.storage.local.remove("mpv_playback_cache");
+					broadcastPlaybackState(folderId, { isLaunching: false, isRunning: false, isIdle: false });
+				}
+			}
 		});
 		
 		export const handlePlayM3U = createHandler(async ({ request, folderId, data }) => {
@@ -838,6 +846,12 @@ export const handlePlay = createHandler(async ({ request, folderId, data }) => {
 				broadcastPlaybackState(folderId, { isLaunching: true, isRunning: true });
 			}
 		}
+	},
+	onError: async (error, { folderId }) => {
+		if (folderId) {
+			await chrome.storage.local.remove("mpv_playback_cache");
+			broadcastPlaybackState(folderId, { isLaunching: false, isRunning: false, isIdle: false });
+		}
 	}
 });
 
@@ -901,6 +915,12 @@ export async function handleUpdateItemResumeTime(data) {
 				item.resumeTime = resumeTime;
 				item.lastModified = lastModified || Date.now();
 				await storage.set(storageData, actualFolderId);
+				
+				// DELTA UPDATE: Progress bar or resume time change
+				broadcastItemUpdate(actualFolderId, itemId, {
+					resumeTime: item.resumeTime
+				});
+				
 				debouncedSyncToNativeHostFile(null, true);
 				break;
 			}
@@ -973,7 +993,12 @@ export async function handleUpdateItemMarkedAsWatched(data) {
 				if (watched !== undefined) item.watched = watched;
 				item.lastModified = lastModified || Date.now();
 				await storage.set(storageData, actualFolderId);
-				await broadcastPlaylistState(actualFolderId, folder.playlist);
+				
+				// DELTA UPDATE: Notify UI to update just this item
+				broadcastItemUpdate(actualFolderId, itemId, {
+					watched: item.watched,
+					markedAsWatched: item.markedAsWatched
+				});
 				break;
 			}
 		}

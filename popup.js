@@ -2142,6 +2142,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 				showStatus(request.log.text, request.log.type === "error");
 			}
 
+			if (request.action === "update_playlist_item") {
+				const currentFolderId = miniFolderSelect.value;
+				if (currentFolderId === request.folderId && renderer) {
+					renderer.updateItemDelta(request.itemId, request.delta);
+				}
+			}
+
 			// Handle live playlist updates to keep the item count and playlist view in sync
 			if (request.action === "render_playlist") {
 				const isMiniView = uiManager.isMiniView();

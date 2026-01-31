@@ -468,7 +468,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			).element;
 		}
 
-		_formatTitle(urlSpan, item) {
+	_formatTitle(urlSpan, item) {
 			if (!item.title) {
 				urlSpan.textContent = item.url;
 				return;
@@ -487,6 +487,53 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				urlSpan.append(prefix, main);
 			} else {
 				urlSpan.textContent = item.title;
+			}
+		}
+
+		/**
+		 * Delta update for a single item DOM node.
+		 */
+		updateItemDelta(itemId, delta) {
+			if (!this.fullContainer) return;
+			const itemDiv = this.fullContainer.querySelector(`[data-id="${itemId}"]`);
+			if (!itemDiv) return;
+
+			// Update internal state copy if it exists
+			const internalItem = this.currentPlaylist.find(i => i.id === itemId);
+			if (internalItem) Object.assign(internalItem, delta);
+
+			if (delta.watched !== undefined || delta.markedAsWatched !== undefined) {
+				const isWatched = !!(delta.watched || delta.markedAsWatched);
+				itemDiv.classList.toggle("item-watched", isWatched);
+
+				// Update/Toggle Checkmarks
+				const isYouTube = itemDiv.dataset.url?.includes("youtube.com") || itemDiv.dataset.url?.includes("youtu.be");
+				
+				// 1. Index Checkmark (non-YT)
+				const existingIndexCheck = itemDiv.querySelector(".index-checkmark");
+				if (isWatched && !isYouTube && !existingIndexCheck) {
+					const check = document.createElement("span");
+					check.className = "watched-checkmark index-checkmark";
+					check.innerHTML = "✔";
+					const indexSpan = itemDiv.querySelector(".url-index");
+					if (indexSpan) indexSpan.after(check);
+				} else if (!isWatched && existingIndexCheck) {
+					existingIndexCheck.remove();
+				}
+
+				// 2. Checkbox Checkmark (YT)
+				const existingCheckboxCheck = itemDiv.querySelector(".checkbox-checkmark");
+				const checkbox = itemDiv.querySelector(".item-watched-checkbox");
+				if (isWatched && isYouTube && checkbox && !existingCheckboxCheck) {
+					const check = document.createElement("span");
+					check.className = "watched-checkmark checkbox-checkmark";
+					check.innerHTML = "✔";
+					checkbox.after(check);
+				} else if (!isWatched && existingCheckboxCheck) {
+					existingCheckboxCheck.remove();
+				}
+
+				if (checkbox) checkbox.checked = !isWatched;
 			}
 		}
 	};

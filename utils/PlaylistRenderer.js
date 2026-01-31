@@ -218,6 +218,47 @@
                 span.textContent = item.title;
             }
         }
+
+        /**
+         * Delta update for a single item DOM node.
+         */
+        updateItemDelta(itemId, delta) {
+            const itemDiv = this.container.querySelector(`[data-id="${itemId}"]`);
+            if (!itemDiv) return;
+
+            if (delta.watched !== undefined || delta.markedAsWatched !== undefined) {
+                const isWatched = !!(delta.watched || delta.markedAsWatched);
+                itemDiv.classList.toggle("item-watched", isWatched);
+
+                const isYouTube = itemDiv.dataset.url?.includes("youtube.com") || itemDiv.dataset.url?.includes("youtu.be");
+                
+                // 1. Index Checkmark (non-YT)
+                const existingIndexCheck = itemDiv.querySelector(".index-checkmark");
+                if (isWatched && !isYouTube && !existingIndexCheck) {
+                    const check = document.createElement("span");
+                    check.className = "watched-checkmark index-checkmark";
+                    check.innerHTML = "✔";
+                    const indexSpan = itemDiv.querySelector(".url-index");
+                    if (indexSpan) indexSpan.after(check);
+                } else if (!isWatched && existingIndexCheck) {
+                    existingIndexCheck.remove();
+                }
+
+                // 2. Checkbox Checkmark (YT)
+                const existingCheckboxCheck = itemDiv.querySelector(".checkbox-checkmark");
+                const checkbox = itemDiv.querySelector(".item-watched-checkbox");
+                if (isWatched && isYouTube && checkbox && !existingCheckboxCheck) {
+                    const check = document.createElement("span");
+                    check.className = "watched-checkmark checkbox-checkmark";
+                    check.innerHTML = "✔";
+                    checkbox.after(check);
+                } else if (!isWatched && existingCheckboxCheck) {
+                    existingCheckboxCheck.remove();
+                }
+
+                if (checkbox) checkbox.checked = !isWatched;
+            }
+        }
     };
 })();
 

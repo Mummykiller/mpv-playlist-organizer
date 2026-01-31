@@ -12,6 +12,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		constructor() {
 			this.isTearingDown = false;
 			this.tabId = null;
+			this.observedFolderKey = null; // Key for the currently watched folder bucket
 			this.preFullscreenPosition = null;
 			this.preResizePosition = null;
 			this.lastRightClickedElement = null;
@@ -25,6 +26,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.state = new MPV.ContentState({
 				onUpdate: (state) => this._syncUiToState(state),
 			});
+
+			this._initStorageObservation();
 
 			this.nav = new MPV.NavigationObserver({
 				onNavigation: (url) => this._handleNavigation(url),
@@ -139,6 +142,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						req.isFolderActive,
 					),
 				last_folder_changed: (req) => this._syncFolderChange(req),
+				update_playlist_item: (req) => {
+					const currentFolderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
+					if (req.folderId === currentFolderId) {
+						this.playlistUI?.updateItemDelta(req.itemId, req.delta);
+					}
+				},
 				log: (req) => this.addLogEntry(req.log),
 				preferences_changed: (req) => {
 					if (req.preferences && Object.keys(req.preferences).length > 0) {
@@ -222,6 +231,43 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.handleMouseDown = this.handleMouseDown.bind(this);
 		}
 
+		_initStorageObservation() {
+			chrome.storage.onChanged.addListener((changes, area) => {
+				if (area !== "local") return;
+
+				// 1. Settings Channel: Sync Layout & UI Prefs
+				if (changes.mpv_settings) {
+					const newSettings = changes.mpv_settings.newValue;
+					if (newSettings) {
+						this.applyPreferences(newSettings.uiPreferences?.global || {});
+					}
+				}
+
+				// 2. Folder Index Channel: Sync Dropdowns
+				if (changes.mpv_folder_index) {
+					this.updateFolderDropdowns();
+				}
+
+				// 3. Dynamic Folder Channel: Sync Playlist Content
+				if (this.observedFolderKey && changes[this.observedFolderKey]) {
+					const newFolderData = changes[this.observedFolderKey].newValue;
+					const currentFolderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
+					
+					if (newFolderData && currentFolderId) {
+						this.playlistUI?.render(
+							newFolderData.playlist,
+							newFolderData.lastPlayedId || this.state.state.lastPlayedId,
+							this.state.state.isFolderActive
+						);
+					}
+				}
+			});
+		}
+
+		_updateFolderSubscription(folderId) {
+			this.observedFolderKey = folderId ? `mpv_folder_data_${folderId}` : null;
+		}
+
 		async init() {
 			const initialPrefs = await this.bridge.send("get_ui_preferences");
 			const restrictedDomains =
@@ -271,6 +317,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			window.addEventListener("focus", () => {
 				// Proactively refresh status when tab gains focus
 				this.refreshPlaylist();
+			});
+			document.addEventListener("visibilitychange", () => {
+				if (document.visibilityState === "visible") {
+					this.refreshPlaylist();
+					MPV.playbackStateManager.requestSync();
+				}
 			});
 		}
 
@@ -993,6 +1045,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (selectedId) {
 				fullSelect.value = selectedId;
 				compactSelect.value = selectedId;
+				this._updateFolderSubscription(selectedId);
 			}
 
 			this.refreshPlaylist(targetLastPlayed, targetIsActive, targetIsPaused, targetNeedsAppend);
@@ -1002,14 +1055,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const folderId =
 				this.ui.shadowRoot?.getElementById("folder-select")?.value;
 
-			// Priority for targets: passed argument > current state
-			const finalLastPlayed = targetLastPlayed || this.state.state.lastPlayedId;
-			const finalIsActive =
-				targetIsActive !== undefined
-					? targetIsActive
-					: this.state.state.isFolderActive;
-
 			if (folderId) {
+				this._updateFolderSubscription(folderId);
 				this.bridge.send("get_playlist", folderId).then((response) => {
 					if (response?.success) {
 						// Update unified manager first

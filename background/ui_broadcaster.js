@@ -82,11 +82,20 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 	const session = playbackManager.findSessionByFolderId(folderId);
 	const completedIds = session ? Array.from(session.completedItemIds) : [];
 
+	const pbState = {
+		folderId: folderId,
+		isRunning: isActive,
+		isPaused: isPaused,
+		needsAppend: needsAppend,
+		lastPlayedId: lastPlayedId || data.folders[folderId]?.lastPlayedId
+	};
+	chrome.storage.local.set({ active_playback_state: pbState });
+
 	broadcastToTabs({
 		action: action,
 		folderId: folderId,
 		playlist: targetPlaylist,
-		lastPlayedId: lastPlayedId || data.folders[folderId]?.lastPlayedId,
+		lastPlayedId: pbState.lastPlayedId,
 		isFolderActive: isActive,
 		isPaused: isPaused,
 		needsAppend: needsAppend,
@@ -131,8 +140,23 @@ export async function broadcastPlaybackState(folderId, statusOverride = {}) {
 		...statusOverride
 	};
 
+	// PROACTIVE: Sync to storage so all tabs see it instantly without broadcast
+	chrome.storage.local.set({ active_playback_state: state });
+
 	broadcastToTabs({
 		action: "playback_state_changed",
 		state: state
+	});
+}
+
+/**
+ * Broadcasts a delta update for a single playlist item.
+ */
+export function broadcastItemUpdate(folderId, itemId, delta) {
+	broadcastToTabs({
+		action: "update_playlist_item",
+		folderId: folderId,
+		itemId: itemId,
+		delta: delta
 	});
 }
