@@ -497,6 +497,26 @@ select:focus-visible {
 	background-color: rgba(87, 242, 135, 0.2);
 }
 
+.list-item.item-watched {
+	opacity: 0.7;
+}
+
+.watched-checkmark {
+	color: var(--accent-success);
+	font-weight: normal;
+	font-size: 13px;
+	flex-shrink: 0;
+}
+
+.index-checkmark {
+	margin-right: 6px;
+}
+
+.checkbox-checkmark {
+	margin-right: 4px;
+	margin-left: -4px; /* Tighten up spacing after checkbox */
+}
+
 .url-index {
 	color: var(--text-secondary);
 	font-family: var(--font-mono);

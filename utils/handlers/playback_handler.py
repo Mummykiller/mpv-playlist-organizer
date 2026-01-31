@@ -235,21 +235,22 @@ class PlaybackHandler(BaseHandler):
     @command('is_mpv_running')
     def handle_is_mpv_running(self, request: native_link.LiveUpdateRequest):
         is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
+        
+        # 1. Fast PID check first
+        if is_running and not self.ipc_utils.is_pid_running(self.mpv_session.pid):
+            is_running = False
+
+        # 2. Socket check if PID seems alive
         if is_running:
             if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
-                res = self.mpv_session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
+                res = self.mpv_session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.3, expect_response=True)
                 if not res or res.get("error") != "success":
-                    if not self.ipc_utils.is_pid_running(self.mpv_session.pid):
-                        is_running = False
+                    is_running = False
             else:
                 is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
 
         if not is_running:
-            if self.mpv_session.pid:
-                # PID is set but process is not alive
-                self.mpv_session.clear()
-            elif self.mpv_session.is_alive:
-                # is_alive is True but no PID, inconsistent state
+            if self.mpv_session.pid or self.mpv_session.is_alive:
                 self.mpv_session.clear()
 
         return native_link.success({
@@ -260,18 +261,20 @@ class PlaybackHandler(BaseHandler):
     @command('get_playback_status')
     def handle_get_playback_status(self, request: native_link.LiveUpdateRequest):
         is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
+        
+        # 1. Fast PID check
+        if is_running and not self.ipc_utils.is_pid_running(self.mpv_session.pid):
+            is_running = False
+
         if is_running:
+            # 2. Check responsiveness if needed
             if not (self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected()):
                 is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
 
         if not is_running:
-            if self.mpv_session.pid and not self.ipc_utils.is_pid_running(self.mpv_session.pid):
+            if self.mpv_session.pid or self.mpv_session.is_alive:
                 self.mpv_session.clear()
-                return native_link.success({"is_running": False, "is_paused": False})
-            elif self.mpv_session.pid:
-                is_running = True
-            else:
-                return native_link.success({"is_running": False, "is_paused": False})
+            return native_link.success({"is_running": False, "is_paused": False})
         
         is_paused = self.mpv_session.get_pause_state()
         is_idle = self.mpv_session.get_idle_state()

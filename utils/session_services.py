@@ -382,7 +382,9 @@ class LauncherService:
             stats = self.session.clear(mpv_return_code=return_code)
             self.session.send_message({
                 "action": "mpv_exited", "folder_id": f_id, "return_code": return_code, "reason": exit_reason,
-                "played_ids": stats.get("played_ids", []), "session_ids": stats.get("session_ids", [])
+                "played_ids": stats.get("played_ids", []), 
+                "watched_ids": stats.get("watched_ids", []),
+                "session_ids": stats.get("session_ids", [])
             })
 
         threading.Thread(target=process_waiter, args=(process, folder_id), daemon=True).start()

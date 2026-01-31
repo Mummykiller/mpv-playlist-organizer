@@ -1420,6 +1420,26 @@ button:disabled {
 	border-color: var(--border-hover);
 }
 
+.playlist-container .list-item.item-watched {
+	opacity: 0.7;
+}
+
+.watched-checkmark {
+	color: var(--accent-success);
+	font-weight: normal;
+	font-size: 13px;
+	flex-shrink: 0;
+}
+
+.index-checkmark {
+	margin-right: 6px;
+}
+
+.checkbox-checkmark {
+	margin-right: 4px;
+	margin-left: -4px;
+}
+
 .btn-copy-item {
 	width: 14px;
 	height: 14px;
