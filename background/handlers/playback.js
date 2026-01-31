@@ -844,6 +844,9 @@ export async function handleUpdateLastPlayed(data) {
 				currentCache.isRunning = true;
 				await chrome.storage.local.set({ mpv_playback_cache: currentCache });
 			}
+			
+			// Force sync to disk so shard reflects the change
+			debouncedSyncToNativeHostFile(true);
 		}
 		
 		await broadcastPlaylistState(actualFolderId, storageData.folders[actualFolderId]?.playlist);
@@ -866,6 +869,7 @@ export async function handleUpdateItemResumeTime(data) {
 				item.resumeTime = resumeTime;
 				item.lastModified = lastModified || Date.now();
 				await storage.set(storageData, actualFolderId);
+				debouncedSyncToNativeHostFile(true);
 				break;
 			}
 		}
