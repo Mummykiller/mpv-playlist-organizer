@@ -11,16 +11,21 @@ import { storage } from "./storage_instance.js";
 
 export { storage, broadcastLog, broadcastToTabs };
 
+let syncQueue = Promise.resolve();
+
 export const _syncToNativeHostFile = async (folderId = null) => {
-	try {
-		await nativeLink.syncToFile(folderId);
-	} catch (e) {
-		console.error(`[CoreSync] ${e.message}`);
-		broadcastLog({
-			text: `[Background]: Sync failed: ${e.message}`,
-			type: "error",
-		});
-	}
+	syncQueue = syncQueue.then(async () => {
+		try {
+			await nativeLink.syncToFile(folderId);
+		} catch (e) {
+			console.error(`[CoreSync] ${e.message}`);
+			broadcastLog({
+				text: `[Background]: Sync failed: ${e.message}`,
+				type: "error",
+			});
+		}
+	});
+	return syncQueue;
 };
 
 export const debouncedSyncToNativeHostFile = (

@@ -22,10 +22,15 @@ def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
     if not url or not cookies_info:
         return False, "Missing URL or cookies info"
 
-    ytdlp_path = shutil.which("yt-dlp") or "yt-dlp"
+    settings = file_io.get_settings()
+    ytdlp_path = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
+    
+    logging.info(f"[PY][Sync] Marking watched using {ytdlp_path} for URL: {url}")
+
     cmd = [
         ytdlp_path, "--ignore-config", "--simulate", "--mark-watched",
-        "--no-playlist", "--quiet", "--no-warnings"
+        "--no-playlist", "--quiet", "--no-warnings",
+        "--ignore-no-formats-error", "--no-check-certificate"
     ]
 
     if os.path.exists(cookies_info):

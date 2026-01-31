@@ -279,6 +279,9 @@ class LauncherService:
             updated_custom_flags = f"{current_custom_flags} {handshake_flag}".strip()
 
             # 3. Construct Command
+            # For the initial CLI command, we only pass ONE URL (the launch_item).
+            # Therefore, MPV must start at index 0 of its initial 'playlist'.
+            # The full playlist index is handled later by the background enrichment flow.
             full_command, has_terminal_flag = services.construct_mpv_command(
                 mpv_exe=mpv_exe, ipc_path=ipc_path, url=launch_url, is_youtube=is_youtube,
                 ytdl_raw_options=kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options'),
@@ -291,7 +294,7 @@ class LauncherService:
                 load_on_completion_script=True, title=url_item.get('title'),
                 use_ytdl_mpv=use_ytdl_mpv, is_youtube_override=use_ytdl_mpv, idle="yes", 
                 force_terminal=kwargs.get('force_terminal', False), settings=settings,
-                flag_dir=self.session.FLAG_DIR, playlist_start_index=playlist_start_index,
+                flag_dir=self.session.FLAG_DIR, playlist_start_index=0,
                 cookies_browser=kwargs.get('cookies_browser') or url_item.get('cookies_browser'),
                 force_bypass=force_bypass, start_time=start_time
             )

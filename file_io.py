@@ -288,6 +288,74 @@ def validate_safe_path(path, allow_user_content=False):
     """
     return security.validate_safe_path(path, DATA_DIR, SCRIPT_DIR, TEMP_DIR, allow_user_content)
 
+def _merge_playlists(existing_playlist, new_playlist):
+    """
+    Performs a 'Last Write Wins' merge between two playlist arrays based on last_modified.
+    In this system, the browser is the source of truth for membership (deletions).
+    """
+    if not existing_playlist:
+        return new_playlist
+        
+    existing_map = {item.get('id'): item for item in existing_playlist if item.get('id')}
+    merged_playlist = []
+    
+    for new_item in new_playlist:
+        item_id = new_item.get('id')
+        if not item_id:
+            merged_playlist.append(new_item)
+            continue
+        
+        existing_item = existing_map.get(item_id)
+        if existing_item:
+            # Compare timestamps (ms)
+            new_ts = new_item.get('last_modified', 0)
+            old_ts = existing_item.get('last_modified', 0)
+            
+            if new_ts >= old_ts:
+                merged_playlist.append(new_item)
+            else:
+                logging.debug(f"[PY][IO] Preserving newer local state for item {item_id} ({old_ts} > {new_ts})")
+                merged_playlist.append(existing_item)
+            
+            # Remove from map to track processed items
+            del existing_map[item_id]
+        else:
+            # Item is new from incoming data
+            merged_playlist.append(new_item)
+    
+    return merged_playlist
+
+def save_library_batch(folders_to_save):
+    """
+    Saves multiple folders (shards + index) atomically with merge support.
+    folders_to_save: Dict of { folder_id: { playlist, metadata } }
+    """
+    with FileLock(INDEX_FILE):
+        index = _safe_json_load(INDEX_FILE)
+        
+        for folder_id, content in folders_to_save.items():
+            canonical_id = _get_canonical_folder_id(folder_id, index)
+            new_playlist = content.get("playlist", [])
+            
+            # 1. Load existing for merge
+            existing_playlist = get_playlist_shard(canonical_id)
+            merged_playlist = _merge_playlists(existing_playlist, new_playlist)
+            
+            # 2. Save Shard
+            shard_path = os.path.join(PLAYLISTS_DIR, f"{canonical_id}.json")
+            with FileLock(shard_path):
+                _atomic_json_dump({"playlist": merged_playlist}, shard_path)
+            
+            # 3. Update Index Metadata
+            meta = {k: v for k, v in content.items() if k != "playlist"}
+            index[canonical_id] = {
+                **meta,
+                "item_count": len(merged_playlist)
+            }
+        
+        # Finalize Index
+        return _atomic_json_dump(index, INDEX_FILE)
+
 # --- Atomic Write & Safe Load Helpers ---
 
 def _atomic_json_dump(data, filepath):
@@ -561,23 +629,7 @@ def write_folders_file(data):
     """
     Distributes the provided full data structure back into shards and the index.
     """
-    index_data = {}
-    for folder_id, folder_content in data.items():
-        # Use .get to avoid modifying the input dictionary
-        playlist = folder_content.get("playlist", [])
-        
-        # Update Shard without updating index (we'll do it once at the end)
-        save_playlist_shard(folder_id, playlist, update_index=False)
-        
-        # Prepare Index Metadata
-        # Create a copy of metadata without the playlist
-        meta = {k: v for k, v in folder_content.items() if k != "playlist"}
-        index_data[folder_id] = {
-            **meta,
-            "item_count": len(playlist)
-        }
-        
-    return {"success": save_index(index_data)}
+    return {"success": save_library_batch(data)}
 
 def write_export_file(filename, data, subfolder=None):
     """Helper to write data to a file in the export directory, optionally in a subfolder."""

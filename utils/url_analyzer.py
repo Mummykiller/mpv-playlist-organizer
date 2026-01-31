@@ -185,7 +185,9 @@ class VolatileCookieManager:
             # Use yt-dlp to read from the shadow copy
             # Note: yt-dlp doesn't have a direct "read from this file" for browser DBs,
             # but we can use the --cookies-from-browser BROWSER:PATH syntax.
-            ytdlp_path = shutil.which("yt-dlp") or "yt-dlp"
+            settings = file_io.get_settings()
+            ytdlp_path = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
+            
             cmd = [
                 ytdlp_path,
                 '--cookies-from-browser', f"{browser}:{os.path.dirname(os.path.dirname(db_rel_path)) if system == 'Windows' else os.path.dirname(db_rel_path)}",
@@ -236,7 +238,8 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
         temp_path = os.path.join(cookies_dir, temp_filename)
         
         # Layer 3: Hard Refresh via yt-dlp
-        ytdlp_path = shutil.which("yt-dlp") or "yt-dlp"
+        settings = file_io.get_settings()
+        ytdlp_path = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
         
         cookie_cmd = [
             ytdlp_path,
