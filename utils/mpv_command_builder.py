@@ -160,12 +160,37 @@ class MpvCommandBuilder:
         return self
 
     def build(self):
+        # Handle custom flags early to extract and merge script-opts
+        parsed_custom = []
+        if self.custom_flags:
+            try:
+                if isinstance(self.custom_flags, list):
+                    for f in self.custom_flags:
+                        if isinstance(f, dict) and f.get('enabled', True): parsed_custom.extend(shlex.split(f.get('flag','')))
+                        elif isinstance(f, str): parsed_custom.extend(shlex.split(f))
+                elif isinstance(self.custom_flags, str): parsed_custom.extend(shlex.split(self.custom_flags))
+            except Exception: pass
+
+        # Merge script-opts from custom flags into our internal list
+        final_script_opts = list(self.script_opts)
+        filtered_custom = []
+        for a in parsed_custom:
+            if a.startswith('--script-opts='):
+                val = a.split('=', 1)[1]
+                if val: final_script_opts.append(val)
+            else:
+                filtered_custom.append(a)
+
         args = [self.mpv_exe]
         if self.ipc_path: args.append(f'--input-ipc-server={self.ipc_path}')
         if self.idle_val: args.append(f'--idle={self.idle_val if isinstance(self.idle_val, str) else "yes"}')
         if self.input_terminal: args.append(f'--input-terminal={self.input_terminal}')
         for s in self.scripts: args.append(f'--script={s}')
-        if self.script_opts: args.append(f"--script-opts={','.join(self.script_opts)}")
+        
+        # --- COMBINED SCRIPT OPTS ---
+        if final_script_opts: 
+            args.append(f"--script-opts={','.join(final_script_opts)}")
+        
         for p in self.properties: args.append(p)
         if self.title: args.append(f'--title={security.sanitize_string(self.title)}')
         
@@ -175,6 +200,11 @@ class MpvCommandBuilder:
 
         # Performance optimization: Fast seeking for immediate startup
         args.append("--hr-seek=no")
+
+        # Smart Resume Override: Tell MPV to ignore its built-in watch-later files
+        # because we are handling the resume logic manually via our database.
+        if self.settings.get("enable_smart_resume", True):
+            args.append("--no-resume-playback")
 
         if self.headers:
             # Case-insensitive header extraction
@@ -280,17 +310,10 @@ class MpvCommandBuilder:
                     elif not f or f.startswith('--hwdec'): continue
                     elif f.split('=', 1)[0] in security.SAFE_MPV_FLAGS_ALLOWLIST: args.append(f)
 
-        if self.custom_flags:
-            try:
-                parsed = []
-                if isinstance(self.custom_flags, list):
-                    for f in self.custom_flags:
-                        if isinstance(f, dict) and f.get('enabled', True): parsed.extend(shlex.split(f.get('flag','')))
-                        elif isinstance(f, str): parsed.extend(shlex.split(f))
-                elif isinstance(self.custom_flags, str): parsed.extend(shlex.split(self.custom_flags))
-                for a in parsed:
-                    if a.startswith('--') and a.split('=', 1)[0] in security.SAFE_MPV_FLAGS_ALLOWLIST: args.append(a)
-            except Exception: pass
+        # Apply filtered custom flags (script-opts already removed and handled)
+        for a in filtered_custom:
+            if a.startswith('--') and a.split('=', 1)[0] in security.SAFE_MPV_FLAGS_ALLOWLIST:
+                args.append(a)
 
         if self.has_terminal_flag: args = [a for a in args if a != '--terminal' and a != 'terminal']
         full_command = args + (['--'] + (self.url if isinstance(self.url, list) else [self.url]) if self.url else [])

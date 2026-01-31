@@ -40,6 +40,7 @@ export function processPlaylistItem(rawItem, options = {}) {
     let markedAsWatched = rawItem.markedAsWatched;
 	let lastModified = rawItem.lastModified || Date.now();
 	let currentlyPlaying = rawItem.currentlyPlaying || false;
+	let watched = rawItem.watched || false;
 
 	if (typeof rawItem === "string") {
 		url = rawItem;
@@ -61,9 +62,10 @@ export function processPlaylistItem(rawItem, options = {}) {
 		id: id || generateItemId(),
 		settings: settings,
 		lastModified: lastModified,
-		currentlyPlaying: currentlyPlaying,
-		...(resumeTime !== undefined && { resumeTime: resumeTime }),
-        ...(markedAsWatched !== undefined && { markedAsWatched: markedAsWatched })
+		currentlyPlaying: rawItem.currentlyPlaying || false,
+		watched: rawItem.watched || false,
+		resumeTime: resumeTime !== undefined ? resumeTime : 0,
+        markedAsWatched: markedAsWatched !== undefined ? markedAsWatched : false
 	};
 }
 

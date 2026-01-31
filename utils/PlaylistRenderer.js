@@ -151,11 +151,14 @@
             const input = document.createElement("input");
             input.type = "checkbox";
             input.className = "item-watched-checkbox";
-            input.checked = !item.markedAsWatched;
-            input.title = input.checked ? "Will mark as watched on YouTube" : "Already marked or skipped";
+            // Check both flags - if either is true, it's watched.
+            const isWatched = item.markedAsWatched || item.watched;
+            input.checked = !isWatched;
+            input.title = input.checked ? "Will mark as watched on YouTube" : "Already marked or watched locally";
             
             input.onclick = (e) => e.stopPropagation();
             input.onchange = (e) => {
+                // When toggling manually, we update both for consistency
                 if (this.callbacks.onWatchedToggle) this.callbacks.onWatchedToggle(item.id, !e.target.checked);
             };
             return input;

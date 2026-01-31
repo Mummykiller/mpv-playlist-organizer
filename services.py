@@ -38,7 +38,7 @@ SAFE_MPV_FLAGS_ALLOWLIST = {
     '--interpolation', '--tscale', '--volume', '--mute', '--audio-device',
     '--audio-channels', '--sub-visibility', '--sub-pos', '--sub-scale', '--sub-font',
     '--sub-font-size', '--no-audio', '--no-video', '--force-window', '--cursor-autohide',
-    '--terminal', '--input-terminal',
+    '--terminal', '--input-terminal', '--resume-playback', '--script-opts',
 }
 
 def sanitize_url(url):
@@ -94,6 +94,15 @@ def construct_lua_options(item, settings, script_dir, index=None):
     
     item_url = sanitize_url(item.get('original_url') or item.get('url'))
     
+    # Defensive extraction of resume time
+    raw_resume = item.get('resume_time') if item.get('resume_time') is not None else item.get('resumeTime')
+    try:
+        resume_time = int(float(raw_resume)) if raw_resume is not None else 0
+    except (ValueError, TypeError):
+        resume_time = 0
+        
+    logging.info(f"[PY][Services] construct_lua_options: item='{item.get('title')}', resume_time={resume_time}")
+
     lua_options = {
         "id": item.get('id'), 
         "title": item.get('title'),
@@ -117,10 +126,10 @@ def construct_lua_options(item, settings, script_dir, index=None):
         "stream_buffer_size": settings.get('stream_buffer_size', '10M'),
         "analyzeduration": settings.get('analyzeduration', 0),
         "probesize": settings.get('probesize', 32),
-        "resume_time": item.get('resume_time'),
+        "resume_time": resume_time,
         "project_root": script_dir,
         "mark_watched": get_mark_watched(item, settings),
-        "marked_as_watched": item.get('marked_as_watched', False),
+        "marked_as_watched": item.get('marked_as_watched') if item.get('marked_as_watched') is not None else item.get('markedAsWatched', False),
         "targeted_defaults": settings.get('targeted_defaults', 'none')
     }
     
