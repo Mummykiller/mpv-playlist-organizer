@@ -901,10 +901,16 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                         display: flex;
                         flex-direction: column;
                         gap: 20px;
-                        max-width: 400px;
-                        width: 90%;
+                        max-width: 600px;
+                        width: 95%;
                     }
-                    p { margin: 0; font-size: 16px; line-height: 1.5; }
+                    p { 
+                        margin: 0; 
+                        font-size: 16px; 
+                        line-height: 1.5; 
+                        white-space: pre-wrap;
+                        word-break: break-word;
+                    }
                     .modal-actions { display: flex; justify-content: center; gap: 12px; }
                     button {
                         color: #fff; border: none; border-radius: var(--border-radius);

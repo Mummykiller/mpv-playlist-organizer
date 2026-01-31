@@ -190,6 +190,7 @@ local function handle_natural_completion(reason)
 end
 
 function on_end_file(event)
+    -- Use playlist-pos-1 as a fallback for the item that just finished if pos is gone
     local pos = mp.get_property_number("playlist-pos")
     local count = mp.get_property_number("playlist-count", 0)
     
@@ -204,17 +205,23 @@ function on_end_file(event)
     -- Case 1: The file finished naturally
     if event.reason == 'eof' then
         -- Always notify Python that THIS item finished if it was natural
-        if pos and count > 0 then
-            log("Item finished (EOF). Notifying Python.")
-            mp.commandv("script-message", "item_natural_completion", tostring(pos))
+        -- Note: At EOF, pos is usually the index of the file that just finished,
+        -- but we check if it's nil or out of bounds to be safe.
+        local effective_pos = pos
+        if not effective_pos or effective_pos < 0 or effective_pos >= count then
+             -- If pos is invalid, it's likely we were at the end and it's now nil/out of bounds
+             effective_pos = count - 1
+        end
+
+        if effective_pos >= 0 then
+            log("Item finished (EOF). Notifying Python for pos: " .. tostring(effective_pos))
+            mp.commandv("script-message", "item_natural_completion", tostring(effective_pos))
         end
 
         -- If we just finished the last item in the playlist
-        if pos and count > 0 and pos >= count - 1 then
+        -- We trigger completion if pos is already nil (past the end) or pointing at the last item
+        if not pos or pos < 0 or (count > 0 and pos >= count - 1) then
             handle_natural_completion("Reached end of playlist (EOF on last item)")
-        elseif not pos or pos < 0 then
-            -- Fallback for weird edge cases where pos is lost
-            handle_natural_completion("Reached end of playlist (Position invalid)")
         end
     
     -- Case 2: The player went idle (usually happens after EOF with --idle=yes)
@@ -233,9 +240,15 @@ mp.observe_property("idle-active", "bool", function(name, val)
                 log("Idle active but last_error is true. Skipping completion.")
                 return
             end
+            
             local pos = mp.get_property_number("playlist-pos")
-            if not pos or pos < 0 then
-                handle_natural_completion("Idle property triggered completion")
+            local count = mp.get_property_number("playlist-count", 0)
+            
+            -- Trigger completion if we are idle and either:
+            -- 1. We have no active position (finished or empty)
+            -- 2. The playlist is empty
+            if not pos or pos < 0 or count == 0 then
+                handle_natural_completion("Idle property triggered completion (pos=" .. tostring(pos) .. ", count=" .. count .. ")")
             end
         end)
     end

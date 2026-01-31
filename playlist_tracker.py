@@ -23,6 +23,7 @@ class PlaylistTracker:
         self.played_item_ids = set()
         self.threshold_met_ids = set() # Items watched > 30s
         self.watched_this_session = set() # Track items already marked as watched this session
+        self.session_item_ids = [] # Persistent history of all items in this session
         
         # New: Track playback duration in the current session
         self.current_session_duration = 0
@@ -80,7 +81,8 @@ class PlaylistTracker:
         # Capture stats before joining
         stats = {
             "played_ids": list(self.played_item_ids),
-            "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
+            "watched_ids": list(self.threshold_met_ids),
+            "session_ids": list(self.session_item_ids)
         }
 
         if self.tracking_thread:
@@ -103,6 +105,9 @@ class PlaylistTracker:
         # It is assumed the item already has an 'id' assigned by resolve_or_assign_item_id.
         with self.lock:
             self.playlist.append(item)
+            item_id = item.get('id')
+            if item_id and item_id not in self.session_item_ids:
+                self.session_item_ids.append(item_id)
             logging.debug(f"[PY][Tracker] Added item to tracker's internal playlist: {item.get('title') or item['url']} (ID: {item.get('id')})")
 
     def remove_item_internal(self, item_id):
@@ -115,6 +120,10 @@ class PlaylistTracker:
         """Updates the internal playlist order to match the live session."""
         with self.lock:
             self.playlist = new_playlist
+            for item in new_playlist:
+                item_id = item.get('id')
+                if item_id and item_id not in self.session_item_ids:
+                    self.session_item_ids.append(item_id)
             logging.debug("[PY][Tracker] Internal playlist order updated.")
 
     def _track(self):
@@ -383,7 +392,7 @@ class PlaylistTracker:
                         "is_natural_completion": self.is_naturally_completed,
                         "played_ids": list(self.played_item_ids),
                         "watched_ids": list(self.threshold_met_ids),
-                        "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
+                        "session_ids": list(self.session_item_ids)
                     })
                     # 2. Stop loop
                     self.is_tracking = False 
@@ -399,7 +408,8 @@ class PlaylistTracker:
                         "folder_id": self.folder_id,
                         "is_natural_completion": self.is_naturally_completed,
                         "played_ids": list(self.played_item_ids),
-                        "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
+                        "watched_ids": list(self.threshold_met_ids),
+                        "session_ids": list(self.session_item_ids)
                     })
                     self.is_tracking = False
                     break
@@ -774,7 +784,8 @@ class PlaylistTracker:
                 "is_paused": is_paused,
                 "is_idle": is_idle,
                 "last_played_id": self.current_id,
-                "session_ids": [item.get('id') for item in self.playlist if item.get('id')]
+                "watched_ids": list(self.threshold_met_ids),
+                "session_ids": list(self.session_item_ids)
             })
         except Exception as e:
             logging.debug(f"[PY][Tracker] Failed to update playback status: {e}")

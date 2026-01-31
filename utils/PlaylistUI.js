@@ -87,6 +87,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const itemDiv = document.createElement("div");
 					itemDiv.className = "list-item";
 					
+					const isWatched = item.watched || item.markedAsWatched;
+					if (isWatched) {
+						itemDiv.classList.add("item-watched");
+					}
+					
 					const isCurrent = item.currentlyPlaying || (lastPlayedId && item.id === lastPlayedId);
 					if (highlightEnabled && isCurrent) {
 						itemDiv.classList.add(
@@ -115,6 +120,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					indexSpan.textContent = `${index + 1}.`;
 					itemDiv.appendChild(indexSpan);
 
+					const isYouTube = item.url.includes("youtube.com/") || item.url.includes("youtu.be/");
+
+					if (isWatched && !isYouTube) {
+						const check = document.createElement("span");
+						check.className = "watched-checkmark index-checkmark";
+						check.innerHTML = "✔";
+						itemDiv.appendChild(check);
+					}
+
 					const urlSpan = document.createElement("span");
 					urlSpan.className = "url-text";
 					this._formatTitle(urlSpan, item);
@@ -141,6 +155,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 							);
 						});
 						itemDiv.appendChild(watchedCheckbox);
+
+						if (isWatched) {
+							const check = document.createElement("span");
+							check.className = "watched-checkmark checkbox-checkmark";
+							check.innerHTML = "✔";
+							itemDiv.appendChild(check);
+						}
 					}
 
 					itemDiv.appendChild(urlSpan);

@@ -377,10 +377,15 @@ def is_process_alive(pid, ipc_path):
     if not pid or not ipc_path:
         return False
     
+    # Optimization: Check if the PID is even running before trying the socket.
+    # This avoids a 2-second timeout if the process is completely gone.
+    if not is_pid_running(pid):
+        return False
+
     # We use a temporary manager to test connectivity without starting a background reader.
     # This avoids spawning threads for a simple one-shot check.
     temp_manager = IPCSocketManager()
-    if not temp_manager.connect(ipc_path, timeout=2.0, start_event_reader=False): 
+    if not temp_manager.connect(ipc_path, timeout=1.0, start_event_reader=False): 
         return False
 
     # If connected, send a command to verify the PID.

@@ -13,6 +13,7 @@ export class PlaybackSession {
 		this.isProcessingQueue = false;
 		this.currentPlayingItem = null; // { urlItem, folderId, isLastInFolder }
 		this.completedItemIds = new Set();
+		this.watchedItemIds = new Set();
 	}
 
 	/**

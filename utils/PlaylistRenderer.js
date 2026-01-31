@@ -86,6 +86,12 @@
         _createItemNode(item, index, status) {
             const div = document.createElement("div");
             div.className = "list-item";
+            
+            const isWatched = item.markedAsWatched || item.watched;
+            if (isWatched) {
+                div.classList.add("item-watched");
+            }
+
             div.draggable = true;
             div.dataset.id = item.id;
             div.dataset.url = item.url;
@@ -117,6 +123,15 @@
             indexSpan.textContent = (index + 1) + ".";
             div.appendChild(indexSpan);
 
+            const isYouTube = item.url.indexOf("youtube.com/") !== -1 || item.url.indexOf("youtu.be/") !== -1 || item.url.indexOf("youtube.com/shorts/") !== -1;
+
+            if (isWatched && !isYouTube) {
+                const check = document.createElement("span");
+                check.className = "watched-checkmark index-checkmark";
+                check.innerHTML = "✔";
+                div.appendChild(check);
+            }
+
             const titleSpan = document.createElement("span");
             titleSpan.className = "url-text";
             this._formatTitle(titleSpan, item);
@@ -125,6 +140,14 @@
             const isYouTube = item.url.indexOf("youtube.com/") !== -1 || item.url.indexOf("youtu.be/") !== -1 || item.url.indexOf("youtube.com/shorts/") !== -1;
             if (this.prefs.showWatchedStatusGui && isYouTube) {
                 div.appendChild(this._createWatchedCheckbox(item));
+                
+                const isWatched = item.markedAsWatched || item.watched;
+                if (isWatched) {
+                    const check = document.createElement("span");
+                    check.className = "watched-checkmark checkbox-checkmark";
+                    check.innerHTML = "✔";
+                    div.appendChild(check);
+                }
             }
 
             div.appendChild(this._createRemoveButton(index, item.id));
