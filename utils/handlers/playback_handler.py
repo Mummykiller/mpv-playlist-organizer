@@ -374,13 +374,12 @@ class PlaybackHandler(BaseHandler):
             with open(handshake_path, 'w', encoding='utf-8') as f:
                 json.dump(handshake_data, f)
             
-            # Extract resume_time for CLI --start
-            start_time = handshake_data["lua_options"].get("resume_time")
-            
             # Inject handshake into custom flags
             handshake_flag = f"--script-opts=mpv_organizer-handshake={handshake_path}"
             updated_custom_flags = f"{custom_mpv_flags or ''} {handshake_flag}".strip()
 
+            # NOTE: We do NOT pass start_time here via CLI args, because it creates a global
+            # '--start' flag that applies to ALL videos. We rely on the handshake/Lua for that.
             full_command, has_terminal_flag = self.services.construct_mpv_command(
                 mpv_exe=mpv_exe, 
                 url=enriched_playlist, 
@@ -399,8 +398,7 @@ class PlaybackHandler(BaseHandler):
                 use_ytdl_mpv=use_ytdl_mpv,
                 script_dir=self.ctx.script_dir,
                 # metadata_item and temp_dir are now legacy, handshake handles it
-                flag_dir=handshake_data["flag_dir"],
-                start_time=start_time
+                flag_dir=handshake_data["flag_dir"]
             )
             
             import subprocess

@@ -216,12 +216,6 @@ class LauncherService:
         for k, v in props.items():
             mgr.send({"command": ["set_property", k, v]})
 
-        # 3. Synchronous Resume Priming (Property only)
-        if settings.get('enable_precise_resume', True):
-            start_time = int(float(launch_lua_options.get('resume_time') or 0))
-            # Send as raw integer to avoid string encoding issues
-            mgr.send({"command": ["set_property", "user-data/primed-resume-time", start_time]})
-        
         # NOTE: We do NOT send 'loadfile' here because the file is already on the command line.
         # Sending it again via IPC causes a "Double Load" race condition.
 
@@ -267,9 +261,6 @@ class LauncherService:
                 "is_unmanaged": kwargs.get('is_unmanaged', False)
             }
             
-            # Extract resume_time for CLI --start
-            start_time = handshake_data["lua_options"].get("resume_time")
-            
             handshake_path = os.path.join(self.session.FLAG_DIR, f"handshake_{uuid.uuid4().hex}.json")
             with open(handshake_path, 'w', encoding='utf-8') as f:
                 json.dump(handshake_data, f)
@@ -283,6 +274,9 @@ class LauncherService:
             # For the initial CLI command, we only pass ONE URL (the launch_item).
             # Therefore, MPV must start at index 0 of its initial 'playlist'.
             # The full playlist index is handled later by the background enrichment flow.
+            #
+            # NOTE: We do NOT pass start_time here via CLI args, because it creates a global 
+            # '--start' flag that applies to ALL videos. We rely on the handshake/Lua for that.
             full_command, has_terminal_flag = services.construct_mpv_command(
                 mpv_exe=mpv_exe, ipc_path=ipc_path, url=launch_url, is_youtube=is_youtube,
                 ytdl_raw_options=kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options'),
@@ -297,7 +291,7 @@ class LauncherService:
                 force_terminal=kwargs.get('force_terminal', False), settings=settings,
                 flag_dir=self.session.FLAG_DIR, playlist_start_index=0,
                 cookies_browser=kwargs.get('cookies_browser') or url_item.get('cookies_browser'),
-                force_bypass=force_bypass, start_time=start_time
+                force_bypass=force_bypass
             )
 
             # 4. Spawn Process

@@ -5,6 +5,7 @@ local indexed_options = {}
 local session_timestamps = {} -- Internal memory for the current session
 local unmanaged_fallback_opts = nil -- Global fallback for disconnected launches
 local has_started = false
+local handshake_processed = false -- Flag to ensure handshake is only processed once
 
 -- Store initial global states
 local initial_ua = mp.get_property("user-agent") or "libmpv"
@@ -82,35 +83,41 @@ local function apply_adaptive_settings()
     if not path or path == "" then return end
 
     -- 0. Metadata Handshake (Primary initialization source)
-    local handshake_path = mp.get_opt("mpv_organizer-handshake")
-    if handshake_path and handshake_path ~= "" then
-        local content = safe_read_file(handshake_path)
-        if content and content ~= "" then
-            local ok, data = pcall(utils.parse_json, content)
-            if ok and data then
-                local opts = data.lua_options
-                if opts then
-                    if opts.id then id_options[opts.id] = opts end
-                    url_options[path] = opts
-                    unmanaged_fallback_opts = opts -- Set global fallback
-                    
-                    -- NEW: Extract resume time from handshake to override MPV memory immediately
-                    if opts.resume_time then
-                        primed_resume_time = tonumber(opts.resume_time)
-                        debug_log("Handshake resume time found: " .. tostring(primed_resume_time))
-                    end
+    if not handshake_processed then
+        local handshake_path = mp.get_opt("mpv_organizer-handshake")
+        if handshake_path and handshake_path ~= "" then
+            local content = safe_read_file(handshake_path)
+            if content and content ~= "" then
+                local ok, data = pcall(utils.parse_json, content)
+                if ok and data then
+                    local opts = data.lua_options
+                    if opts then
+                        if opts.id then id_options[opts.id] = opts end
+                        url_options[path] = opts
+                        unmanaged_fallback_opts = opts -- Set global fallback
+                        
+                        -- NEW: Extract resume time from handshake to override MPV memory immediately
+                        if opts.resume_time then
+                            primed_resume_time = tonumber(opts.resume_time)
+                            debug_log("Handshake resume time found: " .. tostring(primed_resume_time))
+                        end
 
-                    debug_log("Handshake successful. Project root: " .. (data.project_root or "unknown"))
-                    
-                    -- Populate unmanaged context if needed
-                    if data.project_root then mp.set_property("user-data/project-root", data.project_root) end
-                    if data.folder_id then mp.set_property("user-data/folder-id", data.folder_id) end
-                    if data.original_url then mp.set_property_native("user-data/original-url", data.original_url) end
-                    if data.cookies_browser then mp.set_property("user-data/cookies-browser", data.cookies_browser) end
-                    if data.is_unmanaged ~= nil then mp.set_property("user-data/is-unmanaged", data.is_unmanaged and "yes" or "no") end
+                        debug_log("Handshake successful. Project root: " .. (data.project_root or "unknown"))
+                        
+                        -- Populate unmanaged context if needed
+                        if data.project_root then mp.set_property("user-data/project-root", data.project_root) end
+                        if data.folder_id then mp.set_property("user-data/folder-id", data.folder_id) end
+                        if data.original_url then mp.set_property_native("user-data/original-url", data.original_url) end
+                        if data.cookies_browser then mp.set_property("user-data/cookies-browser", data.cookies_browser) end
+                        if data.is_unmanaged ~= nil then mp.set_property("user-data/is-unmanaged", data.is_unmanaged and "yes" or "no") end
+                        
+                        -- Clear the handshake option so we don't re-process it for subsequent files
+                        mp.set_property("opt-mpv_organizer-handshake", "")
+                    end
                 end
             end
         end
+        handshake_processed = true
     end
 
     -- 1. Extract Solid ID
@@ -204,8 +211,15 @@ local function apply_adaptive_settings()
             debug_log("Session memory found: resuming at " .. tostring(session_time))
         end
     end
+    
+    -- Priority 3: Global Handshake Resume Time (One-time use)
+    if final_resume_time == nil and primed_resume_time then
+        final_resume_time = primed_resume_time
+        primed_resume_time = nil -- Consume it immediately
+        debug_log("Handshake resume time applied and cleared: " .. tostring(final_resume_time))
+    end
 
-    -- Priority 3: Metadata Registry (From 'set_url_options' batch sync)
+    -- Priority 4: Metadata Registry (From 'set_url_options' batch sync)
     if final_resume_time == nil and opts and opts.resume_time then
         final_resume_time = tonumber(opts.resume_time)
         if final_resume_time then
@@ -230,8 +244,13 @@ local function apply_adaptive_settings()
     if final_resume_time ~= nil then
         -- CRITICAL: Force MPV to ignore its own watch-later files for this specific load
         mp.set_property("file-local-options/resume-playback", "no")
-        mp.set_property_number("file-local-options/start", final_resume_time)
+        -- Use the global 'start' property because 'file-local-options/start' is unreliable during on_load
+        mp.set_property("start", final_resume_time)
         debug_log("Applied final resume time: " .. tostring(final_resume_time))
+    else
+        -- CRITICAL: Reset start time to 'none' (default) so we don't leak the previous file's start time
+        -- Since 'start' is a global option, it persists across files if not reset.
+        mp.set_property("start", "none")
     end
 
     if not opts then return end
