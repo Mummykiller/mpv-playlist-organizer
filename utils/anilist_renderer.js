@@ -7,7 +7,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	 * ES Module version of AniListRenderer for Background/Module context.
 	 */
 
-	MPV.AniListRenderer = class AniListRenderer {
+	const AniListRenderer = MPV.AniListRenderer = class AniListRenderer {
 		static _cache = null;
 		static _cacheTimestamp = 0;
 		static _inFlightRequest = null;

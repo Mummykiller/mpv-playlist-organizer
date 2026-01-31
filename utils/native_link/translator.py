@@ -35,10 +35,13 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
 
 import re
 
+# Keys that should NOT be converted (acronyms, special IDs, etc.)
+WHITELIST = {'request_id', 'url', 'm3u8'}
+
 def _camel_to_snake(camel_str: str) -> str:
     """Converts camelCase to snake_case."""
-    if camel_str == "request_id":
-        return "request_id"
+    if camel_str in WHITELIST:
+        return camel_str
     # Handle acronyms and standard camelCase
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', camel_str)
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()

@@ -830,6 +830,12 @@ export async function handleUpdateLastPlayed(data) {
 
 		if (storageData.folders[actualFolderId]) {
 			storageData.folders[actualFolderId].lastPlayedId = itemId;
+			
+			// Mutually Exclusive currentlyPlaying update
+			storageData.folders[actualFolderId].playlist.forEach(item => {
+				item.currentlyPlaying = (item.id === itemId);
+			});
+
 			await storage.set(storageData, actualFolderId);
 
 			const currentCache = (await chrome.storage.local.get("mpv_playback_cache")).mpv_playback_cache || {};
@@ -845,7 +851,7 @@ export async function handleUpdateLastPlayed(data) {
 }
 
 export async function handleUpdateItemResumeTime(data) {
-	const { folderId, itemId, resumeTime } = data;
+	const { folderId, itemId, resumeTime, lastModified } = data;
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
 	const storageData = await storage.get();
@@ -858,6 +864,7 @@ export async function handleUpdateItemResumeTime(data) {
 		for (const item of folder.playlist) {
 			if (item.id === itemId) {
 				item.resumeTime = resumeTime;
+				item.lastModified = lastModified || Date.now();
 				await storage.set(storageData, actualFolderId);
 				break;
 			}
@@ -871,12 +878,12 @@ export async function handlePlaybackStatusChanged(data) {
 
 	const cacheData = {
 		folderId,
-		isRunning: true, // If we got a status update, it's definitely running
+		isRunning: true,
 		isPaused: isPaused,
 		isIdle: isIdle,
 		lastPlayedId: lastPlayedId,
 		sessionIds: sessionIds || [],
-		isLaunching: false, // Got a status update, so launch is finished
+		isLaunching: false,
 		timestamp: Date.now(),
 	};
 
@@ -888,12 +895,27 @@ export async function handlePlaybackStatusChanged(data) {
 	const storageData = await storage.get();
 	const folder = storageData.folders[folderId];
 	if (folder) {
+		// Sync currently_playing flag to storage so it survives browser-to-python syncs
+		if (lastPlayedId) {
+			let changed = false;
+			folder.playlist.forEach(item => {
+				const isCurrent = item.id === lastPlayedId;
+				if (item.currentlyPlaying !== isCurrent) {
+					item.currentlyPlaying = isCurrent;
+					item.lastModified = Date.now();
+					changed = true;
+				}
+			});
+			if (changed) {
+				await storage.set(storageData, folderId);
+			}
+		}
 		await broadcastPlaylistState(folderId, folder.playlist);
 	}
 }
 
 export async function handleUpdateItemMarkedAsWatched(data) {
-	const { folderId, itemId, markedAsWatched } = data;
+	const { folderId, itemId, markedAsWatched, lastModified } = data;
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
 	const storageData = await storage.get();
@@ -906,6 +928,7 @@ export async function handleUpdateItemMarkedAsWatched(data) {
 		for (const item of folder.playlist) {
 			if (item.id === itemId) {
 				item.markedAsWatched = markedAsWatched;
+				item.lastModified = lastModified || Date.now();
 				await storage.set(storageData, actualFolderId);
 				await broadcastPlaylistState(actualFolderId, folder.playlist);
 				break;

@@ -20,15 +20,11 @@ class DataHandler(BaseHandler):
             return native_link.failure("No data provided.")
             
         if request.is_incremental:
-            index = self.file_io.get_index()
-            for folder_id, folder_content in data.items():
-                canonical_id = self.file_io._get_canonical_folder_id(folder_id, index)
-                playlist = folder_content.get("playlist", [])
-                self.file_io.save_playlist_shard(canonical_id, playlist, update_index=False)
-                meta = {k: v for k, v in folder_content.items() if k != "playlist"}
-                index[canonical_id] = {**meta, "item_count": len(playlist)}
-            self.file_io.save_index(index)
-            return native_link.success(message="Incremental sync complete.", log={"text": "[Native Host]: Incremental sync complete.", "type": "info"})
+            success = self.file_io.save_library_batch(data)
+            if success:
+                return native_link.success(message="Incremental sync complete.", log={"text": "[Native Host]: Incremental sync complete.", "type": "info"})
+            else:
+                return native_link.failure("Incremental sync failed.")
         else:
             res = self.file_io.write_folders_file(data)
             if res["success"]:

@@ -715,11 +715,13 @@ class MpvSessionManager:
             target_id = kwargs.get('playlist_start_id')
             
             # 2. Second Priority: Persistent 'currently_playing' marker in items
+            # If multiple items are marked (due to sync race conditions), pick the one with newest last_modified
             if not target_id:
-                for item in _url_items_list:
-                    if item.get('currently_playing'):
-                        target_id = item.get('id')
-                        break
+                candidate_items = [item for item in _url_items_list if item.get('currently_playing')]
+                if candidate_items:
+                    # Sort by last_modified descending
+                    candidate_items.sort(key=lambda x: x.get('last_modified', 0), reverse=True)
+                    target_id = candidate_items[0].get('id')
             
             # 3. Third Priority: last_played_id from index metadata
             if not target_id:
@@ -903,15 +905,13 @@ class MpvSessionManager:
 
             # --- LAUNCH LOGIC (Only if not already active) ---
             if not launch_result.get("already_active"):
-                # Determine indices for the staggered launch.
-                # If we are background-loading (len > 1), the initial MPV instance only sees ONE item, 
-                # so it must start at 0 regardless of its eventual position in the full list.
-                staggered_initial_index = 0 if len(_url_items_list) > 1 else playlist_start_index
-
+                # Always use the true playlist_start_index for metadata and resume timing.
+                # The 'staggered' optimization (loading the rest in background) 
+                # is handled by how we pass full_playlist and how handle_standard_flow_launch reacts.
                 launch_result = self.launcher.launch(
                     launch_item, folder_id, settings, file_io,
                     full_playlist=_url_items_list if len(_url_items_list) > 1 else [_url_items_list[playlist_start_index]],
-                    playlist_start_index=staggered_initial_index,
+                    playlist_start_index=playlist_start_index,
                     **kwargs
                 )
                 

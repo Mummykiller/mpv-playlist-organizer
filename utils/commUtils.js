@@ -93,7 +93,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		return ytUrl;
 	}
 
-	MPV.Logger = class Logger {
+	const Logger = MPV.Logger = class Logger {
 		constructor(tag = "BG") {
 			this.tag = tag;
 		}

@@ -385,6 +385,19 @@ export class StorageManager {
 							modified = true;
 						}
 
+						// Migration: currently_playing -> currentlyPlaying
+						if (newItem.currently_playing !== undefined && newItem.currentlyPlaying === undefined) {
+							newItem.currentlyPlaying = newItem.currently_playing;
+							delete newItem.currently_playing;
+							modified = true;
+						}
+
+						// NEW: Conflict Resolution - ensure lastModified exists
+						if (newItem.lastModified === undefined) {
+							newItem.lastModified = Date.now();
+							modified = true;
+						}
+
 						if (modified) {
 							needsUpdate = true;
 							return newItem;

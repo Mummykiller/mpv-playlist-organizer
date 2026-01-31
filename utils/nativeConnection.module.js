@@ -39,8 +39,10 @@ function normalizePayload(data) {
 		return data.map(normalizePayload);
 	}
 
+	const WHITELIST = new Set(["request_id", "url", "m3u8"]);
+
 	const snakeToCamel = (str) => {
-		if (str === "request_id") return "request_id";
+		if (WHITELIST.has(str)) return str;
 		return str.replace(/([-_][a-z])/g, (group) =>
 			group.toUpperCase().replace("-", "").replace("_", "")
 		);
