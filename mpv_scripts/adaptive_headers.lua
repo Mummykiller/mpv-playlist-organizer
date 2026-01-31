@@ -3,7 +3,6 @@ local url_options = {}
 local id_options = {}
 local indexed_options = {}
 local session_timestamps = {} -- Internal memory for the current session
-local primed_resume_time = nil
 local unmanaged_fallback_opts = nil -- Global fallback for disconnected launches
 local has_started = false
 
@@ -94,6 +93,13 @@ local function apply_adaptive_settings()
                     if opts.id then id_options[opts.id] = opts end
                     url_options[path] = opts
                     unmanaged_fallback_opts = opts -- Set global fallback
+                    
+                    -- NEW: Extract resume time from handshake to override MPV memory immediately
+                    if opts.resume_time then
+                        primed_resume_time = tonumber(opts.resume_time)
+                        debug_log("Handshake resume time found: " .. tostring(primed_resume_time))
+                    end
+
                     debug_log("Handshake successful. Project root: " .. (data.project_root or "unknown"))
                     
                     -- Populate unmanaged context if needed
@@ -172,52 +178,60 @@ local function apply_adaptive_settings()
         debug_log("Resolved options for " .. (opts.title or path))
     end
 
-    -- 4b. Synchronous Primed Resume Time (from Python IPC)
-    -- This is the ONLY source of truth for forced jumps now.
+    -- --- NEW: ITEM-SPECIFIC RESUME LOGIC ---
+    local final_resume_time = nil
+
+    -- Priority 1: Synchronous Primed Resume Time (from Python IPC)
+    -- This property is set by the backend just before 'loadfile'
     local sync_primed = mp.get_property("user-data/primed-resume-time")
     if sync_primed and sync_primed ~= "" then
-        primed_resume_time = tonumber(sync_primed)
-        mp.set_property("user-data/primed-resume-time", "") -- Clear it immediately
-        debug_log("Sync primed resume time found: " .. tostring(primed_resume_time))
+        -- Strip literal double quotes if they exist
+        sync_primed = sync_primed:gsub('^"', ''):gsub('"$', '')
+        final_resume_time = tonumber(sync_primed)
+        
+        -- Consume it immediately so it doesn't leak to next file
+        mp.set_property("user-data/primed-resume-time", "")
+        if final_resume_time then
+            debug_log("Sync primed resume time found: " .. tostring(final_resume_time))
+        end
     end
 
-    -- 4c. Explicit YouTube Check (Always useful)
-    local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
-    if is_yt then
-        debug_log("YouTube detected, enforcing ytdl=yes")
-        set_property_if_diff("ytdl", "yes")
-        set_property_if_diff("user-data/is-youtube", "yes")
-    end
-
-    -- 4d. Session Memory Fallback
-    -- If no primed time, check if we've been in this file before during THIS session.
-    if primed_resume_time == nil then
+    -- Priority 2: Session Memory (If we've played this EXACT file earlier in this instance)
+    if final_resume_time == nil then
         local session_time = (item_id and session_timestamps[item_id]) or session_timestamps[path]
         if session_time then
-            primed_resume_time = session_time
+            final_resume_time = session_time
             debug_log("Session memory found: resuming at " .. tostring(session_time))
         end
     end
 
-    if not primed_resume_time then 
-        -- If no primed time, and no options, exit early.
-        if not opts then return end
+    -- Priority 3: Metadata Registry (From 'set_url_options' batch sync)
+    if final_resume_time == nil and opts and opts.resume_time then
+        final_resume_time = tonumber(opts.resume_time)
+        if final_resume_time then
+            debug_log("Metadata resume time found: " .. tostring(final_resume_time))
+        end
     end
 
-    -- 5. Always apply UI/State features (Titles & Resume)
+    -- Priority 4: Handshake/Default
+    -- If we still have nothing, force 0 to override MPV's internal memory
+    if final_resume_time == nil then
+        final_resume_time = 0
+    end
+
+    -- 5. Apply UI/State features (Titles & Resume)
     if opts and opts.title and opts.title ~= "" then
         set_property_if_diff("title", opts.title)
         set_property_if_diff("force-media-title", opts.title)
     end
 
-    -- Priority: ONLY use primed_resume_time. 
-    -- Metadata fallback removed to prevent accidental jumps.
-    -- We check if primed_resume_time is NOT nil, allowing 0 to be a valid forced start.
-    if primed_resume_time ~= nil then
-        mp.set_property_number("file-local-options/start", primed_resume_time)
-        set_property_if_diff("file-local-options/resume-playback", "no")
-        debug_log("Applied primed resume time: " .. tostring(primed_resume_time))
-        primed_resume_time = nil -- Consume it
+    -- Priority: ONLY use final_resume_time. 
+    -- We check if final_resume_time is NOT nil, allowing 0 to be a valid forced start.
+    if final_resume_time ~= nil then
+        -- CRITICAL: Force MPV to ignore its own watch-later files for this specific load
+        mp.set_property("file-local-options/resume-playback", "no")
+        mp.set_property_number("file-local-options/start", final_resume_time)
+        debug_log("Applied final resume time: " .. tostring(final_resume_time))
     end
 
     if not opts then return end
@@ -313,7 +327,7 @@ local function apply_adaptive_settings()
     if opts.original_url then mp.set_property_native("user-data/original-url", opts.original_url) end
 end
 
-mp.add_hook("on_load", 0, function()
+mp.add_hook("on_load", -10, function()
     local ok, err = pcall(apply_adaptive_settings)
     if not ok then
         mp.msg.error("AdaptiveHeaders: Error in on_load hook: " .. tostring(err))

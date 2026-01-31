@@ -384,6 +384,18 @@ export class StorageManager {
 							delete newItem.marked_as_watched;
 							modified = true;
 						}
+						
+						// Initialize defaults if missing
+						if (newItem.markedAsWatched === undefined) {
+							newItem.markedAsWatched = false;
+							modified = true;
+						}
+
+						// NEW: Redundancy Sync - Ensure 'watched' exists
+						if (newItem.watched === undefined) {
+							newItem.watched = newItem.markedAsWatched || false;
+							modified = true;
+						}
 
 						// Migration: currently_playing -> currentlyPlaying
 						if (newItem.currently_playing !== undefined && newItem.currentlyPlaying === undefined) {

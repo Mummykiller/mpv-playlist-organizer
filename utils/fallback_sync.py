@@ -69,7 +69,7 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
     if playlist:
         for item in playlist:
             if item.get("id") == item_id:
-                is_already_watched = item.get("marked_as_watched", False)
+                is_already_watched = item.get("marked_as_watched", False) or item.get("watched", False)
                 break
     
     watched_success = False
@@ -92,12 +92,16 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
                 if watched_success:
                     if not item.get("marked_as_watched"):
                         item["marked_as_watched"] = True
+                        item["watched"] = True # NEW: Additional modifier
+                        item["last_modified"] = int(time.time() * 1000)
                         needs_shard_save = True
-                        logging.info("Disk: Updated marked_as_watched.")
+                        logging.info("Disk: Updated marked_as_watched and watched.")
                 elif mark_watched and not is_already_watched and not settings.get('yt_mark_watched', True):
                     # Manual override/fallback case
                     if not item.get("marked_as_watched"):
                         item["marked_as_watched"] = True
+                        item["watched"] = True # NEW: Additional modifier
+                        item["last_modified"] = int(time.time() * 1000)
                         needs_shard_save = True
                 
                 # Update Resume Time

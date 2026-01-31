@@ -30,6 +30,7 @@ class PlaylistTracker:
         self.last_disk_save_time = time.time() # Throttle for disk writes
         self.resume_cache = {} # Map of item_id -> resume_time for pending disk writes
         self.watched_status_cache = {} # Map of item_id -> bool for pending disk writes
+        self.watched_cache = {} # NEW: Map of item_id -> bool for pending 'watched' disk writes
         self.dirty_last_played_id = None # Pending last_played_id for disk commit
         
         self.file_io = file_io
@@ -47,7 +48,7 @@ class PlaylistTracker:
         self.current_id = None
         self.last_played_id = None
         self.last_commit_time = time.time()
-        self.commit_interval = 30 # Seconds between forced syncs if dirty
+        self.commit_interval = 10 # NEW: Faster commit interval (10s)
         self.last_mark_try_time = {} # NEW: Cooldown for retries per item ID
 
         for item in initial_playlist:
@@ -258,6 +259,17 @@ class PlaylistTracker:
                             # 3. Notify the MPV terminal that we are tracking this new video
                             self._remote_log(f"AdaptiveHeaders: Tracking: {display_name}{status_info}")
                             
+                            # NEW: Proactive Redundancy Sync
+                            # If the item has the old flag but not the new one, fix it immediately upon tracking start
+                            with self.lock:
+                                for item in self.playlist:
+                                    if item.get('id') == self.current_id:
+                                        if item.get('marked_as_watched') and not item.get('watched'):
+                                            logging.info(f"[PY][Tracker] Proactively backfilling 'watched' mark for {self.current_id}")
+                                            # Correctly pass watched_status=True
+                                            self._update_marked_as_watched(self.current_id, watched_status=True, persist=bool(self.folder_id))
+                                        break
+
                             # 4. Immediately notify the extension to update the UI highlight (Visual only)
                             logging.info(f"[PY][Tracker] Active episode changed to ID {self.current_id}. Notifying UI (Visual).")
                             
@@ -316,9 +328,9 @@ class PlaylistTracker:
                             if int(current_time) > 0 and int(current_time) % 5 == 0:
                                 self._update_resume_time(self.current_id, current_time)
                                 
-                                # Periodically commit to disk every 30s
+                                # Periodically commit to disk every 10s
                                 now = time.time()
-                                if now - self.last_disk_save_time >= 30:
+                                if now - self.last_disk_save_time >= 10:
                                     self._commit_to_disk()
                                     self.last_disk_save_time = now
 
@@ -424,6 +436,9 @@ class PlaylistTracker:
                 # Reset its disk state to 0 so even if a sync happens, it's clean
                 self._update_resume_time(target_id, 0)
                 
+                # NEW: Mark as watched locally for all videos upon natural completion
+                self._update_marked_as_watched(target_id, True, persist=bool(self.folder_id))
+                
                 # Send specialized clear message
                 self.send_message({
                     "action": "item_natural_completion",
@@ -477,7 +492,7 @@ class PlaylistTracker:
                     logging.debug("[PY][Tracker] Heartbeat stopping: is_tracking is False.")
                     break
                 
-                if self.resume_cache or self.watched_status_cache or self.dirty_last_played_id:
+                if self.resume_cache or self.watched_status_cache or self.watched_cache or self.dirty_last_played_id:
                     if time.time() - self.last_commit_time >= self.commit_interval:
                         logging.debug("[PY][Tracker] Heartbeat triggering forced commit.")
                         self._commit_to_disk()
@@ -488,7 +503,7 @@ class PlaylistTracker:
     def _commit_to_disk(self):
         """Performs a single read-modify-write to the playlist shard with all cached changes."""
         self.last_commit_time = time.time()
-        if not self.folder_id or (not self.resume_cache and not self.watched_status_cache and not self.dirty_last_played_id):
+        if not self.folder_id or (not self.resume_cache and not self.watched_status_cache and not self.watched_cache and not self.dirty_last_played_id):
             return
 
         try:
@@ -527,17 +542,24 @@ class PlaylistTracker:
                         item["marked_as_watched"] = self.watched_status_cache[item_id]
                         item["last_modified"] = int(time.time() * 1000)
                         changed = True
+                    
+                    # Sync watched from cache
+                    if item_id in self.watched_cache:
+                        item["watched"] = self.watched_cache[item_id]
+                        item["last_modified"] = int(time.time() * 1000)
+                        changed = True
                 
                 if changed:
                     self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
                     self.resume_cache.clear()
                     self.watched_status_cache.clear()
+                    self.watched_cache.clear()
                     logging.info(f"[PY][Tracker] Throttled shard commit complete for '{self.folder_id}'.")
         except Exception as e:
             logging.error(f"[PY][Tracker] Throttled disk commit failed: {e}")
 
-    def _update_marked_as_watched(self, item_id, status, persist=True):
-        """Notifies extension and queues marked_as_watched status for disk commit."""
+    def _update_marked_as_watched(self, item_id, marked_status=None, watched_status=None, persist=True):
+        """Notifies extension and queues status for disk commit. Supports partial updates."""
         if not item_id or item_id == -1 or item_id == "-1":
             return
         
@@ -548,22 +570,31 @@ class PlaylistTracker:
             with self.lock:
                 for item in self.playlist:
                     if item.get('id') == item_id:
-                        item["marked_as_watched"] = status
+                        if marked_status is not None:
+                            item["marked_as_watched"] = marked_status
+                        if watched_status is not None:
+                            item["watched"] = watched_status
                         item["last_modified"] = last_modified
                         break
 
-            # 2. Queue for throttled commit (Only if we have a folder)
+            # 2. Queue for throttled commit
             if persist and self.folder_id:
-                self.watched_status_cache[item_id] = status
-            
-            # 3. Notify the extension (always notify to keep UI in sync)
-            self.send_message({
+                if marked_status is not None:
+                    self.watched_status_cache[item_id] = marked_status
+                if watched_status is not None:
+                    self.watched_cache[item_id] = watched_status
+
+            # 3. Notify the extension
+            msg = {
                 "action": "update_item_marked_as_watched",
                 "folder_id": self.folder_id,
                 "item_id": item_id,
-                "marked_as_watched": status,
                 "last_modified": last_modified
-            })
+            }
+            if marked_status is not None: msg["marked_as_watched"] = marked_status
+            if watched_status is not None: msg["watched"] = watched_status
+            
+            self.send_message(msg)
 
         except Exception as e:
             logging.error(f"[PY][Tracker] Failed to update marked_as_watched: {e}")
@@ -597,17 +628,25 @@ class PlaylistTracker:
             is_yt = self.file_io.is_youtube_url(target_item.get('url')) or \
                     self.file_io.is_youtube_url(target_item.get('original_url'))
 
-        if not is_yt:
-            # Permanent skip: not a YouTube video
-            self.watched_this_session.add(item_id)
-            return
-
         # Ensure we check both the direct keys and potential nested settings
         is_enabled = target_item.get('mark_watched')
         if is_enabled is None:
             is_enabled = target_item.get('settings', {}).get('yt_mark_watched', True)
         
-        already_marked = target_item.get('marked_as_watched', False)
+        # Robust already-watched detection: check both old and new flags
+        has_marked_flag = target_item.get('marked_as_watched', False)
+        has_watched_flag = target_item.get('watched', False)
+        already_marked = has_marked_flag or has_watched_flag
+        
+        # Backfill: If they are out of sync, update local state to ensure consistency
+        if has_marked_flag != has_watched_flag:
+            logging.info(f"[PY][Tracker] Syncing watched flags for {item_id} (marked={has_marked_flag}, watched={has_watched_flag})")
+            # Set both to True to ensure they match
+            self._update_marked_as_watched(item_id, marked_status=True, watched_status=True, persist=bool(self.folder_id))
+            # Refresh flags for the rest of this method
+            has_marked_flag = True
+            has_watched_flag = True
+            already_marked = True
         
         has_cookies = target_item.get('cookies_file') is not None
         # NEW: Check item browser, fallback to global setting
@@ -623,95 +662,95 @@ class PlaylistTracker:
         if len(title) > 50:
             title = title[:47] + "..."
 
-        # Lazy Extraction: If we are using direct browser access, we won't have a file yet.
-        # Extract it now solely for the purpose of marking as watched.
-        if is_enabled and not already_marked and has_url and not has_cookies and has_browser:
-            logging.info(f"[PY][Tracker] Lazy-extracting cookies from '{browser}' for history update...")
-            self._remote_log("AdaptiveHeaders: Extracting cookies for history...")
+        # --- Phased Marking ---
+        
+        # 1. Local Mark (The 30s threshold mark)
+        # This applied to ALL videos regardless of provider.
+        if not has_watched_flag:
+            logging.info(f"[PY][Tracker] Marking item {item_id} as watched (30s threshold reached).")
+            self._update_marked_as_watched(item_id, watched_status=True, persist=bool(self.folder_id))
             
-            # Use volatile storage (RAM)
-            extracted_path = url_analyzer.get_cookies_file(browser, watch_url, force_refresh=False)
-            
-            if extracted_path:
-                with self.lock:
-                    target_item['cookies_file'] = extracted_path
-                has_cookies = True
-                logging.info(f"[PY][Tracker] Cookies extracted to {extracted_path}")
-            else:
-                logging.warning(f"[PY][Tracker] Failed to lazy-extract cookies from '{browser}'.")
+            # Force immediate commit so it shows in JSON files instantly
+            self._commit_to_disk()
+            has_watched_flag = True # Update local variable
 
-        if is_enabled and not already_marked and has_cookies and has_url:
-            # Check if already in progress to avoid double-triggers
-            if item_id in self.watched_this_session:
-                return
-                
+        # 2. External Mark (YouTube only)
+        if not is_yt:
+            # Non-YouTube is fully handled by the local mark above.
+            # We do NOT set 'marked_as_watched' for local files/direct streams.
             self.watched_this_session.add(item_id)
-            
-            cookies = target_item['cookies_file']
-            headers = target_item.get('headers', {})
-            ua = headers.get('User-Agent')
-            
-            logging.info(f"[PY][Tracker] Triggering watch history update for: {watch_url}")
-            self.send_message({"log": {"text": "[Tracker]: Mark-as-watched triggered for YouTube video.", "type": "info"}})
-            self._remote_log(f"AdaptiveHeaders: Marking {title} as watched on YouTube.")
-            
-            if self.ipc_manager and self.ipc_manager.is_connected():
-                self.ipc_manager.send({"command": ["show-text", "YouTube: Marking as watched...", 3000]})
+            return
 
-            def on_done(success, msg):
-                # 1. Update Internal Tracker State & Extension UI (Always)
-                if success:
-                    # We pass persist=True ONLY if we have a folder_id.
-                    # mark_video_as_watched_threaded calls sync_state which handles disk sync if folder exists.
-                    self._update_marked_as_watched(item_id, True, persist=bool(self.folder_id))
-                    self.send_message({"log": {"text": "[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
+        # YouTube-Specific authentication and sync logic
+        if is_enabled and not has_marked_flag:
+            # Lazy Extraction: ONLY for YouTube videos if cookies are missing
+            if has_url and not has_cookies and has_browser:
+                logging.info(f"[PY][Tracker] Lazy-extracting cookies from '{browser}' for history update...")
+                self._remote_log("AdaptiveHeaders: Extracting cookies for history...")
+                
+                # Use volatile storage (RAM)
+                extracted_path = url_analyzer.get_cookies_file(browser, watch_url, force_refresh=False)
+                
+                if extracted_path:
+                    with self.lock:
+                        target_item['cookies_file'] = extracted_path
+                    has_cookies = True
+                    logging.info(f"[PY][Tracker] Cookies extracted to {extracted_path}")
                 else:
-                    self.send_message({"log": {"text": f"[Tracker]: Failed to mark YouTube video as watched: {msg}", "type": "error"}})
-                    # NEW: Remove from session set on failure to allow retry later in this session (respecting cooldown)
-                    if item_id in self.watched_this_session:
-                        self.watched_this_session.remove(item_id)
+                    logging.warning(f"[PY][Tracker] Failed to lazy-extract cookies from '{browser}'.")
 
-                # 2. Update MPV Feedback (Only if still connected)
-                if self.ipc_manager and self.ipc_manager.is_connected():
-                    if success:
-                        self.ipc_manager.send({"command": ["show-text", "YouTube: Video marked as watched", 2000]})
-                        self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {title}")
-                        # Sync property to MPV so Lua knows we've done it
-                        self.ipc_manager.send({"command": ["set_property", "user-data/marked-as-watched", "yes"]})
-                    else:
-                        self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched failed ({msg})", 3000]})
-                        self._remote_log(f"AdaptiveHeaders: Mark watched failed for {title}: {msg}")
-
-            # Prune finished threads
-            self.pending_threads = [t for t in self.pending_threads if t.is_alive()]
-            
-            # Start and track the thread
-            thread = mark_video_as_watched_threaded(watch_url, cookies, user_agent=ua, folder_id=self.folder_id, item_id=item_id, on_done=on_done)
-            self.pending_threads.append(thread)
-        else:
-            # Report why it was skipped (But don't block future retries if it's a cookie/url issue)
-            reasons = []
-            is_permanent_skip = False
-            if not is_enabled:
-                reasons.append("setting disabled")
-                is_permanent_skip = True
-            if already_marked:
-                reasons.append("already marked as watched")
-                is_permanent_skip = True
-            if not has_cookies:
-                reasons.append("missing cookies (waiting for lazy extraction?)")
-            if not has_url:
-                reasons.append("missing URL")
-            
-            reason_str = ", ".join(reasons)
-            logging.debug(f"[PY][Tracker] Mark-watched skip check for {item_id}: {reason_str}")
-            
-            if is_permanent_skip:
+            # Check if we are ready for the API call
+            if has_cookies and has_url:
+                # Check if already in progress to avoid double-triggers
+                if item_id in self.watched_this_session:
+                    return
+                    
                 self.watched_this_session.add(item_id)
-                if already_marked:
-                    self._remote_log(f"AdaptiveHeaders: {title} has been marked, ignoring.")
-                elif not is_enabled:
-                    self._remote_log(f"AdaptiveHeaders: Mark-as-watched disabled for {title}, ignoring.")
+                
+                cookies = target_item['cookies_file']
+                headers = target_item.get('headers', {})
+                ua = headers.get('User-Agent')
+                
+                logging.info(f"[PY][Tracker] Triggering watch history update for: {watch_url}")
+                self.send_message({"log": {"text": "[Tracker]: Mark-as-watched triggered for YouTube video.", "type": "info"}})
+                self._remote_log(f"AdaptiveHeaders: Marking {title} as watched on YouTube.")
+                
+                if self.ipc_manager and self.ipc_manager.is_connected():
+                    self.ipc_manager.send({"command": ["show-text", "YouTube: Marking as watched...", 3000]})
+
+                def on_done(success, msg):
+                    if success:
+                        # ONLY set 'marked_as_watched' after success
+                        self._update_marked_as_watched(item_id, marked_status=True, persist=bool(self.folder_id))
+                        self.send_message({"log": {"text": "[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
+                    else:
+                        self.send_message({"log": {"text": f"[Tracker]: Failed to mark YouTube video as watched: {msg}", "type": "error"}})
+                        # Remove from session set on failure to allow retry later in this session (respecting cooldown)
+                        if item_id in self.watched_this_session:
+                            self.watched_this_session.remove(item_id)
+
+                    # Update MPV Feedback (Only if still connected)
+                    if self.ipc_manager and self.ipc_manager.is_connected():
+                        if success:
+                            self.ipc_manager.send({"command": ["show-text", "YouTube: Video marked as watched", 2000]})
+                            self._remote_log(f"AdaptiveHeaders: YouTube watch history updated for: {title}")
+                            self.ipc_manager.send({"command": ["set_property", "user-data/marked-as-watched", "yes"]})
+                        else:
+                            self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched failed ({msg})", 3000]})
+                            self._remote_log(f"AdaptiveHeaders: Mark watched failed for {title}: {msg}")
+
+                # Prune finished threads
+                self.pending_threads = [t for t in self.pending_threads if t.is_alive()]
+                
+                # Start and track the thread
+                thread = mark_video_as_watched_threaded(watch_url, cookies, user_agent=ua, folder_id=self.folder_id, item_id=item_id, on_done=on_done)
+                self.pending_threads.append(thread)
+            elif not has_cookies:
+                # Still waiting for cookies, retry on next check
+                pass
+        else:
+            # YouTube video but already marked or disabled
+            self.watched_this_session.add(item_id)
             
             # Note: We don't flood the OSD/Log for temporary skips (missing cookies/url) 
             # because they might resolve themselves in a few seconds.

@@ -216,13 +216,14 @@ class LauncherService:
         for k, v in props.items():
             mgr.send({"command": ["set_property", k, v]})
 
-        # 3. Atomic Load with Synchronous Resume Priming
+        # 3. Synchronous Resume Priming (Property only)
         if settings.get('enable_precise_resume', True):
             start_time = int(float(launch_lua_options.get('resume_time') or 0))
-            # Use user-data for synchronous delivery before loadfile
-            mgr.send({"command": ["set_property", "user-data/primed-resume-time", str(start_time)]})
+            # Send as raw integer to avoid string encoding issues
+            mgr.send({"command": ["set_property", "user-data/primed-resume-time", start_time]})
         
-        mgr.send({"command": ["loadfile", launch_url, "replace"]})
+        # NOTE: We do NOT send 'loadfile' here because the file is already on the command line.
+        # Sending it again via IPC causes a "Double Load" race condition.
 
     def launch(self, url_item, folder_id, settings, file_io, **kwargs):
         logging.info(f"[PY][Session] Starting a new MPV instance for URL: {url_item.get('url')}")

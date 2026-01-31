@@ -915,7 +915,7 @@ export async function handlePlaybackStatusChanged(data) {
 }
 
 export async function handleUpdateItemMarkedAsWatched(data) {
-	const { folderId, itemId, markedAsWatched, lastModified } = data;
+	const { folderId, itemId, markedAsWatched, watched, lastModified } = data;
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
 	const storageData = await storage.get();
@@ -927,7 +927,8 @@ export async function handleUpdateItemMarkedAsWatched(data) {
 		const folder = storageData.folders[actualFolderId];
 		for (const item of folder.playlist) {
 			if (item.id === itemId) {
-				item.markedAsWatched = markedAsWatched;
+				if (markedAsWatched !== undefined) item.markedAsWatched = markedAsWatched;
+				if (watched !== undefined) item.watched = watched;
 				item.lastModified = lastModified || Date.now();
 				await storage.set(storageData, actualFolderId);
 				await broadcastPlaylistState(actualFolderId, folder.playlist);
