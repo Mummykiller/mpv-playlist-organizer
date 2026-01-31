@@ -447,7 +447,7 @@ class PlaylistTracker:
                 self._update_resume_time(target_id, 0)
                 
                 # NEW: Mark as watched locally for all videos upon natural completion
-                self._update_marked_as_watched(target_id, True, persist=bool(self.folder_id))
+                self._update_marked_as_watched(target_id, watched_status=True, persist=bool(self.folder_id))
                 
                 # Send specialized clear message
                 self.send_message({
@@ -643,20 +643,8 @@ class PlaylistTracker:
         if is_enabled is None:
             is_enabled = target_item.get('settings', {}).get('yt_mark_watched', True)
         
-        # Robust already-watched detection: check both old and new flags
         has_marked_flag = target_item.get('marked_as_watched', False)
         has_watched_flag = target_item.get('watched', False)
-        already_marked = has_marked_flag or has_watched_flag
-        
-        # Backfill: If they are out of sync, update local state to ensure consistency
-        if has_marked_flag != has_watched_flag:
-            logging.info(f"[PY][Tracker] Syncing watched flags for {item_id} (marked={has_marked_flag}, watched={has_watched_flag})")
-            # Set both to True to ensure they match
-            self._update_marked_as_watched(item_id, marked_status=True, watched_status=True, persist=bool(self.folder_id))
-            # Refresh flags for the rest of this method
-            has_marked_flag = True
-            has_watched_flag = True
-            already_marked = True
         
         has_cookies = target_item.get('cookies_file') is not None
         # NEW: Check item browser, fallback to global setting
@@ -666,7 +654,7 @@ class PlaylistTracker:
         watch_url = target_item.get('original_url') or target_item.get('url')
         has_url = watch_url is not None
         
-        logging.debug(f"[PY][Tracker] Mark-watched check for {item_id}: enabled={is_enabled}, already_marked={already_marked}, cookies={has_cookies}, browser={has_browser}, url={has_url}")
+        logging.debug(f"[PY][Tracker] Mark-watched check for {item_id}: enabled={is_enabled}, has_marked={has_marked_flag}, cookies={has_cookies}, browser={has_browser}, url={has_url}")
         
         title = target_item.get('title') or watch_url or item_id
         if len(title) > 50:
@@ -732,6 +720,8 @@ class PlaylistTracker:
                     if success:
                         # ONLY set 'marked_as_watched' after success
                         self._update_marked_as_watched(item_id, marked_status=True, persist=bool(self.folder_id))
+                        # Force immediate commit to disk for faster persistence
+                        self._commit_to_disk()
                         self.send_message({"log": {"text": "[Tracker]: Successfully marked YouTube video as watched.", "type": "info"}})
                     else:
                         self.send_message({"log": {"text": f"[Tracker]: Failed to mark YouTube video as watched: {msg}", "type": "error"}})

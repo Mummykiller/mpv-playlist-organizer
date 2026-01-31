@@ -675,6 +675,22 @@ class MpvSessionManager:
             self.ipc_manager.send({"command": ["show-text", "Playlist cleared", 2000]}, expect_response=True)
             return {"success": True, "message": "Live playlist cleared."}
 
+    def update_item_watch_status(self, item_id, folder_id, marked_as_watched=None, watched=None):
+        """Updates the watch status of an item in the active tracker."""
+        with self.sync_lock:
+            if self.playlist_tracker and self.owner_folder_id == folder_id:
+                self.playlist_tracker._update_marked_as_watched(
+                    item_id, 
+                    marked_status=marked_as_watched, 
+                    watched_status=watched
+                )
+                return {"success": True}
+            
+            # If no active tracker for this folder, we can still update the shard directly
+            # but usually the background script handles that. 
+            # This is primarily to sync the tracker's internal cache.
+            return {"success": True, "tracker_active": False}
+
     def _generate_m3u_content(self, items):
         """Generates M3U content from a list of items."""
         m3u_lines = ["#EXTM3U"]

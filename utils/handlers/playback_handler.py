@@ -25,12 +25,26 @@ class PlaybackHandler(BaseHandler):
         
         # 1. Resolve Input
         raw_input = None
+        effective_input_type = input_type
+
         if input_type == 'single':
-            # Direct User Click: Strip any existing resume_time to ensure it starts at 0s
-            # unless the request explicitly provided a fresh one or a specific start ID.
-            if request.url_item and 'resume_time' in request.url_item and not request.playlist_start_id:
-                request.url_item['resume_time'] = None
-            raw_input = [request.url_item]
+            # Check if we should promote to folder-level playback for managed sessions
+            if not request.play_new_instance and request.folder_id:
+                shard_playlist = self.file_io.get_playlist_shard(request.folder_id)
+                if shard_playlist:
+                    logging.info(f"[PY][Handler] Promoting single play request to folder batch for '{request.folder_id}'.")
+                    raw_input = shard_playlist
+                    effective_input_type = 'batch'
+                    # Ensure we start at the requested item if it has an ID
+                    if request.url_item and request.url_item.get('id'):
+                        request.playlist_start_id = request.url_item.get('id')
+            
+            if not raw_input:
+                # Direct User Click: Strip any existing resume_time to ensure it starts at 0s
+                # unless the request explicitly provided a fresh one or a specific start ID.
+                if request.url_item and 'resume_time' in request.url_item and not request.playlist_start_id:
+                    request.url_item['resume_time'] = None
+                raw_input = [request.url_item]
         elif input_type == 'batch':
             raw_input = request.playlist
         elif input_type == 'm3u':
@@ -62,11 +76,11 @@ class PlaybackHandler(BaseHandler):
                 
                 should_toggle_pause = False
                 
-                if input_type == 'single' and request.url_item:
+                if effective_input_type == 'single' and request.url_item:
                     target_id = request.url_item.get('id')
                     if target_id and current_playing_id == target_id:
                         should_toggle_pause = True
-                elif input_type == 'batch' or input_type == 'm3u':
+                elif effective_input_type == 'batch' or effective_input_type == 'm3u':
                     # For batches, check if we're adding anything new
                     current_ids = {item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')}
                     new_items = [item for item in items if self.item_processor.ensure_id(item)['id'] not in current_ids]
@@ -231,6 +245,19 @@ class PlaybackHandler(BaseHandler):
         response = self.mpv_session.close()
         self.m3u_server.stop()
         return response
+
+    @command('update_item_marked_as_watched')
+    def handle_update_item_marked_as_watched(self, request: native_link.LiveUpdateRequest):
+        if not request.folder_id or not request.item_id:
+            return native_link.failure("Missing folder_id or item_id.")
+        
+        canonical_id = self.file_io._get_canonical_folder_id(request.folder_id)
+        return self.mpv_session.update_item_watch_status(
+            request.item_id, 
+            canonical_id, 
+            marked_as_watched=request.marked_as_watched,
+            watched=request.watched
+        )
 
     @command('is_mpv_running')
     def handle_is_mpv_running(self, request: native_link.LiveUpdateRequest):

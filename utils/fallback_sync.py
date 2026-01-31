@@ -63,22 +63,23 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
 
     settings = file_io.get_settings()
     
-    # 2. Check if already watched to avoid slow network call
-    is_already_watched = False
+    # 2. Check if already marked EXTERNALLY to avoid slow network call
+    is_already_marked_externally = False
     playlist = file_io.get_playlist_shard(canonical_id)
     if playlist:
         for item in playlist:
             if item.get("id") == item_id:
-                is_already_watched = item.get("marked_as_watched", False) or item.get("watched", False)
+                is_already_marked_externally = item.get("marked_as_watched", False)
                 break
     
-    watched_success = False
+    watched_success = True # Default to true if not marking
+    mark_watched_error = None
     
-    # 3. Slow Network Call (ONLY if not already watched)
-    if mark_watched and not is_already_watched and settings.get('yt_mark_watched', True):
-        watched_success, msg = mark_video_as_watched(url, cookies, ua)
+    # 3. Slow Network Call (ONLY if not already marked EXTERNALLY)
+    if mark_watched and not is_already_marked_externally and settings.get('yt_mark_watched', True):
+        watched_success, mark_watched_error = mark_video_as_watched(url, cookies, ua)
         if not watched_success:
-            logging.error(f"YouTube Error: {msg}")
+            logging.error(f"YouTube Mark-Watched Error: {mark_watched_error}")
 
     # 4. Atomic Read-Modify-Write
     needs_shard_save = False
@@ -89,18 +90,16 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
         for item in playlist:
             if item.get("id") == item_id:
                 # Update Watched Status
-                if watched_success:
+                if mark_watched and watched_success:
                     if not item.get("marked_as_watched"):
                         item["marked_as_watched"] = True
-                        item["watched"] = True # NEW: Additional modifier
                         item["last_modified"] = int(time.time() * 1000)
                         needs_shard_save = True
-                        logging.info("Disk: Updated marked_as_watched and watched.")
-                elif mark_watched and not is_already_watched and not settings.get('yt_mark_watched', True):
-                    # Manual override/fallback case
-                    if not item.get("marked_as_watched"):
-                        item["marked_as_watched"] = True
-                        item["watched"] = True # NEW: Additional modifier
+                        logging.info("Disk: Updated marked_as_watched.")
+                elif mark_watched and not settings.get('yt_mark_watched', True):
+                    # Manual override/fallback case (marking locally only)
+                    if not item.get("watched"):
+                        item["watched"] = True
                         item["last_modified"] = int(time.time() * 1000)
                         needs_shard_save = True
                 
@@ -125,6 +124,9 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
             index[canonical_id]["last_played_id"] = item_id
             file_io.save_index(index)
             logging.info(f"Disk: Updated last played item to {item_id}.")
+
+    if mark_watched and not watched_success:
+        return False, mark_watched_error or "Failed to mark YouTube video as watched."
 
     return True, "Sync complete"
 

@@ -401,7 +401,7 @@ export class StorageManager {
 
 						// NEW: Redundancy Sync - Ensure 'watched' exists
 						if (newItem.watched === undefined) {
-							newItem.watched = newItem.markedAsWatched || false;
+							newItem.watched = false;
 							modified = true;
 						}
 

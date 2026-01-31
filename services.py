@@ -130,6 +130,7 @@ def construct_lua_options(item, settings, script_dir, index=None):
         "project_root": script_dir,
         "mark_watched": get_mark_watched(item, settings),
         "marked_as_watched": item.get('marked_as_watched') if item.get('marked_as_watched') is not None else item.get('markedAsWatched', False),
+        "watched": item.get('watched') if item.get('watched') is not None else item.get('watched', False),
         "targeted_defaults": settings.get('targeted_defaults', 'none')
     }
     

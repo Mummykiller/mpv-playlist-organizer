@@ -136,11 +136,21 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		 */
 		async requestSync() {
 			try {
+				// Guard: Check if the extension context is still valid
+				if (typeof chrome === "undefined" || !chrome.runtime?.id) {
+					return;
+				}
+
 				// Use the existing bridge or global sendMessage
 				chrome.runtime.sendMessage({ action: "get_playback_status" }, (response) => {
+					if (chrome.runtime.lastError) return;
 					if (response) this.update(response);
 				});
 			} catch (e) {
+				const msg = e?.message || "";
+				if (msg.includes("Extension context invalidated")) {
+					return;
+				}
 				console.warn("[StateManager] Sync request failed:", e);
 			}
 		}

@@ -25,7 +25,7 @@ addNativeListener("update_item_resume_time", (data) =>
 	handleUpdateItemResumeTime(data),
 );
 addNativeListener("update_item_marked_as_watched", (data) =>
-	handleUpdateItemMarkedAsWatched(data),
+	handleUpdateItemMarkedAsWatchedInternal(data, { isNative: true }),
 );
 addNativeListener("playback_status_changed", (data) =>
 	handlePlaybackStatusChanged(data),
@@ -976,7 +976,16 @@ export async function handlePlaybackStatusChanged(data) {
 	}
 }
 
-export async function handleUpdateItemMarkedAsWatched(data) {
+export const handleUpdateItemMarkedAsWatched = createHandler(async ({ request, folderId }) => {
+	await handleUpdateItemMarkedAsWatchedInternal(request, { isNative: false });
+	return { success: true };
+}, {
+	syncToNative: true,
+	syncImmediate: true,
+	broadcastPlaylist: true
+});
+
+export async function handleUpdateItemMarkedAsWatchedInternal(data, options = {}) {
 	const { folderId, itemId, markedAsWatched, watched, lastModified } = data;
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
@@ -992,8 +1001,20 @@ export async function handleUpdateItemMarkedAsWatched(data) {
 				if (markedAsWatched !== undefined) item.markedAsWatched = markedAsWatched;
 				if (watched !== undefined) item.watched = watched;
 				item.lastModified = lastModified || Date.now();
+				
+				// Manual persistence here is needed if we want it to work for BOTH 
+				// the createHandler wrapper AND the raw native listener.
 				await storage.set(storageData, actualFolderId);
 				
+				// SYNC TO NATIVE: Ensure the native tracker knows about the manual update
+				// Guard: Only sync if the request DID NOT come from the native host itself
+				if (!options.isNative) {
+					nativeLink.updateItemMarkedAsWatched(actualFolderId, itemId, {
+						markedAsWatched: item.markedAsWatched,
+						watched: item.watched
+					}).catch(e => console.warn("[PlaybackHandler] Failed to sync watch status to native:", e));
+				}
+
 				// DELTA UPDATE: Notify UI to update just this item
 				broadcastItemUpdate(actualFolderId, itemId, {
 					watched: item.watched,

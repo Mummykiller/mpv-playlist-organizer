@@ -314,16 +314,16 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// 6. Global Event Listeners
 			window.addEventListener("mousedown", this.handleMouseDown, true);
-			window.addEventListener("focus", () => {
+			window.addEventListener("focus", this._safeWrap(() => {
 				// Proactively refresh status when tab gains focus
 				this.refreshPlaylist();
-			});
-			document.addEventListener("visibilitychange", () => {
+			}));
+			document.addEventListener("visibilitychange", this._safeWrap(() => {
 				if (document.visibilityState === "visible") {
 					this.refreshPlaylist();
 					MPV.playbackStateManager.requestSync();
 				}
-			});
+			}));
 		}
 
 		handleMouseDown(event) {
@@ -1084,14 +1084,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.ui.shadowRoot?.getElementById("folder-select")?.value;
 			if (!folderId) return;
 
-			const isMarked = !isChecked;
+			const isMarked = isChecked;
+			// Manual UI toggle: strictly only update the SYNC flag
 			this.bridge.send("update_item_marked_as_watched", folderId, {
-				itemId: itemId,
-				markedAsWatched: isMarked,
+				item_id: itemId,
+				marked_as_watched: isMarked,
 			});
 
 			this.addLogEntry({
-				text: `[Content]: ${isMarked ? "Marked" : "Unmarked"} item as watched.`,
+				text: `[Content]: ${isMarked ? "Marked" : "Unmarked"} item as synced to YouTube.`,
 				type: "info",
 			});
 		}

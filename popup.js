@@ -233,7 +233,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		// Playlist Elements
 		const playlistContainer = document.getElementById(
-			"popup-playlist-container",
+			"playlist-container",
 		);
 
 		// Export/Import Elements
@@ -750,6 +750,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 					const itemDiv = document.createElement("div");
 					itemDiv.className = "list-item";
 
+					// UI Change: Only gray out if PERSONALLY watched
+					if (item.watched) {
+						itemDiv.classList.add("item-watched");
+					}
+
 					if (
 						highlightEnabled &&
 						effectiveLastPlayedId &&
@@ -785,6 +790,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 					indexSpan.textContent = `${index + 1}.`;
 					itemDiv.appendChild(indexSpan);
 
+					const isYouTube = item.url.includes("youtube.com/") || item.url.includes("youtu.be/");
+
+					if (item.watched && !isYouTube) {
+						const check = document.createElement("span");
+						check.className = "watched-checkmark index-checkmark";
+						check.innerHTML = "✔";
+						itemDiv.appendChild(check);
+					}
+
 					const urlSpan = document.createElement("span");
 					urlSpan.className = "url-text";
 					_formatTitle(urlSpan, item); // Use the title formatting function
@@ -798,16 +812,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 						const watchedCheckbox = document.createElement("input");
 						watchedCheckbox.type = "checkbox";
 						watchedCheckbox.className = "item-watched-checkbox";
-						watchedCheckbox.checked = !item.markedAsWatched;
-						watchedCheckbox.title = watchedCheckbox.checked
-							? "Will mark as watched on YouTube"
-							: "Already marked or skipped";
+						// UI Change: Checkbox only reflects SYNC status
+						watchedCheckbox.checked = !!item.markedAsWatched;
+						watchedCheckbox.title = item.markedAsWatched
+							? "Already marked as watched"
+							: "Click to mark as watched on YouTube";
 
 						watchedCheckbox.addEventListener("click", (e) =>
 							e.stopPropagation(),
 						);
 						watchedCheckbox.addEventListener("change", async (e) => {
-							const isMarked = !watchedCheckbox.checked;
+							const isMarked = watchedCheckbox.checked;
 							const folderId = miniFolderSelect.value;
 							try {
 								await sendMessageAsync({
@@ -817,14 +832,23 @@ document.addEventListener("DOMContentLoaded", async () => {
 									markedAsWatched: isMarked,
 								});
 								showStatus(
-									`${isMarked ? "Marked" : "Unmarked"} item as watched.`,
+									`${isMarked ? "Marked" : "Unmarked"} item as synced to YouTube.`,
 								);
 							} catch (err) {
 								console.error("Failed to update watched status:", err);
 								showStatus("Failed to update watched status.", true);
+								// Rollback UI on error
+								watchedCheckbox.checked = !isMarked;
 							}
 						});
 						itemDiv.appendChild(watchedCheckbox);
+
+						if (item.watched) {
+							const check = document.createElement("span");
+							check.className = "watched-checkmark checkbox-checkmark";
+							check.innerHTML = "✔";
+							itemDiv.appendChild(check);
+						}
 					}
 
 					itemDiv.appendChild(urlSpan);
@@ -865,11 +889,63 @@ document.addEventListener("DOMContentLoaded", async () => {
 			playlistContainer.scrollTop = scrollPosition;
 		}
 
-		/**
-		 * Formats the title for display, highlighting episode numbers or channel names.
-		 * @param {HTMLElement} urlSpan The span element to populate.
-		 * @param {object} item The playlist item containing title and url.
-		 */
+				function updateItemDelta(itemId, delta) {
+					const itemDiv = playlistContainer.querySelector(`[data-id="${itemId}"]`);
+					if (!itemDiv) return;
+		
+					const isYouTube = itemDiv.dataset.url?.includes("youtube.com") || itemDiv.dataset.url?.includes("youtu.be");
+		
+					// 1. Gray out (watched)
+					if (delta.watched !== undefined) {
+						itemDiv.classList.toggle("item-watched", !!delta.watched);
+						
+						const existingIndexCheck = itemDiv.querySelector(".index-checkmark");
+						if (delta.watched && !isYouTube && !existingIndexCheck) {
+							const check = document.createElement("span");
+							check.className = "watched-checkmark index-checkmark";
+							check.innerHTML = "✔";
+							const indexSpan = itemDiv.querySelector(".url-index");
+							if (indexSpan) indexSpan.after(check);
+						} else if (!delta.watched && existingIndexCheck) {
+							existingIndexCheck.remove();
+						}
+					}
+		
+					// 2. Checkbox & Checkmark (markedAsWatched vs watched)
+					if (delta.markedAsWatched !== undefined || delta.watched !== undefined) {
+						const checkbox = itemDiv.querySelector(".item-watched-checkbox");
+						
+						// Checkbox strictly follows sync status
+						if (delta.markedAsWatched !== undefined && checkbox) {
+							checkbox.checked = !!delta.markedAsWatched;
+							checkbox.title = delta.markedAsWatched ? "Already marked as watched" : "Click to mark as watched on YouTube";
+						}
+
+						// Checkmark strictly follows local watched status
+						const existingCheckboxCheck = itemDiv.querySelector(".checkbox-checkmark");
+						if (isYouTube && checkbox) {
+							const currentlyWatched = delta.watched !== undefined ? delta.watched : !!itemDiv.classList.contains("item-watched");
+							
+							if (currentlyWatched && !existingCheckboxCheck) {
+								const check = document.createElement("span");
+								check.className = "watched-checkmark checkbox-checkmark";
+								check.innerHTML = "✔";
+								checkbox.after(check);
+							} else if (!currentlyWatched && existingCheckboxCheck) {
+								existingCheckboxCheck.remove();
+							}
+						}
+					}
+				}
+				/**
+
+				 * Formats the title for display, highlighting episode numbers or channel names.
+
+				 * @param {HTMLElement} urlSpan The span element to populate.
+
+				 * @param {object} item The playlist item containing title and url.
+
+				 */
 		function _formatTitle(urlSpan, item) {
 			const titleParts = item.title.split(" - ");
 			const isYouTubeVideoUrl = item.url.includes("youtube.com/watch");
@@ -1751,6 +1827,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const copyBtn = e.target.closest(".btn-copy-item");
 			const watchedCheckbox = e.target.closest(".item-watched-checkbox");
 
+			// Handle Button A selection mode (Pick Start Item)
+			if (isPickStartModeActive && !removeBtn && !copyBtn && !watchedCheckbox) {
+				const id = listItem.dataset.id;
+				const fullItem = popupState.currentPlaylist.find(i => i.id === id);
+
+				if (fullItem) {
+					sendMessageAsync({
+						action: "play",
+						folderId: miniFolderSelect.value,
+						urlItem: fullItem,
+						playlistStartId: fullItem.id
+					});
+					isPickStartModeActive = false;
+					refreshQuickActionsBar();
+				}
+				return;
+			}
+
 			// Handle Selection Mode (Disconnected Launch)
 			if (isSelectionModeActive && !removeBtn && !copyBtn && !watchedCheckbox) {
 				const id = listItem.dataset.id;
@@ -1842,25 +1936,81 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		// Quick Action Bar Listeners
 		const quickActionButtons = document.querySelectorAll(".quick-action-btn");
+		
+		const refreshQuickActionsBar = () => {
+			const bar = document.getElementById("quick-actions-bar");
+			if (!bar) return;
+
+			bar.classList.toggle("selection-mode-active", isSelectionModeActive);
+			bar.classList.toggle("pick-start-mode-active", isPickStartModeActive);
+			playlistContainer.classList.toggle("selection-mode-active", isSelectionModeActive);
+			playlistContainer.classList.toggle("pick-start-mode-active", isPickStartModeActive);
+
+			quickActionButtons.forEach(btn => {
+				if (btn.textContent === "A") {
+					btn.classList.toggle("active", isPickStartModeActive);
+				} else if (btn.textContent === "⚡") {
+					btn.classList.toggle("active", isSelectionModeActive);
+				}
+			});
+		};
+
+		// Track pick start mode globally in popup scope
+		let isPickStartModeActive = false;
+
 		quickActionButtons.forEach((btn, index) => {
-			// Identify the toggle button (it's the last one)
-			const isLast = index === quickActionButtons.length - 1;
-			if (isLast) {
+			const label = btn.textContent;
+			const isA = label === "A";
+			const isLast = label === "⚡" || index === quickActionButtons.length - 1;
+
+			if (isA) {
+				btn.title = "Left-click: Play from start | Right-click: Pick start item";
+				btn.classList.add("btn-start-from-beginning");
+				
+				btn.onclick = (e) => {
+					e.stopPropagation();
+					if (isPickStartModeActive) {
+						isPickStartModeActive = false;
+						refreshQuickActionsBar();
+						return;
+					}
+
+					if (popupState.currentPlaylist.length > 0) {
+						const firstItem = popupState.currentPlaylist[0];
+						sendMessageAsync({
+							action: "play",
+							folderId: miniFolderSelect.value,
+							urlItem: firstItem,
+							playlistStartId: firstItem.id
+						});
+					} else {
+						showStatus("Cannot play from start - Playlist is empty.", true);
+					}
+				};
+
+				btn.oncontextmenu = (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					isSelectionModeActive = false;
+					isPickStartModeActive = !isPickStartModeActive;
+					refreshQuickActionsBar();
+				};
+			} else if (isLast) {
 				btn.textContent = "⚡";
 				btn.title = "Toggle Disconnected Launch (Selection Mode)";
 				btn.classList.add("btn-disconnected-toggle");
-			}
 
-			btn.addEventListener("click", () => {
-				if (btn.classList.contains("btn-disconnected-toggle")) {
+				btn.onclick = (e) => {
+					e.stopPropagation();
+					isPickStartModeActive = false;
 					isSelectionModeActive = !isSelectionModeActive;
-					btn.classList.toggle("selection-mode-active", isSelectionModeActive);
-					document.getElementById("quick-actions-bar")?.classList.toggle("selection-mode-active", isSelectionModeActive);
-					playlistContainer.classList.toggle("selection-mode-active", isSelectionModeActive);
-				} else {
+					refreshQuickActionsBar();
+				};
+			} else {
+				btn.addEventListener("click", () => {
 					console.log(`Quick Action ${btn.textContent} clicked`);
-				}
-			});
+				});
+			}
 		});
 
 		const popupKeybinds = { openPopup: null };
@@ -2144,8 +2294,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			if (request.action === "update_playlist_item") {
 				const currentFolderId = miniFolderSelect.value;
-				if (currentFolderId === request.folderId && renderer) {
-					renderer.updateItemDelta(request.itemId, request.delta);
+				if (currentFolderId === request.folderId) {
+					updateItemDelta(request.itemId, request.delta);
 				}
 			}
 
