@@ -17,6 +17,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.preResizePosition = null;
 			this.lastRightClickedElement = null;
 			this._lastUpdateHash = "";
+			this._lastPlaylistFingerprint = "";
+			this._isPlaylistDirty = false;
 
 			// 1. Initialize Logic Modules
 			this.bridge = new MPV.MessageBridge({
@@ -79,6 +81,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.actionMap = {
 				ping: (req, send) => send({ success: true }),
 				init_ui_state: (req) => this._handleInitState(req),
+				playlist_dirty: (req) => this.actionMap.render_playlist(req),
 				render_playlist: (req) => {
 					const currentFolderId =
 						this.ui.shadowRoot?.getElementById("folder-select")?.value;
@@ -97,18 +100,30 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					// 2. Folder Guard for rendering
 					if (req.folderId && req.folderId !== currentFolderId) return;
 
-					// 3. Render Playlist
-					const playlistToRender = req.playlist !== undefined ? req.playlist : this.playlistUI?.currentPlaylist;
+					// 3. Visibility Guard: Mark as dirty and defer if tab is hidden
+					if (document.visibilityState !== "visible") {
+						this._isPlaylistDirty = true;
+						return;
+					}
+
+					// 4. Render Playlist
+					const playlistToRender = req.playlist;
 					if (playlistToRender) {
+						this._lastPlaylistFingerprint = this._getPlaylistFingerprint(playlistToRender);
 						this.playlistUI?.render(
 							playlistToRender,
 							req.lastPlayedId || this.state.state.lastPlayedId,
 							req.isFolderActive ?? this.state.state.isFolderActive,
 							req.completedIds || []
 						);
-					} else if (req.playlist === null) {
-						// Explicit empty playlist signal
-						this.refreshPlaylist();
+					} else {
+						// Payload-less signal: fetch fresh data (usually from storage)
+						this.refreshPlaylist(
+							req.lastPlayedId || this.state.state.lastPlayedId, 
+							req.isFolderActive ?? this.state.state.isFolderActive, 
+							req.isPaused, 
+							req.needsAppend
+						);
 					}
 				},
 				detected_url_changed: (req) => {
@@ -254,14 +269,41 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const currentFolderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
 					
 					if (newFolderData && currentFolderId) {
-						this.playlistUI?.render(
-							newFolderData.playlist,
-							newFolderData.lastPlayedId || this.state.state.lastPlayedId,
-							this.state.state.isFolderActive
-						);
+						const newFingerprint = this._getPlaylistFingerprint(newFolderData.playlist);
+						const hasStructuralChange = newFingerprint !== this._lastPlaylistFingerprint;
+						const hasHighlightChange = newFolderData.lastPlayedId !== this.state.state.lastPlayedId;
+
+						if (hasStructuralChange) {
+							this._lastPlaylistFingerprint = newFingerprint;
+							this.playlistUI?.render(
+								newFolderData.playlist,
+								newFolderData.lastPlayedId || this.state.state.lastPlayedId,
+								this.state.state.isFolderActive
+							);
+						} else if (hasHighlightChange) {
+							// Surgical update: just the highlight
+							this.playlistUI?.syncActiveHighlight(
+								newFolderData.lastPlayedId, 
+								this.state.state.isFolderActive
+							);
+						}
+						
+						// Always sync the playback manager state silently
+						if (newFolderData.lastPlayedId) {
+							this.state.update({ lastPlayedId: newFolderData.lastPlayedId }, true);
+						}
 					}
 				}
 			});
+		}
+
+		_getPlaylistFingerprint(playlist) {
+			if (!playlist || !Array.isArray(playlist)) return "";
+			// A fingerprint consists of the count and the ordered sequence of IDs + watch status.
+			// This detects additions, removals, reorders, and status changes as a fallback for IPC.
+			return `${playlist.length}:` + playlist.map(item => 
+				`${item.id}:${!!item.watched}:${!!item.markedAsWatched}`
+			).join(",");
 		}
 
 		_updateFolderSubscription(folderId) {
@@ -320,7 +362,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}));
 			document.addEventListener("visibilitychange", this._safeWrap(() => {
 				if (document.visibilityState === "visible") {
-					this.refreshPlaylist();
+					if (this._isPlaylistDirty) {
+						this.refreshPlaylist();
+						this._isPlaylistDirty = false;
+					}
 					MPV.playbackStateManager.requestSync();
 				}
 			}));
@@ -1057,24 +1102,41 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			if (folderId) {
 				this._updateFolderSubscription(folderId);
-				this.bridge.send("get_playlist", folderId).then((response) => {
-					if (response?.success) {
-						// Update unified manager first
-						MPV.playbackStateManager.update({
-							folderId: folderId,
-							lastPlayedId: targetLastPlayed || response.lastPlayedId,
-							isRunning: targetIsActive !== undefined ? targetIsActive : response.isRunning,
-							isPaused: targetIsPaused !== undefined ? targetIsPaused : response.isPaused,
-							isIdle: response.isIdle,
-							needsAppend: targetNeedsAppend !== undefined ? targetNeedsAppend : response.needsAppend
-						});
+				
+				const folderKey = `mpv_folder_data_${folderId}`;
+				chrome.storage.local.get([folderKey, "active_playback_state"], (result) => {
+					const folderData = result[folderKey] || { playlist: [], lastPlayedId: null };
+					const pbState = result.active_playback_state || {};
+					const list = folderData.playlist || [];
+					
+					// 1. Update Unified Manager State
+					MPV.playbackStateManager.update({
+						folderId: folderId,
+						lastPlayedId: targetLastPlayed || folderData.lastPlayedId || (pbState.folderId === folderId ? pbState.lastPlayedId : null),
+						isRunning: targetIsActive !== undefined ? targetIsActive : (pbState.folderId === folderId ? pbState.isRunning : false),
+						isPaused: targetIsPaused !== undefined ? targetIsPaused : (pbState.folderId === folderId ? pbState.isPaused : false),
+						needsAppend: targetNeedsAppend !== undefined ? targetNeedsAppend : (pbState.folderId === folderId ? pbState.needsAppend : false)
+					});
 
+					// 2. Structural Check: Only re-render if fingerprint changed
+					const newFingerprint = this._getPlaylistFingerprint(list);
+					if (newFingerprint !== this._lastPlaylistFingerprint) {
+						this._lastPlaylistFingerprint = newFingerprint;
 						this.playlistUI?.render(
-							response.list,
+							list,
 							this.state.state.lastPlayedId,
-							this.state.state.isFolderActive,
+							this.state.state.isFolderActive
+						);
+					} else {
+						// Surgical highlight update
+						this.playlistUI?.syncActiveHighlight(
+							this.state.state.lastPlayedId,
+							this.state.state.isFolderActive
 						);
 					}
+					
+					// 3. Sync Add Button State
+					this.updateAddButtonState();
 				});
 			}
 		}
