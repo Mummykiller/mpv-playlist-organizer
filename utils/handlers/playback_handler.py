@@ -173,7 +173,13 @@ class PlaybackHandler(BaseHandler):
         items_to_process = url_items_list if url_items_list else [url_item]
         settings = self._get_merged_settings(request.settings)
         
+        job_id = None
+        if len(items_to_process) > 1:
+            job_id = self.ctx.task_manager.create_job("append_batch", f"Adding {len(items_to_process)} items to '{canonical_id}'...", total=len(items_to_process))
+            self.ctx.task_manager.update_job(job_id, status="processing")
+
         final_processed_items = []
+        processed_count = 0
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=5) as executor:
             def process_wrapper(item):
@@ -185,10 +191,26 @@ class PlaybackHandler(BaseHandler):
                     settings=settings, 
                     session=self.mpv_session
                 )
-            results = list(executor.map(process_wrapper, items_to_process))
-            for processed_list in results:
-                final_processed_items.extend(processed_list)
+            
+            futures = [executor.submit(process_wrapper, itm) for itm in items_to_process]
+            for future in futures:
+                if job_id and self.ctx.task_manager.is_cancelled(job_id):
+                    break
+                
+                try:
+                    res = future.result()
+                    if res: final_processed_items.extend(res)
+                except Exception as e:
+                    logging.error(f"Error enriching item in append batch: {e}")
+                
+                processed_count += 1
+                if job_id:
+                    self.ctx.task_manager.update_job(job_id, progress=processed_count)
         
+        if job_id:
+            status = "completed" if not self.ctx.task_manager.is_cancelled(job_id) else "cancelled"
+            self.ctx.task_manager.update_job(job_id, status=status)
+
         # Filter out empty results (e.g. enrichment failures that returned empty list)
         final_processed_items = [i for i in final_processed_items if i]
 

@@ -1,5 +1,6 @@
 import { broadcastLog } from "../background/messaging.js";
 import * as security from "./security.module.js";
+import { normalizeKeys } from "./commUtils.module.js";
 
 const NATIVE_HOST_NAME = "com.mpv_playlist_organizer.handler";
 
@@ -29,36 +30,6 @@ const eventListeners = {
 };
 
 /**
- * Normalizes keys in an object from snake_case to camelCase where appropriate.
- * Ensures upper layers always see a consistent schema.
- */
-function normalizePayload(data) {
-	if (!data || typeof data !== "object") return data;
-
-	if (Array.isArray(data)) {
-		return data.map(normalizePayload);
-	}
-
-	const WHITELIST = new Set(["request_id", "url", "m3u8"]);
-
-	const snakeToCamel = (str) => {
-		if (WHITELIST.has(str)) return str;
-		return str.replace(/([-_][a-z])/g, (group) =>
-			group.toUpperCase().replace("-", "").replace("_", "")
-		);
-	};
-
-	const normalized = {};
-	for (const key in data) {
-		if (Object.prototype.hasOwnProperty.call(data, key)) {
-			const camelKey = snakeToCamel(key);
-			normalized[camelKey] = normalizePayload(data[key]);
-		}
-	}
-	return normalized;
-}
-
-/**
  * Registers a listener for unsolicited native host events.
  */
 export function addNativeListener(action, callback) {
@@ -72,7 +43,7 @@ export function addNativeListener(action, callback) {
  */
 function dispatchNativeEvent(action, data) {
 	if (eventListeners[action]) {
-		const normalizedData = normalizePayload(data);
+		const normalizedData = normalizeKeys(data);
 		eventListeners[action].forEach((cb) => {
 			cb(normalizedData);
 		});
@@ -131,7 +102,7 @@ function connectToNativeHost() {
 
 		nativePort.onMessage.addListener((response) => {
 			const { request_id, ...responseData } = response;
-			const normalizedResponse = normalizePayload(responseData);
+			const normalizedResponse = normalizeKeys(responseData);
 
 			if (request_id && requestPromises[request_id]) {
 				requestPromises[request_id].resolve(normalizedResponse);

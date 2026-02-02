@@ -10,6 +10,8 @@ from .handlers.data_handler import DataHandler
 from .handlers.settings_handler import SettingsHandler
 from .handlers.context import BackendContext
 from .handlers.registry import HandlerRegistry
+from .native_link.metadata_cache import MetadataCache
+from .native_link.task_manager import TaskManager
 
 class HandlerManager:
     """
@@ -17,6 +19,8 @@ class HandlerManager:
     Uses composition to delegate to specialized handlers.
     """
     def __init__(self, **kwargs):
+        self.metadata_cache = MetadataCache(kwargs.get('data_dir', ''), kwargs.get('file_io'))
+        self.task_manager = TaskManager(kwargs.get('send_message'))
         self.ctx = BackendContext(
             mpv=kwargs.get('mpv_session'),
             io=kwargs.get('file_io'),
@@ -28,6 +32,8 @@ class HandlerManager:
             temp_playlists_dir=kwargs.get('temp_playlists_dir'),
             log_stream=kwargs.get('log_stream'),
             data_dir=kwargs.get('data_dir', ''),
+            metadata_cache=self.metadata_cache,
+            task_manager=self.task_manager,
             diagnostic_collector=kwargs.get('diagnostic_collector')
         )
         self.playback = PlaybackHandler(self.ctx)

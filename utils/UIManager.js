@@ -12,6 +12,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.minimizedHost = null;
 			this.anilistPanelHost = null;
 			this.anilistShadowRoot = null;
+			this.progressDashboard = null;
 		}
 
 		getDomain() {
@@ -48,6 +49,16 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			uiWrapper.innerHTML = `
                 <link rel="stylesheet" type="text/css" href="${cssUrl}">
                 <div id="status-banner"><span id="stream-status">No stream detected</span></div>
+                <div id="progress-dashboard" style="display: none;">
+                    <div class="progress-info">
+                        <span class="progress-label">Processing...</span>
+                        <span class="progress-percent">0%</span>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar-fill"></div>
+                    </div>
+                    <button id="btn-cancel-task" title="Cancel Task">&times;</button>
+                </div>
                 <div id="m3u8-header">
                     <div id="m3u8-url">
                         <button id="btn-toggle-minimize" title="Minimize UI"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg></button>

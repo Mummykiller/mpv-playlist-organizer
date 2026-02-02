@@ -949,12 +949,12 @@ export class OptionsManager {
 					action: "get_ui_preferences",
 				});
 				const currentlyLocked =
-					response?.preferences?.popup_width_locked || false;
+					response?.preferences?.popupWidthLocked || false;
 				const newLockedState = !currentlyLocked;
 
 				await this.sendMessageAsync({
 					action: "set_ui_preferences",
-					preferences: { popup_width_locked: newLockedState },
+					preferences: { popupWidthLocked: newLockedState },
 				});
 				this._updatePopupWidthLock(newLockedState);
 			});

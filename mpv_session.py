@@ -39,6 +39,10 @@ class MpvSessionManager:
         self.launch_cancelled = False
         self.last_played_id_cache = None
         self.handshake_path = None
+        self.health = "ok"
+        self.health_watcher_thread = None
+        self.metadata_cache = dependencies.get('metadata_cache')
+        self.task_manager = dependencies.get('task_manager')
 
         # --- Injected Dependencies ---
         self.get_all_folders_from_file = dependencies['get_all_folders_from_file']
@@ -50,7 +54,7 @@ class MpvSessionManager:
         self.FLAG_DIR = os.path.join(os.path.dirname(self.TEMP_PLAYLISTS_DIR), "flags")
         
         # --- Specialized Services ---
-        self.enricher = EnrichmentService(services, self.send_message, file_io)
+        self.enricher = EnrichmentService(services, self.send_message, file_io, metadata_cache=self.metadata_cache, task_manager=self.task_manager)
         self.launcher = LauncherService(self)
         self.ipc_service = IPCService(self)
 
@@ -62,6 +66,54 @@ class MpvSessionManager:
     def register_ipc_callbacks(self):
         if self.ipc_manager:
             self.ipc_manager.register_script_message_handler("ytdl_error_detected", self._handle_ytdl_error)
+
+    def _start_health_watcher(self):
+        """Starts a background thread to poll MPV health via IPC."""
+        def watcher():
+            logging.info(f"[PY][Health] Starting watcher for folder '{self.owner_folder_id}'.")
+            last_health = "ok"
+            consecutive_failures = 0
+            
+            while self.is_alive and self.ipc_manager:
+                try:
+                    # Ping MPV with a tight timeout
+                    res = self.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.3, expect_response=True)
+                    if res and res.get("error") == "success":
+                        current_health = "ok"
+                        consecutive_failures = 0
+                    else:
+                        consecutive_failures += 1
+                        current_health = "stale" if consecutive_failures < 3 else "dead"
+                except Exception:
+                    consecutive_failures += 1
+                    current_health = "stale" if consecutive_failures < 3 else "dead"
+
+                if current_health != last_health:
+                    last_health = current_health
+                    self.health = current_health
+                    logging.info(f"[PY][Health] State changed to: {current_health}")
+                    
+                    self.send_message({
+                        "action": "playback_health_changed",
+                        "folder_id": self.owner_folder_id,
+                        "health": current_health
+                    })
+                    
+                    if current_health == "dead":
+                        # If truly dead (IPC gone), check if PID is also gone
+                        if not ipc_utils.is_pid_running(self.pid):
+                            logging.warning("[PY][Health] PID is gone. Clearing session state.")
+                            self.clear()
+                        break
+
+                time.sleep(0.5) # 500ms heartbeat
+            logging.info("[PY][Health] Watcher stopped.")
+
+        if self.health_watcher_thread and self.health_watcher_thread.is_alive():
+            return # Already running
+
+        self.health_watcher_thread = threading.Thread(target=watcher, daemon=True)
+        self.health_watcher_thread.start()
 
     def _handle_ytdl_error(self, args):
         error_msg = args[0] if args else "Unknown error"
@@ -206,6 +258,7 @@ class MpvSessionManager:
         stats = {}
         with self.sync_lock:
             self.is_alive = False
+            self.health = "ok"
             pid_to_clear = self.pid
             self.pid = None
 
@@ -422,6 +475,8 @@ class MpvSessionManager:
                     from playlist_tracker import PlaylistTracker
                     self.playlist_tracker = PlaylistTracker(owner_folder_id, self.playlist, file_io, file_io.get_settings(), self.ipc_path, self.send_message)
                     self.playlist_tracker.start_tracking()
+                    
+                    self._start_health_watcher()
                     
                     # Ensure tracker authoritative state is reflected
                     if last_played_id:
@@ -941,6 +996,7 @@ class MpvSessionManager:
                             pass
                     
                     self.register_ipc_callbacks()
+                    self._start_health_watcher()
 
         if launch_result.get("success") and len(_url_items_list) > 1:
             # Trigger background enrichment if it's NOT the first pass of a raw launch 

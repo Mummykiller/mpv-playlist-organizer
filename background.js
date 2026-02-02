@@ -116,6 +116,24 @@ addNativeListener("log", (data) => {
 	if (data.log) broadcastLog(data.log);
 });
 
+const activeTasks = new Map();
+
+addNativeListener("task_update", async (data) => {
+	const { task, removed, task_id } = data;
+	const id = task_id || task?.id;
+	if (!id) return;
+
+	if (removed) {
+		activeTasks.delete(id);
+	} else {
+		activeTasks.set(id, task);
+	}
+
+	// Sync to storage for UI observation
+	const taskList = Array.from(activeTasks.values());
+	await chrome.storage.local.set({ mpv_active_tasks: taskList });
+});
+
 async function performNativeHostHeartbeat() {
 	try {
 		const response = await nativeLink.ping();
@@ -125,6 +143,8 @@ async function performNativeHostHeartbeat() {
 				lastCheck: Date.now(),
 				info: { python: response.pythonVersion, platform: response.platform },
 			};
+			// Proactively sync metadata cache when native host is confirmed online
+			syncMetadataCache();
 		} else {
 			nativeHostStatus.status = "error";
 			nativeHostStatus.lastCheck = Date.now();
@@ -135,9 +155,28 @@ async function performNativeHostHeartbeat() {
 	}
 }
 
+async function syncMetadataCache() {
+	try {
+		const shardsResult = await nativeLink.getMetadataCache();
+		if (shardsResult?.success && shardsResult.shards) {
+			console.log(`[BG] Syncing ${shardsResult.shards.length} metadata shards...`);
+			for (const shard of shardsResult.shards) {
+				const content = await nativeLink.getMetadataCache(shard);
+				if (content?.success && content.data) {
+					const storageKey = `mpv_meta_cache_${shard}`;
+					await chrome.storage.local.set({ [storageKey]: content.data });
+				}
+			}
+		}
+	} catch (e) {
+		console.warn(`[BG] Metadata cache sync failed: ${e.message}`);
+	}
+}
+
 function startNativeHostHeartbeat() {
 	performNativeHostHeartbeat();
 	chrome.alarms.create("native-host-heartbeat", { periodInMinutes: 5 });
+	chrome.alarms.create("metadata-cache-sync", { periodInMinutes: 30 });
 }
 
 startNativeHostHeartbeat();
@@ -178,6 +217,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 			.catch((e) => console.error("Janitor alarm failed:", e));
 	} else if (alarm.name === "native-host-heartbeat") {
 		performNativeHostHeartbeat();
+	} else if (alarm.name === "metadata-cache-sync") {
+		syncMetadataCache();
 	} else if (alarm.name === "sync-to-native-host") {
 		_syncToNativeHostFile();
 	}

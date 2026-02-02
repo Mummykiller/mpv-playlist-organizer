@@ -18,8 +18,8 @@ import file_io
 from .item_processor import ItemProcessor
 
 class EnrichmentService(ItemProcessor):
-    def __init__(self, services, send_message_func, file_io_module):
-        super().__init__(services, send_message_func, file_io_module)
+    def __init__(self, services, send_message_func, file_io_module, metadata_cache=None, task_manager=None):
+        super().__init__(services, send_message_func, file_io_module, metadata_cache=metadata_cache, task_manager=task_manager)
         self._sync_in_progress = False
 
     def handle_standard_flow_launch(self, session, url_items, start_index, folder_id, settings, file_io):

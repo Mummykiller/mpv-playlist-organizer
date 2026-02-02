@@ -30,6 +30,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			});
 
 			this._initStorageObservation();
+			this._initTaskObservation();
 
 			this.nav = new MPV.NavigationObserver({
 				onNavigation: (url) => this._handleNavigation(url),
@@ -304,6 +305,60 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			return `${playlist.length}:` + playlist.map(item => 
 				`${item.id}:${!!item.watched}:${!!item.markedAsWatched}`
 			).join(",");
+		}
+
+		_initTaskObservation() {
+			chrome.storage.onChanged.addListener((changes, area) => {
+				if (area === "local" && changes.mpv_active_tasks) {
+					this._updateTaskUI(changes.mpv_active_tasks.newValue);
+				}
+			});
+
+			// Initial check
+			chrome.storage.local.get("mpv_active_tasks", (data) => {
+				if (data.mpv_active_tasks) {
+					this._updateTaskUI(data.mpv_active_tasks);
+				}
+			});
+		}
+
+		_updateTaskUI(tasks) {
+			if (!this.ui.shadowRoot) return;
+			const dashboard = this.ui.shadowRoot.getElementById("progress-dashboard");
+			if (!dashboard) return;
+
+			// Filter for only 'processing' or 'queued' tasks to show in the bar
+			const activeTasks = (tasks || []).filter(t => t.status === "processing" || t.status === "queued");
+
+			if (activeTasks.length === 0) {
+				dashboard.style.display = "none";
+				return;
+			}
+
+			// Show the first/most important task
+			const task = activeTasks[0];
+			dashboard.style.display = "flex";
+
+			const label = dashboard.querySelector(".progress-label");
+			const percentText = dashboard.querySelector(".progress-percent");
+			const barFill = dashboard.querySelector(".progress-bar-fill");
+			const cancelBtn = dashboard.querySelector("#btn-cancel-task");
+
+			if (label) label.textContent = task.label;
+			
+			const percent = task.total > 0 ? Math.round((task.progress / task.total) * 100) : 0;
+			if (percentText) percentText.textContent = `${percent}%`;
+			if (barFill) barFill.style.width = `${percent}%`;
+
+			if (cancelBtn) {
+				cancelBtn.onclick = () => {
+					this.bridge.send("cancel_task", null, { task_id: task.id });
+					cancelBtn.disabled = true;
+					cancelBtn.style.opacity = "0.5";
+				};
+				cancelBtn.disabled = false;
+				cancelBtn.style.opacity = "1";
+			}
 		}
 
 		_updateFolderSubscription(folderId) {

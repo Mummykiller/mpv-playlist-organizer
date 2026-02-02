@@ -37,6 +37,30 @@ addNativeListener("item_natural_completion", (data) =>
 );
 addNativeListener("mpv_quitting", (data) => handleMpvQuitting(data));
 addNativeListener("session_restored", (data) => handleSessionRestored(data));
+addNativeListener("playback_health_changed", (data) => handlePlaybackHealthChanged(data));
+
+export async function handlePlaybackHealthChanged(data) {
+	const { folderId, health } = data;
+	if (!folderId) return;
+
+	console.log(`[PlaybackHandler] Health changed for folder '${folderId}': ${health}`);
+
+	// Update the global playback state bucket
+	const { active_playback_state: pbState } = await chrome.storage.local.get("active_playback_state");
+	if (pbState && pbState.folderId === folderId) {
+		pbState.health = health;
+		
+		// If health is dead, we should also mark it as not running to trigger UI reset
+		if (health === "dead") {
+			pbState.isRunning = false;
+		}
+		
+		await chrome.storage.local.set({ active_playback_state: pbState });
+		
+		// Broadcast the new state to all tabs
+		broadcastPlaybackState(folderId, { health });
+	}
+}
 
 export async function handleItemNaturalCompletion(data) {
 	const { folderId, itemId } = data;

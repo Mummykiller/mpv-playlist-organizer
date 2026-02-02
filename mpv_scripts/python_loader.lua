@@ -150,3 +150,19 @@ mp.register_event("end-file", function(event)
 end)
 
 debug_log("Python interaction script loaded.")
+
+-- Monitor logs for yt-dlp errors
+mp.enable_messages("info")
+mp.register_event("log-message", function(e)
+    if e.prefix == "ytdl_hook" then
+        if e.text:find("Requested format is not available") or 
+           e.text:find("youtube-dl failed") or
+           e.text:find("Sign in to confirm your age") or
+           e.text:find("confirm you’re not a bot") or
+           e.text:find("403: Forbidden") then
+            
+            debug_log("Detected YTDL Error: " .. e.text)
+            mp.commandv("script-message", "ytdl_error_detected", e.text)
+        end
+    end
+end)

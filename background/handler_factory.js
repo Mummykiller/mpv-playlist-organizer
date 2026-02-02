@@ -5,30 +5,7 @@ import { debouncedSyncToNativeHostFile } from "./core_services.js";
 import { broadcastLog, broadcastToTabs } from "./messaging.js";
 import { storage } from "./storage_instance.js";
 import { broadcastPlaylistState } from "./ui_broadcaster.js";
-
-function normalizeRequest(data) {
-	if (!data || typeof data !== "object") return data;
-	
-	if (Array.isArray(data)) {
-		return data.map(normalizeRequest);
-	}
-
-	const snakeToCamel = (str) => {
-		if (str === "request_id") return "request_id";
-		return str.replace(/([-_][a-z])/g, (group) =>
-			group.toUpperCase().replace("-", "").replace("_", "")
-		);
-	};
-
-	const normalized = {};
-	for (const key in data) {
-		if (Object.prototype.hasOwnProperty.call(data, key)) {
-			const camelKey = snakeToCamel(key);
-			normalized[camelKey] = normalizeRequest(data[key]);
-		}
-	}
-	return normalized;
-}
+import { normalizeKeys } from "../utils/commUtils.module.js";
 
 /**
  * Higher-order function to create standardized request handlers.
@@ -55,7 +32,7 @@ export function createHandler(logic, options = {}) {
 	} = options;
 
 	return async (rawRequest = {}, sender = {}) => {
-		const request = normalizeRequest(rawRequest);
+		const request = normalizeKeys(rawRequest);
 		const context = { 
 			request: request, 
 			sender: sender || {}, 
