@@ -4,10 +4,12 @@ from concurrent.futures import ThreadPoolExecutor
 from . import native_link
 
 class ItemProcessor:
-    def __init__(self, services, send_message, file_io):
+    def __init__(self, services, send_message, file_io, metadata_cache=None, task_manager=None):
         self.services = services
         self.send_message = send_message
         self.file_io = file_io
+        self.metadata_cache = metadata_cache
+        self.task_manager = task_manager
 
     def ensure_id(self, item):
         """Ensures an item has a unique ID."""
@@ -29,8 +31,25 @@ class ItemProcessor:
         self.ensure_id(item)
         
         # Ensure it has an original URL
+        url = item.get('url')
         if not item.get('original_url'):
-            item['original_url'] = item.get('url')
+            item['original_url'] = url
+
+        # --- Layer 0: Global Metadata Cache ---
+        if self.metadata_cache:
+            cached = self.metadata_cache.get(url)
+            if cached:
+                logging.debug(f"[ItemProcessor] Global cache hit for: {url}")
+                item.update({
+                    "title": cached.get("title") or item.get("title"),
+                    "headers": cached.get("headers"),
+                    "is_youtube": cached.get("is_youtube"),
+                    "use_ytdl_mpv": cached.get("use_ytdl_mpv"),
+                    "ytdl_format": cached.get("ytdl_format"),
+                    "cookies_browser": cached.get("cookies_browser"),
+                    "enriched": True
+                })
+                return [item]
 
         if settings is None:
             settings = self.file_io.get_settings()
@@ -52,6 +71,11 @@ class ItemProcessor:
                 entry.setdefault('use_ytdl_mpv', False)
                 if cookies_browser: entry['cookies_browser'] = cookies_browser
                 if cookies_file: entry['cookies_file'] = cookies_file
+                
+                # Cache individual entries if possible
+                if self.metadata_cache:
+                    self.metadata_cache.set(entry['url'], entry)
+                    
                 processed_entries.append(entry)
             return processed_entries
 
@@ -84,18 +108,44 @@ class ItemProcessor:
                 session_cookies.add(cookies_file)
                 
         item['enriched'] = True
+
+        # --- Save to Global Cache ---
+        if self.metadata_cache:
+            self.metadata_cache.set(url, item)
+
         return [item]
 
     def process_batch(self, items, folder_id, settings, session=None, max_workers=5):
         """Enriches a batch of items in parallel."""
         final_items = []
+        job_id = None
+        
+        if self.task_manager and len(items) > 1:
+            job_id = self.task_manager.create_job("batch_enrich", f"Enriching {len(items)} items...", total=len(items))
+            self.task_manager.update_job(job_id, status="processing")
+
+        processed_count = 0
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(self.enrich_single_item, item, folder_id, settings=settings, session=session, quiet=True) for item in items]
             for future in futures:
+                # Check for cancellation
+                if job_id and self.task_manager.is_cancelled(job_id):
+                    logging.info(f"[ItemProcessor] Batch enrichment for job {job_id} cancelled.")
+                    break
+
                 try:
                     final_items.extend(future.result())
                 except Exception as e:
                     logging.error(f"Error enriching item in batch: {e}")
+                
+                processed_count += 1
+                if job_id:
+                    self.task_manager.update_job(job_id, progress=processed_count)
+
+        if job_id:
+            status = "completed" if not self.task_manager.is_cancelled(job_id) else "cancelled"
+            self.task_manager.update_job(job_id, status=status)
+
         return final_items
 
     def resolve_input_items(self, url_items_or_m3u, enriched_items_list, headers):

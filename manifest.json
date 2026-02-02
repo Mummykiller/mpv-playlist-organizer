@@ -5,6 +5,7 @@
 	"description": "Organize playlists and send them to the MPV media player.",
 	"permissions": [
 		"storage",
+		"unlimitedStorage",
 		"nativeMessaging",
 		"webRequest",
 		"contextMenus",

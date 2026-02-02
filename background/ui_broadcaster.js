@@ -138,6 +138,7 @@ export async function broadcastPlaybackState(folderId, statusOverride = {}) {
 		isIdle: mpv_playback_cache?.isIdle || false,
 		lastPlayedId: mpv_playback_cache?.lastPlayedId,
 		needsAppend: needsAppend,
+		health: mpv_playback_cache?.health || "ok",
 		...statusOverride
 	};
 

@@ -177,6 +177,10 @@ class NativeLink {
 		return this.call("get_anilist_releases", params);
 	}
 
+	async getMetadataCache(shard = null) {
+		return this.call("get_metadata_cache", { shard });
+	}
+
 	async checkYtdlpUpdate() {
 		return this.call("ytdlp_update_check");
 	}

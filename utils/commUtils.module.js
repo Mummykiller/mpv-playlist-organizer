@@ -115,3 +115,33 @@ export class Logger {
 		console.debug(this._format(msg));
 	}
 }
+
+/**
+ * Recursively normalizes keys in an object from snake_case to camelCase.
+ * Excludes whitelisted keys like 'request_id'.
+ */
+export function normalizeKeys(data) {
+	if (!data || typeof data !== "object") return data;
+
+	if (Array.isArray(data)) {
+		return data.map(normalizeKeys);
+	}
+
+	const WHITELIST = new Set(["request_id", "url", "m3u8"]);
+
+	const snakeToCamel = (str) => {
+		if (WHITELIST.has(str)) return str;
+		return str.replace(/([-_][a-z])/g, (group) =>
+			group.toUpperCase().replace("-", "").replace("_", ""),
+		);
+	};
+
+	const normalized = {};
+	for (const key in data) {
+		if (Object.prototype.hasOwnProperty.call(data, key)) {
+			const camelKey = snakeToCamel(key);
+			normalized[camelKey] = normalizeKeys(data[key]);
+		}
+	}
+	return normalized;
+}

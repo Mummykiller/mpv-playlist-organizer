@@ -4,6 +4,7 @@ import threading
 import sys
 import os
 import logging
+import time
 
 # Attempt to import cli_base to setup environment
 try:

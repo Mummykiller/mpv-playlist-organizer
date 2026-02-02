@@ -284,13 +284,18 @@ try:
             logging.error(f"[PY] Unexpected error in send_message: {e}")
 
     # --- Global Instances ---
+    metadata_cache = native_link.metadata_cache.MetadataCache(DATA_DIR, file_io)
+    task_manager = native_link.task_manager.TaskManager(send_message)
+
     mpv_session = MpvSessionManager(session_file_path=SESSION_FILE, dependencies={
         'get_all_folders_from_file': file_io.get_all_folders_from_file,
         'get_mpv_executable': file_io.get_mpv_executable,
         'log_stream': log_stream,
         'send_message': send_message,
         'SCRIPT_DIR': SCRIPT_DIR,
-        'TEMP_PLAYLISTS_DIR': TEMP_PLAYLISTS_DIR
+        'TEMP_PLAYLISTS_DIR': TEMP_PLAYLISTS_DIR,
+        'metadata_cache': metadata_cache,
+        'task_manager': task_manager
     })
 
     handler_manager = HandlerManager(
@@ -304,6 +309,8 @@ try:
         temp_playlists_dir=TEMP_PLAYLISTS_DIR,
         log_stream=log_stream,
         data_dir=DATA_DIR,
+        metadata_cache=metadata_cache,
+        task_manager=task_manager,
         diagnostic_collector=diagnostic_collector
     )
 

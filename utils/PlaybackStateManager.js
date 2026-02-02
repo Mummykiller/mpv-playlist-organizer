@@ -26,6 +26,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				isRunning: false,
 				needsAppend: false,
 				isClosing: false,
+				health: "ok",
 			};
 			this.listeners = new Set();
 			this._initStorageListener();
@@ -84,15 +85,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (newData.lastPlayedId) this.state.lastPlayedId = newData.lastPlayedId;
 			if (newData.needsAppend !== undefined) this.state.needsAppend = newData.needsAppend;
 			if (newData.isClosing !== undefined) this.state.isClosing = newData.isClosing;
+			if (newData.health !== undefined) this.state.health = newData.health;
 
 			// 2. Derive Status
 			let isRunning = newData.isRunning ?? this.state.isRunning;
 			const isPaused = newData.isPaused ?? this.state.isPaused;
 			const isIdle = newData.isIdle ?? this.state.isIdle;
+			const health = newData.health ?? this.state.health;
 
-			// If the player is NOT running, we must clear the needsAppend state
-			if (!isRunning) {
+			// If the player is NOT running OR health is dead, we must clear the needsAppend state
+			if (!isRunning || health === "dead") {
 				this.state.needsAppend = false;
+				isRunning = false; // Force stop if dead
 			}
 
 			let newStatus = PlaybackStatus.STOPPED;

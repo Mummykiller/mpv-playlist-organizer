@@ -68,10 +68,13 @@ class DataHandler(BaseHandler):
             if not filepath.startswith(export_dir_abs):
                 msg = "Access denied: Path outside export directory."
                 return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
+            
             with open(filepath, 'r', encoding='utf-8') as f:
-                return native_link.success(f.read())
+                import json
+                data = json.load(f)
+                return native_link.success(data=data)
         except Exception as e:
-            msg = f"Failed to read file: {e}"
+            msg = f"Failed to read or parse file: {e}"
             return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
 
     @command('open_export_folder')
@@ -90,3 +93,22 @@ class DataHandler(BaseHandler):
         except Exception as e:
             msg = f"Failed to open folder: {e}"
             return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
+
+    @command('get_metadata_cache')
+    def handle_get_metadata_cache(self, request: native_link.BaseRequest):
+        """Returns the global metadata cache for a specific shard or all shards."""
+        if hasattr(request, 'shard') and request.shard:
+            data = self.ctx.metadata_cache.get_shard(request.shard)
+            return native_link.success({"shard": request.shard, "data": data})
+        else:
+            shards = self.ctx.metadata_cache.list_shards()
+            return native_link.success({"shards": shards})
+
+    @command('cancel_task')
+    def handle_cancel_task(self, request: native_link.BaseRequest):
+        """Cancels a specific background task by ID."""
+        task_id = getattr(request, 'task_id', None)
+        if task_id:
+            self.ctx.task_manager.cancel_job(task_id)
+            return native_link.success(message=f"Task {task_id} cancellation requested.")
+        return native_link.failure("Missing task_id.")

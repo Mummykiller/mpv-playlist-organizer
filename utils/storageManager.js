@@ -1,3 +1,5 @@
+import { normalizeKeys } from "./commUtils.module.js";
+
 /**
  * Manages all data persistence and migration logic for the extension.
  * Uses a granular 'Bucket' system to improve performance and memory usage.
@@ -29,30 +31,8 @@ export class StorageManager {
 		if (!keys.mpv_settings || keys.mpv_camel_migrated) return;
 
 		console.log("[Storage] Migrating settings to camelCase...");
-		const settings = keys.mpv_settings;
+		const settings = normalizeKeys(keys.mpv_settings);
 		
-		const snakeToCamel = (str) => str.replace(/([-_][a-z])/g, group => group.toUpperCase().replace("-", "").replace("_", ""));
-
-		const migrateObject = (obj) => {
-			if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
-			const newObj = {};
-			for (const key in obj) {
-				const newKey = snakeToCamel(key);
-				newObj[newKey] = migrateObject(obj[key]);
-			}
-			return newObj;
-		};
-
-		if (settings.ui_preferences) {
-			settings.uiPreferences = migrateObject(settings.ui_preferences);
-			delete settings.ui_preferences;
-		}
-		
-		if (settings.lastUsedFolderId === undefined && settings.last_used_folder_id !== undefined) {
-			settings.lastUsedFolderId = settings.last_used_folder_id;
-			delete settings.last_used_folder_id;
-		}
-
 		await chrome.storage.local.set({ 
 			mpv_settings: settings,
 			mpv_camel_migrated: true 

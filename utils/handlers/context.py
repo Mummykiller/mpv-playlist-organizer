@@ -23,4 +23,6 @@ class BackendContext:
     temp_playlists_dir: str
     log_stream: Callable
     data_dir: str
+    metadata_cache: Any # MetadataCache instance
+    task_manager: Any # TaskManager instance
     diagnostic_collector: Optional[Any] = None

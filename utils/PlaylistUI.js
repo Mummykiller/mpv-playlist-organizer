@@ -63,144 +63,165 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			if (!this.fullContainer) return;
 
-			const oldItemCount =
-				this.fullContainer.querySelectorAll(".list-item").length;
-			const scrollPosition = this.fullContainer.scrollTop;
+			// Optimization: Fetch all potentially relevant cache shards in one go
+			const domains = new Set(effectivePlaylist.map(item => {
+				try { return new URL(item.url).hostname; } catch(e) { return null; }
+			}).filter(Boolean));
+			
+			const storageKeys = Array.from(domains).map(d => `mpv_meta_cache_${d.replace(/[^a-zA-Z0-9.-]/g, "_")}`);
+			
+			chrome.storage.local.get(storageKeys, (cacheData) => {
+				const oldItemCount =
+					this.fullContainer.querySelectorAll(".list-item").length;
+				const scrollPosition = this.fullContainer.scrollTop;
 
-			// Clear container efficiently
-			while (this.fullContainer.firstChild) {
-				this.fullContainer.removeChild(this.fullContainer.lastChild);
-			}
+				// Clear container efficiently
+				while (this.fullContainer.firstChild) {
+					this.fullContainer.removeChild(this.fullContainer.lastChild);
+				}
 
-			this._renderQuickActions();
+				this._renderQuickActions();
 
-			if (playlist && playlist.length > 0) {
-				const highlightEnabled =
-					this.controller.state.state.settings?.enableActiveItemHighlight ??
-					true;
-				const showWatchedGUI =
-					this.controller.state.state.settings?.showWatchedStatusGui ?? true;
+				if (effectivePlaylist && effectivePlaylist.length > 0) {
+					const highlightEnabled =
+						this.controller.state.state.settings?.enableActiveItemHighlight ??
+						true;
+					const showWatchedGUI =
+						this.controller.state.state.settings?.showWatchedStatusGui ?? true;
 
-				// Use DocumentFragment to minimize reflows during bulk DOM updates
-				const fragment = document.createDocumentFragment();
+					const fragment = document.createDocumentFragment();
 
-				playlist.forEach((item, index) => {
-					const itemDiv = document.createElement("div");
-					itemDiv.className = "list-item";
-					
-					// UI Change: Only gray out if PERSONALLY watched
-					if (item.watched) {
-						itemDiv.classList.add("item-watched");
-					}
-					
-					const isCurrent = item.currentlyPlaying || (lastPlayedId && item.id === lastPlayedId);
-					if (highlightEnabled && isCurrent) {
-						itemDiv.classList.add(
-							isFolderActive ? "active-item" : "last-played-item",
-						);
-					}
-					itemDiv.draggable = true;
-					itemDiv.title = item.url;
-					itemDiv.dataset.url = item.url;
-					itemDiv.dataset.title = item.title;
-					itemDiv.dataset.id = item.id || "";
+					effectivePlaylist.forEach((item, index) => {
+						// LAYER 0: ENRICH FROM CACHE INSTANTLY
+						if (!item.title || item.title === item.url) {
+							try {
+								const domain = new URL(item.url).hostname;
+								const storageKey = `mpv_meta_cache_${domain.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
+								const shard = cacheData[storageKey];
+								if (shard && shard[item.url]) {
+									const cached = shard[item.url];
+									item.title = cached.title || item.title;
+									// Optionally pull headers/covers if we add them to UI later
+								}
+							} catch(e) {}
+						}
 
-					// 1. Copy URL Button
-					if (this.controller.state.state.settings.showCopyTitleButton) {
-						const copyBtn = document.createElement("button");
-						copyBtn.className = "btn-copy-item";
-						copyBtn.dataset.url = item.url;
-						copyBtn.title = "Copy URL";
-						copyBtn.innerHTML =
-							'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-						itemDiv.appendChild(copyBtn);
-					}
-
-					const indexSpan = document.createElement("span");
-					indexSpan.className = "url-index";
-					indexSpan.textContent = `${index + 1}.`;
-					itemDiv.appendChild(indexSpan);
-
-					const isYouTube = item.url.includes("youtube.com/") || item.url.includes("youtu.be/");
-
-					if (item.watched && !isYouTube) {
-						const check = document.createElement("span");
-						check.className = "watched-checkmark index-checkmark";
-						check.innerHTML = "✔";
-						itemDiv.appendChild(check);
-					}
-
-					const urlSpan = document.createElement("span");
-					urlSpan.className = "url-text";
-					this._formatTitle(urlSpan, item);
-
-					// --- Watched Status Checkbox ---
-					if (
-						showWatchedGUI &&
-						(item.url.includes("youtube.com/") ||
-							item.url.includes("youtu.be/"))
-					) {
-						const watchedCheckbox = document.createElement("input");
-						watchedCheckbox.type = "checkbox";
-						watchedCheckbox.className = "item-watched-checkbox";
-						// UI Change: Checkbox only reflects SYNC status
-						watchedCheckbox.checked = !!item.markedAsWatched;
-						watchedCheckbox.title = watchedCheckbox.checked
-							? "Already marked as watched"
-							: "Click to mark as watched on YouTube";
-
-						watchedCheckbox.addEventListener("change", (e) => {
-							e.stopPropagation();
-							this.controller.handleWatchedToggle(
-								item.id,
-								watchedCheckbox.checked,
-							);
-						});
-						itemDiv.appendChild(watchedCheckbox);
-
+						const itemDiv = document.createElement("div");
+						itemDiv.className = "list-item";
+						
 						if (item.watched) {
+							itemDiv.classList.add("item-watched");
+						}
+						
+						const isCurrent = item.currentlyPlaying || (lastPlayedId && item.id === lastPlayedId);
+						if (highlightEnabled && isCurrent) {
+							itemDiv.classList.add(
+								isFolderActive ? "active-item" : "last-played-item",
+							);
+						}
+						itemDiv.draggable = true;
+						itemDiv.title = item.url;
+						itemDiv.dataset.url = item.url;
+						itemDiv.dataset.title = item.title;
+						itemDiv.dataset.id = item.id || "";
+
+						// ... (rest of rendering logic remains the same)
+						// 1. Copy URL Button
+						if (this.controller.state.state.settings.showCopyTitleButton) {
+							const copyBtn = document.createElement("button");
+							copyBtn.className = "btn-copy-item";
+							copyBtn.dataset.url = item.url;
+							copyBtn.title = "Copy URL";
+							copyBtn.innerHTML =
+								'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+							itemDiv.appendChild(copyBtn);
+						}
+
+						const indexSpan = document.createElement("span");
+						indexSpan.className = "url-index";
+						indexSpan.textContent = `${index + 1}.`;
+						itemDiv.appendChild(indexSpan);
+
+						const isYouTube = item.url.includes("youtube.com/") || item.url.includes("youtu.be/");
+
+						if (item.watched && !isYouTube) {
 							const check = document.createElement("span");
-							check.className = "watched-checkmark checkbox-checkmark";
+							check.className = "watched-checkmark index-checkmark";
 							check.innerHTML = "✔";
 							itemDiv.appendChild(check);
 						}
-					}
 
-					itemDiv.appendChild(urlSpan);
+						const urlSpan = document.createElement("span");
+						urlSpan.className = "url-text";
+						this._formatTitle(urlSpan, item);
 
-					const removeBtn = document.createElement("button");
-					removeBtn.className = "btn-remove-item";
-					removeBtn.dataset.index = index;
-					removeBtn.title = "Remove Item";
-					removeBtn.textContent = "×";
-					itemDiv.appendChild(removeBtn);
+						// --- Watched Status Checkbox ---
+						if (
+							showWatchedGUI &&
+							(item.url.includes("youtube.com/") ||
+								item.url.includes("youtu.be/"))
+						) {
+							const watchedCheckbox = document.createElement("input");
+							watchedCheckbox.type = "checkbox";
+							watchedCheckbox.className = "item-watched-checkbox";
+							watchedCheckbox.checked = !!item.markedAsWatched;
+							watchedCheckbox.title = watchedCheckbox.checked
+								? "Already marked as watched"
+								: "Click to mark as watched on YouTube";
 
-					fragment.appendChild(itemDiv);
-				});
+							watchedCheckbox.addEventListener("change", (e) => {
+								e.stopPropagation();
+								this.controller.handleWatchedToggle(
+									item.id,
+									watchedCheckbox.checked,
+								);
+							});
+							itemDiv.appendChild(watchedCheckbox);
 
-				this.fullContainer.appendChild(fragment);
-			} else {
-				const placeholder = document.createElement("p");
-				placeholder.id = "playlist-placeholder";
-				placeholder.textContent = "Playlist is empty.";
-				this.fullContainer.appendChild(placeholder);
-			}
+							if (item.watched) {
+								const check = document.createElement("span");
+								check.className = "watched-checkmark checkbox-checkmark";
+								check.innerHTML = "✔";
+								itemDiv.appendChild(check);
+							}
+						}
 
-			const newItemCount = playlist ? playlist.length : 0;
-			if (
-				newItemCount > oldItemCount &&
-				this.fullContainer.scrollHeight > this.fullContainer.clientHeight
-			) {
-				this.fullContainer.scrollTop = this.fullContainer.scrollHeight;
-			} else if (isFolderActive && lastPlayedId) {
-				const activeItem = this.fullContainer.querySelector(".active-item");
-				if (activeItem)
-					activeItem.scrollIntoView({ behavior: "smooth", block: "center" });
-				else this.fullContainer.scrollTop = scrollPosition;
-			} else {
-				this.fullContainer.scrollTop = scrollPosition;
-			}
-			this.controller.updateAddButtonState();
+						itemDiv.appendChild(urlSpan);
+
+						const removeBtn = document.createElement("button");
+						removeBtn.className = "btn-remove-item";
+						removeBtn.dataset.index = index;
+						removeBtn.title = "Remove Item";
+						removeBtn.textContent = "×";
+						itemDiv.appendChild(removeBtn);
+
+						fragment.appendChild(itemDiv);
+					});
+
+					this.fullContainer.appendChild(fragment);
+				} else {
+					const placeholder = document.createElement("p");
+					placeholder.id = "playlist-placeholder";
+					placeholder.textContent = "Playlist is empty.";
+					this.fullContainer.appendChild(placeholder);
+				}
+
+				const newItemCount = effectivePlaylist ? effectivePlaylist.length : 0;
+				if (
+					newItemCount > oldItemCount &&
+					this.fullContainer.scrollHeight > this.fullContainer.clientHeight
+				) {
+					this.fullContainer.scrollTop = this.fullContainer.scrollHeight;
+				} else if (isFolderActive && lastPlayedId) {
+					const activeItem = this.fullContainer.querySelector(".active-item");
+					if (activeItem)
+						activeItem.scrollIntoView({ behavior: "smooth", block: "center" });
+					else this.fullContainer.scrollTop = scrollPosition;
+				} else {
+					this.fullContainer.scrollTop = scrollPosition;
+				}
+				this.controller.updateAddButtonState();
+			});
 		}
 
 		_renderQuickActions() {
