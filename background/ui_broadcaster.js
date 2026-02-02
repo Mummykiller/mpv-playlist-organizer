@@ -71,7 +71,7 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
  * Broadcasts a full playlist update to all UI components.
  * Standardizes the payload structure to prevent UI flicker/mismatches.
  */
-export async function broadcastPlaylistState(folderId, playlist = null, action = "render_playlist") {
+export async function broadcastPlaylistState(folderId, playlist = null, action = "playlist_dirty") {
 	const data = await storage.get();
 	const targetPlaylist = playlist || data.folders[folderId]?.playlist || [];
 	
@@ -94,7 +94,8 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 	broadcastToTabs({
 		action: action,
 		folderId: folderId,
-		playlist: targetPlaylist,
+		// Omit playlist array to prevent payload overload. 
+		// The UI will fetch from storage if needed.
 		lastPlayedId: pbState.lastPlayedId,
 		isFolderActive: isActive,
 		isPaused: isPaused,

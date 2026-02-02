@@ -17,6 +17,8 @@ import {
 } from "../ui_broadcaster.js";
 
 const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;
+const RESUME_TIME_WRITE_THROTTLE_MS = 10000;
+const resumeTimeThrottles = new Map();
 
 // Register listeners for unsolicited native host events
 addNativeListener("mpv_exited", (data) => handleMpvExited(data));
@@ -910,20 +912,26 @@ export async function handleUpdateItemResumeTime(data) {
 
 	if (actualFolderId && storageData.folders[actualFolderId]) {
 		const folder = storageData.folders[actualFolderId];
-		for (const item of folder.playlist) {
-			if (item.id === itemId) {
-				item.resumeTime = resumeTime;
-				item.lastModified = lastModified || Date.now();
+		const item = folder.playlist.find(i => i.id === itemId);
+		
+		if (item) {
+			item.resumeTime = resumeTime;
+			item.lastModified = lastModified || Date.now();
+			
+			const now = Date.now();
+			const lastWrite = resumeTimeThrottles.get(itemId) || 0;
+
+			// PERSISTENCE THROTTLE: Only write to storage/disk every 10 seconds
+			if (now - lastWrite >= RESUME_TIME_WRITE_THROTTLE_MS) {
+				resumeTimeThrottles.set(itemId, now);
 				await storage.set(storageData, actualFolderId);
-				
-				// DELTA UPDATE: Progress bar or resume time change
-				broadcastItemUpdate(actualFolderId, itemId, {
-					resumeTime: item.resumeTime
-				});
-				
-				debouncedSyncToNativeHostFile(null, true);
-				break;
+				debouncedSyncToNativeHostFile(actualFolderId, false);
 			}
+			
+			// REAL-TIME BROADCAST: Always send lightweight delta for UI progress bars (if any)
+			broadcastItemUpdate(actualFolderId, itemId, {
+				resumeTime: item.resumeTime
+			});
 		}
 	}
 }
