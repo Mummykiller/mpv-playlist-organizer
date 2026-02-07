@@ -11,7 +11,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	 * The global version is auto-generated from this file.
 	 */
 
-	MPV.debounce = function debounce(func, wait) {
+	const debounce = MPV.debounce = function debounce(func, wait) {
 		let timeout;
 		return function executedFunction(...args) {
 			const later = () => {
@@ -23,7 +23,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		};
 	}
 
-	MPV.sendMessageAsync = (payload) =>
+	const sendMessageAsync = MPV.sendMessageAsync = (payload) =>
 		new Promise((resolve, reject) => {
 			if (typeof chrome === "undefined" || !chrome.runtime?.id) {
 				return reject(new Error("Extension context invalidated."));
@@ -40,7 +40,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	 * @param {string} str The string to sanitize.
 	 * @param {boolean} isFilename If true, applies strict filesystem-safe filtering.
 	 */
-	MPV.sanitizeString = function sanitizeString(str, isFilename = false) {
+	const sanitizeString = MPV.sanitizeString = function sanitizeString(str, isFilename = false) {
 		if (typeof str !== "string") return str;
 		if (isFilename) {
 			// Strict filtering for filenames (strips / \ : * ? " < > | $ ; & ` and newlines)
@@ -51,12 +51,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 	}
 
-	MPV.isYouTubeUrl = function isYouTubeUrl(url) {
+	const isYouTubeUrl = MPV.isYouTubeUrl = function isYouTubeUrl(url) {
 		if (!url || typeof url !== "string") return false;
 		return url.includes("youtube.com/") || url.includes("youtu.be/");
 	}
 
-	MPV.getYoutubeId = function getYoutubeId(url) {
+	const getYoutubeId = MPV.getYoutubeId = function getYoutubeId(url) {
 		if (!url) return null;
 		const videoMatch = url.match(
 			/(?:v=|\/v\/|embed\/|youtu\.be\/|\/shorts\/)([a-zA-Z0-9_-]{11})/,
@@ -70,7 +70,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	/**
 	 * Normalizes YouTube URLs by removing timestamps and other tracking parameters.
 	 */
-	MPV.normalizeYouTubeUrl = function normalizeYouTubeUrl(ytUrl) {
+	const normalizeYouTubeUrl = MPV.normalizeYouTubeUrl = function normalizeYouTubeUrl(ytUrl) {
 		if (!ytUrl || typeof ytUrl !== "string") return ytUrl;
 		try {
 			const urlObj = new URL(ytUrl);
@@ -118,6 +118,36 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		debug(msg) {
 			console.debug(this._format(msg));
 		}
+	}
+
+	/**
+	 * Recursively normalizes keys in an object from snake_case to camelCase.
+	 * Excludes whitelisted keys like 'request_id'.
+	 */
+	const normalizeKeys = MPV.normalizeKeys = function normalizeKeys(data) {
+		if (!data || typeof data !== "object") return data;
+
+		if (Array.isArray(data)) {
+			return data.map(normalizeKeys);
+		}
+
+		const WHITELIST = new Set(["request_id", "url", "m3u8"]);
+
+		const snakeToCamel = (str) => {
+			if (WHITELIST.has(str)) return str;
+			return str.replace(/([-_][a-z])/g, (group) =>
+				group.toUpperCase().replace("-", "").replace("_", ""),
+			);
+		};
+
+		const normalized = {};
+		for (const key in data) {
+			if (Object.prototype.hasOwnProperty.call(data, key)) {
+				const camelKey = snakeToCamel(key);
+				normalized[camelKey] = normalizeKeys(data[key]);
+			}
+		}
+		return normalized;
 	}
 
 })();

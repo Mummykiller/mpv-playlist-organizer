@@ -137,7 +137,6 @@
             this._formatTitle(titleSpan, item);
             div.appendChild(titleSpan);
 
-            const isYouTube = item.url.indexOf("youtube.com/") !== -1 || item.url.indexOf("youtu.be/") !== -1 || item.url.indexOf("youtube.com/shorts/") !== -1;
             if (this.prefs.showWatchedStatusGui && isYouTube) {
                 div.appendChild(this._createWatchedCheckbox(item));
                 

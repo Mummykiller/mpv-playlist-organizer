@@ -96,6 +96,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// If the player is NOT running OR health is dead, we must clear the needsAppend state
 			if (!isRunning || health === "dead") {
 				this.state.needsAppend = false;
+				this.state.isClosing = false;
 				isRunning = false; // Force stop if dead
 			}
 

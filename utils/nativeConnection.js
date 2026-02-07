@@ -2,8 +2,9 @@
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 (() => {
 	const MPV = window.MPV_INTERNAL;
-	const { broadcastLog } = window.MPV_INTERNAL;
+	const broadcastLog = window.MPV_INTERNAL.broadcastLog;
 	const security = window.MPV_SECURITY;
+	// import { normalizeKeys } from "./commUtils.module.js"; // UNMAPPED
 
 	const NATIVE_HOST_NAME = "com.mpv_playlist_organizer.handler";
 
@@ -33,39 +34,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	};
 
 	/**
-	 * Normalizes keys in an object from snake_case to camelCase where appropriate.
-	 * Ensures upper layers always see a consistent schema.
-	 */
-	function normalizePayload(data) {
-		if (!data || typeof data !== "object") return data;
-
-		if (Array.isArray(data)) {
-			return data.map(normalizePayload);
-		}
-
-		const WHITELIST = new Set(["request_id", "url", "m3u8"]);
-
-		const snakeToCamel = (str) => {
-			if (WHITELIST.has(str)) return str;
-			return str.replace(/([-_][a-z])/g, (group) =>
-				group.toUpperCase().replace("-", "").replace("_", "")
-			);
-		};
-
-		const normalized = {};
-		for (const key in data) {
-			if (Object.prototype.hasOwnProperty.call(data, key)) {
-				const camelKey = snakeToCamel(key);
-				normalized[camelKey] = normalizePayload(data[key]);
-			}
-		}
-		return normalized;
-	}
-
-	/**
 	 * Registers a listener for unsolicited native host events.
 	 */
-	MPV.addNativeListener = function addNativeListener(action, callback) {
+	const addNativeListener = MPV.addNativeListener = function addNativeListener(action, callback) {
 		if (eventListeners[action]) {
 			eventListeners[action].push(callback);
 		}
@@ -76,7 +47,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	 */
 	function dispatchNativeEvent(action, data) {
 		if (eventListeners[action]) {
-			const normalizedData = normalizePayload(data);
+			const normalizedData = normalizeKeys(data);
 			eventListeners[action].forEach((cb) => {
 				cb(normalizedData);
 			});
@@ -135,7 +106,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			nativePort.onMessage.addListener((response) => {
 				const { request_id, ...responseData } = response;
-				const normalizedResponse = normalizePayload(responseData);
+				const normalizedResponse = normalizeKeys(responseData);
 
 				if (request_id && requestPromises[request_id]) {
 					requestPromises[request_id].resolve(normalizedResponse);
@@ -144,7 +115,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 				if (normalizedResponse.action)
 					dispatchNativeEvent(normalizedResponse.action, normalizedResponse);
-				
+
 				if (normalizedResponse.log) {
 					dispatchNativeEvent("log", { action: "log", log: normalizedResponse.log });
 				}
@@ -191,7 +162,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	 * @param {boolean} [shouldThrow=false] - Whether to throw errors or return failure object.
 	 * @returns {Promise<object>} A promise that resolves with the response.
 	 */
-	MPV.callNativeHost = async function callNativeHost(message, shouldThrow = false) {
+	const callNativeHost = MPV.callNativeHost = async function callNativeHost(message, shouldThrow = false) {
 		try {
 			// --- Pre-Validation Security Gate ---
 			// Check for URLs in the message and validate them
@@ -227,6 +198,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 	}
 
-	MPV.injectDependencies = function injectDependencies() {}
+	const injectDependencies = MPV.injectDependencies = function injectDependencies() {}
 
 })();
