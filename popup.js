@@ -7,6 +7,8 @@ import {
 	sendMessageAsync,
 } from "./utils/commUtils.module.js";
 import { OptionsManager } from "./utils/settings.js";
+import { MpvInterface } from "./utils/MpvInterface.module.js";
+import { PlaylistRenderer } from "./utils/PlaylistRenderer.js";
 
 document.addEventListener("DOMContentLoaded", async () => {
 	try {
@@ -683,7 +685,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (completedIds) popupState.completedIds = completedIds;
 
 			// Use fallbacks from persistent state
-			let effectivePlaylist = playlist || popupState.currentPlaylist || [];
+			const effectivePlaylist = playlist || popupState.currentPlaylist || [];
 			const effectiveLastPlayedId = lastPlayedId || popupState.lastPlayedId;
 			const effectiveIsFolderActive =
 				typeof isFolderActive === "boolean" ? isFolderActive : popupState.isFolderActive;
@@ -691,27 +693,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 				typeof isPaused === "boolean" ? isPaused : (popupState.isPaused || false);
 			const effectiveNeedsAppend = 
 				typeof needsAppend === "boolean" ? needsAppend : (popupState.needsAppend || false);
-			const effectiveCompletedIds = new Set(completedIds || popupState.completedIds || []);
-
-			// Filter out staged completed items
-			if (effectiveCompletedIds.size > 0) {
-				effectivePlaylist = effectivePlaylist.filter(item => !effectiveCompletedIds.has(item.id));
-			}
+			const effectiveCompletedIds = completedIds || popupState.completedIds || [];
 
 			// Guard: If we are in the closing state, do not update UI button icons
 			// or state as 'isPlaybackClosing' has higher visual priority.
 			if (isPlaybackClosing) return;
 
-			const oldItemCount =
-				playlistContainer.querySelectorAll(".list-item").length;
-			const scrollPosition = playlistContainer.scrollTop;
+			// 1. Let the shared renderer handle the list
+			playlistRenderer.updatePrefs(cachedPrefs || {});
+			playlistRenderer.render({
+				playlist: effectivePlaylist,
+				lastPlayedId: effectiveLastPlayedId,
+				isActive: effectiveIsFolderActive,
+				isPaused: effectiveIsPaused,
+				needsAppend: effectiveNeedsAppend,
+				completedIds: effectiveCompletedIds
+			});
 
-			// Efficiently clear container
-			while (playlistContainer.firstChild) {
-				playlistContainer.removeChild(playlistContainer.lastChild);
-			}
-
-			// Update the play button based on current playback state
+			// 2. Update the play button based on current playback state
 			if (miniPlayBtn) {
 				const effectiveIsActive = !!effectiveIsFolderActive;
 				const showingNeedsAppend = effectiveIsActive && !!effectiveNeedsAppend;
@@ -738,245 +737,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
 				}
 			}
-
-			if (effectivePlaylist && effectivePlaylist.length > 0) {
-				const prefs = cachedPrefs || {};
-				const highlightEnabled = prefs.enableActiveItemHighlight ?? true;
-				const showWatchedGUI = prefs.showWatchedStatusGui ?? true;
-
-				const fragment = document.createDocumentFragment();
-
-				effectivePlaylist.forEach((item, index) => {
-					const itemDiv = document.createElement("div");
-					itemDiv.className = "list-item";
-
-					// UI Change: Only gray out if PERSONALLY watched
-					if (item.watched) {
-						itemDiv.classList.add("item-watched");
-					}
-
-					if (
-						highlightEnabled &&
-						effectiveLastPlayedId &&
-						item.id === effectiveLastPlayedId
-					) {
-						if (effectiveIsFolderActive) {
-							itemDiv.classList.add("active-item");
-						} else {
-							itemDiv.classList.add("last-played-item");
-						}
-					}
-
-					itemDiv.draggable = true;
-					itemDiv.title = item.url;
-					itemDiv.dataset.url = item.url;
-					itemDiv.dataset.title = item.title;
-					itemDiv.dataset.index = index;
-					itemDiv.dataset.id = item.id || ""; // Attach ID to dataset
-
-					// 1. Copy URL Button
-					if (prefs.showCopyTitleButton) {
-						const copyBtn = document.createElement("button");
-						copyBtn.className = "btn-copy-item";
-						copyBtn.dataset.url = item.url;
-						copyBtn.title = "Copy URL";
-						copyBtn.innerHTML =
-							'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-						itemDiv.appendChild(copyBtn);
-					}
-
-					const indexSpan = document.createElement("span");
-					indexSpan.className = "url-index";
-					indexSpan.textContent = `${index + 1}.`;
-					itemDiv.appendChild(indexSpan);
-
-					const isYouTube = item.url.includes("youtube.com/") || item.url.includes("youtu.be/");
-
-					if (item.watched && !isYouTube) {
-						const check = document.createElement("span");
-						check.className = "watched-checkmark index-checkmark";
-						check.innerHTML = "✔";
-						itemDiv.appendChild(check);
-					}
-
-					const urlSpan = document.createElement("span");
-					urlSpan.className = "url-text";
-					_formatTitle(urlSpan, item); // Use the title formatting function
-
-					// --- Watched Status Checkbox (Popup Controller) ---
-					if (
-						showWatchedGUI &&
-						(item.url.includes("youtube.com/") ||
-							item.url.includes("youtu.be/"))
-					) {
-						const watchedCheckbox = document.createElement("input");
-						watchedCheckbox.type = "checkbox";
-						watchedCheckbox.className = "item-watched-checkbox";
-						// UI Change: Checkbox only reflects SYNC status
-						watchedCheckbox.checked = !!item.markedAsWatched;
-						watchedCheckbox.title = item.markedAsWatched
-							? "Already marked as watched"
-							: "Click to mark as watched on YouTube";
-
-						watchedCheckbox.addEventListener("click", (e) =>
-							e.stopPropagation(),
-						);
-						watchedCheckbox.addEventListener("change", async (e) => {
-							const isMarked = watchedCheckbox.checked;
-							const folderId = miniFolderSelect.value;
-							try {
-								await sendMessageAsync({
-									action: "update_item_marked_as_watched",
-									folderId: folderId,
-									itemId: item.id,
-									markedAsWatched: isMarked,
-								});
-								showStatus(
-									`${isMarked ? "Marked" : "Unmarked"} item as synced to YouTube.`,
-								);
-							} catch (err) {
-								console.error("Failed to update watched status:", err);
-								showStatus("Failed to update watched status.", true);
-								// Rollback UI on error
-								watchedCheckbox.checked = !isMarked;
-							}
-						});
-						itemDiv.appendChild(watchedCheckbox);
-
-						if (item.watched) {
-							const check = document.createElement("span");
-							check.className = "watched-checkmark checkbox-checkmark";
-							check.innerHTML = "✔";
-							itemDiv.appendChild(check);
-						}
-					}
-
-					itemDiv.appendChild(urlSpan);
-
-					const removeBtn = document.createElement("button");
-					removeBtn.className = "btn-remove-item";
-					removeBtn.dataset.index = index;
-					removeBtn.title = "Remove Item";
-					removeBtn.textContent = "×";
-					itemDiv.appendChild(removeBtn);
-
-					fragment.appendChild(itemDiv);
-				});
-
-				playlistContainer.appendChild(fragment);
-
-				// Post-render scroll logic
-				const newItemCount = effectivePlaylist.length;
-				const wasItemAdded = newItemCount > oldItemCount;
-				if (
-					wasItemAdded &&
-					playlistContainer.scrollHeight > playlistContainer.clientHeight
-				) {
-					playlistContainer.scrollTop = playlistContainer.scrollHeight;
-				} else if (isFolderActive && lastPlayedId) {
-					const activeItem = playlistContainer.querySelector(".active-item");
-					if (activeItem)
-						activeItem.scrollIntoView({ behavior: "smooth", block: "center" });
-				}
-			} else {
-				const placeholder = document.createElement("p");
-				placeholder.className = "playlist-placeholder";
-				placeholder.textContent = "Playlist is empty.";
-				playlistContainer.appendChild(placeholder);
-			}
-
-			// Restore scroll position immediately for non-playlist-change updates
-			playlistContainer.scrollTop = scrollPosition;
 		}
 
-				function updateItemDelta(itemId, delta) {
-					const itemDiv = playlistContainer.querySelector(`[data-id="${itemId}"]`);
-					if (!itemDiv) return;
-		
-					const isYouTube = itemDiv.dataset.url?.includes("youtube.com") || itemDiv.dataset.url?.includes("youtu.be");
-		
-					// 1. Gray out (watched)
-					if (delta.watched !== undefined) {
-						itemDiv.classList.toggle("item-watched", !!delta.watched);
-						
-						const existingIndexCheck = itemDiv.querySelector(".index-checkmark");
-						if (delta.watched && !isYouTube && !existingIndexCheck) {
-							const check = document.createElement("span");
-							check.className = "watched-checkmark index-checkmark";
-							check.innerHTML = "✔";
-							const indexSpan = itemDiv.querySelector(".url-index");
-							if (indexSpan) indexSpan.after(check);
-						} else if (!delta.watched && existingIndexCheck) {
-							existingIndexCheck.remove();
-						}
-					}
-		
-					// 2. Checkbox & Checkmark (markedAsWatched vs watched)
-					if (delta.markedAsWatched !== undefined || delta.watched !== undefined) {
-						const checkbox = itemDiv.querySelector(".item-watched-checkbox");
-						
-						// Checkbox strictly follows sync status
-						if (delta.markedAsWatched !== undefined && checkbox) {
-							checkbox.checked = !!delta.markedAsWatched;
-							checkbox.title = delta.markedAsWatched ? "Already marked as watched" : "Click to mark as watched on YouTube";
-						}
-
-						// Checkmark strictly follows local watched status
-						const existingCheckboxCheck = itemDiv.querySelector(".checkbox-checkmark");
-						if (isYouTube && checkbox) {
-							const currentlyWatched = delta.watched !== undefined ? delta.watched : !!itemDiv.classList.contains("item-watched");
-							
-							if (currentlyWatched && !existingCheckboxCheck) {
-								const check = document.createElement("span");
-								check.className = "watched-checkmark checkbox-checkmark";
-								check.innerHTML = "✔";
-								checkbox.after(check);
-							} else if (!currentlyWatched && existingCheckboxCheck) {
-								existingCheckboxCheck.remove();
-							}
-						}
-					}
-				}
-				/**
-
-				 * Formats the title for display, highlighting episode numbers or channel names.
-
-				 * @param {HTMLElement} urlSpan The span element to populate.
-
-				 * @param {object} item The playlist item containing title and url.
-
-				 */
-		function _formatTitle(urlSpan, item) {
-			const titleParts = item.title.split(" - ");
-			const isYouTubeVideoUrl = item.url.includes("youtube.com/watch");
-			const isYouTubePlaylistUrl = item.url.includes("youtube.com/playlist");
-
-			if (
-				titleParts.length > 1 &&
-				/^(s\d+)?e\d+(\.\d+)?$/i.test(titleParts[0].trim())
-			) {
-				const episodePrefixSpan = document.createElement("span");
-				episodePrefixSpan.textContent = titleParts.shift() + " - ";
-				const mainTitleSpan = document.createElement("span");
-				mainTitleSpan.className = "main-title-highlight";
-				mainTitleSpan.textContent = titleParts.join(" - ");
-				urlSpan.append(episodePrefixSpan, mainTitleSpan);
-			} else if (
-				(isYouTubeVideoUrl || isYouTubePlaylistUrl) &&
-				titleParts.length > 1
-			) {
-				const channelPrefixSpan = document.createElement("span");
-				channelPrefixSpan.textContent = titleParts.shift() + " - ";
-				const videoTitleSpan = document.createElement("span");
-				videoTitleSpan.className = "main-title-highlight";
-				videoTitleSpan.textContent = titleParts.join(" - ");
-				urlSpan.append(channelPrefixSpan, videoTitleSpan);
-			} else {
-				urlSpan.textContent = item.title;
-			}
+		function updateItemDelta(itemId, delta) {
+			playlistRenderer.updateItemDelta(itemId, delta);
 		}
-
-		// --- Event Listeners ---
+						// Quick Action Bar Listeners
+				
 
 		showOnPageControllerBtn.addEventListener("click", () => {
 			// Send a message to the background script to update the minimized state for the current tab.
@@ -1522,6 +1289,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 			fetchAniListReleases,
 		});
 
+		const playlistRenderer = new PlaylistRenderer(playlistContainer, {
+			callbacks: {
+				onRemove: (index, id) => {
+					MpvInterface.removeItem(miniFolderSelect.value, { index, id }).catch(err => {
+						showStatus("Failed to remove item: " + err.message, true);
+						refreshPlaylist(); // Rollback
+					});
+				},
+				onCopy: (url) => {
+					navigator.clipboard.writeText(url)
+						.then(() => showStatus("Copied URL to clipboard."))
+						.catch(() => showStatus("Failed to copy URL.", true));
+				},
+				onWatchedToggle: (itemId, isMarked) => {
+					MpvInterface.updateMarkedAsWatched(miniFolderSelect.value, itemId, isMarked).catch(err => {
+						showStatus("Failed to update watched status.", true);
+						refreshPlaylist(); // Rollback
+					});
+				},
+				onLog: (log) => showStatus(log.text, log.type === "error")
+			},
+			prefs: cachedPrefs || {}
+		});
+
 		importConfirmBtn.addEventListener("click", () => {
 			const filename = importFileSelect.value;
 			if (
@@ -1660,18 +1451,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 					title = title.substring(0, 252) + "...";
 				}
 
-				const payload = {
-					action: "add",
-					folderId,
-					tabId,
-					tab: activeTab,
-					data: {
-						url: streamUrl,
-						title: title,
-					},
-				};
+				const addResponse = await MpvInterface.add(folderId, {
+					url: streamUrl,
+					title: title,
+				}, { tabId, tab: activeTab });
 
-				const addResponse = await sendMessageAsync(payload);
 				if (addResponse.success) {
 					if (addResponse.message) showStatus(addResponse.message);
 
@@ -1723,8 +1507,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					}
 				}
 
-				// The background 'close_mpv' action doesn't require folderId or tabId.
-				const response = await sendMessageAsync({ action: "close_mpv" });
+				const response = await MpvInterface.closeMpv();
 				if (response.success) showStatus(response.message);
 				else showStatus(response.error, true);
 			} catch (error) {
@@ -1755,12 +1538,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 
 			try {
-				// These actions only need the folderId.
-				const response = await sendMessageAsync({ action, folderId });
+				const response = await (action === "clear" ? MpvInterface.clear(folderId) : sendMessageAsync({ action, folderId }));
 				if (response.success) {
 					if (response.message) showStatus(response.message);
 					if (action === "clear") {
-						// When clearing, also update the item count in the UI.
 						refreshPlaylist();
 					}
 				} else if (response.error) {
@@ -1771,50 +1552,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		}
 
-				async function handlePlaySelectedPlaylist(folderId) {
-					if (!folderId) {
-						return showStatus("Please select a folder.", true);
-					}
-		
-					// Get current 'needsAppend' state from the button
-					const needsAppend =
-						miniPlayBtn?.title.includes("Queue") ||
-						miniPlayBtn?.innerHTML.includes("<line");
-					// Optimistic Toggle check
-			const isToggle = popupState.isFolderActive && !needsAppend && !isPlaybackClosing;
-			if (!isToggle) {
-				MPV.playbackStateManager.setLoading(folderId);
+		async function handlePlaySelectedPlaylist(folderId) {
+			if (!folderId) {
+				return showStatus("Please select a folder.", true);
 			}
-			setPlaybackClosing(false);
+
+			// Get current 'needsAppend' state from the button
+			const needsAppend =
+				miniPlayBtn?.title.includes("Queue") ||
+				miniPlayBtn?.innerHTML.includes("<line");
+
 			try {
-				const response = await sendMessageAsync({
-					action: "play",
-					folderId: folderId,
-				});
+				const response = await MpvInterface.play(folderId);
 
 				if (response.success) {
 					if (response.message) showStatus(response.message);
-					
-					MPV.playbackStateManager.update({
-						folderId: folderId,
-						isRunning: response.isRunning || true, // Play succeeded
-						isPaused: response.isPaused,
-						needsAppend: response.needsAppend
-					});
-					
 					refreshPlaylist();
 				} else {
-					setPlaybackLoading(false); // Force double-check
 					showStatus(response.error || "Failed to start playback.", true);
-					MPV.playbackStateManager.update({ isRunning: popupState.isFolderActive });
 				}
 			} catch (error) {
-				setPlaybackLoading(false);
 				showStatus(
 					`An error occurred while playing playlist: ${error.message}`,
 					true,
 				);
-				MPV.playbackStateManager.update({ isRunning: popupState.isFolderActive });
 			}
 		}
 
@@ -1833,9 +1594,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				const fullItem = popupState.currentPlaylist.find(i => i.id === id);
 
 				if (fullItem) {
-					sendMessageAsync({
-						action: "play",
-						folderId: miniFolderSelect.value,
+					MpvInterface.play(miniFolderSelect.value, {
 						urlItem: fullItem,
 						playlistStartId: fullItem.id
 					});
@@ -1865,35 +1624,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 				}
 				return;
 			}
-
-			// Standard Actions
-			if (removeBtn) {
-				const index = parseInt(removeBtn.dataset.index, 10);
-				const itemId = listItem?.dataset.id;
-				const folderId = miniFolderSelect.value;
-
-				if (!isNaN(index) && listItem) {
-					// Optimistic UI update: fade out immediately
-					listItem.classList.add("removing");
-
-					sendMessageAsync({
-						action: "remove_item",
-						folderId,
-						data: { index, id: itemId },
-					}).catch((err) => {
-						listItem.classList.remove("removing"); // Rollback on error
-						showStatus("Failed to remove item: " + err.message, true);
-					});
-				}
-			} else if (copyBtn) {
-				const url = copyBtn.dataset.url;
-				if (url) {
-					navigator.clipboard
-						.writeText(url)
-						.then(() => showStatus("Copied URL to clipboard."))
-						.catch((err) => showStatus("Failed to copy URL.", true));
-				}
-			}
 		});
 		addDragDropListeners(playlistContainer);
 		playlistContainer.addEventListener("drop", (e) => {
@@ -1913,11 +1643,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 					title: item.dataset.title,
 					id: item.dataset.id,
 				}));
-				sendMessageAsync({
-					action: "set_playlist_order",
-					folderId,
-					data: { order: newOrder },
-				}).catch((err) => {
+				
+				MpvInterface.setPlaylistOrder(folderId, newOrder).catch((err) => {
 					showStatus("Failed to save playlist order: " + err.message, true);
 				});
 			}

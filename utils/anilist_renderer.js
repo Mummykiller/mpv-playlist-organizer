@@ -2,10 +2,10 @@
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 (() => {
 	const MPV = window.MPV_INTERNAL;
-	const { sendMessageAsync } = window.MPV_INTERNAL;
 	/**
 	 * ES Module version of AniListRenderer for Background/Module context.
 	 */
+	const sendMessageAsync = window.MPV_INTERNAL.sendMessageAsync;
 
 	const AniListRenderer = MPV.AniListRenderer = class AniListRenderer {
 		static _cache = null;

@@ -24,6 +24,7 @@
 				"utils/security.js",
 				"utils/commUtils.js",
 				"utils/MessageBridge.js",
+				"utils/MpvInterface.js",
 				"utils/ContentState.js",
 				"utils/PlaybackStateManager.js",
 				"utils/NavigationObserver.js",

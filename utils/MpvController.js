@@ -1350,74 +1350,37 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		sendCommandToBackground(action, folderId, data = {}) {
-			// Get current 'needsAppend' state from the UI button title or internal knowledge
-			const playBtn = this.ui.shadowRoot?.getElementById("btn-play");
-			const needsAppend = playBtn?.innerHTML.includes("Queue") || playBtn?.innerHTML.includes("➕");
+			const MPV = window.MPV_INTERNAL;
+			
+			// Mapping of actions to MpvInterface methods
+			const interfaceMap = {
+				play: () => MPV.MpvInterface.play(folderId, data),
+				close_mpv: () => MPV.MpvInterface.closeMpv(),
+				add: () => MPV.MpvInterface.add(folderId, data.data || data),
+				clear: () => MPV.MpvInterface.clear(folderId),
+				remove_item: () => MPV.MpvInterface.removeItem(folderId, data.data || data),
+				set_playlist_order: () => MPV.MpvInterface.setPlaylistOrder(folderId, data.data?.order || data.order || data),
+			};
 
-			// Optimistic Toggle Check:
-			// Only treat as a simple toggle if the folder is active AND we don't need to append items.
-			const isToggle =
-				action === "play" &&
-				this.state.state.isFolderActive &&
-				!needsAppend &&
-				!data.playNewInstance;
-
-			if (action === "play" && !isToggle) {
-				MPV.playbackStateManager.setLoading(folderId);
-			}
-
-			// Fire and forget for toggles
-			if (isToggle) {
-				return this.bridge.send(action, folderId, data);
-			}
-
-			return this.bridge
-				.send(action, folderId, data)
-				.then((response) => {
-					// UI Refresh Logic for State-Modifying Actions:
-					// If the action is known to modify the playlist, ensure we refresh our local view.
-					const stateModifyingActions = [
-						"play",
-						"add",
-						"append",
-						"clear",
-						"remove_item",
-						"set_playlist_order",
-						"get_playlist",
-					];
-					if (response?.success && stateModifyingActions.includes(action)) {
-												// Always update the manager with whatever state the bridge returns
-												MPV.playbackStateManager.update({
-													folderId: folderId,
-													isRunning: response.isFolderActive ?? response.isRunning,
-													isPaused: response.isPaused,
-													needsAppend: response.needsAppend,
-													lastPlayedId: response.lastPlayedId
-												});
-						
-												// Prefer using the list returned in the response if available (faster)
-												if (response.list) {
-													this.playlistUI?.render(
-														response.list,
-														response.lastPlayedId,
-														this.state.state.isFolderActive,
-													);
-												}
-						 else {
-							// Fallback to a full refresh if the response is generic
-							this.refreshPlaylist();
-						}
-					} else if (action === "play") {
-						// Handle play failure
-						MPV.playbackStateManager.update({ isRunning: this.state.state.isFolderActive });
+			if (interfaceMap[action]) {
+				return interfaceMap[action]().then(response => {
+					if (response?.success && response.list) {
+						this.playlistUI?.render(
+							response.list,
+							response.lastPlayedId || this.state.state.lastPlayedId,
+							this.state.state.isFolderActive
+						);
+					} else if (response?.success && ["add", "clear", "remove_item", "set_playlist_order"].includes(action)) {
+						this.refreshPlaylist();
 					}
-				})
-				.catch((err) => {
-					console.error(`[Controller] Command '${action}' failed:`, err);
-					if (action === "play") {
-						MPV.playbackStateManager.update({ isRunning: this.state.state.isFolderActive });
-					}
+					return response;
+				}).catch(err => {
+					console.error(`[Controller] MpvInterface error for '${action}':`, err);
 				});
+			}
+
+			// Fallback to bridge for other actions (e.g. append, heartbeat)
+			return this.bridge.send(action, folderId, data);
 		}
 
 		_startHeartbeat() {

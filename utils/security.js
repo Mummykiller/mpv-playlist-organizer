@@ -6,14 +6,14 @@ window.MPV_SECURITY = window.MPV_SECURITY || {};
 	 * MPV Playlist Organizer: Security Hub (ES Module)
 	 * Centralized validation and sanitization for the Chrome Extension.
 	 */
-	MPV.SECURITY_LIMITS = {
+	const SECURITY_LIMITS = MPV.SECURITY_LIMITS = {
 		MAX_TITLE_LENGTH: 255,
 		MAX_URL_LENGTH: 2048,
 		MAX_PLAYLIST_ITEMS: 5000,
 		MAX_FOLDER_NAME_LENGTH: 100,
 	};
 
-	MPV.ALLOWED_PROTOCOLS = [
+	const ALLOWED_PROTOCOLS = MPV.ALLOWED_PROTOCOLS = [
 		"http:",
 		"https:",
 		"file:",
@@ -26,7 +26,7 @@ window.MPV_SECURITY = window.MPV_SECURITY || {};
 	/**
 	 * Validates a URL against the protocol allowlist and length limits.
 	 */
-	MPV.isValidUrl = function isValidUrl(urlString) {
+	const isValidUrl = MPV.isValidUrl = function isValidUrl(urlString) {
 		if (!urlString || typeof urlString !== "string") return false;
 		if (urlString.length > SECURITY_LIMITS.MAX_URL_LENGTH) return false;
 
@@ -41,7 +41,7 @@ window.MPV_SECURITY = window.MPV_SECURITY || {};
 	/**
 	 * Sanitizes strings for safe OSD display or communication.
 	 */
-	MPV.sanitizeString = function sanitizeString(str, isFilename = false) {
+	const sanitizeString = MPV.sanitizeString = function sanitizeString(str, isFilename = false) {
 		if (typeof str !== "string") return str;
 
 		const limit = isFilename
