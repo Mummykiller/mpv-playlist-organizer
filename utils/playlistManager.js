@@ -278,6 +278,10 @@ export const handleClear = createHandler(async ({ folderId, data }) => {
 		return { success: false, error: "Folder not found." };
 
 	data.folders[actualFolderId].playlist = [];
+
+	if (data.settings.uiPreferences.global.liveRemoval !== false) {
+		nativeLink.clearLive(actualFolderId).catch(() => {});
+	}
 	
 	return { success: true, message: `Playlist for '${actualFolderId}' cleared.` };
 }, {
@@ -313,7 +317,7 @@ export const handleRemoveItem = createHandler(async ({ request, folderId, data }
 				nativeLink.call("remove_item_live", {
 					folderId: actualFolderId,
 					itemId: itemToRemove.id,
-				}).catch(() => {});
+				}).catch((e) => console.warn("[PlaylistManager] Live removal failed:", e));
 			}
 			return { success: true, message: "Item removed." };
 		}

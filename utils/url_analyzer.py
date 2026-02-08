@@ -536,6 +536,28 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     except Exception as e:
         return {"success": False, "error": f"Bypass script error: {str(e)}"}
 
+def normalize_url(url):
+    """
+    Normalizes a URL by removing common tracking parameters and fragments.
+    Used for robust matching between MPV reality and browser shards.
+    """
+    if not url or not isinstance(url, str):
+        return url
+    
+    try:
+        from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+        u = urlparse(url)
+        # Remove fragments (where our ID usually lives, but also site-specific ones)
+        # Remove tracking query parameters
+        query = dict(parse_qsl(u.query))
+        for p in ['t', 'index', 'start', 'ab_channel', 'attr_tag', 'si', 'feature', 'pp']:
+            query.pop(p, None)
+        
+        new_query = urlencode(sorted(query.items()))
+        return urlunparse((u.scheme, u.netloc, u.path, u.params, new_query, ""))
+    except Exception:
+        return url
+
 if __name__ == "__main__":
     if len(sys.argv) < 5:
         print(json.dumps({"success": False, "error": "Missing arguments."}), file=sys.stderr)

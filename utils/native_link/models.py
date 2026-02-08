@@ -73,6 +73,7 @@ class PlaybackRequest(BaseRequest):
 class LiveUpdateRequest(BaseRequest):
     folder_id: Optional[str] = None
     item_id: Optional[str] = None
+    item_ids: Optional[List[str]] = None
     marked_as_watched: Optional[bool] = None
     watched: Optional[bool] = None
     played_ids: Optional[List[str]] = None

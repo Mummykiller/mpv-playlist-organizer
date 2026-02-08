@@ -198,10 +198,7 @@ const DOMAIN_SPECIFIC_KEYS = [
 const UI_ONLY_KEYS = [
 	...DOMAIN_SPECIFIC_KEYS,
 	"logVisible",
-	"showPlayNewButton",
-	"duplicateUrlBehavior",
 	"autoAppendOnAdd",
-	"liveRemoval",
 	"confirmRemoveFolder",
 	"confirmClearPlaylist",
 	"confirmCloseMpv",
@@ -215,7 +212,6 @@ const UI_ONLY_KEYS = [
 	"popupWidth",
 	"showWatchedStatusGui",
 	"showMinimizedStub",
-	"restrictedDomains",
 	"kbAddPlaylist",
 	"kbPlayPlaylist",
 	"kbToggleController",

@@ -4,7 +4,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	const MPV = window.MPV_INTERNAL;
 	const broadcastLog = window.MPV_INTERNAL.broadcastLog;
 	const security = window.MPV_SECURITY;
-	// import { normalizeKeys } from "./commUtils.module.js"; // UNMAPPED
+	const normalizeKeys = window.MPV_INTERNAL.normalizeKeys;
 
 	const NATIVE_HOST_NAME = "com.mpv_playlist_organizer.handler";
 

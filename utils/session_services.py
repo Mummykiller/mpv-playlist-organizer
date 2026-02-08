@@ -483,9 +483,12 @@ class IPCService:
         self.session = session
 
     def reorder_live(self, folder_id, new_order_items):
-        if not self.session.is_alive or self.session.owner_folder_id != folder_id:
+        if not self.session.is_alive or not self.session.owner_folder_id or self.session.owner_folder_id.lower() != folder_id.lower():
             return {"success": False, "message": "Session mismatch."}
         
+        # Ensure internal playlist matches MPV reality before reordering
+        self.session._sync_playlist_from_mpv()
+
         simulated_playlist = list(self.session.playlist)
         for target_index, item_data in enumerate(new_order_items):
             target_id = item_data.get('id')
