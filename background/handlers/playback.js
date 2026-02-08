@@ -469,10 +469,14 @@ async function clearFolderPlaylist(folderId, options = {}) {
 
 				if (idsToRemoveLive && idsToRemoveLive.length > 0) {
 					for (const rId of idsToRemoveLive) {
-						nativeLink.call("remove_item_live", {
-							folderId: folderId,
-							itemId: rId,
-						}).catch(() => {});
+						try {
+							await nativeLink.call("remove_item_live", {
+								folderId: folderId,
+								itemId: rId,
+							});
+						} catch (e) {
+							console.warn(`[PlaybackHandler] Live removal of ${rId} failed:`, e);
+						}
 					}
 				}
 			}

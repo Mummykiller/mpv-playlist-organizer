@@ -522,47 +522,63 @@ class MpvSessionManager:
     def _sync_playlist_from_mpv(self):
         """Forces a real-time synchronization of the internal playlist from MPV reality."""
         if not self.ipc_manager or not self.ipc_manager.is_connected():
+            logging.debug("[PY][Session] Sync: IPC not connected. Skipping.")
             return False
         
         try:
             res = self.ipc_manager.send({"command": ["get_property", "playlist"]}, expect_response=True, timeout=2.0)
-            # If the command failed, we don't want to clear our internal list.
             if not res or res.get("error") != "success":
+                logging.warning(f"[PY][Session] Sync: Failed to get playlist from MPV: {res}")
                 return False
 
             mpv_playlist = res.get("data", [])
-            # An empty playlist is possible, but we should still update our state.
+            logging.debug(f"[PY][Session] Sync: MPV reported {len(mpv_playlist)} items.")
             
             # Get latest shard data to match IDs back to metadata
             folder_data = file_io.get_folder_data(self.owner_folder_id)
             shard_playlist = folder_data.get("playlist", []) if folder_data else []
+            
+            # Build maps with NORMALIZED URLs for robust matching
             shard_map = {item.get('id'): item for item in shard_playlist if item.get('id')}
-            url_map = {item.get('url'): item for item in shard_playlist}
+            url_map = {url_analyzer.normalize_url(item.get('url')): item for item in shard_playlist if item.get('url')}
+            orig_url_map = {url_analyzer.normalize_url(item.get('original_url')): item for item in shard_playlist if item.get('original_url')}
 
             synced_playlist = []
-            for mpv_item in mpv_playlist:
+            for idx, mpv_item in enumerate(mpv_playlist):
                 path = mpv_item.get('filename', '')
-                # Try matching by Solid ID fragment first
                 match = ID_MATCH_RE.search(path)
-                item_id = match.group(1) if match else None
+                found_id = match.group(1) if match else None
                 
-                clean_url = path.split('#')[0].split('&mpv_organizer_id=')[0]
+                # Strip our tracking fragment
+                base_path = re.sub(r'[#&]mpv_organizer_id=[^#&]+', '', path)
+                # Normalize the resulting URL to remove junk params (t, index, etc.)
+                norm_path = url_analyzer.normalize_url(base_path)
                 
-                if item_id and item_id in shard_map:
-                    synced_playlist.append(shard_map[item_id])
+                matched_item = None
+                if found_id and found_id in shard_map:
+                    matched_item = shard_map[found_id]
+                elif norm_path in url_map:
+                    matched_item = url_map[norm_path]
+                elif norm_path in orig_url_map:
+                    matched_item = orig_url_map[norm_path]
+                
+                if matched_item:
+                    synced_playlist.append(matched_item)
                 else:
-                    # Fallback to URL matching (stripped of fragment)
-                    if clean_url in url_map:
-                        synced_playlist.append(url_map[clean_url])
-                    else:
-                        synced_playlist.append({
-                            "url": clean_url, 
-                            "title": mpv_item.get('title') or clean_url, 
-                            "id": item_id or str(uuid.uuid4())
-                        })
+                    generated_id = str(uuid.uuid4())
+                    logging.debug(f"[PY][Session] Sync: No match for item {idx} ({path}). Generated temp ID: {generated_id}")
+                    synced_playlist.append({
+                        "url": base_path, 
+                        "title": mpv_item.get('title') or base_path, 
+                        "id": found_id or generated_id
+                    })
             
             self.playlist = synced_playlist
             logging.info(f"[PY][Session] Reality Sync: {len(self.playlist)} items tracked.")
+            
+            if self.playlist_tracker:
+                self.playlist_tracker.update_playlist_order(self.playlist)
+                
             return True
         except Exception as e:
             logging.error(f"[PY][Session] Reality Sync Failed: {e}")
@@ -676,34 +692,60 @@ class MpvSessionManager:
 
 
     def remove(self, item_id, folder_id):
-        """Removes an item from the active MPV playlist by ID."""
+        """Removes an item from the active MPV playlist by ID with resilient recovery."""
         with self.sync_lock:
-            if not self.is_alive or self.owner_folder_id != folder_id:
+            logging.info(f"[PY][Session] remove() called: item_id='{item_id}', folder_id='{folder_id}'")
+            if not self.is_alive or not self.owner_folder_id or self.owner_folder_id.lower() != folder_id.lower():
+                logging.warning(f"[PY][Session] remove() aborted: alive={self.is_alive}, owner='{self.owner_folder_id}', target='{folder_id}'")
                 return {"success": False, "message": "Session not active or folder mismatch."}
             
+            # 1. Mandatory reality sync to get current indices
+            self._sync_playlist_from_mpv()
+
+            # 2. Resilient Matching Logic
             index_to_remove = -1
-            if self.playlist:
-                for i, item in enumerate(self.playlist):
-                    if item.get('id') == item_id:
-                        index_to_remove = i
-                        break
+            target_norm = url_analyzer.normalize_url(item_id) if "://" in item_id else None
+
+            for i, item in enumerate(self.playlist):
+                # Priority 1: Direct ID Match
+                if item.get('id') == item_id:
+                    index_to_remove = i
+                    logging.debug(f"[PY][Session] found item via ID match at index {i}")
+                    break
+                # Priority 2: Exact URL/Path Match
+                if item.get('url') == item_id or item.get('original_url') == item_id:
+                    index_to_remove = i
+                    logging.debug(f"[PY][Session] found item via path match at index {i}")
+                    break
+                # Priority 3: Normalized URL Match (ignores tracking junk)
+                if target_norm and url_analyzer.normalize_url(item.get('url')) == target_norm:
+                    index_to_remove = i
+                    logging.debug(f"[PY][Session] found item via normalized URL match at index {i}")
+                    break
             
+            # 3. Execution
             if index_to_remove != -1:
-                logging.info(f"Removing item index {index_to_remove} (ID: {item_id}) from live MPV session.")
-                self.ipc_manager.send({"command": ["playlist-remove", index_to_remove]}, expect_response=True)
+                logging.info(f"[PY][Session] Removing item at index {index_to_remove} (ID: {item_id})")
+                res = self.ipc_manager.send({"command": ["playlist-remove", index_to_remove]}, expect_response=True)
                 
+                # Check for MPV errors
+                if not res or res.get("error") != "success":
+                    logging.error(f"[PY][Session] MPV rejected playlist-remove: {res}")
+                    return {"success": False, "error": f"MPV Error: {res.get('error') if res else 'Timeout'}"}
+
                 removed_item = self.playlist.pop(index_to_remove)
                 
                 if self.playlist_tracker:
                     self.playlist_tracker.remove_item_internal(item_id)
                 
+                # OSD feedback
                 title = services.sanitize_url(removed_item.get('title') or "Item")
-                if len(title) > 60:
-                    title = title[:57] + "..."
-                self.ipc_manager.send({"command": ["show-text", f"Removed: {title}", 2000]}, expect_response=True)
+                if len(title) > 60: title = title[:57] + "..."
+                self.ipc_manager.send({"command": ["show-text", f"Removed: {title}", 2000]}, expect_response=False)
                 
                 return {"success": True, "message": "Item removed from live session."}
             
+            logging.warning(f"[PY][Session] remove() failed: could not identify item '{item_id}' in live playlist.")
             return {"success": False, "message": "Item not found in live session."}
 
     def reorder(self, folder_id, new_order_items):
@@ -714,7 +756,7 @@ class MpvSessionManager:
     def clear_live(self, folder_id):
         """Clears all items from the active MPV playlist."""
         with self.sync_lock:
-            if not self.is_alive or self.owner_folder_id != folder_id:
+            if not self.is_alive or not self.owner_folder_id or self.owner_folder_id.lower() != folder_id.lower():
                 return {"success": False, "message": "Session not active or folder mismatch."}
             
             logging.info(f"Clearing live MPV playlist for folder '{folder_id}'.")
@@ -733,7 +775,7 @@ class MpvSessionManager:
     def update_item_watch_status(self, item_id, folder_id, marked_as_watched=None, watched=None):
         """Updates the watch status of an item in the active tracker."""
         with self.sync_lock:
-            if self.playlist_tracker and self.owner_folder_id == folder_id:
+            if self.playlist_tracker and self.owner_folder_id and self.owner_folder_id.lower() == folder_id.lower():
                 self.playlist_tracker._update_marked_as_watched(
                     item_id, 
                     marked_status=marked_as_watched, 
@@ -855,7 +897,7 @@ class MpvSessionManager:
                 if not currently_alive:
                     logging.info(f"Session for PID {self.pid} is confirmed dead. Clearing.")
                     self.clear() 
-                elif folder_id == self.owner_folder_id: 
+                elif folder_id and self.owner_folder_id and folder_id.lower() == self.owner_folder_id.lower(): 
                     # --- NON-DESTRUCTIVE HOT SWAP ---
                     # If we are asked to play items in the CURRENT folder, we attempt a direct jump.
                     if self.ipc_manager and self.ipc_manager.is_connected():

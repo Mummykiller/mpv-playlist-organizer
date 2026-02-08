@@ -232,10 +232,15 @@ class PlaybackHandler(BaseHandler):
 
     @command('remove_item_live')
     def handle_remove_item_live(self, request: native_link.LiveUpdateRequest):
+        logging.info(f"[PY][Handler] Received remove_item_live: folder_id='{request.folder_id}', item_id='{request.item_id}'")
+        logging.debug(f"[PY][Handler] remove_item_live payload: {request}")
         if not request.folder_id or not request.item_id:
+            logging.warning(f"[PY][Handler] remove_item_live FAILED: Missing folder_id or item_id in request. folder_id={request.folder_id}, item_id={request.item_id}")
             return native_link.failure("Missing folder_id or item_id.")
         canonical_id = self.file_io._get_canonical_folder_id(request.folder_id)
-        return self.mpv_session.remove(request.item_id, canonical_id)
+        res = self.mpv_session.remove(request.item_id, canonical_id)
+        logging.info(f"[PY][Handler] remove_item_live final result for {request.item_id}: {res}")
+        return res
 
     @command('reorder_live')
     def handle_reorder_live(self, request: native_link.LiveUpdateRequest):
@@ -270,16 +275,20 @@ class PlaybackHandler(BaseHandler):
 
     @command('update_item_marked_as_watched')
     def handle_update_item_marked_as_watched(self, request: native_link.LiveUpdateRequest):
+        logging.info(f"[PY][Handler] Received update_item_marked_as_watched: folder_id='{request.folder_id}', item_id='{request.item_id}', marked={request.marked_as_watched}")
         if not request.folder_id or not request.item_id:
+            logging.warning(f"[PY][Handler] update_item_marked_as_watched: Missing folder_id or item_id. folder_id={request.folder_id}, item_id={request.item_id}")
             return native_link.failure("Missing folder_id or item_id.")
         
         canonical_id = self.file_io._get_canonical_folder_id(request.folder_id)
-        return self.mpv_session.update_item_watch_status(
+        res = self.mpv_session.update_item_watch_status(
             request.item_id, 
             canonical_id, 
             marked_as_watched=request.marked_as_watched,
             watched=request.watched
         )
+        logging.info(f"[PY][Handler] update_item_marked_as_watched result: {res}")
+        return res
 
     @command('is_mpv_running')
     def handle_is_mpv_running(self, request: native_link.LiveUpdateRequest):

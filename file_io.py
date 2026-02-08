@@ -737,6 +737,7 @@ def get_settings():
             {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
             {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
         ],
+        "live_removal": True,
         "enable_per_item_mark_watched": True
     }
 

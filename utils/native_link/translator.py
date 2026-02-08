@@ -15,6 +15,7 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
     
     # Live Updates / Status
     'remove_item_live': LiveUpdateRequest,
+    'remove_items_live': LiveUpdateRequest,
     'reorder_live': LiveUpdateRequest,
     'clear_live': LiveUpdateRequest,
     'update_item_marked_as_watched': LiveUpdateRequest,
@@ -95,6 +96,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             request_id=request_id,
             folder_id=norm_message.get('folder_id'),
             item_id=norm_message.get('item_id'),
+            item_ids=norm_message.get('item_ids'),
             marked_as_watched=norm_message.get('marked_as_watched'),
             watched=norm_message.get('watched'),
             played_ids=norm_message.get('played_ids'),

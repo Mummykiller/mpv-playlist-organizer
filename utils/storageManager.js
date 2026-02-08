@@ -28,7 +28,26 @@ export class StorageManager {
 
 	async _migrateToCamelCaseSettings() {
 		const keys = await chrome.storage.local.get(["mpv_settings", "mpv_camel_migrated"]);
-		if (!keys.mpv_settings || keys.mpv_camel_migrated) return;
+		if (!keys.mpv_settings) return;
+
+		// SELF-HEALING: Always ensure global preferences are purged of snake_case trash
+		// This prevents sync conflicts with the native host
+		if (keys.mpv_settings.uiPreferences?.global) {
+			const globalPrefs = keys.mpv_settings.uiPreferences.global;
+			let polluted = false;
+			for (const key in globalPrefs) {
+				if (key.includes("_") && key !== "request_id") {
+					delete globalPrefs[key];
+					polluted = true;
+				}
+			}
+			if (polluted) {
+				console.log("[Storage] Purged polluted snake_case keys from preferences.");
+				await chrome.storage.local.set({ mpv_settings: keys.mpv_settings });
+			}
+		}
+
+		if (keys.mpv_camel_migrated) return;
 
 		console.log("[Storage] Migrating settings to camelCase...");
 		const settings = normalizeKeys(keys.mpv_settings);
@@ -239,9 +258,10 @@ export class StorageManager {
 						],
 						showPlayNewButton: false,
 						duplicateUrlBehavior: "ask",
-						                    syncGlobalRemovals: false,
-						                    syncGlobalRemovalsLive: false,
-						                    autoAppendOnAdd: true,						liveRemoval: true,
+						syncGlobalRemovals: false,
+						syncGlobalRemovalsLive: false,
+						autoAppendOnAdd: true,
+						liveRemoval: true,
 						confirmRemoveFolder: true,
 						confirmClearPlaylist: true,
 						confirmCloseMpv: true,
