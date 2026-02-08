@@ -1,3 +1,11 @@
+/* --- Hardware-level Fullscreen Guard --- */
+/* This ensures the UI is hidden as soon as it is injected if a video is already fullscreen */
+:root:has(*:fullscreen) #m3u8-controller-host, 
+:root:has(*:fullscreen) #m3u8-minimized-host,
+:root:has(*:fullscreen) #anilist-panel-host { 
+    display: none !important; 
+}
+
 /* --- CSS Variables for a Modern Theme --- */
 /* Default values for AniList image size, can be overridden by JS */
 :host,

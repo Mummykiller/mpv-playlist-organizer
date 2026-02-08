@@ -19,6 +19,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this._lastUpdateHash = "";
 			this._lastPlaylistFingerprint = "";
 			this._isPlaylistDirty = false;
+			this.suppressedByWatchdog = false;
 
 			// 1. Initialize Logic Modules
 			this.bridge = new MPV.MessageBridge({
@@ -404,10 +405,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			await this.bridge.send("content_script_init");
 
-			// 5. Fullscreen Guard
-			if (document.fullscreenElement) {
-				this.ui.controllerHost.style.display = "none";
-			}
+			// 5. Fullscreen & Visibility Watchdog
+			this._initFullscreenSettleCheck();
+			this._startVisualWatchdog();
 
 			// 6. Global Event Listeners
 			window.addEventListener("mousedown", this.handleMouseDown, true);
@@ -454,6 +454,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.state.destroy();
 			this.nav.destroy();
 			if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+			if (this.visualWatchdogInterval) clearInterval(this.visualWatchdogInterval);
 			if (this.resizeListener)
 				window.removeEventListener("resize", this.resizeListener);
 			document.removeEventListener(
@@ -502,6 +503,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				detected: !!state.detectedUrl,
 				showStub: state.settings.showMinimizedStub,
 				highlight: state.settings.enableActiveItemHighlight,
+				suppressed: this.suppressedByWatchdog
 			};
 			const currentHash = JSON.stringify(relevantState);
 			if (currentHash === this._lastUpdateHash) return;
@@ -513,7 +515,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 
 			// 1. Visibility
-			if (state.minimized) {
+			if (this.suppressedByWatchdog) {
+				this.ui.controllerHost.style.display = "none";
+				this.ui.minimizedHost.style.display = "none";
+				this.ui.anilistPanelHost.style.display = "none";
+			} else if (state.minimized) {
 				this.ui.controllerHost.style.display = "none";
 				
 				// If stub is disabled, we show nothing (hidden state)
@@ -2056,24 +2062,69 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		handleFullscreenChange() {
-			const host = this.ui.controllerHost;
-			const stub = this.ui.minimizedHost;
-			if (document.fullscreenElement) {
-				if (host && !this.preFullscreenPosition) {
-					this.preFullscreenPosition = {
-						left: host.style.left,
-						top: host.style.top,
-						right: host.style.right,
-						bottom: host.style.bottom,
-					};
+			this._checkVisibility();
+		}
+
+		_initFullscreenSettleCheck() {
+			let frames = 0;
+			const maxFrames = 10;
+			const settle = () => {
+				if (this.isTearingDown) return;
+				this._checkVisibility();
+				frames++;
+				if (frames < maxFrames) {
+					requestAnimationFrame(settle);
 				}
-				if (host) host.style.display = "none";
-				if (stub) stub.style.display = "none";
-			} else {
-				if (this.preFullscreenPosition && host) {
-					Object.assign(host.style, this.preFullscreenPosition);
+			};
+			requestAnimationFrame(settle);
+		}
+
+		_startVisualWatchdog() {
+			if (this.visualWatchdogInterval) clearInterval(this.visualWatchdogInterval);
+			this.visualWatchdogInterval = setInterval(() => {
+				if (document.visibilityState === "visible") {
+					this._checkVisibility();
+				}
+			}, 3000);
+		}
+
+		_checkVisibility() {
+			if (this.isTearingDown || !this.ui.controllerHost) return;
+
+			const isNativeFullscreen = !!document.fullscreenElement;
+			
+			// Detect "Fake" Fullscreen (Theater modes or window-sized elements)
+			// We compare outer dimensions to available screen dimensions to account for OS-level 
+			// docks/panels (like on Linux) that might occupy space.
+			const isFakeFullscreen = 
+				(window.outerWidth >= window.screen.availWidth - 20 && 
+				 window.outerHeight >= window.screen.availHeight - 20) &&
+				!isNativeFullscreen;
+
+			const shouldHide = isNativeFullscreen || isFakeFullscreen;
+
+			if (shouldHide !== this.suppressedByWatchdog) {
+				this.suppressedByWatchdog = shouldHide;
+				
+				if (shouldHide) {
+					// Save position before hiding if we were visible
+					const host = this.ui.controllerHost;
+					if (host && host.style.display !== "none") {
+						this.preFullscreenPosition = {
+							left: host.style.left,
+							top: host.style.top,
+							right: host.style.right,
+							bottom: host.style.bottom,
+						};
+					}
+				} else if (this.preFullscreenPosition) {
+					// Restore position before showing
+					const host = this.ui.controllerHost;
+					if (host) Object.assign(host.style, this.preFullscreenPosition);
 					this.preFullscreenPosition = null;
 				}
+
+				// Trigger UI sync to apply the suppressed state
 				this._syncUiToState(this.state.state);
 			}
 		}
