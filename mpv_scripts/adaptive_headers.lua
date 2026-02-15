@@ -156,6 +156,9 @@ local function apply_adaptive_settings()
         mp.set_property_native("user-data/original-url", nil)
         set_property_if_diff("user-data/is-youtube", "no")
         set_property_if_diff("user-data/marked-as-watched", "no")
+        
+        -- Reset Start Time to prevent leakage from previous file
+        mp.set_property("start", "none")
 
         -- Reset Buffering to Launch Defaults
         set_property_if_diff("demuxer-max-bytes", initial_max_bytes)
@@ -189,21 +192,14 @@ local function apply_adaptive_settings()
     local final_resume_time = nil
 
     -- Priority 1: Synchronous Primed Resume Time (from Python IPC)
-    -- This property is set by the backend just before 'loadfile'
     local sync_primed = mp.get_property("user-data/primed-resume-time")
     if sync_primed and sync_primed ~= "" then
-        -- Strip literal double quotes if they exist
         sync_primed = sync_primed:gsub('^"', ''):gsub('"$', '')
         final_resume_time = tonumber(sync_primed)
-        
-        -- Consume it immediately so it doesn't leak to next file
-        mp.set_property("user-data/primed-resume-time", "")
-        if final_resume_time then
-            debug_log("Sync primed resume time found: " .. tostring(final_resume_time))
-        end
+        debug_log("Sync primed resume time found: " .. tostring(final_resume_time))
     end
 
-    -- Priority 2: Session Memory (If we've played this EXACT file earlier in this instance)
+    -- Priority 2: Session Memory
     if final_resume_time == nil then
         local session_time = (item_id and session_timestamps[item_id]) or session_timestamps[path]
         if session_time then
@@ -215,11 +211,10 @@ local function apply_adaptive_settings()
     -- Priority 3: Global Handshake Resume Time (One-time use)
     if final_resume_time == nil and primed_resume_time then
         final_resume_time = primed_resume_time
-        primed_resume_time = nil -- Consume it immediately
-        debug_log("Handshake resume time applied and cleared: " .. tostring(final_resume_time))
+        debug_log("Handshake resume time applied: " .. tostring(final_resume_time))
     end
 
-    -- Priority 4: Metadata Registry (From 'set_url_options' batch sync)
+    -- Priority 4: Metadata Registry
     if final_resume_time == nil and opts and opts.resume_time then
         final_resume_time = tonumber(opts.resume_time)
         if final_resume_time then
@@ -227,10 +222,18 @@ local function apply_adaptive_settings()
         end
     end
 
-    -- Priority 4: Handshake/Default
-    -- If we still have nothing, force 0 to override MPV's internal memory
+    -- PROTECTION: Resolution Pass Detection
+    local id_in_path = path:match("[#&]mpv_organizer_id=([^#&]+)")
+    local id_in_user_data = mp.get_property("user-data/id")
+    local is_resolution_pass = (id_in_path == nil and id_in_user_data ~= "")
+
     if final_resume_time == nil then
-        final_resume_time = 0
+        if is_resolution_pass then
+            debug_log("Resolution pass detected. Preserving previous start time.")
+        else
+            -- Fresh load with no saved time: force 0
+            final_resume_time = 0
+        end
     end
 
     -- 5. Apply UI/State features (Titles & Resume)
@@ -239,18 +242,17 @@ local function apply_adaptive_settings()
         set_property_if_diff("force-media-title", opts.title)
     end
 
-    -- Priority: ONLY use final_resume_time. 
-    -- We check if final_resume_time is NOT nil, allowing 0 to be a valid forced start.
     if final_resume_time ~= nil then
-        -- CRITICAL: Force MPV to ignore its own watch-later files for this specific load
         mp.set_property("file-local-options/resume-playback", "no")
-        -- Use the global 'start' property because 'file-local-options/start' is unreliable during on_load
         mp.set_property("start", final_resume_time)
         debug_log("Applied final resume time: " .. tostring(final_resume_time))
-    else
-        -- CRITICAL: Reset start time to 'none' (default) so we don't leak the previous file's start time
-        -- Since 'start' is a global option, it persists across files if not reset.
-        mp.set_property("start", "none")
+        
+        -- CLEAR PRIMED DATA: Only if we are NOT a YT unresolved URL (which will reload)
+        local is_yt_unresolved = path:find("youtube%.com/watch") or path:find("youtu%.be/")
+        if not is_yt_unresolved then
+            mp.set_property("user-data/primed-resume-time", "")
+            primed_resume_time = nil -- Consume Lua global
+        end
     end
 
     if not opts then return end
@@ -354,3 +356,11 @@ mp.add_hook("on_load", -10, function()
 end)
 
 mp.register_event("end-file", save_current_position)
+
+local function on_file_loaded()
+    -- Final cleanup of primed data once playback has actually started
+    mp.set_property("user-data/primed-resume-time", "")
+    primed_resume_time = nil
+end
+
+mp.register_event("file-loaded", on_file_loaded)

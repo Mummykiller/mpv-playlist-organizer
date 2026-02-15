@@ -162,6 +162,13 @@ local function handle_natural_completion(reason)
         return
     end
 
+    -- Protection: Ensure we've actually played for a bit
+    local play_time = mp.get_property_number("playback-time", 0)
+    if play_time < 2 then
+        log("handle_natural_completion ignored: playback time too short (" .. tostring(play_time) .. "s). Likely a load failure.")
+        return
+    end
+
     if manual_quit then
         log("handle_natural_completion called but manual_quit is true. Aborting.")
         return

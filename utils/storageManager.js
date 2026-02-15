@@ -414,11 +414,12 @@ export class StorageManager {
 
 						// NEW: Conflict Resolution - ensure lastModified exists
 						if (newItem.lastModified === undefined) {
-							newItem.lastModified = Date.now();
+							newItem.lastModified = item.last_modified || Date.now();
 							modified = true;
 						}
 
 						if (modified) {
+							console.log(`[Storage] Migrated item ${newItem.id}:`, newItem);
 							needsUpdate = true;
 							return newItem;
 						}
