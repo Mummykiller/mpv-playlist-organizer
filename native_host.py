@@ -464,21 +464,22 @@ try:
                 except Exception:
                     pass
 
-        # --- Automatic Session Restoration ---
+        # --- Automatic Session Restoration (Threaded) ---
         # Attempt to reconnect to an existing MPV session immediately upon startup.
-        # This ensures the browser is notified of active playback even after a reload.
-        try:
-            restore_data = mpv_session.restore()
-            if restore_data:
-                logging.info(f"[PY][MAIN] Automatic restoration successful for folder '{mpv_session.owner_folder_id}'.")
-                # Send unsolicited event to notify the extension
-                # We wrap this in a short delay to ensure the browser port is fully ready to receive
-                def notify_restore():
-                    time.sleep(0.2)
+        # This is done in a thread to avoid blocking the main message loop.
+        def async_restore():
+            try:
+                restore_data = mpv_session.restore()
+                if restore_data:
+                    logging.info(f"[PY][MAIN] Automatic restoration successful for folder '{mpv_session.owner_folder_id}'.")
+                    # Send unsolicited event to notify the extension
+                    # Small delay to ensure the browser port is fully ready
+                    time.sleep(0.5)
                     send_message(native_link.success(restore_data, action="session_restored"))
-                threading.Thread(target=notify_restore, daemon=True).start()
-        except Exception as e:
-            logging.error(f"[PY][MAIN] Error during automatic session restoration: {e}")
+            except Exception as e:
+                logging.error(f"[PY][MAIN] Error during automatic session restoration: {e}")
+        
+        threading.Thread(target=async_restore, daemon=True).start()
 
         while True:
             try:

@@ -48,18 +48,41 @@ class M3UServer:
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, env=server_env
                 )
                 
-                # Wait for port identification
+                # Wait for port identification (non-blocking)
                 start_time = time.time()
+                self.port = None
                 while time.time() - start_time < 5:
-                    line = self.process.stdout.readline()
-                    if not line: break
+                    # check if process died
+                    if self.process.poll() is not None:
+                        break
+                    
+                    # Try to read line without blocking indefinitely
+                    # We use a simple read-and-check approach for compatibility
+                    import fcntl
+                    fd = self.process.stdout.fileno()
+                    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+                    
                     try:
-                        data = json.loads(line.strip())
-                        if data.get("status") == "running" and data.get("port"):
-                            self.port = int(data.get("port"))
-                            break
-                    except json.JSONDecodeError:
+                        line = self.process.stdout.readline()
+                        if line:
+                            try:
+                                data = json.loads(line.strip())
+                                if data.get("status") == "running" and data.get("port"):
+                                    self.port = int(data.get("port"))
+                                    break
+                            except json.JSONDecodeError:
+                                pass
+                    except (IOError, ValueError):
                         pass
+                    
+                    # Reset to blocking for future reads if needed, or just sleep
+                    time.sleep(0.1)
+                
+                # Restore blocking mode for safety
+                try:
+                    fcntl.fcntl(fd, fcntl.F_SETFL, fl)
+                except: pass
                 
                 def consume_stderr(proc):
                     for line in iter(proc.stderr.readline, ''):

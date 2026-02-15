@@ -256,7 +256,14 @@ class MpvSessionManager:
     def clear(self, mpv_return_code=None):
         """Clears the session state and removes the session file."""
         stats = {}
+        tracker_to_stop = None
+        ipc_to_close = None
+        handshake_to_remove = None
+        cookies_to_remove = []
+        session_file_to_remove = None
+
         with self.sync_lock:
+            # 1. Immediate State Inactivation
             self.is_alive = False
             self.health = "ok"
             pid_to_clear = self.pid
@@ -265,12 +272,13 @@ class MpvSessionManager:
             if pid_to_clear:
                 logging.info(f"Clearing session state for PID: {pid_to_clear}")
 
+            # Capture objects for cleanup outside lock
             if self.playlist_tracker:
-                stats = self.playlist_tracker.stop_tracking(mpv_return_code=mpv_return_code)
-            self.playlist_tracker = None
+                tracker_to_stop = self.playlist_tracker
+                self.playlist_tracker = None
 
             if self.ipc_manager:
-                self.ipc_manager.close()
+                ipc_to_close = self.ipc_manager
                 self.ipc_manager = None
 
             self.process = None
@@ -281,36 +289,56 @@ class MpvSessionManager:
             self.last_played_id_cache = None
 
             if self.handshake_path and os.path.exists(self.handshake_path):
-                try:
-                    os.remove(self.handshake_path)
-                    logging.info(f"Cleaned up handshake file: {self.handshake_path}")
-                except Exception as e:
-                    logging.warning(f"Failed to remove handshake file: {e}")
+                handshake_to_remove = self.handshake_path
             self.handshake_path = None
 
             if self.session_cookies:
-                logging.info(f"Cleaning up {len(self.session_cookies)} session cookies.")
-                for cookie_path in list(self.session_cookies):
-                    try:
-                        if os.path.exists(cookie_path):
-                            os.remove(cookie_path)
-                    except Exception as e:
-                        logging.warning(f"Failed to remove session cookie {cookie_path}: {e}")
+                cookies_to_remove = list(self.session_cookies)
                 self.session_cookies.clear()
 
-            # Clean up the entire volatile directory if this was the last managed session
-            try:
-                from utils.url_analyzer import VolatileCookieManager
-                VolatileCookieManager.cleanup_volatile_dir()
-            except Exception as e:
-                logging.warning(f"Failed to cleanup volatile directory: {e}")
-
             if os.path.exists(self.session_file):
+                session_file_to_remove = self.session_file
+
+        # --- Cleanup Operations (OUTSIDE SYNC LOCK) ---
+        # These operations can be slow (joins, I/O timeouts)
+        
+        if tracker_to_stop:
+            logging.info("[PY][Session] Stopping playlist tracker (background)...")
+            stats = tracker_to_stop.stop_tracking(mpv_return_code=mpv_return_code)
+
+        if ipc_to_close:
+            logging.info("[PY][Session] Closing IPC manager (background)...")
+            ipc_to_close.close()
+
+        if handshake_to_remove:
+            try:
+                os.remove(handshake_to_remove)
+                logging.info(f"Cleaned up handshake file: {handshake_to_remove}")
+            except Exception as e:
+                logging.warning(f"Failed to remove handshake file: {e}")
+
+        if cookies_to_remove:
+            logging.info(f"Cleaning up {len(cookies_to_remove)} session cookies.")
+            for cookie_path in cookies_to_remove:
                 try:
-                    os.remove(self.session_file)
-                    logging.info(f"Cleaned up session file: {self.session_file}")
-                except OSError as e:
-                    logging.warning(f"Failed to remove session file during cleanup: {e}")
+                    if os.path.exists(cookie_path):
+                        os.remove(cookie_path)
+                except Exception as e:
+                    logging.warning(f"Failed to remove session cookie {cookie_path}: {e}")
+
+        try:
+            from utils.url_analyzer import VolatileCookieManager
+            VolatileCookieManager.cleanup_volatile_dir()
+        except Exception as e:
+            logging.warning(f"Failed to cleanup volatile directory: {e}")
+
+        if session_file_to_remove:
+            try:
+                os.remove(session_file_to_remove)
+                logging.info(f"Cleaned up session file: {session_file_to_remove}")
+            except OSError as e:
+                logging.warning(f"Failed to remove session file during cleanup: {e}")
+        
         return stats
 
     def get_pause_state(self):
@@ -344,6 +372,7 @@ class MpvSessionManager:
         with self.sync_lock:
             # 1. Check if we are already reconnected
             if self.is_alive and self.pid and ipc_utils.is_pid_running(self.pid):
+                logging.info(f"[PY][Session] Restore: Already connected to PID {self.pid}.")
                 return {
                     "was_stale": False, 
                     "folder_id": self.owner_folder_id, 
@@ -369,9 +398,10 @@ class MpvSessionManager:
                     raise ValueError("Session file is malformed.")
 
                 # 2. Verify IPC connectivity and get actual MPV PID
+                # Use a short timeout for the initial probe
                 actual_mpv_pid = None
                 temp_manager = ipc_utils.IPCSocketManager()
-                if temp_manager.connect(ipc_path, timeout=2.0, start_event_reader=False):
+                if temp_manager.connect(ipc_path, timeout=1.5, start_event_reader=False):
                     try:
                         pid_resp = temp_manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=1.0)
                         if pid_resp and pid_resp.get("error") == "success":
@@ -383,83 +413,51 @@ class MpvSessionManager:
                 # 3. Validation Logic
                 is_alive = False
                 if actual_mpv_pid:
-                    is_alive = True # Socket is alive, that's enough for us to try re-attach
+                    is_alive = True # Socket is alive
                 elif ipc_utils.is_pid_running(pid):
                     # PID exists but IPC failed - might be starting up or just unresponsive
                     is_alive = True
-                    logging.warning(f"[PY][Session] Restore: PID {pid} is running but IPC check failed. Attempting attachment anyway.")
+                    logging.warning(f"[PY][Session] Restore: PID {pid} is running but IPC probe failed. Attempting attachment anyway.")
 
                 if is_alive:
                     folder_data = file_io.get_folder_data(owner_folder_id)
                     if not folder_data:
                         raise RuntimeError(f"Could not find data for restored folder '{owner_folder_id}'.")
 
-                    # 4. Populate Session State (Full Parity)
+                    # 4. Populate Session State
                     self.pid = actual_mpv_pid if actual_mpv_pid else pid
                     self.ipc_path = ipc_path
                     self.owner_folder_id = owner_folder_id
                     self.current_token = token
                     self.is_alive = True
                     
-                    # Persist actual PID if it changed (important for terminal wrappers)
+                    # Persist actual PID if it changed
                     if actual_mpv_pid and actual_mpv_pid != pid:
                         self.persist_session()
 
                     # 5. Initialize Services
                     self.ipc_manager = ipc_utils.IPCSocketManager()
-                    if not self.ipc_manager.connect(self.ipc_path, timeout=5.0):
+                    if not self.ipc_manager.connect(self.ipc_path, timeout=3.0):
                         logging.error("[PY][Session] Restore: Persistent IPC connection failed.")
                         self.is_alive = False
                         return None
 
                     # --- Sync Internal Playlist with MPV Reality ---
-                    # We parse IDs from MPV's 'playlist' property to ensure self.playlist
-                    # only contains items that are actually in MPV.
-                    try:
-                        pl_resp = self.ipc_manager.send({"command": ["get_property", "playlist"]}, expect_response=True, timeout=2.0)
-                        mpv_playlist_urls = pl_resp.get("data") if pl_resp else None
-                        
-                        if mpv_playlist_urls and isinstance(mpv_playlist_urls, list):
-                            logging.info(f"[PY][Session] Restore: Found {len(mpv_playlist_urls)} items in MPV playlist.")
-                            synced_playlist = []
-                            shard_playlist = folder_data.get("playlist", [])
-                            shard_map = {item.get('id'): item for item in shard_playlist if item.get('id')}
-                            
-                            for mpv_item in mpv_playlist_urls:
-                                path = mpv_item.get('filename', '')
-                                logging.debug(f"[PY][Session] Restore: Processing MPV path: {path}")
-                                # Extract Solid ID from fragment
-                                match = re.search(r"[#&]mpv_organizer_id=([^#&]+)", path)
-                                item_id = match.group(1) if match else None
-                                logging.debug(f"[PY][Session] Restore: Extracted ID: {item_id}")
-                                
-                                if item_id and item_id in shard_map:
-                                    synced_playlist.append(shard_map[item_id])
-                                else:
-                                    # Fallback: try to find by URL if no ID fragment
-                                    # This might happen for items added outside our system
-                                    synced_playlist.append({"url": path, "title": mpv_item.get('title') or path, "id": item_id or str(uuid.uuid4())})
-                            
-                            self.playlist = synced_playlist
-                            logging.info(f"[PY][Session] Restore: Synced {len(self.playlist)} items from MPV reality.")
-                        else:
-                            self.playlist = folder_data.get("playlist", [])
-                            logging.warning("[PY][Session] Restore: Could not get playlist from MPV. Falling back to shard.")
-                    except Exception as e:
-                        self.playlist = folder_data.get("playlist", [])
-                        logging.warning(f"[PY][Session] Restore: Error syncing playlist: {e}. Falling back to shard.")
-
+                    # Use the robust helper instead of duplicate logic
+                    self._sync_playlist_from_mpv()
+                    
                     self.register_ipc_callbacks()
                     
                     # 6. Re-sync active item ID
                     last_played_id = None
                     try:
+                        # Priority 1: user-data/id (Solid ID from fragment)
                         id_resp = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=1.0)
                         if id_resp and id_resp.get("error") == "success":
                             last_played_id = id_resp.get("data")
                         
+                        # Priority 2: Fallback to path matching
                         if not last_played_id:
-                            # Fallback to path/title matching
                             path_resp = self.ipc_manager.send({"command": ["get_property", "path"]}, expect_response=True)
                             curr_path = path_resp.get("data") if path_resp else None
                             if curr_path:
@@ -472,20 +470,25 @@ class MpvSessionManager:
                     except Exception as e:
                         logging.warning(f"Failed to query active item during restore: {e}")
                     
+                    # 7. Re-initialize Tracker
                     from playlist_tracker import PlaylistTracker
+                    # Clean up old tracker if it somehow exists
+                    if self.playlist_tracker:
+                        self.playlist_tracker.stop_tracking()
+                        
                     self.playlist_tracker = PlaylistTracker(owner_folder_id, self.playlist, file_io, file_io.get_settings(), self.ipc_path, self.send_message)
-                    self.playlist_tracker.start_tracking()
                     
-                    self._start_health_watcher()
-                    
-                    # Ensure tracker authoritative state is reflected
+                    # Manually inject state before starting thread to avoid race conditions
                     if last_played_id:
                         self.playlist_tracker.current_id = last_played_id
                         self.playlist_tracker.last_played_id = last_played_id
-
+                    
+                    self.playlist_tracker.start_tracking()
+                    self._start_health_watcher()
+                    
                     self.launcher.start_restored_process_watcher(self.pid, ipc_path, owner_folder_id)
 
-                    logging.info(f"[PY][Session] Successfully restored session for folder '{owner_folder_id}'.")
+                    logging.info(f"[PY][Session] Successfully restored session for folder '{owner_folder_id}'. Active item: {last_played_id}")
                     return {
                         "was_stale": False, 
                         "folder_id": owner_folder_id, 
@@ -814,13 +817,18 @@ class MpvSessionManager:
 
     def start(self, url_items_or_m3u, folder_id, settings, file_io, **kwargs):
         """Starts a new mpv process with a playlist of URLs or an M3U."""
+        logging.info(f"[PY][Session] start() called for folder '{folder_id}'")
         self.launch_cancelled = False
         launch_result = {"success": False, "error": "Initialization failed"}
+        
+        logging.info("[PY][Session] Resolving input items for start...")
         _url_items_list, input_was_raw = self.enricher.resolve_input_items(url_items_or_m3u, kwargs.get('enriched_items_list'), kwargs.get('headers'))
         
         if not _url_items_list:
+            logging.warning("[PY][Session] No URL items resolved.")
             return {"success": False, "error": "No URL items provided or parsed."}
 
+        logging.info(f"[PY][Session] Resolved {len(_url_items_list)} items.")
         # Calculate Smart Resume Index EARLY
         playlist_start_index = 0
         if settings.get("enable_smart_resume", True):
@@ -828,11 +836,9 @@ class MpvSessionManager:
             target_id = kwargs.get('playlist_start_id')
             
             # 2. Second Priority: Persistent 'currently_playing' marker in items
-            # If multiple items are marked (due to sync race conditions), pick the one with newest last_modified
             if not target_id:
                 candidate_items = [item for item in _url_items_list if item.get('currently_playing')]
                 if candidate_items:
-                    # Sort by last_modified descending
                     candidate_items.sort(key=lambda x: x.get('last_modified', 0), reverse=True)
                     target_id = candidate_items[0].get('id')
             
@@ -851,13 +857,15 @@ class MpvSessionManager:
 
         # Handle Enrichment for Raw Inputs
         if input_was_raw:
+            logging.info("[PY][Session] Input was raw. Checking for M3U flow or start-item enrichment.")
             is_m3u_flow = isinstance(url_items_or_m3u, str) and "youtube.com" not in url_items_or_m3u
             if is_m3u_flow:
+                logging.info("[PY][Session] M3U flow detected. Performing parallel enrichment.")
                 from concurrent.futures import ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=10) as executor:
-                    # Pass context for cookie management
                     results = list(executor.map(lambda x: self.enricher.enrich_single_item(x, folder_id, self.session_cookies, self.sync_lock, settings=settings, session=self), _url_items_list))
                 _url_items_list = [i for r in results for i in r]
+                logging.info(f"[PY][Session] Parallel enrichment complete. {len(_url_items_list)} items total.")
                 return {
                     "success": True, 
                     "enriched_url_items": _url_items_list,
@@ -866,32 +874,33 @@ class MpvSessionManager:
                 }
             else:
                 # Standard Flow: Enrich only the STARTING item immediately
-                # This ensures the item we actually launch with has headers/cookies
-                logging.info(f"Enriching start item at index {playlist_start_index} for immediate launch.")
+                logging.info(f"[PY][Session] Standard flow. Enriching start item at index {playlist_start_index} for immediate launch.")
                 start_item_enriched = self.enricher.enrich_single_item(_url_items_list[playlist_start_index], folder_id, self.session_cookies, self.sync_lock, settings=settings, session=self)
                 
-                # Replace the raw item with the enriched one in the list
-                # Note: enrich_single_item returns a list (usually of length 1)
                 if start_item_enriched:
                     _url_items_list[playlist_start_index] = start_item_enriched[0]
+                    logging.info(f"[PY][Session] Start item enriched: {start_item_enriched[0].get('title')}")
 
         with self.sync_lock:
+            logging.info("[PY][Session] start() - Entered sync_lock.")
             launch_item = _url_items_list[playlist_start_index]
+            logging.info(f"[PY][Session] Final launch item resolved: {launch_item.get('title')} (ID: {launch_item.get('id')})")
 
             if self.pid:
-                # 1. Determine if actually alive
+                logging.info(f"[PY][Session] Active PID {self.pid} found. Checking if it belongs to the same folder.")
                 currently_alive = self.is_alive
                 if currently_alive:
                     if self.ipc_manager and self.ipc_manager.is_connected():
-                        # Verification ping
+                        logging.info("[PY][Session] start() - Sending verification ping to MPV.")
                         res = self.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
                         if not res or res.get("error") != "success":
-                            # Ping failed, but is the process really gone?
+                            logging.info("[PY][Session] start() - Ping failed, checking PID existence.")
                             if not ipc_utils.is_pid_running(self.pid):
                                 currently_alive = False
                             else:
                                 logging.warning(f"Session PID {self.pid} is unresponsive but still running. Keeping alive.")
                     else:
+                        logging.info("[PY][Session] start() - IPC not connected, checking process/socket alive.")
                         currently_alive = ipc_utils.is_process_alive(self.pid, self.ipc_path)
 
                 if not currently_alive:
@@ -899,15 +908,14 @@ class MpvSessionManager:
                     self.clear() 
                 elif folder_id and self.owner_folder_id and folder_id.lower() == self.owner_folder_id.lower(): 
                     # --- NON-DESTRUCTIVE HOT SWAP ---
-                    # If we are asked to play items in the CURRENT folder, we attempt a direct jump.
+                    logging.info("[PY][Session] Same folder active. Attempting hot swap.")
                     if self.ipc_manager and self.ipc_manager.is_connected():
                         logging.info(f"Hot Swap: Switching active session to item: {launch_item.get('title')}")
                         
-                        # 1. Mandatory Sync: Get current MPV reality
                         self._sync_playlist_from_mpv()
                         mpv_playlist_urls = []
                         try:
-                            # We need the filenames specifically for fragment matching
+                            logging.info("[PY][Session] hot-swap - Getting MPV playlist.")
                             pl_res = self.ipc_manager.send({"command": ["get_property", "playlist"]}, expect_response=True)
                             mpv_playlist_urls = pl_res.get("data", []) if pl_res else []
                         except Exception:
@@ -922,23 +930,19 @@ class MpvSessionManager:
                             sep = "#" if "#" not in target_url else "&"
                             target_url = f"{target_url}{sep}mpv_organizer_id={item_id}"
                         
-                        # 2. Try to find the item by ID fragment or URL
                         target_index = -1
                         clean_target_url = target_url.split('#')[0].split('&mpv_organizer_id=')[0]
 
                         for idx, mpv_item in enumerate(mpv_playlist_urls):
                             fname = mpv_item.get('filename', '')
-                            # Priority 1: Match by Solid ID
                             if item_id and f"mpv_organizer_id={item_id}" in fname:
                                 target_index = idx
                                 break
-                            # Priority 2: Match by URL (stripped)
                             clean_fname = fname.split('#')[0].split('&mpv_organizer_id=')[0]
                             if clean_fname == clean_target_url:
                                 target_index = idx
                                 break
                         
-                        # 3. Prepare Metadata & Network properties
                         essential_flags = services.get_essential_ytdlp_flags()
                         raw_opts = launch_item.get('ytdl_raw_options')
                         if launch_item.get('cookies_browser'):
@@ -948,6 +952,7 @@ class MpvSessionManager:
 
                         lua_options, _ = services.construct_lua_options(launch_item, settings, self.SCRIPT_DIR)
                         
+                        logging.info("[PY][Session] hot-swap - Setting properties.")
                         self.ipc_manager.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(lua_options)]})
                         orig_url = launch_item.get('original_url') or launch_item.get('url', '')
                         self.ipc_manager.send({"command": ["set_property", "user-data/original-url", services.sanitize_url(orig_url)]})
@@ -961,10 +966,8 @@ class MpvSessionManager:
                         if lua_options.get('headers') and isinstance(lua_options['headers'], dict):
                             ua = lua_options['headers'].get('User-Agent')
                             ref = lua_options['headers'].get('Referer')
-                            if ua:
-                                self.ipc_manager.send({"command": ["set_property", "user-agent", ua]})
-                            if ref:
-                                self.ipc_manager.send({"command": ["set_property", "referrer", ref]})
+                            if ua: self.ipc_manager.send({"command": ["set_property", "user-agent", ua]})
+                            if ref: self.ipc_manager.send({"command": ["set_property", "referrer", ref]})
 
                         if settings.get('enable_precise_resume', True):
                             try:
@@ -973,21 +976,18 @@ class MpvSessionManager:
                             except (ValueError, TypeError):
                                 pass
 
-                        # 4. Trigger Execution
                         if target_index != -1:
                             logging.info(f"Hot Swap: Item exists at index {target_index}. Jumping.")
                             self.ipc_manager.send({"command": ["set_property", "playlist-pos", target_index]})
                         else:
                             logging.info("Hot Swap: Item not in MPV. Appending and jumping.")
-                            # Force a re-sync of internal list before manual append
                             self.ipc_manager.send({"command": ["loadfile", target_url, "append"]})
-                            time.sleep(0.1) # Brief yield for MPV
+                            time.sleep(0.1)
                             
                             pl_count_res = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True)
                             new_idx = (pl_count_res.get("data", 1) if pl_count_res else 1) - 1
                             self.ipc_manager.send({"command": ["set_property", "playlist-pos", new_idx]})
                             
-                            # Add to internal list
                             if self.playlist is not None:
                                 self.playlist.append(launch_item)
                                 if self.playlist_tracker:
@@ -996,21 +996,22 @@ class MpvSessionManager:
                         launch_result = {
                             "success": True, 
                             "already_active": True,
-                            "handled_directly": True, # Hot swaps are always handled directly
+                            "handled_directly": True, 
                             "message": f"Switched to item: {launch_item.get('title')}",
                             "enriched_url_items": _url_items_list
                         }
                     else:
-                        logging.info(f"[PY][Session] Session already active for folder '{folder_id}'. Returning already_active=True.")
+                        logging.info(f"[PY][Session] Session already active for folder '{folder_id}' but IPC disconnected. Returning already_active=True.")
                         launch_result = {
                             "success": True, 
                             "already_active": True, 
-                            "handled_directly": True, # Active but no IPC is also handled directly
+                            "handled_directly": True, 
                             "enriched_url_items": _url_items_list,
                             "enriched_m3u_content": self._generate_m3u_content(_url_items_list)
                         }
                 else:
                     # Folder mismatch - close old session first
+                    logging.info(f"[PY][Session] Folder mismatch (Current: {self.owner_folder_id}, Target: {folder_id}). Closing old session.")
                     if ipc_utils.is_pid_running(self.pid):
                         self.close()
                     else:
@@ -1018,22 +1019,20 @@ class MpvSessionManager:
 
             # --- LAUNCH LOGIC (Only if not already active) ---
             if not launch_result.get("already_active"):
-                # Always use the true playlist_start_index for metadata and resume timing.
-                # The 'staggered' optimization (loading the rest in background) 
-                # is handled by how we pass full_playlist and how handle_standard_flow_launch reacts.
+                logging.info("[PY][Session] No active session. Calling launcher.launch()...")
                 launch_result = self.launcher.launch(
                     launch_item, folder_id, settings, file_io,
                     full_playlist=_url_items_list if len(_url_items_list) > 1 else [_url_items_list[playlist_start_index]],
                     playlist_start_index=playlist_start_index,
                     **kwargs
                 )
+                logging.info(f"[PY][Session] launcher.launch() result: {launch_result.get('success')}")
                 
                 if launch_result.get("success"):
-                    # Ensure owner-only permissions for the IPC socket immediately after creation
+                    logging.info("[PY][Session] start() - Post-launch initialization.")
                     if self.ipc_path and os.path.exists(self.ipc_path) and platform.system() != "Windows":
                         try:
                             os.chmod(self.ipc_path, 0o600)
-                            logging.info(f"Set secure permissions (0600) for IPC socket: {self.ipc_path}")
                         except Exception:
                             pass
                     
@@ -1041,17 +1040,20 @@ class MpvSessionManager:
                     self._start_health_watcher()
 
         if launch_result.get("success") and len(_url_items_list) > 1:
-            # Trigger background enrichment if it's NOT the first pass of a raw launch 
-            # (Wait for the second pass with enriched items)
-            # OR if it's a Hot Swap/Active session (already_active), since it won't have a second pass.
             if not launch_result.get("handled_directly") or launch_result.get("already_active"):
+                logging.info("[PY][Session] Triggering background enrichment flow.")
                 self.enricher.handle_standard_flow_launch(self, _url_items_list, playlist_start_index, folder_id, settings, file_io)
 
         if launch_result.get("success") and input_was_raw and not launch_result.get("already_active"):
-            launch_result["handled_directly"] = True
+            # Only mark as fully handled if it's a single item launch.
+            # For batches, we need the handler to set up the M3U server for the remaining items.
+            if len(_url_items_list) == 1:
+                launch_result["handled_directly"] = True
+            
             launch_result["enriched_url_items"] = _url_items_list
             launch_result["enriched_m3u_content"] = self._generate_m3u_content(_url_items_list)
 
+        logging.info(f"[PY][Session] start() finished for folder '{folder_id}'. Success: {launch_result.get('success')}")
         return launch_result
 
     def close(self):

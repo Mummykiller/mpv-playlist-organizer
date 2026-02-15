@@ -216,11 +216,21 @@ class LauncherService:
         for k, v in props.items():
             mgr.send({"command": ["set_property", k, v]})
 
+        if settings.get('enable_precise_resume', True):
+            try:
+                # Extract resume time from the already constructed lua_opts
+                start_time = int(float(lua_opts.get('resume_time') or 0))
+                if start_time > 0:
+                    mgr.send({"command": ["set_property", "user-data/primed-resume-time", str(start_time)]})
+                    logging.info(f"[PY][Session] Primed initial resume time: {start_time}s")
+            except (ValueError, TypeError):
+                pass
+
         # NOTE: We do NOT send 'loadfile' here because the file is already on the command line.
         # Sending it again via IPC causes a "Double Load" race condition.
 
     def launch(self, url_item, folder_id, settings, file_io, **kwargs):
-        logging.info(f"[PY][Session] Starting a new MPV instance for URL: {url_item.get('url')}")
+        logging.info(f"[PY][Session] Launcher.launch() start for URL: {url_item.get('url')}")
         mpv_exe = self.session.get_mpv_executable()
         ipc_path = ipc_utils.get_ipc_path()
         playlist_start_index = kwargs.get('playlist_start_index', 0)
@@ -241,10 +251,12 @@ class LauncherService:
             force_bypass = True
 
         if getattr(self.session, 'launch_cancelled', False):
+            logging.info("[PY][Session] Launch cancelled flag detected.")
             return {"success": False, "error": "Launch cancelled by user."}
 
         try:
             # 2.5 Generate Metadata Handshake File
+            logging.info("[PY][Session] Generating handshake file...")
             handshake_data = {
                 "folder_id": folder_id,
                 "project_root": self.session.SCRIPT_DIR,
@@ -265,22 +277,17 @@ class LauncherService:
             with open(handshake_path, 'w', encoding='utf-8') as f:
                 json.dump(handshake_data, f)
             
-            # Ensure the flag is passed to the command builder
             handshake_flag = f"--script-opts=mpv_organizer-handshake={handshake_path}"
             current_custom_flags = kwargs.get('custom_mpv_flags') or ""
             updated_custom_flags = f"{current_custom_flags} {handshake_flag}".strip()
 
             # 3. Construct Command
-            # For the initial CLI command, we only pass ONE URL (the launch_item).
-            # Therefore, MPV must start at index 0 of its initial 'playlist'.
-            # The full playlist index is handled later by the background enrichment flow.
-            #
-            # NOTE: We do NOT pass start_time here via CLI args, because it creates a global 
-            # '--start' flag that applies to ALL videos. We rely on the handshake/Lua for that.
+            logging.info("[PY][Session] Constructing mpv command...")
             full_command, has_terminal_flag = services.construct_mpv_command(
                 mpv_exe=mpv_exe, ipc_path=ipc_path, url=launch_url, is_youtube=is_youtube,
                 ytdl_raw_options=kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options'),
-                geometry=kwargs.get('geometry'), custom_width=kwargs.get('custom_width'),
+                geometry=kwargs.get('geometry'), 
+                custom_width=kwargs.get('custom_width'),
                 custom_height=kwargs.get('custom_height'), custom_mpv_flags=updated_custom_flags,
                 automatic_mpv_flags=kwargs.get('automatic_mpv_flags'),
                 headers=kwargs.get('headers') or url_item.get('headers'),
@@ -295,26 +302,29 @@ class LauncherService:
             )
 
             # 4. Spawn Process
+            logging.info(f"[PY][Session] Spawning mpv process: {mpv_exe}")
             env = self._prepare_launch_env(has_terminal_flag)
             process = subprocess.Popen(full_command, env=env, **services.get_mpv_popen_kwargs(has_terminal_flag))
             self.session.process, self.session.ipc_path = process, ipc_path
-            
-            # Record handshake path for cleanup
             self.session.handshake_path = handshake_path
 
             if process.stdout:
                 threading.Thread(target=self.session.log_stream, args=(process.stdout, logging.warning, folder_id), daemon=True).start()
 
             # 5. Connect & Sync
+            logging.info(f"[PY][Session] Connecting to IPC: {ipc_path}")
             self.session.ipc_manager = ipc_utils.IPCSocketManager()
             if not self.session.ipc_manager.connect(self.session.ipc_path, timeout=5.0):
+                logging.error(f"[PY][Session] IPC connection timeout: {ipc_path}")
                 raise RuntimeError(f"Failed to connect to MPV IPC at {self.session.ipc_path}")
 
-            # Resolve actual PID (important for terminal wrappers)
-            self.session.pid = process.pid
             pid_res = self.session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=5.0, expect_response=True)
             if pid_res and pid_res.get("error") == "success":
                 self.session.pid = pid_res.get("data")
+                logging.info(f"[PY][Session] MPV PID resolved: {self.session.pid}")
+            else:
+                self.session.pid = process.pid
+                logging.warning(f"[PY][Session] Could not resolve MPV PID via IPC, using parent PID: {self.session.pid}")
 
             self.session.owner_folder_id, self.session.is_alive = folder_id, True
             self.session.playlist = kwargs.get('full_playlist') or [url_item]
@@ -331,6 +341,7 @@ class LauncherService:
             self._start_exit_watcher(process, folder_id)
             
             resume_msg = f" at {int(float(launch_lua_options['resume_time']))}s" if launch_lua_options.get('resume_time') else ""
+            logging.info(f"[PY][Session] Launcher.launch() successful{resume_msg}")
             return {"success": True, "message": f"MPV playback initiated{resume_msg}."}
         except Exception as e:
             logging.error(f"Launcher Error: {type(e).__name__}: {e}", exc_info=True)

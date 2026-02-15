@@ -55,6 +55,7 @@ class ItemProcessor:
             settings = self.file_io.get_settings()
 
         # Run bypass analysis
+        logging.info(f"[ItemProcessor] Applying bypass script for: {url}")
         res = self.services.apply_bypass_script(item, self.send_message, settings=settings, session=session, quiet=quiet)
         (
             processed_url, headers, ytdl_opts, use_ytdl, is_yt, entries, 

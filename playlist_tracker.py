@@ -86,15 +86,19 @@ class PlaylistTracker:
         }
 
         if self.tracking_thread:
-            self.tracking_thread.join()
+            self.tracking_thread.join(timeout=2.0)
+            if self.tracking_thread.is_alive():
+                logging.warning(f"[PY][Tracker] Tracking thread for '{self.folder_id}' did not exit within 2s.")
         
-        # Join any pending mark-watched threads to ensure disk persistence
+        # Final commit to ensure no data loss on shutdown
+        # This will take the FileLock, which is safe now as the tracking thread has been joined or timed out.
+        self._commit_to_disk()
+
+        # Prune dead threads from the list, but don't join them.
+        # They will finish their work in the background.
+        self.pending_threads = [t for t in self.pending_threads if t.is_alive()]
         if self.pending_threads:
-            logging.info(f"[PY][Tracker] Waiting for {len(self.pending_threads)} pending mark-watched threads to finish...")
-            for t in self.pending_threads:
-                if t.is_alive():
-                    t.join(timeout=5.0)
-            self.pending_threads.clear()
+            logging.info(f"[PY][Tracker] Leaving {len(self.pending_threads)} mark-watched threads to finish in background.")
         
         return stats
 
@@ -197,6 +201,10 @@ class PlaylistTracker:
                     # Connection lost but no event? (EOF)
                     if not self.ipc_manager.is_connected() and self.is_tracking:
                         logging.info(f"[PY][Tracker] IPC connection lost unexpectedly for folder '{self.folder_id}'. Signaling shutdown.")
+                        
+                        # Final commit before exiting due to connection loss
+                        self._commit_to_disk()
+
                         self.send_message({
                             "action": "mpv_quitting",
                             "folder_id": self.folder_id
@@ -364,16 +372,21 @@ class PlaylistTracker:
                             target_id_for_eof = self.previous_id
                         
                         if target_id_for_eof:
-                            self._check_mark_watched(target_id_for_eof)
-                            self.played_item_ids.add(target_id_for_eof)
-                            self._update_resume_time(target_id_for_eof, 0)
+                            # PROTECTION: Only treat as "finished" if we actually played for at least 2s
+                            # or if it's a very short video that finished naturally.
+                            if self.current_session_duration >= 2:
+                                self._check_mark_watched(target_id_for_eof)
+                                self.played_item_ids.add(target_id_for_eof)
+                                self._update_resume_time(target_id_for_eof, 0)
 
-                            # --- Early Clear Hint Logic ---
-                            # Check if this item is the last in our tracked playlist
-                            with self.lock:
-                                if self.playlist and self.playlist[-1].get('id') == target_id_for_eof:
-                                    logging.info(f"[PY][Tracker] Last item in session playlist finished naturally ({target_id_for_eof}). Setting completion flag.")
-                                    self.is_naturally_completed = True
+                                # --- Early Clear Hint Logic ---
+                                # Check if this item is the last in our tracked playlist
+                                with self.lock:
+                                    if self.playlist and self.playlist[-1].get('id') == target_id_for_eof:
+                                        logging.info(f"[PY][Tracker] Last item in session playlist finished naturally ({target_id_for_eof}). Setting completion flag.")
+                                        self.is_naturally_completed = True
+                            else:
+                                logging.warning(f"[PY][Tracker] EOF detected for {target_id_for_eof} but session duration was too short ({self.current_session_duration}s). Preserving progress.")
                             
                     elif reason == 'stop' or reason == 'quit':
                         if self.current_id and current_time > 1:
@@ -403,6 +416,10 @@ class PlaylistTracker:
                 # If the socket is explicitly closed or we get a connection error, stop tracking
                 if self.ipc_manager and not self.ipc_manager.is_connected():
                     logging.info("[PY][Tracker] MPV IPC connection lost. Signaling shutdown.")
+                    
+                    # Final commit before exiting due to error-induced connection loss
+                    self._commit_to_disk()
+
                     self.send_message({
                         "action": "mpv_quitting",
                         "folder_id": self.folder_id,

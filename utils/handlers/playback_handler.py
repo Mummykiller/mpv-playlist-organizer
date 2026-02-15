@@ -15,11 +15,8 @@ class PlaybackHandler(BaseHandler):
     def _orchestrate_playback(self, request: native_link.PlaybackRequest, input_type: str):
         """
         Unified pipeline for all playback types.
-        1. Resolve Input -> List[Item]
-        2. Active Session Pre-check
-        3. Parallel Enrichment
-        4. Session Launch/Append
         """
+        logging.info(f"[PY][Handler] _orchestrate_playback start: input_type='{input_type}', folder_id='{request.folder_id}'")
         folder_id = request.folder_id or str(uuid.uuid4())
         settings = self._get_merged_settings(request.settings)
         
@@ -28,20 +25,32 @@ class PlaybackHandler(BaseHandler):
         effective_input_type = input_type
 
         if input_type == 'single':
+            if request.url_item:
+                logging.info(f"[PY][Handler] Incoming single item: '{request.url_item.get('title')}', resume_time={request.url_item.get('resume_time')}")
             # Check if we should promote to folder-level playback for managed sessions
             if not request.play_new_instance and request.folder_id:
                 shard_playlist = self.file_io.get_playlist_shard(request.folder_id)
                 if shard_playlist:
                     logging.info(f"[PY][Handler] Promoting single play request to folder batch for '{request.folder_id}'.")
+                    
+                    # CRITICAL: Merge the latest data from request.url_item into the shard item
+                    if request.url_item and request.url_item.get('id'):
+                        target_id = request.url_item.get('id')
+                        request.playlist_start_id = target_id
+                        
+                        for i, shard_item in enumerate(shard_playlist):
+                            if shard_item.get('id') == target_id:
+                                # Prioritize incoming browser data for this specific item
+                                # (Title, Resume Time, etc.)
+                                updated_item = {**shard_item, **request.url_item}
+                                shard_playlist[i] = updated_item
+                                logging.info(f"[PY][Handler] Merged browser state for {target_id}. Resume: {updated_item.get('resume_time')}s")
+                                break
+                    
                     raw_input = shard_playlist
                     effective_input_type = 'batch'
-                    # Ensure we start at the requested item if it has an ID
-                    if request.url_item and request.url_item.get('id'):
-                        request.playlist_start_id = request.url_item.get('id')
             
             if not raw_input:
-                # Direct User Click: Strip any existing resume_time to ensure it starts at 0s
-                # unless the request explicitly provided a fresh one or a specific start ID.
                 if request.url_item and 'resume_time' in request.url_item and not request.playlist_start_id:
                     request.url_item['resume_time'] = None
                 raw_input = [request.url_item]
@@ -51,57 +60,51 @@ class PlaybackHandler(BaseHandler):
             m3u_data = request.m3u_data
             if not m3u_data or 'value' not in m3u_data:
                 msg = "Missing M3U data."
+                logging.warning(f"[PY][Handler] {msg}")
                 return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
             raw_input = m3u_data['value']
         
         # Resolve to standard list of items
+        logging.info(f"[PY][Handler] Resolving input items...")
         items, is_expanded = self.item_processor.resolve_input_items(
             raw_input, None, (request.url_item or {}).get('headers')
         )
+        logging.info(f"[PY][Handler] Resolved {len(items)} items.")
         
         if not items:
             msg = "Could not resolve any playable items."
+            logging.warning(f"[PY][Handler] {msg}")
             return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
 
-        # 2. Active Session Pre-check (Already Active / Pause Cycle)
+        # 2. Active Session Pre-check
         if not request.play_new_instance and self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id:
-            # We cycle pause if:
-            # 1. Single click on the item that is ALREADY playing.
-            # 2. Clicking 'Play' on a folder that is already fully loaded in MPV.
-            
+            logging.info(f"[PY][Handler] Session already alive for folder '{folder_id}'. Checking for pause cycle.")
             if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
-                # Get the actual ID from MPV in real-time
                 res = self.mpv_session.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=0.5)
                 current_playing_id = res.get("data") if res and res.get("error") == "success" else None
                 
                 should_toggle_pause = False
-                
                 if effective_input_type == 'single' and request.url_item:
                     target_id = request.url_item.get('id')
                     if target_id and current_playing_id == target_id:
                         should_toggle_pause = True
                 elif effective_input_type == 'batch' or effective_input_type == 'm3u':
-                    # For batches, check if we're adding anything new
                     current_ids = {item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')}
                     new_items = [item for item in items if self.item_processor.ensure_id(item)['id'] not in current_ids]
                     if not new_items:
                         should_toggle_pause = True
 
                 if should_toggle_pause:
-                    logging.info(f"[PY][Handler] Active session for {folder_id}. Toggling pause.")
+                    logging.info(f"[PY][Handler] Toggling pause for active session.")
                     self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
                     return native_link.success(already_active=True)
 
-        # 2.5 Log batch preparation
-        if len(items) > 1:
-            folder_name = self.file_io.get_index().get(folder_id, {}).get("name")
-            display_name = f"'{folder_name}'" if folder_name else "detached playlist"
-            self.ctx.sender({"log": {"text": f"[Background]: Preparing {display_name} ({len(items)} items)...", "type": "info"}})
-
         # 3. Parallel Enrichment & Initial Launch
+        logging.info(f"[PY][Handler] Starting enrichment and launch payload construction...")
         launch_payload = items if len(items) > 1 else items[0]
         
         try:
+            logging.info(f"[PY][Handler] Calling mpv_session.start (first pass)...")
             first_call_result = self.mpv_session.start(
                 launch_payload, folder_id, settings, self.file_io,
                 geometry=request.geometry, custom_width=request.custom_width, 
@@ -110,6 +113,7 @@ class PlaybackHandler(BaseHandler):
                 start_paused=request.start_paused, force_terminal=request.force_terminal,
                 playlist_start_id=request.playlist_start_id
             )
+            logging.info(f"[PY][Handler] First pass result: success={first_call_result.get('success')}, handled_directly={first_call_result.get('handled_directly')}")
             
             if not first_call_result["success"] or first_call_result.get("handled_directly"):
                 return first_call_result
@@ -121,10 +125,13 @@ class PlaybackHandler(BaseHandler):
             
             target_payload = enriched_url_items
             if enriched_m3u_content and (input_type == 'm3u' or len(enriched_url_items) > 1):
+                logging.info(f"[PY][Handler] Starting local M3U server for multi-item payload.")
                 local_server_url = self.m3u_server.start(enriched_m3u_content)
                 if local_server_url:
                     target_payload = local_server_url
+                    logging.info(f"[PY][Handler] Local M3U server started at {local_server_url}")
 
+            logging.info(f"[PY][Handler] Calling mpv_session.start (final pass)...")
             return self.mpv_session.start(
                 target_payload, folder_id, settings, self.file_io,
                 geometry=request.geometry, custom_width=request.custom_width, 
@@ -140,6 +147,7 @@ class PlaybackHandler(BaseHandler):
                 playlist_start_id=request.playlist_start_id
             )
         except Exception as e:
+            logging.error(f"[PY][Handler] Error during playback orchestration: {e}", exc_info=True)
             if "Launch cancelled" in str(e):
                 self.mpv_session.clear()
                 return native_link.failure("Cancelled")
@@ -241,13 +249,6 @@ class PlaybackHandler(BaseHandler):
         res = self.mpv_session.remove(request.item_id, canonical_id)
         logging.info(f"[PY][Handler] remove_item_live final result for {request.item_id}: {res}")
         return res
-
-    @command('reorder_live')
-    def handle_reorder_live(self, request: native_link.LiveUpdateRequest):
-        if not request.folder_id or not request.new_order:
-            return native_link.failure("Missing folder_id or new_order.")
-        canonical_id = self.file_io._get_canonical_folder_id(request.folder_id)
-        return self.mpv_session.reorder(canonical_id, request.new_order)
 
     @command('reorder_live')
     def handle_reorder_live(self, request: native_link.LiveUpdateRequest):

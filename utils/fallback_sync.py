@@ -107,8 +107,19 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
                 # Update Resume Time
                 if resume_time is not None and settings.get('enable_smart_resume', True):
                     time_val = int(float(resume_time))
-                    # Allow a small 2s drift, but always save 0 (finished)
-                    if abs(item.get("resume_time", 0) - time_val) > 2 or time_val == 0:
+                    current_stored = item.get("resume_time", 0)
+                    
+                    # PROTECTION: If we are trying to set to 0, ensure it's not overwriting 
+                    # a significant progress unless we are reasonably sure it's intentional.
+                    # (e.g. if the caller provided it explicitly or it's a minor drift)
+                    is_reset = (time_val == 0 and current_stored > 10)
+                    
+                    # For now, we trust the caller (Tracker) because we added guards there,
+                    # but we'll add a log for visibility.
+                    if is_reset:
+                        logging.info(f"[PY][Sync] Resetting progress for {item_id} from {current_stored}s to 0s.")
+
+                    if abs(current_stored - time_val) > 2 or time_val == 0:
                         item["resume_time"] = time_val
                         needs_shard_save = True
                         logging.info(f"Disk: Updated resume time to {time_val}s.")
