@@ -122,7 +122,12 @@ local function apply_adaptive_settings()
 
     -- 1. Extract Solid ID
     local solid_id = path:match("[#&]mpv_organizer_id=([^#&]+)")
-    if solid_id then mp.set_property_native("user-data/id", solid_id) end
+    if solid_id then 
+        mp.set_property_native("user-data/id", solid_id) 
+    else
+        -- CRITICAL: If no ID in path, we MUST clear the previous one to prevent leakage
+        mp.set_property_native("user-data/id", "")
+    end
 
     -- 2. Hot-Swap / Race Condition Recovery
     local hs_json = mp.get_property("user-data/hot-swap-options")
@@ -131,7 +136,10 @@ local function apply_adaptive_settings()
     if is_hot_swap then
         local ok, hs_opts = pcall(utils.parse_json, hs_json)
         if ok and hs_opts then
-            if hs_opts.id then id_options[hs_opts.id] = hs_opts end
+            if hs_opts.id then 
+                id_options[hs_opts.id] = hs_opts 
+                mp.set_property_native("user-data/id", hs_opts.id)
+            end
             url_options[path] = hs_opts
         else
             mp.msg.error("AdaptiveHeaders: Failed to parse hot-swap-options. Raw value: '" .. tostring(hs_json) .. "'. Error: " .. tostring(hs_opts))
@@ -144,6 +152,7 @@ local function apply_adaptive_settings()
     -- or if we are performing a hot-swap (item change).
     -- This prevents wiping out command-line cookies/headers on startup.
     if has_started or is_hot_swap then
+        debug_log("Cleaning up previous state...")
         set_property_if_diff("user-agent", initial_ua)
         set_property_if_diff("referrer", initial_referrer)
         set_property_if_diff("http-header-fields", "")
@@ -156,9 +165,15 @@ local function apply_adaptive_settings()
         mp.set_property_native("user-data/original-url", nil)
         set_property_if_diff("user-data/is-youtube", "no")
         set_property_if_diff("user-data/marked-as-watched", "no")
+        set_property_if_diff("user-data/cookies-browser", "")
+        set_property_if_diff("user-data/project-root", "")
+        set_property_if_diff("user-data/folder-id", "")
+        set_property_if_diff("user-data/is-unmanaged", "no")
         
         -- Reset Start Time to prevent leakage from previous file
         mp.set_property("start", "none")
+        mp.set_property("user-data/primed-resume-time", "")
+        primed_resume_time = nil -- Consume Lua global early during reset
 
         -- Reset Buffering to Launch Defaults
         set_property_if_diff("demuxer-max-bytes", initial_max_bytes)
@@ -273,6 +288,14 @@ local function apply_adaptive_settings()
     local targeted = opts.targeted_defaults or "none"
     local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
     local bypass_active = false
+
+    -- ACCURATE SEEKING (Fixes AAC "illegal icc" / "iid_mode 6" errors in Anime)
+    if targeted == 'animepahe' then
+        set_property_if_diff("hr-seek", "yes")
+        debug_log("Accurate seeking enabled for AnimePahe.")
+    else
+        set_property_if_diff("hr-seek", "no")
+    end
 
     if targeted == 'animepahe' and (path:find("kwik%.cx") or path:find("owocdn%.top") or path:find("uwucdn%.top")) then
         bypass_active = true
