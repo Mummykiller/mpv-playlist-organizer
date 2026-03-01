@@ -145,10 +145,20 @@ end)
 local completion_triggered = false
 local has_started = false
 local last_error = false
+local max_playback_time = 0
+
+-- Track max playback time to prevent reset race conditions at EOF
+mp.observe_property("playback-time", "number", function(_, val)
+    if val and val > max_playback_time then
+        max_playback_time = val
+    end
+end)
 
 -- Monitor start-file to ensure we don't trigger completion before anything even played
 mp.register_event("start-file", function()
+    completion_triggered = false
     last_error = false
+    max_playback_time = 0
     log("File started. Resetting error state.")
     if not has_started then
         log("First file started. Watch history tracking active.")
@@ -162,10 +172,9 @@ local function handle_natural_completion(reason)
         return
     end
 
-    -- Protection: Ensure we've actually played for a bit
-    local play_time = mp.get_property_number("playback-time", 0)
-    if play_time < 2 then
-        log("handle_natural_completion ignored: playback time too short (" .. tostring(play_time) .. "s). Likely a load failure.")
+    -- Protection: Ensure we've actually played for a bit (Threshold: 5s)
+    if max_playback_time < 5 then
+        log("handle_natural_completion ignored: playback time too short (" .. tostring(max_playback_time) .. "s). Likely a load failure or skip.")
         return
     end
 
@@ -189,8 +198,8 @@ local function handle_natural_completion(reason)
     -- Write flag IMMEDIATELY so Python can see it
     write_completion_flag(reason)
     
-    -- Small delay to ensure the flag is flushed to disk before the process dies
-    mp.add_timeout(0.2, function()
+    -- Delay to ensure the flag is flushed to disk before the process dies (User requested 0.5s)
+    mp.add_timeout(0.5, function()
         log("Exiting with code 99.")
         mp.command("quit 99")
     end)

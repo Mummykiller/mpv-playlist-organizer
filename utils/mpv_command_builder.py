@@ -198,9 +198,6 @@ class MpvCommandBuilder:
         if not self.ipc_path:
             args.append("--keep-open=yes")
 
-        # Performance optimization: Fast seeking for immediate startup
-        args.append("--hr-seek=no")
-
         # Smart Resume Override: Tell MPV to ignore its built-in watch-later files
         # because we are handling the resume logic manually via our database.
         if self.settings.get("enable_smart_resume", True):
