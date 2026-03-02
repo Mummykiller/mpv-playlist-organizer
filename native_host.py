@@ -127,36 +127,12 @@ try:
                 
     os.environ["PATH"] = os.pathsep.join(current_path_list)
 
-    LOG_FILE = os.path.join(DATA_DIR, "native_host.log")
-    MAX_LOG_BYTES = 1024 * 1024 * 5 # 5 MB
-    BACKUP_COUNT = 1
-
     # --- Logging Setup (Must be done BEFORE starting any threads) ---
-    os.makedirs(DATA_DIR, exist_ok=True)
-    root_logger = logging.getLogger()
-    if root_logger.hasHandlers():
-        root_logger.handlers.clear()
-    root_logger.setLevel(logging.DEBUG)
+    from utils import logger
+    logger.initialize(DATA_DIR, SCRIPT_DIR)
     
-    # Use standard RotatingFileHandler
-    handler = RotatingFileHandler(LOG_FILE, maxBytes=MAX_LOG_BYTES, backupCount=BACKUP_COUNT, encoding='utf-8')
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    root_logger.addHandler(handler)
-
-    # --- Dedicated IPC Event Logger ---
-    # This separates high-frequency tracking noise (like time-pos) into its own file.
-    IPC_LOG_FILE = os.path.join(DATA_DIR, "ipc_events.log")
-    ipc_logger = logging.getLogger("ipc_events")
-    ipc_logger.setLevel(logging.DEBUG)
-    ipc_logger.propagate = False # Prevent noise from reaching native_host.log
-    
-    ipc_handler = RotatingFileHandler(IPC_LOG_FILE, maxBytes=MAX_LOG_BYTES, backupCount=BACKUP_COUNT, encoding='utf-8')
-    ipc_handler.setFormatter(formatter)
-    ipc_logger.addHandler(ipc_handler)
-
-    # Prevent logs from propagating to the console (important for clean CLI)
-    root_logger.propagate = False
+    # Root logger for general logic
+    logging.info(f"[PY][MAIN] Native host starting. Version: 1.1.0. Data Dir: {DATA_DIR}")
 
     from mpv_session import MpvSessionManager
     import cli
@@ -197,43 +173,6 @@ try:
                 return list(self.errors)
 
     diagnostic_collector = DiagnosticCollector()
-
-    def log_stream(stream, log_level, owner_folder_id):
-        """Reads from a stream line by line and logs it."""
-        # Keywords that suggest yt-dlp is outdated for YouTube.
-        YTDLP_FAILURE_KEYWORDS = [
-            "HTTP Error 410", # "HTTP Error 410: Gone" is a classic sign.
-            "This video is unavailable",
-            "unable to extract video data"
-        ]
-        ytdlp_failure_detected = False
-        
-        # Regex to strip ANSI escape codes (colors)
-        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-
-        # The `for line in iter(...)` construct is a standard way to read
-        # from a stream until it's closed.
-        for line in iter(stream.readline, b''):
-            decoded_line = line.decode('utf-8', errors='ignore').strip()
-            clean_line = ansi_escape.sub('', decoded_line)
-            # Mask paths in the logs
-            clean_line = security.mask_path(clean_line, DATA_DIR, SCRIPT_DIR)
-            
-            if "'uname' is not recognized" not in clean_line and "keepalive request failed" not in clean_line and "[mpv_thumbnail_script" not in clean_line:
-                log_level(f"[PY][MPV]: {clean_line}")
-                if not ytdlp_failure_detected and any(keyword in clean_line for keyword in YTDLP_FAILURE_KEYWORDS):
-                    ytdlp_failure_detected = True # Prevent multiple triggers
-                    logging.warning("[PY][MPV] Detected a potential yt-dlp failure. Notifying extension.")
-                    # Send a message to the extension to check if auto-update is enabled
-                    send_message({
-                        "action": "ytdlp_update_check", 
-                        "folder_id": owner_folder_id,
-                        "log": {
-                            "text": "[Native Host]: YouTube playback failed. This may be due to an outdated yt-dlp. Checking for auto-update...",
-                            "type": "error"
-                        }
-                    })
-        stream.close()
 
     def get_message():
         """Reads a message from stdin and decodes it."""
@@ -290,7 +229,7 @@ try:
     mpv_session = MpvSessionManager(session_file_path=SESSION_FILE, dependencies={
         'get_all_folders_from_file': file_io.get_all_folders_from_file,
         'get_mpv_executable': file_io.get_mpv_executable,
-        'log_stream': log_stream,
+        'log_stream': logger.observe_stream,
         'send_message': send_message,
         'SCRIPT_DIR': SCRIPT_DIR,
         'TEMP_PLAYLISTS_DIR': TEMP_PLAYLISTS_DIR,
@@ -307,7 +246,7 @@ try:
         script_dir=SCRIPT_DIR,
         anilist_cache_file=ANILIST_CACHE_FILE,
         temp_playlists_dir=TEMP_PLAYLISTS_DIR,
-        log_stream=log_stream,
+        log_stream=logger.observe_stream,
         data_dir=DATA_DIR,
         metadata_cache=metadata_cache,
         task_manager=task_manager,
@@ -316,6 +255,7 @@ try:
 
     def cleanup_ipc_socket(session_manager):
         """Remove the IPC socket file on exit, if it exists (non-Windows)."""
+        logger.shutdown()
         # Check if the MPV process is still running. If so, preserve the socket for reconnection.
         if session_manager.pid and ipc_utils.is_pid_running(session_manager.pid):
              logging.info(f"[PY] Preserving IPC socket {session_manager.ipc_path} because MPV (PID {session_manager.pid}) is still running.")
@@ -373,6 +313,9 @@ try:
     def main():
         """Main message loop for native messaging from the browser."""
         set_process_name()
+        
+        # Inject the UI notification bridge into the logger
+        logger.set_ui_sender(send_message)
 
         # --- Pre-emptive Cleanup ---
         # Resolve volatile leaks from previous crashes/SIGKILLs that bypassed atexit.
@@ -425,45 +368,70 @@ try:
         def handle_get_native_diagnostics(request: native_link.BaseRequest):
             return {"success": True, "errors": diagnostic_collector.get_errors()}
 
+        @HandlerRegistry.command('get_debug_bundle')
+        def handle_get_debug_bundle(request: native_link.BaseRequest):
+            """Flushes logs and returns sanitized diagnostic data."""
+            # 1. Flush non-blocking queue to disk
+            logger.shutdown()
+            
+            # 2. Re-initialize logging for future messages
+            logger.initialize(DATA_DIR, SCRIPT_DIR)
+            
+            def read_safe(path):
+                if os.path.exists(path):
+                    try:
+                        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                            return f.read()[-50000:] # Last 50KB
+                    except Exception as e:
+                        return f"Error reading file: {e}"
+                return "File not found."
+
+            bundle = {
+                "native_host_log": read_safe(os.path.join(DATA_DIR, "native_host.log")),
+                "ipc_events_log": read_safe(os.path.join(DATA_DIR, "ipc_events.log")),
+                "session_json": read_safe(os.path.join(DATA_DIR, "session.json")),
+                "diagnostics": diagnostic_collector.get_errors(),
+                "timestamp": datetime.now().isoformat()
+            }
+            return native_link.success(bundle)
+
+        @logger.catch(ui_alert=True)
         def task_wrapper(message):
             """Worker thread task to execute handler and send response."""
+            # Set request ID context for this thread
+            req_id = message.get('request_id')
+            token = logger.request_id_var.set(req_id)
+
             try:
                 # 1. Mandatory Security Payload Validation
                 is_valid, err_msg = security.validate_payload(message)
                 if not is_valid:
                     logging.warning(f"[PY][SECURITY] Blocked malicious payload: {err_msg}")
                     error_resp = native_link.failure(f"Security block: {err_msg}")
-                    if message.get('request_id'):
-                        error_resp['request_id'] = message.get('request_id')
+                    if req_id:
+                        error_resp['request_id'] = req_id
                     send_message(error_resp)
                     return
 
                 request = native_link.translate(message)
                 command_name = request.action
-                
+
                 # Dynamic dispatch using the registry
                 handler = HandlerRegistry.get_handler(command_name)
-                
+
                 if handler:
                     response = handler(request)
                 else:
                     response = native_link.failure(f"Unknown command: {command_name}")
 
-                if request.request_id:
-                    response['request_id'] = request.request_id
-                send_message(response)
-
-            except Exception as e:
-                diagnostic_collector.add_error(f"Task: {message.get('action')}", e)
-                logging.error(f"[PY][TASK] Error processing {message.get('action')}: {e}", exc_info=True)
-                try:
-                    error_resp = native_link.failure(f"Task error: {str(e)}")
-                    if message.get('request_id'):
-                        error_resp['request_id'] = message.get('request_id')
-                    send_message(error_resp)
-                except Exception:
-                    pass
-
+                if response:
+                    # Preserve request_id for the bridge
+                    if req_id:
+                        response['request_id'] = req_id
+                    send_message(response)
+            finally:
+                # Reset context for reuse in thread pool
+                logger.request_id_var.reset(token)
         # --- Automatic Session Restoration (Threaded) ---
         # Attempt to reconnect to an existing MPV session immediately upon startup.
         # This is done in a thread to avoid blocking the main message loop.

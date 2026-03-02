@@ -480,7 +480,10 @@ class PlaybackHandler(BaseHandler):
             
             threading.Thread(target=delayed_cleanup, args=(handshake_path, process), daemon=True).start()
             
-            threading.Thread(target=self.ctx.log_stream, args=(process.stderr, logging.warning, None), daemon=True).start()
+            # Use the new non-blocking stream observer
+            observer = self.ctx.log_stream(tag="MPV-UNMANAGED", send_message_func=self.ctx.sender)
+            threading.Thread(target=observer, args=(process.stderr,), daemon=True).start()
+            
             return native_link.success(message="Disconnected session launched.")
         except Exception as e:
             import traceback
