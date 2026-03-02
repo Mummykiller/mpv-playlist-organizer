@@ -309,7 +309,9 @@ class LauncherService:
             self.session.handshake_path = handshake_path
 
             if process.stdout:
-                threading.Thread(target=self.session.log_stream, args=(process.stdout, logging.warning, folder_id), daemon=True).start()
+                # Use the new non-blocking stream observer with yt-dlp failure detection
+                observer = self.session.log_stream(tag="MPV", folder_id=folder_id, send_message_func=self.session.send_message)
+                threading.Thread(target=observer, args=(process.stdout,), daemon=True).start()
 
             # 5. Connect & Sync
             logging.info(f"[PY][Session] Connecting to IPC: {ipc_path}")
