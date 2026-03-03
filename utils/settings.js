@@ -1127,6 +1127,37 @@ export class OptionsManager {
 				this._handleForceRefreshDependencies(refreshDepsBtn),
 			);
 		}
+
+		const copyDiagBtn = document.getElementById("btn-copy-diagnostics");
+		if (copyDiagBtn) {
+			copyDiagBtn.addEventListener("click", async () => {
+				if (copyDiagBtn.disabled) return;
+				copyDiagBtn.disabled = true;
+				const originalText = copyDiagBtn.textContent;
+				copyDiagBtn.textContent = "Generating Report...";
+
+				this.showStatus("Collecting system diagnostics...");
+
+				try {
+					const response = await this.sendMessageAsync({
+						action: "get_unified_diagnostics",
+					});
+
+					if (response?.success) {
+						const blob = JSON.stringify(response.data || response.result || response, null, 2);
+						await navigator.clipboard.writeText(blob);
+						this.showStatus("Diagnostic report copied to clipboard!");
+					} else {
+						this.showStatus(response?.error || "Failed to generate report.", true);
+					}
+				} catch (e) {
+					this.showStatus("Error: " + e.message, true);
+				} finally {
+					copyDiagBtn.disabled = false;
+					copyDiagBtn.textContent = originalText;
+				}
+			});
+		}
 	}
 
 	async _handleForceRefreshDependencies(btn) {

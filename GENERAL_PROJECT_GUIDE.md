@@ -89,8 +89,21 @@ To ensure local progress is never lost due to network or sync failures, these fl
 - **Frontend Reload:** `chrome://extensions` -> Reload.
 - **Backend Reload:** **Restart the Browser** (Native Host persists until browser exit).
 - **MPV Reload:** Restart the player instance or reload the script in MPV.
-- **Diagnostics:** Use `installer.py` -> "Run Diagnostics" or the `get_native_diagnostics` action via the bridge to inspect `DiagnosticCollector` logs.
-- **Legacy Tests:** `testing_tools/test_bridge_protocol.py` is deprecated.
+- **Automated Testing:** Run `python3 testing_tools/run_suite.py` to execute the full batched test suite (Backend, JS, and Integration).
+
+### Testing Blueprint & Standards
+To maintain a clean and reliable environment, all new tests must follow these rules:
+
+1.  **Storage:** All test scripts live in `testing_tools/scripts/`.
+2.  **Python Tests:**
+    - **Inheritance:** Always inherit from `BaseTestCase` in `testing_tools/base_test.py`.
+    - **Discovery:** Name files `test_<name>.py` to be automatically picked up by the runner.
+    - **Utilities:** Use `self.test_dir` for file I/O and `self.mock_send` to verify bridge messages.
+3.  **JavaScript Tests:**
+    - **Environment:** Run in Node.js (mocking browser globals like `navigator` where necessary).
+    - **Registration:** Manually add new JS test filenames to the `js_tests` list in `testing_tools/run_suite.py`.
+    - **Scope:** Focus on protocol parity and logic that doesn't require the Chrome Extension runtime.
+4.  **Verification:** A task is not complete until `run_suite.py` passes with all batches green.
 
 ## 9. JavaScript Build Process
 The project uses a custom Python script to maintain compatibility between ES Modules (Background) and Global Scope (Content Scripts).
@@ -115,3 +128,41 @@ The system uses centralized "Translators" to handle the bridge between `snake_ca
 - **Purpose:** Recursively converts Python's `snake_case` keys back into JS-friendly `camelCase`.
 - **Outgoing Python Responses:** `utils/native_link/responder.py` uses `_translate_keys` to recursively convert all keys to `camelCase` before sending.
 - **Source of Truth:** Edit the `.module.js` file and run the generator.
+
+## 11. Unified Logging & Diagnostics
+The system uses a high-performance, non-blocking logging architecture that synchronizes events between JavaScript and Python using a shared correlation ID.
+
+### Core Principles
+1.  **Zero Latency:** All disk I/O in Python occurs on a background thread (`QueueListener`). Native Messaging is never blocked by log writes.
+2.  **Request Correlation:** Every user action is tagged with a `request_id`. This ID is preserved across the bridge, allowing you to trace a single click from the JS Popup through to the MPV process logs.
+3.  **Security at the Core:** Path masking (PII protection) is handled automatically by the `SecurityFormatter` in Python. Home directories and project roots are replaced with `<HOME>` or `<DATA_DIR>` before hitting the disk.
+4.  **Unified Persistence:** JavaScript `ERROR` and `FATAL` logs are automatically pushed to the Python `native_host.log` via the `log_event` bridge action.
+
+### JavaScript Logging (`utils/SystemLogger.module.js`)
+- **Singleton:** Access via `import { logger } from "./SystemLogger.module.js"`.
+- **Flood Gate:** Implements rate-limiting (max 10 logs/sec). Identical rapid-fire errors are collapsed to prevent bridge saturation.
+- **Level Sync:** During the handshake, JS receives the current Python log level and silences all JS logs below that level to save bandwidth.
+
+### Python Logging (`utils/logger.py`)
+- **Context-Aware:** Uses `ContextVar` to automatically associate log entries with the active `request_id` without manual passing.
+- **Subprocess Integration:** Use `logger.observe_stream(tag="MPV")` to wrap `yt-dlp` or `mpv` stderr. It includes automated detection for site-specific errors (e.g., YouTube 403/410) to trigger auto-updates.
+- **Log Streams:**
+    - `native_host.log`: Main business logic and persistent JS logs.
+    - `ipc_events.log`: High-frequency MPV state data (throttled).
+
+### Developer API Reference
+
+| Action | JS | Python |
+| :--- | :--- | :--- |
+| **Standard Log** | `logger.info("msg")` | `logger.info("msg")` |
+| **UI Notification** | `{ uiNotify: true }` | `logger.info("msg", ui_notify=True)` |
+| **Trace Duration** | N/A | `@logger.trace(name="Task")` |
+| **Safe Execution** | N/A | `@logger.catch(ui_alert=True)` |
+| **Correlation** | `logger.runWithContext(id, fn)` | Handled by `task_wrapper` |
+
+### Diagnostics Export
+A unified diagnostic report can be generated via the `get_unified_diagnostics` action. This merges:
+1.  JS Environment Metadata (Browser, OS, Version).
+2.  JS Breadcrumbs (Last 20 UI actions).
+3.  The last 50KB of `native_host.log` and `ipc_events.log`.
+4.  Active Python session metadata.

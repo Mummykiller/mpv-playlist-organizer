@@ -97,3 +97,9 @@ class ServiceRequest(BaseRequest):
     is_cache_disabled: bool = False
     days: int = 0
     force_refresh: bool = False
+
+@dataclass
+class LogRequest(BaseRequest):
+    level: str = "INFO"
+    message: str = ""
+    context: str = "JS"
