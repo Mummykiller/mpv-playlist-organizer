@@ -18,7 +18,7 @@ import { broadcastPlaylistState, getVisualPlaybackState } from "./background/ui_
 import { broadcastLog, broadcastToTabs } from "./background/messaging.js";
 import { storage } from "./background/storage_instance.js";
 import { updateContextMenus } from "./utils/contextMenu.js";
-import { diagnosticCollector } from "./utils/diagnosticCollector.js";
+import { logger } from "./utils/SystemLogger.module.js";
 import { addNativeListener } from "./utils/nativeConnection.module.js";
 import { nativeLink } from "./utils/nativeLink.js";
 import * as playlistManager from "./utils/playlistManager.js";
@@ -105,15 +105,28 @@ const actionHandlers = {
 	manual_ytdlp_update: dependency_anilist_handlers.handleManualYtdlpUpdate,
 	get_js_diagnostics: async () => ({
 		success: true,
-		errors: diagnosticCollector.getErrors(),
+		errors: logger.getDiagnostics().errors,
 	}),
+	get_unified_diagnostics: async () => {
+		const jsDiagnostics = logger.getDiagnostics();
+		const response = await nativeLink.call("get_unified_diagnostics", jsDiagnostics);
+		return response;
+	},
 };
 
 actionHandlers["session_restored"] = playback_handlers.handleSessionRestored;
 
 // Centralized Python Log Listener
 addNativeListener("log", (data) => {
-	if (data.log) broadcastLog(data.log);
+	if (data.log) {
+		// Log to JS console for visibility, but don't send back to Python
+		const level = data.log.type === "error" ? "error" : "info";
+		// Safely handle unknown levels
+		const logFn = logger[level] ? logger[level].bind(logger) : logger.info.bind(logger);
+		logFn(`[PY] ${data.log.text}`, { persist: false });
+		
+		broadcastLog(data.log);
+	}
 });
 
 const activeTasks = new Map();
@@ -159,7 +172,7 @@ async function syncMetadataCache() {
 	try {
 		const shardsResult = await nativeLink.getMetadataCache();
 		if (shardsResult?.success && shardsResult.shards) {
-			console.log(`[BG] Syncing ${shardsResult.shards.length} metadata shards...`);
+			logger.info(`[BG] Syncing ${shardsResult.shards.length} metadata shards...`);
 			for (const shard of shardsResult.shards) {
 				const content = await nativeLink.getMetadataCache(shard);
 				if (content?.success && content.data) {
@@ -169,7 +182,7 @@ async function syncMetadataCache() {
 			}
 		}
 	} catch (e) {
-		console.warn(`[BG] Metadata cache sync failed: ${e.message}`);
+		logger.warn(`[BG] Metadata cache sync failed: ${e.message}`);
 	}
 }
 
@@ -190,7 +203,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 				const response = await handler(request, sender);
 				if (response !== undefined) sendResponse(response);
 			} catch (e) {
-				console.error(`[BG] Error handling action '${request.action}':`, e);
+				logger.error(`[BG] Error handling action '${request.action}':`, e);
 				broadcastLog({
 					text: `[Background] Error in ${request.action}: ${e.message}`,
 					type: "error",
@@ -207,14 +220,14 @@ chrome.runtime.onInstalled.addListener(async () => {
 	await storage.initialize();
 	await updateContextMenus(storage);
 	chrome.alarms.create("periodic-storage-janitor", { periodInMinutes: 10080 });
-	console.log("[BG] MPV Handler extension installed and initialized.");
+	logger.info("[BG] MPV Handler extension installed and initialized.");
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
 	if (alarm.name === "periodic-storage-janitor") {
 		storage
 			.runJanitorTasks()
-			.catch((e) => console.error("Janitor alarm failed:", e));
+			.catch((e) => logger.error("Janitor alarm failed:", e));
 	} else if (alarm.name === "native-host-heartbeat") {
 		performNativeHostHeartbeat();
 	} else if (alarm.name === "metadata-cache-sync") {

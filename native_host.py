@@ -362,7 +362,10 @@ try:
         def handle_restore_session(request: native_link.BaseRequest):
             """Manual trigger for session restoration from the extension."""
             res = mpv_session.restore()
-            return native_link.success(res, action="session_restored")
+            
+            # Add current log level to the handshake response
+            current_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
+            return native_link.success(res, action="session_restored", log_level=current_level)
 
         @HandlerRegistry.command('get_native_diagnostics')
         def handle_get_native_diagnostics(request: native_link.BaseRequest):
@@ -443,7 +446,8 @@ try:
                     # Send unsolicited event to notify the extension
                     # Small delay to ensure the browser port is fully ready
                     time.sleep(0.5)
-                    send_message(native_link.success(restore_data, action="session_restored"))
+                    current_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
+                    send_message(native_link.success(restore_data, action="session_restored", log_level=current_level))
             except Exception as e:
                 logging.error(f"[PY][MAIN] Error during automatic session restoration: {e}")
         

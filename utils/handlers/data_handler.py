@@ -3,15 +3,68 @@ import os
 import subprocess
 import platform
 from .base_handler import BaseHandler
-from .. import native_link
-
-from .base_handler import BaseHandler
 from .registry import command
 from .. import native_link
 
 class DataHandler(BaseHandler):
     def __init__(self, ctx):
         super().__init__(ctx)
+
+    @command('log_event')
+    def handle_log_event(self, request: native_link.LogRequest):
+        # Determine level
+        level_name = request.level.upper()
+        
+        # Map JS FATAL to Python CRITICAL
+        if level_name == "FATAL":
+            level = logging.CRITICAL
+        else:
+            level = getattr(logging, level_name, logging.INFO)
+        
+        # Log it using the standard logger
+        logging.log(level, f"[JS-{request.context}] {request.message}")
+        return native_link.success()
+
+    @command('get_unified_diagnostics')
+    def handle_get_unified_diagnostics(self, request: native_link.DataSyncRequest):
+        # Flush logs to disk by restarting the listener
+        from utils import logger as logger_module
+        logger_module.shutdown()
+        logger_module.initialize(self.ctx.data_dir, self.ctx.script_dir)
+        
+        js_diagnostics = request.data or {}
+        
+        def read_tail(filename, kb=100):
+            path = os.path.join(self.ctx.data_dir, filename)
+            if not os.path.exists(path):
+                return f"[File not found: {filename}]"
+            try:
+                size = os.path.getsize(path)
+                read_size = min(size, kb * 1024)
+                with open(path, 'rb') as f:
+                    if size > read_size:
+                        f.seek(-read_size, 2)
+                    content = f.read().decode('utf-8', errors='replace')
+                    return content
+            except Exception as e:
+                return f"[Error reading {filename}: {e}]"
+
+        native_log = read_tail("native_host.log")
+        ipc_log = read_tail("ipc_events.log")
+        
+        import sys
+        system_info = {
+            "python_version": sys.version,
+            "platform": platform.platform(),
+            "data_dir": self.ctx.data_dir
+        }
+        
+        return native_link.success({
+            "js_diagnostics": js_diagnostics,
+            "native_log": native_log,
+            "ipc_log": ipc_log,
+            "system_info": system_info
+        })
 
     @command('export_data')
     def handle_export_data(self, request: native_link.DataSyncRequest):

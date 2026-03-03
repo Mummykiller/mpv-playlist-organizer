@@ -1,7 +1,7 @@
 from typing import Dict, Any, Type, Optional
 from .models import (
     BaseRequest, PlaybackRequest, LiveUpdateRequest, 
-    DataSyncRequest, ServiceRequest, SettingsOverrides
+    DataSyncRequest, ServiceRequest, SettingsOverrides, LogRequest
 )
 
 # Action to Dataclass mapping
@@ -29,10 +29,14 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
     'export_all_playlists_separately': DataSyncRequest,
     'import_from_file': DataSyncRequest,
     'set_ui_preferences': DataSyncRequest,
+    'get_unified_diagnostics': DataSyncRequest,
     
     # Services
     'get_anilist_releases': ServiceRequest,
     'check_dependencies': ServiceRequest,
+    
+    # Logging
+    'log_event': LogRequest,
 }
 
 import re
@@ -126,6 +130,15 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             is_cache_disabled=norm_message.get('is_cache_disabled', False),
             days=norm_message.get('days', 0),
             force_refresh=norm_message.get('force_refresh', False)
+        )
+    
+    elif req_class == LogRequest:
+        return LogRequest(
+            action=action,
+            request_id=request_id,
+            level=norm_message.get('level', 'INFO'),
+            message=norm_message.get('message', ''),
+            context=norm_message.get('context', 'JS')
         )
     
     return BaseRequest(action=action, request_id=request_id)

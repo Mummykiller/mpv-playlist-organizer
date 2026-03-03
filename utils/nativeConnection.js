@@ -5,6 +5,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	const broadcastLog = window.MPV_INTERNAL.broadcastLog;
 	const security = window.MPV_SECURITY;
 	const normalizeKeys = window.MPV_INTERNAL.normalizeKeys;
+	const logger = window.MPV_INTERNAL.logger;
 
 	const NATIVE_HOST_NAME = "com.mpv_playlist_organizer.handler";
 
@@ -19,6 +20,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	let requestPromises = {};
 	let requestIdCounter = 0;
 	let connectionPromise = null;
+
+	// Inject the sender into the logger immediately.
+	// The logger buffers internally if the connection isn't ready.
+	logger.setNativeSender((msg) => callNativeHost(msg));
 
 	// Internal listener registry
 	const eventListeners = {
@@ -84,6 +89,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 
 				console.error("Native host disconnected:", lastError);
+				logger.error(`Native host disconnected: ${friendlyError}`, { persist: false });
+
 				broadcastLog({
 					text: `[Background]: Fatal Connection Error: ${friendlyError}`,
 					type: "error",
@@ -134,6 +141,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						text: `[Background]: Session restoration handshake completed.`,
 						type: "info",
 					});
+
+					// Synchronize Log Level
+					if (responseData.log_level) {
+						logger.setLevel(responseData.log_level);
+						logger.info(`Log level synced to ${responseData.log_level}`);
+					}
+
 					if (responseData.action === "session_restored")
 						dispatchNativeEvent("session_restored", responseData);
 					resolve();
@@ -176,22 +190,31 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			return await new Promise((resolve, reject) => {
 				const ensureConnectedAndSend = async () => {
 					await connectToNativeHost();
-					const requestId = `req_${requestIdCounter++}`;
-					requestPromises[requestId] = { resolve, reject };
-					const messageToSend = { ...message, request_id: requestId };
-					try {
-						nativePort.postMessage(messageToSend);
-					} catch (e) {
-						delete requestPromises[requestId];
-						reject(new Error(`Failed to post message: ${e.message}`));
-					}
+					const requestId = message.request_id || `req_${requestIdCounter++}`;
+
+					// Wrap the execution in the logger context
+					await logger.runWithContext(requestId, async () => {
+						requestPromises[requestId] = { resolve, reject };
+						const messageToSend = { ...message, request_id: requestId };
+						try {
+							nativePort.postMessage(messageToSend);
+						} catch (e) {
+							delete requestPromises[requestId];
+							reject(new Error(`Failed to post message: ${e.message}`));
+						}
+					});
 				};
 				ensureConnectedAndSend().catch(reject);
 			});
 		} catch (error) {
 			const errorMessage = `Native Host Error (${message.action}): ${error.message}`;
 			console.error(errorMessage);
-			broadcastLog({ text: `[Background]: ${errorMessage}`, type: "error" });
+
+			// Avoid infinite loops if the logger itself triggers this
+			if (message.action !== "log_event") {
+				logger.error(errorMessage, { persist: false });
+				broadcastLog({ text: `[Background]: ${errorMessage}`, type: "error" });
+			}
 
 			if (shouldThrow) throw error;
 			return { success: false, error: errorMessage };
