@@ -24,6 +24,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				isPaused: false,
 				isIdle: false,
 				isRunning: false,
+				isLaunching: false,
+				isAppending: false,
 				needsAppend: false,
 				isClosing: false,
 				health: "ok",
@@ -85,6 +87,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (newData.lastPlayedId) this.state.lastPlayedId = newData.lastPlayedId;
 			if (newData.needsAppend !== undefined) this.state.needsAppend = newData.needsAppend;
 			if (newData.isClosing !== undefined) this.state.isClosing = newData.isClosing;
+			if (newData.isLaunching !== undefined) this.state.isLaunching = newData.isLaunching;
+			if (newData.isAppending !== undefined) this.state.isAppending = newData.isAppending;
 			if (newData.health !== undefined) this.state.health = newData.health;
 
 			// 2. Derive Status
@@ -92,18 +96,30 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const isPaused = newData.isPaused ?? this.state.isPaused;
 			const isIdle = newData.isIdle ?? this.state.isIdle;
 			const health = newData.health ?? this.state.health;
+			const isLaunching = this.state.isLaunching;
+			const isAppending = this.state.isAppending;
+			const isClosing = this.state.isClosing;
 
-			// If the player is NOT running OR health is dead, we must clear the needsAppend state
+			// If the player is NOT running OR health is dead, we must clear states
 			if (!isRunning || health === "dead") {
 				this.state.needsAppend = false;
-				this.state.isClosing = false;
+				// Only clear isClosing if we are TRULY stopped (isRunning is false)
+				if (!isRunning) {
+					this.state.isClosing = false;
+				}
+				this.state.isLaunching = false;
+				this.state.isAppending = false;
 				isRunning = false; // Force stop if dead
 			}
 
 			let newStatus = PlaybackStatus.STOPPED;
 
-			if (isRunning) {
-				if (isPaused) {
+			if (isClosing) {
+				newStatus = PlaybackStatus.STOPPED; // Visually stopped, but with closing spinner
+			} else if (isRunning) {
+				if (isLaunching || isAppending) {
+					newStatus = PlaybackStatus.LOADING;
+				} else if (isPaused) {
 					newStatus = PlaybackStatus.PAUSED;
 				} else if (isIdle) {
 					if (oldStatus === PlaybackStatus.PLAYING || oldStatus === PlaybackStatus.LOADING || oldStatus === PlaybackStatus.PAUSED) {
@@ -129,8 +145,25 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		 */
 		setLoading(folderId) {
 			this.state.status = PlaybackStatus.LOADING;
-			this.state.isRunning = true;
+			// Optimistic part: We assume it's starting, but isRunning stays false 
+			// until backend confirms success (magical stardust).
+			this.state.isRunning = false; 
+			this.state.isLaunching = true;
+			this.state.isAppending = false;
 			this.state.isIdle = true;
+			this.state.isClosing = false;
+			if (folderId) this.state.folderId = folderId;
+			this.notify();
+		}
+
+		/**
+		 * Optimistic state for appending to an active session.
+		 */
+		setAppending(folderId) {
+			this.state.status = PlaybackStatus.LOADING;
+			// For append, we are already running, keep it that way.
+			this.state.isAppending = true;
+			this.state.isLaunching = false;
 			this.state.isClosing = false;
 			if (folderId) this.state.folderId = folderId;
 			this.notify();

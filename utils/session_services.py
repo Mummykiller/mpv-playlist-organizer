@@ -34,7 +34,9 @@ class EnrichmentService(ItemProcessor):
                 # Poll for readiness instead of hard sleep
                 start_wait = time.time()
                 while time.time() - start_wait < 10.0:
-                    if not session.is_alive:
+                    # --- CANCELLATION CHECK ---
+                    if not session.is_alive or getattr(session, 'launch_cancelled', False):
+                        logging.info(f"[PY][Session] Background Flow aborted: Session dead or cancelled.")
                         return
                     if session.ipc_manager and session.ipc_manager.is_connected():
                         # Optional: Ping to ensure responsiveness
@@ -410,6 +412,7 @@ class LauncherService:
 
             logging.info(f"Closing MPV session for PID: {self.session.pid}")
             self.session.manual_quit = True
+            self.session.is_closing = True
             
             # Local copies for use outside the lock
             proc = self.session.process

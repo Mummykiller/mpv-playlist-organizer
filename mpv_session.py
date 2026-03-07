@@ -37,6 +37,7 @@ class MpvSessionManager:
         self.manual_quit = False
         self.session_cookies = set()
         self.launch_cancelled = False
+        self.is_closing = False
         self.last_played_id_cache = None
         self.handshake_path = None
         self.health = "ok"
@@ -265,6 +266,7 @@ class MpvSessionManager:
         with self.sync_lock:
             # 1. Immediate State Inactivation
             self.is_alive = False
+            self.is_closing = False
             self.health = "ok"
             pid_to_clear = self.pid
             self.pid = None
@@ -818,7 +820,6 @@ class MpvSessionManager:
     def start(self, url_items_or_m3u, folder_id, settings, file_io, **kwargs):
         """Starts a new mpv process with a playlist of URLs or an M3U."""
         logging.info(f"[PY][Session] start() called for folder '{folder_id}'")
-        self.launch_cancelled = False
         launch_result = {"success": False, "error": "Initialization failed"}
         
         logging.info("[PY][Session] Resolving input items for start...")
@@ -883,6 +884,19 @@ class MpvSessionManager:
 
         with self.sync_lock:
             logging.info("[PY][Session] start() - Entered sync_lock.")
+            
+            # --- CANCELLATION & ORCHESTRATION GUARD ---
+            is_final_pass = kwargs.get('enriched_items_list') is not None
+            if getattr(self, 'launch_cancelled', False):
+                logging.info(f"[PY][Session] Launch for folder '{folder_id}' aborted due to cancellation.")
+                return {"success": False, "error": "Launch cancelled."}
+            
+            if is_final_pass and not self.is_alive and not self.pid:
+                # If we are in the final pass but the session is dead, it means the user 
+                # closed the player between Pass 1 and Pass 2. Do NOT relaunch.
+                logging.info(f"[PY][Session] Pass 2 detected dead session. Aborting to prevent ghost relaunch.")
+                return {"success": True, "message": "Playback ended by user between passes."}
+
             launch_item = _url_items_list[playlist_start_index]
             logging.info(f"[PY][Session] Final launch item resolved: {launch_item.get('title')} (ID: {launch_item.get('id')})")
 

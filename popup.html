@@ -619,6 +619,18 @@
                             <option value="ultra">Ultra (Extreme Quality / GPU Heavy)</option>
                         </select>
                     </div>
+
+                    <div class="settings-group-header" style="margin-top: 14px;">Sync & Tearing</div>
+                    <div class="control-group" data-setting-name="enable display sync resample judder">
+                        <label for="enable-display-sync-checkbox" class="settings-label">Enable Display Sync <span class="help-icon" title="Syncs video to display refresh rate (video-sync=display-resample). Fixes judder and tearing without altering frame rate. Recommended if you have tearing.">?</span>:</label>
+                        <input type="checkbox" id="enable-display-sync-checkbox" class="settings-checkbox">
+                    </div>
+                    <hr class="settings-compact-separator">
+                    <div class="control-group" data-setting-name="override display fps refresh rate tearing">
+                        <label for="override-display-fps-input" class="settings-label">Override Display FPS <span class="help-icon" title="Forces MPV to assume your display has this specific refresh rate (e.g. 60, 144). Useful if MPV fails to detect it correctly, causing tearing.">?</span>:</label>
+                        <input type="text" id="override-display-fps-input" class="settings-input networking-small-input" placeholder="e.g. 60" style="width: 80px;">
+                    </div>
+
                     <div id="ultra-options-container" class="settings-section-content" style="border-top: none; padding-top: 0; padding-bottom: 0; display: none;">
                         <hr class="settings-compact-separator">
                         <div class="settings-group-header">Ultra Quality Options</div>
@@ -627,10 +639,6 @@
                             <input type="checkbox" id="ultra-scalers-checkbox" class="settings-checkbox">
                         </div>
                         <hr class="settings-compact-separator">
-                        <div class="control-group" data-setting-name="ultra video sync display">
-                            <label for="ultra-video-sync-checkbox" class="settings-label">Display Sync <span class="help-icon" title="Syncs video to display refresh rate (video-sync=display-resample). Fixes judder without altering frame rate.">?</span>:</label>
-                            <input type="checkbox" id="ultra-video-sync-checkbox" class="settings-checkbox">
-                        </div>
                         <div class="control-group" data-setting-name="ultra motion interpolation">
                             <label for="ultra-interpolation-select" class="settings-label">Frame Generation <span class="help-icon" title="Matches video frames to your refresh rate (e.g. 24fps -> 144Hz):
 • Oversample: Natural timing fix (No Soap Opera Effect).

@@ -1618,16 +1618,16 @@ button:disabled {
 	}
 }
 
-button.btn-loading {
+button.btn-loading,
+button.btn-closing {
 	position: relative;
 	color: transparent !important;
 	pointer-events: none;
 }
 
-button.btn-closing {
-	background-color: var(--accent-inactive) !important;
-	cursor: wait !important;
-	pointer-events: none;
+button.btn-loading svg,
+button.btn-closing svg {
+	visibility: hidden;
 }
 
 button.btn-loading::after,

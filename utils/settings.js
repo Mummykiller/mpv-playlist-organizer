@@ -315,9 +315,14 @@ export class OptionsManager {
 				type: "checkbox",
 			},
 			{
-				key: "ultraVideoSync",
-				elementId: "ultra-video-sync-checkbox",
+				key: "enableDisplaySync",
+				elementId: "enable-display-sync-checkbox",
 				type: "checkbox",
+			},
+			{
+				key: "overrideDisplayFps",
+				elementId: "override-display-fps-input",
+				type: "input",
 			},
 			{
 				key: "ultraInterpolation",

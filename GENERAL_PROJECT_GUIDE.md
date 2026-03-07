@@ -80,12 +80,15 @@ To ensure local progress is never lost due to network or sync failures, these fl
 **Why they are separate:** If external sync fails (expired cookies, offline), the local `watched` flag preserves the user's history so the item still looks completed in the library. Manual UI toggles strictly affect `marked_as_watched` to allow pre-syncing without falsifying local history.
 
 ## 7. Security & Safety
+For detailed protocols, input validation rules, and architectural safety standards, refer to the **SECURITY.md** file in the project root. This is the single source of truth for all security adherence.
+
 - **Command Execution:** Use `subprocess.Popen` with appropriate arguments and environment whitelisting (see `session_services.py`).
-- **Sanitization:** `file_io.py` and `utils/security.py` contain `sanitize_string` for filenames and URLs. Ensure manual validation of all other inputs.
+- **Sanitization:** All inputs MUST be sanitized using the context-aware functions in `utils/security.py` or `file_io.py`.
 - **Isolation:** The Native Host is a separate process. It cannot access `window` or `document`.
 
 ## 8. Development & Testing
 - **JS Build Loop:** After editing any `*.module.js` file in `utils/`, you **MUST** run `python3 testing_tools/generate_js.py` to update the legacy files used by content scripts.
+- **Full Verification:** To automate the build and testing workflow, run `python3 verify_changes.py` from the project root. This sequentially runs the JS generator and the full test suite.
 - **Frontend Reload:** `chrome://extensions` -> Reload.
 - **Backend Reload:** **Restart the Browser** (Native Host persists until browser exit).
 - **MPV Reload:** Restart the player instance or reload the script in MPV.

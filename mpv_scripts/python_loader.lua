@@ -149,6 +149,12 @@ mp.register_event("end-file", function(event)
     end
 end)
 
+-- 4. Fast Shutdown Signal: Block browser retries instantly
+mp.register_event("quit", function()
+    debug_log("Shutdown detected. Signaling browser...")
+    mp.commandv("script-message", "mpv_quitting")
+end)
+
 debug_log("Python interaction script loaded.")
 
 -- Monitor logs for yt-dlp errors

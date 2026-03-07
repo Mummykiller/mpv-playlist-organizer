@@ -167,9 +167,8 @@ export async function handleMpvQuitting(data) {
 		text: `[Background]: MPV shutdown sequence started for '${folderId}'.`,
 		type: "info",
 	});
-	
-	broadcastPlaybackState(folderId, { isClosing: true, isRunning: false });
 
+	broadcastPlaybackState(folderId, { isClosing: true, isRunning: true });
 	await broadcastPlaylistState(folderId, null, "render_playlist");
 
 	// --- Early Clear/Confirm Logic ---
@@ -1103,7 +1102,8 @@ export const handlePlayNewInstance = createHandler(async ({ request, folderId })
 		performanceProfile: globalPrefs.performanceProfile || "default",
 		enablePreciseResume: globalPrefs.enablePreciseResume ?? true,
 		ultraScalers: globalPrefs.ultraScalers ?? true,
-		ultraVideoSync: globalPrefs.ultraVideoSync ?? true,
+		enableDisplaySync: globalPrefs.enableDisplaySync ?? true,
+		overrideDisplayFps: globalPrefs.overrideDisplayFps || "",
 		ultraInterpolation: globalPrefs.ultraInterpolation || "oversample",
 		ultraDeband: globalPrefs.ultraDeband ?? true,
 		ultraFbo: globalPrefs.ultraFbo ?? true,
