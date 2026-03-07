@@ -19,6 +19,8 @@ class SettingsOverrides:
     performance_profile: Optional[str] = None
     ultra_scalers: Optional[bool] = None
     ultra_video_sync: Optional[bool] = None
+    enable_display_sync: Optional[bool] = None
+    override_display_fps: Optional[str] = None
     ultra_interpolation: Optional[bool] = None
     ultra_deband: Optional[bool] = None
     ultra_fbo: Optional[bool] = None
@@ -36,6 +38,7 @@ class SettingsOverrides:
             'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
             'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
             'performance_profile', 'ultra_scalers', 'ultra_video_sync',
+            'enable_display_sync', 'override_display_fps',
             'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
             'enable_precise_resume', 'yt_mark_watched', 'os_platform',
             'ffmpeg_path', 'ytdlp_path'

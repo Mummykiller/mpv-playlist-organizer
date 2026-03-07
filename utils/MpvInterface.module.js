@@ -20,12 +20,17 @@ export class MpvInterface {
 		// Determine if this is a simple toggle or a fresh launch
 		const pbState = MPV.playbackStateManager.state;
 		const isRunning = pbState.isRunning;
+		const isLaunching = pbState.isLaunching;
 		const needsAppend = pbState.needsAppend;
 		
-		// Optimistic "Loading" state if not a simple toggle
-		const isToggle = isRunning && !needsAppend && !options.playNewInstance && !options.urlItem;
+		// Optimistic "Loading" state
+		const isToggle = isRunning && !isLaunching && !needsAppend && !options.playNewInstance && !options.urlItem;
 		if (!isToggle) {
-			MPV.playbackStateManager.setLoading(folderId);
+			if (needsAppend && isRunning && !options.playNewInstance) {
+				MPV.playbackStateManager.setAppending(folderId);
+			} else {
+				MPV.playbackStateManager.setLoading(folderId);
+			}
 		}
 
 		try {

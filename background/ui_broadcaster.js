@@ -134,6 +134,7 @@ export async function broadcastPlaybackState(folderId, statusOverride = {}) {
 	const state = {
 		folderId: targetFolderId,
 		isRunning: isActive || cacheIsActive,
+		isLaunching: !!mpv_playback_cache?.isLaunching,
 		isPaused: mpv_playback_cache?.isPaused || false,
 		isIdle: mpv_playback_cache?.isIdle || false,
 		lastPlayedId: mpv_playback_cache?.lastPlayedId,

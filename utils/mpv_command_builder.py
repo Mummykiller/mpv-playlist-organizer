@@ -222,13 +222,32 @@ class MpvCommandBuilder:
         elif profile == 'ultra':
             args.append("--profile=gpu-hq")
             if self.settings.get('ultra_scalers', True): args.extend(["--scale=ewa_lanczossharp", "--cscale=ewa_lanczossharp"])
-            if self.settings.get('ultra_video_sync', True): args.append("--video-sync=display-resample")
+            if self.settings.get('ultra_deband', True): args.extend(["--deband=yes", "--deband-iterations=4", "--deband-threshold=48", "--deband-range=24"])
+            if self.settings.get('ultra_fbo', True): args.append("--fbo-format=rgba16f")
+
+        # Sync & Tearing (Granular Control)
+        # Default to True if ultra profile is active, unless explicitly set to False by user
+        display_sync = self.settings.get('enable_display_sync')
+        if display_sync is None:
+             display_sync = self.settings.get('ultra_video_sync', profile == 'ultra')
+        
+        if display_sync:
+            args.append("--video-sync=display-resample")
+            # Interpolation requires display-resample to be effective
             interp = self.settings.get('ultra_interpolation', 'oversample')
             if interp not in ('off', False):
                 args.append("--interpolation=yes")
                 args.append(f"--tscale={interp if isinstance(interp, str) else 'oversample'}")
-            if self.settings.get('ultra_deband', True): args.extend(["--deband=yes", "--deband-iterations=4", "--deband-threshold=48", "--deband-range=24"])
-            if self.settings.get('ultra_fbo', True): args.append("--fbo-format=rgba16f")
+
+        fps = self.settings.get('override_display_fps')
+        if fps:
+            try:
+                # Basic sanitization: must be a positive number
+                fps_val = float(fps)
+                if fps_val > 0:
+                    args.append(f"--override-display-fps={fps_val}")
+            except (ValueError, TypeError):
+                pass
 
         if self.geometry:
             geom, w, h = self.geometry

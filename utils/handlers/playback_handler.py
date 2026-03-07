@@ -77,7 +77,7 @@ class PlaybackHandler(BaseHandler):
             return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
 
         # 2. Active Session Pre-check
-        if not request.play_new_instance and self.mpv_session.is_alive and self.mpv_session.owner_folder_id == folder_id:
+        if not request.play_new_instance and self.mpv_session.is_alive and not getattr(self.mpv_session, 'is_closing', False) and self.mpv_session.owner_folder_id == folder_id:
             logging.info(f"[PY][Handler] Session already alive for folder '{folder_id}'. Checking for pause cycle.")
             if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
                 res = self.mpv_session.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=0.5)
@@ -101,6 +101,7 @@ class PlaybackHandler(BaseHandler):
 
         # 3. Parallel Enrichment & Initial Launch
         logging.info(f"[PY][Handler] Starting enrichment and launch payload construction...")
+        self.mpv_session.launch_cancelled = False # Reset for new attempt
         launch_payload = items if len(items) > 1 else items[0]
         
         try:
@@ -117,6 +118,11 @@ class PlaybackHandler(BaseHandler):
             
             if not first_call_result["success"] or first_call_result.get("handled_directly"):
                 return first_call_result
+
+            # --- CANCELLATION CHECK ---
+            if getattr(self.mpv_session, 'launch_cancelled', False):
+                logging.info(f"[PY][Handler] Launch cancelled by user during Pass 1. Aborting Pass 2.")
+                return native_link.failure("Launch cancelled")
 
             # Final Launch Orchestration
             enriched_url_items = first_call_result["enriched_url_items"]
@@ -266,9 +272,8 @@ class PlaybackHandler(BaseHandler):
 
     @command('close_mpv')
     def handle_close_mpv(self, request: native_link.LiveUpdateRequest):
-        is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
-        if not is_running:
-            self.mpv_session.launch_cancelled = True
+        # Force cancel any pending/in-flight launches
+        self.mpv_session.launch_cancelled = True
             
         response = self.mpv_session.close()
         self.m3u_server.stop()
