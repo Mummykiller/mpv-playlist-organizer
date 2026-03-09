@@ -130,7 +130,7 @@ def sanitize_string(s, is_filename=False):
             s = s.replace(char, '')
     else:
         # Minimal OSD/JSON stripping - Allow # and & for URLs/Fragments
-        restricted = ['"', '`', '\n', '\r', '\t']
+        restricted = ['"', '`', '$', '\n', '\r', '\t']
         for char in restricted:
             s = s.replace(char, '')
             

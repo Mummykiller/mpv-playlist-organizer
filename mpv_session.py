@@ -648,7 +648,7 @@ class MpvSessionManager:
             if itm.get('id'):
                 sep = "#" if "#" not in url else "&"
                 url = f"{url}{sep}mpv_organizer_id={itm['id']}"
-            m3u_lines.append(f"#EXTINF:-1,{itm.get('title', 'Unknown')}")
+            m3u_lines.append(f"#EXTINF:-1,{file_io.sanitize_string(itm.get('title', 'Unknown'))}")
             # Ensure the URL is sanitized for M3U and shell safety
             m3u_lines.append(services.sanitize_url(url))
         
@@ -799,7 +799,8 @@ class MpvSessionManager:
         for item in items:
             # Minimal sanitization for titles: only remove newlines and commas to avoid breaking M3U format.
             raw_title = item.get('title', item['url'])
-            safe_title = str(raw_title).replace('\n', ' ').replace('\r', '').replace(',', ' ').strip()
+            # Use strict security-aware sanitization for titles
+            safe_title = file_io.sanitize_string(str(raw_title))
             
             url_to_use = item['url']
             if item.get('is_youtube') and item.get('original_url'):

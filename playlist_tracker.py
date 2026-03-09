@@ -137,13 +137,13 @@ class PlaylistTracker:
         # Optimized: Poll for connection instead of fixed sleep
         self.ipc_manager = ipc_utils.IPCSocketManager()
         connected = False
-        for attempt in range(40): # Try for up to 2 seconds (40 * 0.05s)
+        for attempt in range(60): # Try for 4 seconds (60 * 0.067s) for better Windows compatibility
             if self.ipc_manager.connect(self.ipc_path, timeout=0.1):
                 connected = True
                 break
             if not self.is_tracking:
                 return
-            time.sleep(0.05)
+            time.sleep(0.067)
 
         if not connected:
             logging.error(f"[PY][Tracker] Tracker failed to connect to IPC at {self.ipc_path} after multiple attempts.")
@@ -480,8 +480,9 @@ class PlaylistTracker:
         if not item_id or item_id == -1 or item_id == "-1":
             return
         
-        if self.folder_id:
-            self.dirty_last_played_id = item_id
+        with self.lock:
+            if self.folder_id:
+                self.dirty_last_played_id = item_id
 
         # Notify the extension so it can update its internal storage
         self.send_message({
@@ -498,8 +499,9 @@ class PlaylistTracker:
         last_modified = int(time.time() * 1000)
 
         # 1. Update Cache
-        if self.folder_id:
-            self.resume_cache[item_id] = int(resume_time)
+        with self.lock:
+            if self.folder_id:
+                self.resume_cache[item_id] = int(resume_time)
             
         # 2. Notify the extension (Real-time UI update)
         self.send_message({
@@ -519,7 +521,12 @@ class PlaylistTracker:
                     logging.debug("[PY][Tracker] Heartbeat stopping: is_tracking is False.")
                     break
                 
-                if self.resume_cache or self.watched_status_cache or self.watched_cache or self.dirty_last_played_id:
+                # Preliminary check for pending work (non-critical if we miss it here)
+                has_work = False
+                with self.lock:
+                    has_work = bool(self.resume_cache or self.watched_status_cache or self.watched_cache or self.dirty_last_played_id)
+                
+                if has_work:
                     if time.time() - self.last_commit_time >= self.commit_interval:
                         logging.debug("[PY][Tracker] Heartbeat triggering forced commit.")
                         self._commit_to_disk()
@@ -530,21 +537,35 @@ class PlaylistTracker:
     def _commit_to_disk(self):
         """Performs a single read-modify-write to the playlist shard with all cached changes."""
         self.last_commit_time = time.time()
-        if not self.folder_id or (not self.resume_cache and not self.watched_status_cache and not self.watched_cache and not self.dirty_last_played_id):
-            return
+        
+        # 1. Thread-Safe Snapshot and Clear
+        # We capture a local copy and clear the shared caches immediately to prevent race conditions 
+        # where updates are lost during the disk write (which can be slow on Windows/Slow HDDs).
+        with self.lock:
+            if not self.folder_id or (not self.resume_cache and not self.watched_status_cache and not self.watched_cache and not self.dirty_last_played_id):
+                return
+            
+            res_snap = dict(self.resume_cache)
+            stat_snap = dict(self.watched_status_cache)
+            watch_snap = dict(self.watched_cache)
+            last_played_snap = self.dirty_last_played_id
+            
+            self.resume_cache.clear()
+            self.watched_status_cache.clear()
+            self.watched_cache.clear()
+            self.dirty_last_played_id = None
 
         try:
             logging.debug(f"[PY][Tracker] Committing throttled updates to disk for folder '{self.folder_id}'...")
             
-            # 1. Update Index Metadata if last_played_id changed
-            if self.dirty_last_played_id:
+            # 2. Update Index Metadata if last_played_id changed
+            if last_played_snap:
                 index = self.file_io.get_index()
                 if self.folder_id in index:
-                    index[self.folder_id]["last_played_id"] = self.dirty_last_played_id
+                    index[self.folder_id]["last_played_id"] = last_played_snap
                     self.file_io.save_index(index)
-                    self.dirty_last_played_id = None
             
-            # 2. Update Playlist Shard
+            # 3. Update Playlist Shard
             playlist = self.file_io.get_playlist_shard(self.folder_id)
             if playlist:
                 changed = False
@@ -558,29 +579,24 @@ class PlaylistTracker:
                         item["last_modified"] = int(time.time() * 1000)
                         changed = True
                     
-                    # Sync resume_time from cache
-                    if item_id in self.resume_cache:
-                        item["resume_time"] = self.resume_cache[item_id]
+                    # Sync from Snapshots
+                    if item_id in res_snap:
+                        item["resume_time"] = res_snap[item_id]
                         item["last_modified"] = int(time.time() * 1000)
                         changed = True
 
-                    # Sync marked_as_watched from cache
-                    if item_id in self.watched_status_cache:
-                        item["marked_as_watched"] = self.watched_status_cache[item_id]
+                    if item_id in stat_snap:
+                        item["marked_as_watched"] = stat_snap[item_id]
                         item["last_modified"] = int(time.time() * 1000)
                         changed = True
                     
-                    # Sync watched from cache
-                    if item_id in self.watched_cache:
-                        item["watched"] = self.watched_cache[item_id]
+                    if item_id in watch_snap:
+                        item["watched"] = watch_snap[item_id]
                         item["last_modified"] = int(time.time() * 1000)
                         changed = True
                 
                 if changed:
                     self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
-                    self.resume_cache.clear()
-                    self.watched_status_cache.clear()
-                    self.watched_cache.clear()
                     logging.info(f"[PY][Tracker] Throttled shard commit complete for '{self.folder_id}'.")
         except Exception as e:
             logging.error(f"[PY][Tracker] Throttled disk commit failed: {e}")
