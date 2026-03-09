@@ -52,7 +52,7 @@ window.MPV_SECURITY = window.MPV_SECURITY || {};
 		if (isFilename) {
 			return sanitized.replace(/[\\/:*?"<>|$;&`\n\r\t]/g, "").trim();
 		} else {
-			return sanitized.replace(/["\n\r\t]/g, "").trim();
+			return sanitized.replace(/["`$\n\r\t]/g, "").trim();
 		}
 	}
 

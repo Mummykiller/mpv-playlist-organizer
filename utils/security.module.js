@@ -48,6 +48,6 @@ export function sanitizeString(str, isFilename = false) {
 	if (isFilename) {
 		return sanitized.replace(/[\\/:*?"<>|$;&`\n\r\t]/g, "").trim();
 	} else {
-		return sanitized.replace(/["\n\r\t]/g, "").trim();
+		return sanitized.replace(/["`$\n\r\t]/g, "").trim();
 	}
 }

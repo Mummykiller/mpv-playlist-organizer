@@ -1,6 +1,35 @@
 # Changelog
 
-All notable changes to the **MPV Playlist Organizer** project, summarizing the 134 commits from version 2.0.0 to 2.6.0.
+All notable changes to the **MPV Playlist Organizer** project.
+
+> **Note:** The creator primarily develops and uses this tool on Linux. While Windows compatibility is a major priority and actively tested, some platform-specific edge cases or features may be missed.
+>
+> **Security Warning:** While this update includes significant hardening against injection and path-related attacks, this application still facilitates the downloading and playback of media from external, potentially malicious third-party websites. Users should remain cautious and understand the inherent risks of streaming from unverified sources.
+
+## [2.7.0] - 2026-03-09 (Windows Reliability & UI Polish)
+
+### Platform & Installer Hardening
+- **Windows Path Resilience:** Fixed several path-related failures on Windows, including incorrect quoting in the `run_native_host.bat` wrapper and standardized registry paths to use native backslashes.
+- **Registry Reliability:** Implemented a "Chrome Fallback" registration strategy for Chromium-based browsers (Brave, Vivaldi, Edge) to ensure the Native Messaging host is correctly detected even if the browser-specific key fails.
+- **Improved Dependency Detection:** Enhanced Windows detection for `yt-dlp` to automatically search inside the `mpv` folder (handling common "mpv+yt-dlp" combined installers).
+- **Diagnostic Clarity:** Updated the dependency manager to provide explicit, named error messages for missing components (e.g., "Node.js not found" instead of generic "Not found").
+
+### UI & UX Improvements
+- **Minimize Button Fix:** Resolved a Windows-specific issue where the minimize ("-") button required two clicks. Optimized `Draggable.js` to only prevent default events during active drags and ensured `setMinimizedState` updates locally before background synchronization.
+- **Playback State Synchronization:** Fixed a bug where the Play/Queue button would get stuck in a "loading" state. Standardized the broadcast of `isLaunching` and `isAppending` flags to ensure the UI always reflects the true backend state.
+
+### Security & Sanitation
+- **M3U Injection Hardening:** Hardened playlist generation by stripping shell-sensitive characters (`$` and `` ` ``) from titles, as mandated by the `@SECURITY.md` standards.
+- **Defensive Programming:** Fixed a `TypeError` in the dependency manager that occurred when optional tools (like Node.js) were missing from the system.
+
+### Development & DevOps Tools
+- **New Release Script:** Introduced `testing_tools/create_release.py` to automate the generation of clean, production-ready project copies with smart file exclusion (ignoring dev tools, internal docs, and local logs).
+- **Test Suite Overhaul:** Upgraded `run_suite.py` with automated test discovery for both Python and JS, and introduced a new `--watch` mode for real-time verification during development.
+- **Watchdog Hardening:** Enhanced the `pycache_watchdog.py` utility with PID-based instance locking, a dedicated `kill` command, and custom process naming (`pycache_clear`) for better visibility in system monitors.
+
+### Maintenance
+- **JS Build Process:** Standardized the generation of legacy JS files from ES modules to ensure consistent behavior across all extension contexts.
+- **State Logic Refactor:** Unified state objects in `ui_broadcaster.js` to prevent partial updates from causing UI "ghosting" or stuck loading indicators.
 
 ## [2.6.0] - 2026-03-08 (Stable Release)
 ### Platform & Core Stability

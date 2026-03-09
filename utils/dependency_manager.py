@@ -151,7 +151,9 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
     system = platform.system()
 
     mpv_exe_name = "mpv.exe" if system == "Windows" else "mpv"
-    mpv_path = shutil.which(mpv_exe_name) or (get_mpv_executable_func() if os.path.exists(get_mpv_executable_func()) else None)
+    # Defensive: Ensure get_mpv_executable_func() returns a string before calling os.path.exists
+    mpv_candidate = get_mpv_executable_func()
+    mpv_path = shutil.which(mpv_exe_name) or (mpv_candidate if mpv_candidate and os.path.exists(mpv_candidate) else None)
 
     if mpv_path:
         mpv_status["found"] = True
@@ -161,6 +163,14 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
 
     ytdlp_exe_name = "yt-dlp.exe" if system == "Windows" else "yt-dlp"
     ytdlp_path = shutil.which(ytdlp_exe_name)
+    
+    # NEW: On Windows, check the same folder as mpv.exe if not found in PATH
+    if not ytdlp_path and system == "Windows" and mpv_status["found"]:
+        mpv_dir = os.path.dirname(mpv_status["path"])
+        ytdlp_candidate = os.path.join(mpv_dir, ytdlp_exe_name)
+        if os.path.exists(ytdlp_candidate):
+            ytdlp_path = ytdlp_candidate
+
     if ytdlp_path:
         ytdlp_status["found"] = True
         ytdlp_status["path"] = ytdlp_path
@@ -198,10 +208,11 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
         ffmpeg_ver = _get_ffmpeg_version(ffmpeg_path, send_message_func)
         if ffmpeg_ver: ffmpeg_status["version"] = ffmpeg_ver
     else:
-        ffmpeg_status["error"] = "Not found. Required for 1440p/4K resolution."
+        ffmpeg_status["error"] = "FFmpeg not found. Required for 1440p/4K resolution."
 
     node_exe_name = "node.exe" if system == "Windows" else "node"
-    node_path = shutil.which(node_exe_name) or (config.get("node_path") if os.path.exists(config.get("node_path", "")) else None)
+    node_candidate = config.get("node_path")
+    node_path = shutil.which(node_exe_name) or (node_candidate if node_candidate and os.path.exists(node_candidate) else None)
     if node_path:
         node_status["found"] = True
         node_status["path"] = node_path
@@ -210,7 +221,7 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
         node_ver = _get_node_version(node_path)
         if node_ver: node_status["version"] = node_ver
     else:
-        node_status["error"] = "Not found. Highly recommended for 1440p+ YouTube playback."
+        node_status["error"] = "Node.js not found. Highly recommended for 1440p+ YouTube playback."
 
     result = {"success": True, "mpv": mpv_status, "ytdlp": ytdlp_status, "ffmpeg": ffmpeg_status, "node": node_status}
     _DEPENDENCY_STATUS_CACHE["data"] = result

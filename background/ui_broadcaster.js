@@ -82,12 +82,21 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 	const session = playbackManager.findSessionByFolderId(folderId);
 	const completedIds = session ? Array.from(session.completedItemIds) : [];
 
+	// Fetch current cache for flag persistence (launching/idle/health)
+	const { mpv_playback_cache: storageCache } = await chrome.storage.local.get("mpv_playback_cache");
+	const mpv_playback_cache = storageCache || playbackManager.syncCache;
+
+	// Standardize state object to ensure all flags are present for UI syncing.
 	const pbState = {
 		folderId: folderId,
 		isRunning: isActive,
+		isLaunching: !!mpv_playback_cache?.isLaunching,
+		isAppending: false, // Background is source of truth; if we are broadcasting, appending is done
 		isPaused: isPaused,
+		isIdle: !!mpv_playback_cache?.isIdle,
 		needsAppend: needsAppend,
-		lastPlayedId: lastPlayedId || data.folders[folderId]?.lastPlayedId
+		health: mpv_playback_cache?.health || "ok",
+		lastPlayedId: lastPlayedId || mpv_playback_cache?.last_played_id || data.folders[folderId]?.lastPlayedId
 	};
 	chrome.storage.local.set({ active_playback_state: pbState });
 
@@ -103,6 +112,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 		completedIds: completedIds,
 	});
 
+	// broadcastPlaybackState will further sync the state and notify tabs
 	broadcastPlaybackState(folderId, { needsAppend });
 }
 
@@ -135,9 +145,10 @@ export async function broadcastPlaybackState(folderId, statusOverride = {}) {
 		folderId: targetFolderId,
 		isRunning: isActive || cacheIsActive,
 		isLaunching: !!mpv_playback_cache?.isLaunching,
+		isAppending: false, // Always clear optimistic UI flags when background speaks
 		isPaused: mpv_playback_cache?.isPaused || false,
 		isIdle: mpv_playback_cache?.isIdle || false,
-		lastPlayedId: mpv_playback_cache?.lastPlayedId,
+		lastPlayedId: mpv_playback_cache?.last_played_id || mpv_playback_cache?.lastPlayedId,
 		needsAppend: needsAppend,
 		health: mpv_playback_cache?.health || "ok",
 		...statusOverride

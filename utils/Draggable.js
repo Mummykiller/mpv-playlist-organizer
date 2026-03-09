@@ -33,7 +33,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.options.onDragStart(e) === false
 			)
 				return;
-			e.preventDefault();
+			
+			// Only prevent default if we're actually going to start dragging
+			// This avoids blocking child click events on some browsers/OSs
 			this.isDragging = true;
 			document.body.classList.add("mpv-controller-dragging");
 			const rect = this.element.getBoundingClientRect();
@@ -46,6 +48,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		onMouseMove(e) {
 			if (!this.isDragging) return;
+			e.preventDefault();
 			let newLeft = e.clientX - this.offsetX;
 			let newTop = e.clientY - this.offsetY;
 			if (this.options.clamp) {
