@@ -2,9 +2,11 @@
 
 All notable changes to the **MPV Playlist Organizer** project, summarizing the 134 commits from version 2.0.0 to 2.6.0.
 
-## [2.6.0] - Current Local Version
-### Architectural Overhaul
-- **Modular Service Worker:** Refactored `background.js` from a monolithic file into a modular architecture with specialized handlers in `background/handlers/` (playback, storage, messaging, ui_state, etc.).
+## [2.6.0] - 2026-03-08 (Stable Release)
+### Platform & Core Stability
+- **Windows Compatibility:** Hardened IPC and path handling for Windows (Named Pipes/Sockets).
+- **YouTube Scanner Fix:** Removed redundant scanner windows for a cleaner background experience.
+- **Modular Background:** Refactored monolithic `background.js` into specialized handlers.
 - **Python Utility Centralization:** Moved core logic from `native_host.py` into a new `utils/` directory structure, including:
   - `ipc_utils.py`: Centralized IPC socket and communication logic.
   - `mpv_command_builder.py`: Dedicated class for constructing complex MPV command lines.
