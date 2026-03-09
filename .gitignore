@@ -14,6 +14,7 @@ Verification Report.md
 testing_tools/
 local_commits.txt
 issues.md
+verify_changes.py
 mpv_scripts/vulkan_fallback.lua
 
 
