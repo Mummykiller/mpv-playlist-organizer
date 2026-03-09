@@ -14,6 +14,25 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
 ALLOWED_PROTOCOLS = security.ALLOWED_PROTOCOLS
 
+def _windows_quote(s):
+    """
+    Custom quoter for Windows that handles spaces and special characters 
+    without stripping backslashes.
+    """
+    if not s:
+        return '""'
+    # If no special characters, return as is
+    if not any(c in s for c in ' \t\n\v"'):
+        return s
+    # Escape existing double quotes and wrap in quotes
+    return '"' + s.replace('"', '""') + '"'
+
+def _smart_quote(s):
+    """Quotes a string appropriately for the current platform."""
+    if platform.system() == "Windows":
+        return _windows_quote(s)
+    return shlex.quote(s)
+
 class MpvCommandBuilder:
     def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False, is_youtube=False, settings=None, cookies_browser=None, force_bypass=False, cookies_file=None):
         self.mpv_exe = mpv_exe
@@ -162,13 +181,18 @@ class MpvCommandBuilder:
     def build(self):
         # Handle custom flags early to extract and merge script-opts
         parsed_custom = []
+        is_windows = platform.system() == "Windows"
+        
         if self.custom_flags:
             try:
                 if isinstance(self.custom_flags, list):
                     for f in self.custom_flags:
-                        if isinstance(f, dict) and f.get('enabled', True): parsed_custom.extend(shlex.split(f.get('flag','')))
-                        elif isinstance(f, str): parsed_custom.extend(shlex.split(f))
-                elif isinstance(self.custom_flags, str): parsed_custom.extend(shlex.split(self.custom_flags))
+                        if isinstance(f, dict) and f.get('enabled', True): 
+                            parsed_custom.extend(shlex.split(f.get('flag',''), posix=not is_windows))
+                        elif isinstance(f, str): 
+                            parsed_custom.extend(shlex.split(f, posix=not is_windows))
+                elif isinstance(self.custom_flags, str): 
+                    parsed_custom.extend(shlex.split(self.custom_flags, posix=not is_windows))
             except Exception: pass
 
         # Merge script-opts from custom flags into our internal list
@@ -360,7 +384,7 @@ class MpvCommandBuilder:
                             break
             if term_cmd: full_command = term_cmd
 
-        cmd_str = ' '.join(shlex.quote(a) for a in full_command)
+        cmd_str = ' '.join(_smart_quote(a) for a in full_command)
         if self.settings.get('os_platform', platform.system()) == "Windows" and len(cmd_str) > 7500:
             logging.error(f"CRITICAL: Command line length ({len(cmd_str)}) exceeds limit.")
             raise RuntimeError(f"Command too long for Windows.")
@@ -369,7 +393,7 @@ class MpvCommandBuilder:
         try:
             p = os.path.join(file_io.DATA_DIR, "last_mpv_command.txt")
             with open(p, 'w', encoding='utf-8') as f:
-                f.write(f"Launch Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" + "="*60 + "\nSHELL-QUOTED COMMAND:\n" + " ".join(shlex.quote(a) for a in full_command))
+                f.write(f"Launch Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" + "="*60 + "\nQUOTED COMMAND:\n" + " ".join(_smart_quote(a) for a in full_command))
         except Exception: pass
         return full_command, self.has_terminal_flag
 

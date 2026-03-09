@@ -163,32 +163,48 @@ class LauncherService:
         threading.Thread(target=watcher, daemon=True).start()
 
     def _prepare_launch_env(self, has_terminal_flag):
-        """Scrubs environment variables based on a whitelist for security."""
-        if has_terminal_flag:
-            return os.environ.copy()
-            
-        base_env = os.environ
-        env = {}
+        """Scrubs environment variables based on a whitelist/blacklist for security and stability."""
+        base_env = os.environ.copy()
+        
+        # --- Python Isolation ---
+        # Prevent our own Python environment from leaking into yt-dlp (which is often a frozen Python exe)
+        # This fixes the "Failed to start embedded python interpreter" error on Windows.
+        python_vars = ['PYTHONPATH', 'PYTHONHOME', 'PYTHONIOENCODING', 'PYTHONDONTWRITEBYTECODE', 'PYTHONUNBUFFERED']
+        for var in python_vars:
+            if var in base_env:
+                del base_env[var]
+
+        # On Windows, we prefer a BLACKLIST approach for stability because yt-dlp/mpv
+        # require many obscure system variables (like RNG/entropy vars) to initialize.
         if platform.system() == "Windows":
-            allowed = {
-                'ALLUSERSPROFILE', 'APPDATA', 'COMPUTERNAME', 'ComSpec', 'CommonProgramFiles',
-                'CommonProgramFiles(x86)', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA', 'LOGONSERVER',
-                'NUMBER_OF_PROCESSORS', 'OS', 'PATH', 'PATHEXT', 'PROCESSOR_ARCHITECTURE',
-                'PROCESSOR_IDENTIFIER', 'PROCESSOR_LEVEL', 'PROCESSOR_REVISION', 'ProgramData',
-                'ProgramFiles', 'ProgramFiles(x86)', 'Public', 'SystemDrive', 'SystemRoot',
-                'TEMP', 'TMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'windir'
-            }
-        else:
-            allowed = {
-                'HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'PWD', 'SHELL', 'TERM', 'USER',
-                'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
-                'XDG_CACHE_HOME', 'DBUS_SESSION_BUS_ADDRESS',
-                'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP',
-                'MPV_HOME', 'PULSE_SERVER', 'PIPEWIRE_RUNTIME_DIR'
-            }
+            # We keep the full env but ensure Python vars are gone. 
+            # If we are in a terminal pass-through, we don't scrub further.
+            if has_terminal_flag:
+                return base_env
+            
+            # Additional security scrubbing for non-terminal Windows launches
+            sensitive = {'AWS_', 'GIT_', 'SSH_', 'SECRET', 'TOKEN', 'PASSWORD', 'API_KEY'}
+            env = {}
+            for key, val in base_env.items():
+                if not any(s in key.upper() for s in sensitive):
+                    env[key] = val
+            return env
+
+        # Linux/macOS: Stick to strict WHITELIST for security
+        if has_terminal_flag:
+            return base_env
+            
+        env = {}
+        allowed = {
+            'HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'PWD', 'SHELL', 'TERM', 'USER',
+            'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+            'XDG_CACHE_HOME', 'DBUS_SESSION_BUS_ADDRESS',
+            'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP',
+            'MPV_HOME', 'PULSE_SERVER', 'PIPEWIRE_RUNTIME_DIR'
+        }
         
         for key, val in base_env.items():
-            if key in allowed or key.startswith("LC_") or (platform.system() != "Windows" and key.startswith("XDG_")):
+            if key.upper() in allowed or key.startswith("LC_") or key.startswith("XDG_"):
                 env[key] = val
         return env
 
@@ -276,6 +292,9 @@ class LauncherService:
             }
             
             handshake_path = os.path.join(self.session.FLAG_DIR, f"handshake_{uuid.uuid4().hex}.json")
+            if platform.system() == "Windows":
+                handshake_path = handshake_path.replace("\\", "/")
+                
             with open(handshake_path, 'w', encoding='utf-8') as f:
                 json.dump(handshake_data, f)
             

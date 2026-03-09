@@ -26,7 +26,12 @@ class FileLock:
     _held_locks = threading.local()
 
     def __init__(self, filepath, timeout=5.0, delay=0.05):
+        # Normalize path for the lock dictionary key (case-insensitive on Windows)
         self.filepath = os.path.abspath(filepath)
+        self.lock_key = self.filepath
+        if platform.system() == "Windows":
+             self.lock_key = self.lock_key.lower()
+             
         self.lockfile = f"{self.filepath}.lock"
         self.timeout = timeout
         self.delay = delay
@@ -34,9 +39,9 @@ class FileLock:
         
         # Get or create a thread-level RLock for this specific path
         with FileLock._global_lock:
-            if self.filepath not in FileLock._locks:
-                FileLock._locks[self.filepath] = threading.RLock()
-            self.thread_lock = FileLock._locks[self.filepath]
+            if self.lock_key not in FileLock._locks:
+                FileLock._locks[self.lock_key] = threading.RLock()
+            self.thread_lock = FileLock._locks[self.lock_key]
 
     def _is_pid_running(self, pid):
         """Checks if a process ID is currently running on the system."""
@@ -45,17 +50,40 @@ class FileLock:
         try:
             if platform.system() == "Windows":
                 import ctypes
-                # 0x1000 = PROCESS_QUERY_LIMITED_INFORMATION
+                # PROCESS_QUERY_LIMITED_INFORMATION (0x1000) is enough to check existence.
                 h_process = ctypes.windll.kernel32.OpenProcess(0x1000, 0, pid)
                 if h_process:
+                    # Check if it's a zombie process (still exists but has exited)
+                    exit_code = ctypes.c_ulong()
+                    # STILL_ACTIVE = 259
+                    if ctypes.windll.kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code)):
+                        is_active = (exit_code.value == 259)
+                        ctypes.windll.kernel32.CloseHandle(h_process)
+                        return is_active
                     ctypes.windll.kernel32.CloseHandle(h_process)
-                    return True
-                return ctypes.windll.kernel32.GetLastError() == 5 # Access Denied means it exists
+                    return True # Fallback to existence if exit code fails
+                # ERROR_ACCESS_DENIED (5) means it exists but we can't open it (likely protected/system)
+                return ctypes.windll.kernel32.GetLastError() == 5
             else:
                 os.kill(pid, 0)
                 return True
         except (OSError, ImportError):
             return False
+
+    def _remove_lock_file(self):
+        """Attempts to remove the lock file with a robust retry loop (needed on Windows/AV)."""
+        if not os.path.exists(self.lockfile):
+            return True
+            
+        # Aggressive retry loop: Anti-Virus often holds a handle for 100-500ms
+        for i in range(10): # 1 second total
+            try:
+                os.remove(self.lockfile)
+                return True
+            except (OSError, PermissionError):
+                if i < 9:
+                    time.sleep(0.1)
+        return False
 
     def __enter__(self):
         # 1. Acquire thread-level RLock (prevents internal process contention)
@@ -66,10 +94,10 @@ class FileLock:
         if not hasattr(FileLock._held_locks, 'counters'):
             FileLock._held_locks.counters = {}
         
-        count = FileLock._held_locks.counters.get(self.filepath, 0)
+        count = FileLock._held_locks.counters.get(self.lock_key, 0)
         if count > 0:
             # Recursion: already held by this thread
-            FileLock._held_locks.counters[self.filepath] = count + 1
+            FileLock._held_locks.counters[self.lock_key] = count + 1
             return self
 
         # 2. Acquire cross-process file lock
@@ -86,36 +114,42 @@ class FileLock:
                     os.close(fd)
                 
                 self.is_file_locked = True
-                FileLock._held_locks.counters[self.filepath] = 1
+                FileLock._held_locks.counters[self.lock_key] = 1
                 return self
             except OSError:
                 # Lock file exists. Check if it is stale.
                 try:
                     if os.path.exists(self.lockfile):
-                        with open(self.lockfile, 'r') as f:
-                            content = f.read().strip()
-                            if content:
-                                locked_pid = int(content)
-                                # Check if PID is dead OR if it matches our own PID (orphaned file from this process)
-                                # Since we hold thread_lock, no other thread in this process owns the file lock.
-                                if locked_pid == int(my_pid) or not self._is_pid_running(locked_pid):
-                                    logging.warning(f"[PY][IO] Removing stale lock for {self.filepath} (PID {locked_pid} {'matches current' if locked_pid == int(my_pid) else 'dead'})")
-                                    try:
-                                        os.remove(self.lockfile)
-                                    except Exception:
-                                        pass
-                                    continue # Try acquiring again immediately
-                            else:
-                                # Lock file is empty. Check if it's old enough to be considered stale/crashed.
-                                try:
-                                    if time.time() - os.path.getmtime(self.lockfile) > 1.0:
-                                        logging.warning(f"[PY][IO] Removing stale empty lock file for {self.filepath}")
-                                        os.remove(self.lockfile)
+                        # Use a small retry for reading in case AV is scanning it
+                        content = None
+                        for _ in range(3):
+                            try:
+                                with open(self.lockfile, 'r') as f:
+                                    content = f.read().strip()
+                                break
+                            except (OSError, PermissionError):
+                                time.sleep(0.05)
+
+                        if content:
+                            locked_pid = int(content)
+                            # Check if PID matches current process OR is dead
+                            if locked_pid == int(my_pid) or not self._is_pid_running(locked_pid):
+                                logging.warning(f"[PY][IO] Removing stale lock for {self.filepath} (PID {locked_pid} {'matches current' if locked_pid == int(my_pid) else 'dead'})")
+                                if self._remove_lock_file():
+                                    time.sleep(self.delay)
+                                    continue
+                        elif content == "":
+                            # Empty lock file
+                            try:
+                                if time.time() - os.path.getmtime(self.lockfile) > 1.0:
+                                    logging.warning(f"[PY][IO] Removing stale empty lock file for {self.filepath}")
+                                    if self._remove_lock_file():
+                                        time.sleep(self.delay)
                                         continue
-                                except OSError:
-                                    pass # File might have been removed by another process
-                except Exception:
-                    pass
+                            except OSError:
+                                pass
+                except Exception as e:
+                    logging.debug(f"[PY][IO] Error checking lock staleness: {e}")
                 
                 # Still locked, wait and retry
                 time.sleep(self.delay)
@@ -132,22 +166,17 @@ class FileLock:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
-            count = FileLock._held_locks.counters.get(self.filepath, 0)
+            count = FileLock._held_locks.counters.get(self.lock_key, 0)
             if count > 1:
-                FileLock._held_locks.counters[self.filepath] = count - 1
+                FileLock._held_locks.counters[self.lock_key] = count - 1
             else:
                 # Final release for this thread
                 if self.is_file_locked:
-                    try:
-                        # Verify we still own the lock before deleting
-                        if os.path.exists(self.lockfile):
-                            with open(self.lockfile, 'r') as f:
-                                if f.read().strip() == str(os.getpid()):
-                                    os.remove(self.lockfile)
-                    except Exception:
-                        pass
+                    # We hold the thread-level lock, so no other thread in our process 
+                    # could have modified this file. We can safely remove it.
+                    self._remove_lock_file()
                     self.is_file_locked = False
-                FileLock._held_locks.counters[self.filepath] = 0
+                FileLock._held_locks.counters[self.lock_key] = 0
         finally:
             self.thread_lock.release()
 
@@ -167,6 +196,13 @@ def get_user_data_dir():
             return os.path.join(xdg_data_home, app_name)
         return os.path.join(os.path.expanduser('~/.local/share'), app_name)
 
+# Get the directory where the current file (file_io.py) is located (usually <root>/utils/)
+_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+# The project root is one level up
+PROJECT_ROOT = os.path.dirname(_CURRENT_DIR)
+
+# SCRIPT_DIR remains based on the entry point for backward compatibility in some paths,
+# but we prefer PROJECT_ROOT for internal resource finding.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 DATA_DIR = get_user_data_dir()
 import tempfile
@@ -425,21 +461,41 @@ def _safe_json_load(filepath, default_factory=dict):
 # --- File I/O Functions ---
 
 def get_mpv_executable():
-    """Gets the path to the mpv executable by prioritizing PATH then config."""
+    """Gets the path to the mpv executable by prioritizing config then PATH then local search."""
     current_platform = platform.system()
     mpv_default_name = "mpv.exe" if current_platform == "Windows" else "mpv"
 
-    # 1. Prioritize System PATH
-    found_in_path = shutil.which(mpv_default_name)
-    if found_in_path:
-        return found_in_path
-
-    # 2. Fallback to Configured Path
+    # 1. Fallback to Configured Path (Highest priority if user set it)
     config = _safe_json_load(CONFIG_FILE)
     configured_mpv_path = config.get("mpv_path")
-    if configured_mpv_path and os.path.exists(configured_mpv_path):
-        return configured_mpv_path
+    if configured_mpv_path:
+        if os.path.isdir(configured_mpv_path):
+            full_path = os.path.join(configured_mpv_path, mpv_default_name)
+            if os.path.exists(full_path):
+                return os.path.abspath(full_path)
+        elif os.path.exists(configured_mpv_path):
+            return os.path.abspath(configured_mpv_path)
+
+    # 2. Search in common local locations relative to PROJECT_ROOT, SCRIPT_DIR and Python EXE
+    # PROJECT_ROOT is the parent of utils/
+    # SCRIPT_DIR is the folder containing native_host.py
+    search_dirs = [PROJECT_ROOT, SCRIPT_DIR, os.path.dirname(sys.executable)]
     
+    # Add subdirectories to search list
+    for d in list(search_dirs):
+        search_dirs.append(os.path.join(d, "mpv"))
+        search_dirs.append(os.path.join(d, "bin"))
+
+    for d in search_dirs:
+        local_path = os.path.join(d, mpv_default_name)
+        if os.path.exists(local_path):
+            return os.path.abspath(local_path)
+
+    # 3. Prioritize System PATH
+    found_in_path = shutil.which(mpv_default_name)
+    if found_in_path:
+        return os.path.abspath(found_in_path)
+
     return mpv_default_name
 
 def sanitize_string(s, is_filename=False):
@@ -743,7 +799,13 @@ def get_settings():
 
     with FileLock(CONFIG_FILE):
         current_settings = _safe_json_load(CONFIG_FILE)
-    
+        
+        # If settings were corrupted or missing, we save the defaults to initialize the file.
+        if not current_settings:
+            logging.info(f"[PY][IO] Initializing {CONFIG_FILE} with default settings.")
+            _atomic_json_dump(default_settings, CONFIG_FILE)
+            current_settings = default_settings
+
     # Merge current settings with defaults, prioritizing current_settings
     settings = {**default_settings, **current_settings}
 
@@ -760,9 +822,14 @@ def get_settings():
         
         settings["automatic_mpv_flags"] = updated_flags
 
-    # Ensure mpv_path default is platform-appropriate
-    if settings["mpv_path"] is None:
-        settings["mpv_path"] = "mpv.exe" if platform.system() == "Windows" else "mpv"
+    # Ensure mpv_path default is platform-appropriate and absolute if found
+    if settings.get("mpv_path") is None:
+        mpv_default_name = "mpv.exe" if platform.system() == "Windows" else "mpv"
+        found_in_path = shutil.which(mpv_default_name)
+        if found_in_path:
+            settings["mpv_path"] = found_in_path
+        else:
+            settings["mpv_path"] = mpv_default_name
 
     return settings
 
@@ -794,6 +861,16 @@ def set_settings(settings_dict):
                     if val and val.isdigit():
                         settings_dict[key] = f"{val}M"
                         logging.info(f"[PY][IO] Normalized {key} to {settings_dict[key]}")
+
+            # 3. Normalize paths for the current platform
+            path_keys = ['mpv_path', 'ffmpeg_path', 'node_path']
+            for key in path_keys:
+                if key in settings_dict and settings_dict[key]:
+                    # Always use forward slashes on Windows to avoid \U (Unicode) escaping issues in JSON/logs
+                    path = os.path.normpath(settings_dict[key])
+                    if platform.system() == "Windows":
+                        path = path.replace("\\", "/")
+                    settings_dict[key] = path
 
             merged_settings = {**current_settings, **settings_dict}
 

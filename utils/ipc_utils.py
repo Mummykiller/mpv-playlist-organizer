@@ -35,8 +35,15 @@ def is_pid_running(pid):
         kernel32 = ctypes.windll.kernel32
         h_process = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
         if h_process:
+            # Check if it's a zombie process (still exists but has exited)
+            exit_code = ctypes.c_ulong()
+            # STILL_ACTIVE = 259
+            if kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code)):
+                is_active = (exit_code.value == 259)
+                kernel32.CloseHandle(h_process)
+                return is_active
             kernel32.CloseHandle(h_process)
-            return True
+            return True # Fallback to existence if exit code fails
         else:
             # ERROR_ACCESS_DENIED (5) means the process exists but we can't open it
             if kernel32.GetLastError() == 5:
