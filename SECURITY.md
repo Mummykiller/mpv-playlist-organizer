@@ -71,12 +71,7 @@ All JSON writes (folders, config, shards) MUST use the **Atomic Write Pattern**:
 ### 5.1 yt-dlp Flag Whitelisting
 Only flags in the `YTDLP_SAFE_FLAGS_ALLOWLIST` are permitted. Dangerous flags like `--exec`, `--output`, or `--config-location` are strictly blocked.
 
-### 5.2 MPV Process Isolation (Mandatory Standard)
-To prevent "Shadow Config" attacks, MPV should be launched with:
-- `--no-config`: Ignore local `mpv.conf`.
-- `--load-scripts=no`: Disable local Lua scripts (unless explicitly managed by the extension).
-
-### 5.3 Volatile Cookie Management
+### 5.2 Volatile Cookie Management
 - Cookies are extracted ONLY to RAM-backed storage (`/dev/shm` on Linux).
 - Shadow copying is used to bypass browser database locks without compromising the original file.
 - Cookies are cleaned up on session exit or by "The Janitor" on startup.

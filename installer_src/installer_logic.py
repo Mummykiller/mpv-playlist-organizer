@@ -120,9 +120,18 @@ class InstallerLogic:
 
         self.log(f"Scanning profiles in {user_data_root} for Extension ID...")
 
-        profiles = ['Default']
-        for i in range(1, 21):
+        # Robust profile detection: Default, plus many numbered profiles
+        profiles = ['Default', 'Guest Profile']
+        for i in range(1, 31):
             profiles.append(f'Profile {i}')
+        
+        # Add common Opera-specific profile if applicable
+        if browser_name.lower() == "opera":
+            profiles.append(".") # Opera often has preferences in root of User Data
+
+        norm_install = os.path.realpath(INSTALL_DIR)
+        if platform.system() == "Windows":
+            norm_install = norm_install.lower()
 
         for profile in profiles:
             pref_path = os.path.join(user_data_root, profile, 'Preferences')
@@ -135,14 +144,21 @@ class InstallerLogic:
                     for ext_id, details in settings.items():
                         path = details.get('path')
                         if path:
-                            norm_path = os.path.normpath(path)
-                            norm_install = os.path.normpath(INSTALL_DIR)
+                            # 1. Try realpath comparison (most robust)
+                            try:
+                                if os.path.exists(path) and os.path.samefile(path, INSTALL_DIR):
+                                    self.log(f"✅ Found ID '{ext_id}' in browser profile: '{profile}' (SameFile match)")
+                                    return ext_id
+                            except Exception:
+                                pass
+
+                            # 2. Fallback to normalized string comparison
+                            norm_path = os.path.realpath(path)
                             if platform.system() == "Windows":
                                 norm_path = norm_path.lower()
-                                norm_install = norm_install.lower()
 
                             if norm_path == norm_install:
-                                self.log(f"✅ Found ID '{ext_id}' in browser profile: '{profile}'")
+                                self.log(f"✅ Found ID '{ext_id}' in browser profile: '{profile}' (Path match)")
                                 return ext_id
                 except Exception:
                     continue
@@ -296,15 +312,18 @@ class WindowsLogic(InstallerLogic):
 
         python_executable = self._get_console_python()
         wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.bat")
+        # Ensure Python path and script path are quoted correctly for Windows batch
         with open(wrapper_path, 'w') as f:
             f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\n"{python_executable}" "%~dp0{SCRIPT_NAME}" %*')
-        self.log("Created wrapper script: run_native_host.bat")
+        self.log(f"Created wrapper script: run_native_host.bat")
 
+        # Native messaging manifests MUST use forward slashes or escaped backslashes in JSON, 
+        # but the manifest file path itself should be native.
         manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
         chrome_manifest = {
             "name": HOST_NAME,
             "description": HOST_DESCRIPTION,
-            "path": wrapper_path,
+            "path": wrapper_path.replace("\\", "/"), # Standardize for JSON
             "type": "stdio",
             "allowed_origins": [f"chrome-extension://{extension_id}/"]
         }
@@ -318,16 +337,28 @@ class WindowsLogic(InstallerLogic):
             "chromium": "Chromium", "vivaldi": "Vivaldi", "opera": "Opera"
         }
         target_key = browser_mapping.get(browser_for_bypass)
-        for browser, (reg_path, manifest_to_register) in browsers.items():
+        
+        # Registry paths on Windows MUST use backslashes
+        native_manifest_path = os.path.normpath(manifest_path)
+
+        for browser, (reg_path, _) in browsers.items():
             if target_key and browser != target_key:
                 continue
-            try:
-                key_path = os.path.join(reg_path, HOST_NAME)
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
-                    winreg.SetValue(key, '', winreg.REG_SZ, manifest_path)
-                self.log(f"Successfully registered for {browser}.")
-            except OSError:
-                self.log(f"Skipping {browser} (not installed or registry error).")
+            
+            # Register for specific browser AND fallback to Chrome for Brave/Vivaldi/etc
+            keys_to_register = [f"{reg_path}\\{HOST_NAME}"]
+            if browser != "Google Chrome":
+                 keys_to_register.append(f"SOFTWARE\\Google\\Chrome\\NativeMessagingHosts\\{HOST_NAME}")
+
+            for full_key_path in keys_to_register:
+                try:
+                    # Key creation needs native path
+                    normalized_key_path = full_key_path.replace("/", "\\")
+                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, normalized_key_path) as key:
+                        winreg.SetValue(key, '', winreg.REG_SZ, native_manifest_path)
+                    self.log(f"Successfully registered for {browser} at {normalized_key_path}.")
+                except OSError as e:
+                    self.log(f"Skipping {browser} registry path {full_key_path} (error: {e}).")
 
     def uninstall(self):
         self.log("Uninstalling for Windows...")
@@ -412,8 +443,8 @@ class UnixLogic(InstallerLogic):
             f.write(f"#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\n\n\"{sys.executable}\" \"$(dirname \"$0\")/{SCRIPT_NAME}\" \"$@\"")
         os.chmod(wrapper_path, 0o755)
 
-        manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}.json")
-        with open(manifest_path, 'w') as f:
+        native_manifest_path = os.path.normpath(manifest_path)
+        with open(native_manifest_path, 'w') as f:
             json.dump({"name": HOST_NAME, "description": HOST_DESCRIPTION, "path": wrapper_path, "type": "stdio", "allowed_origins": [f"chrome-extension://{extension_id}/"]}, f, indent=4)
 
         browser_paths = self.get_browser_configs()
@@ -427,7 +458,7 @@ class UnixLogic(InstallerLogic):
                 symlink_target = os.path.join(path, f"{HOST_NAME}.json")
                 if os.path.lexists(symlink_target):
                     os.remove(symlink_target)
-                os.symlink(manifest_path, symlink_target)
+                os.symlink(native_manifest_path, symlink_target)
                 self.log(f"Linked manifest for {browser}.")
 
     def uninstall(self):

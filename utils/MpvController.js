@@ -477,7 +477,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		setMinimizedState(shouldBeMinimized, save = true) {
 			this.state.update({ minimized: shouldBeMinimized });
-			if (save) this.savePreference({ minimized: shouldBeMinimized });
+			if (save) {
+				this.savePreference({ minimized: shouldBeMinimized });
+			}
 		}
 
 		setPinState(shouldBePinned, save = true) {

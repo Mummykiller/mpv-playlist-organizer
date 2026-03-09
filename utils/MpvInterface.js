@@ -50,15 +50,25 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						isRunning: response.isRunning ?? true,
 						isPaused: response.isPaused,
 						needsAppend: response.needsAppend,
-						lastPlayedId: response.lastPlayedId
+						lastPlayedId: response.lastPlayedId,
+						isLaunching: false, // Clear optimistic launch flag on response
+						isAppending: false  // Clear optimistic append flag on response
 					});
 				} else {
 					// Rollback loading state on failure
-					MPV.playbackStateManager.update({ isRunning: isRunning });
+					MPV.playbackStateManager.update({ 
+						isRunning: isRunning,
+						isLaunching: false,
+						isAppending: false
+					});
 				}
 				return response;
 			} catch (error) {
-				MPV.playbackStateManager.update({ isRunning: isRunning });
+				MPV.playbackStateManager.update({ 
+					isRunning: isRunning,
+					isLaunching: false,
+					isAppending: false
+				});
 				throw error;
 			}
 		}
