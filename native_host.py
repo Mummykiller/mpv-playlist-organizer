@@ -2,28 +2,36 @@
 """
 MPV Playlist Organizer - Native Host
 This script acts as the bridge between the Chrome Extension and the local system.
-
-NOTE ON LATE IMPORTS (E402): 
-Module-level imports are intentionally placed inside functions or later in the file 
-to ensure the initial handshake with the browser occurs in < 50ms.
 """
+
 import sys
 import os
+import json
+import struct
+import subprocess
+import atexit
+import logging
+import time
+import signal
+import threading
+import platform
+import re
 import traceback
+import ctypes
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
+from concurrent.futures import ThreadPoolExecutor
 
 # --- Path Correction for CLI Usage ---
 # This ensures that if the script is run from a different directory (e.g., via PATH),
 # it can still find its own modules like 'file_io' and 'cli'.
-SCRIPT_DIR_FOR_PATH = os.path.dirname(os.path.abspath(sys.argv[0]))
-sys.path.insert(0, SCRIPT_DIR_FOR_PATH)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+sys.path.insert(0, SCRIPT_DIR)
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
 
 # --- Standalone Function for Failsafe Path ---
 # This is used ONLY for the very early crash handler before file_io is imported.
-# NOTE: This logic duplicates `file_io.get_user_data_dir`. If you change that,
-# you MUST update this fallback to ensure crash logs are stored in the correct location.
 def _get_emergency_log_path():
     """A minimal, dependency-free function to find a place to log fatal startup errors."""
     app_name = "MPVPlaylistOrganizer"
@@ -45,68 +53,47 @@ def _get_emergency_log_path():
 # --- Failsafe Crash Handler ---
 FAILSAFE_LOG_PATH = _get_emergency_log_path()
 
+def set_process_name():
+    """Attempts to set a recognizable name for the process in Task Managers."""
+    try:
+        if sys.platform.startswith('linux'):
+            # Linux: PR_SET_NAME = 15. Max 16 bytes including null terminator.
+            libc = ctypes.CDLL('libc.so.6')
+            # "mpv-pl-organize" is 15 chars
+            libc.prctl(15, b'mpv-pl-organize', 0, 0, 0)
+        elif sys.platform == 'win32':
+            # Windows: Sets the title shown in the Processes tab
+            ctypes.windll.kernel32.SetConsoleTitleW("mpv playlist organizer")
+    except Exception:
+        pass # Fails silently if restricted or libc missing
+
 try:
-    # --- Windows pythonw.exe Guard ---
-    # If this script is started by the browser on Windows, it might be launched with
-    # an executable that has no console (like pythonw.exe), which makes sys.stdin `None`.
-    # This breaks native messaging. This guard detects that situation and re-launches
-    # the script with the standard python.exe, which has the necessary I/O streams.
-    # This check is skipped if CLI arguments are present, assuming it's an interactive session.
-    if sys.platform == "win32" and sys.stdin is None:
-        import subprocess
-        # Re-launch with python.exe. CREATE_NO_WINDOW prevents a console from flashing.
-        si = subprocess.STARTUPINFO()
-        si.dwFlags = subprocess.STARTF_USESTDHANDLES
-        creation_flags = subprocess.CREATE_NO_WINDOW
-        # Use sys.executable to find the python.exe corresponding to the current pythonw.exe
-        script_path = os.path.abspath(sys.argv[0])
-        
-        subprocess.Popen([sys.executable.replace("pythonw.exe", "python.exe"), script_path] + sys.argv[1:], creationflags=creation_flags, startupinfo=si)
-        sys.exit(0)
-
-    import json
-    import struct
-    import subprocess
-    import atexit
-    import logging
-    import time
-    import signal
-    import threading
-    import platform
-    import re
-    from logging.handlers import RotatingFileHandler
-    import ctypes
-
-    def set_process_name():
-        """Attempts to set a recognizable name for the process in Task Managers."""
-        try:
-            if sys.platform.startswith('linux'):
-                # Linux: PR_SET_NAME = 15. Max 16 bytes including null terminator.
-                libc = ctypes.CDLL('libc.so.6')
-                # "mpv-pl-organize" is 15 chars
-                libc.prctl(15, b'mpv-pl-organize', 0, 0, 0)
-            elif sys.platform == 'win32':
-                # Windows: Sets the title shown in the Processes tab
-                ctypes.windll.kernel32.SetConsoleTitleW("mpv playlist organizer")
-        except Exception:
-            pass # Fails silently if restricted or libc missing
-
-    # --- Path Correction for CLI Usage ---
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-
-    # --- Configuration ---
+    # --- Configuration & Environment Setup ---
     import file_io
     DATA_DIR = file_io.DATA_DIR
     HOME_DIR = os.path.expanduser("~")
     
+    # --- Logging Setup (EARLY) ---
+    from utils import logger
+    logger.initialize(DATA_DIR, SCRIPT_DIR)
+    LOG_FILE = os.path.join(DATA_DIR, "native_host.log") # For the crash handler check
+    
+    # Root logger for general logic
+    logging.info(f"[PY][MAIN] Native host starting. Version: 1.1.1. Data Dir: {DATA_DIR}")
+
     # Ensure standard Linux binary paths are in the environment PATH
-    # This helps sub-processes like yt-dlp find ffmpeg and JS runtimes (node/deno)
     current_path_list = os.environ.get("PATH", "").split(os.pathsep)
     
+    # Add SCRIPT_DIR to PATH (helps find mpv.exe if it's in the same folder as native_host.py)
+    if SCRIPT_DIR not in current_path_list:
+        current_path_list.insert(0, SCRIPT_DIR)
+        
+    # Also add the directory of the current python executable (sometimes mpv is nearby)
+    py_dir = os.path.dirname(sys.executable)
+    if py_dir not in current_path_list:
+        current_path_list.insert(0, py_dir)
+
     if platform.system() == "Linux":
-        # We want to ensure common binary locations are searched.
-        # We prepend them to current_path_list. To maintain the priority 
-        # (left-to-right), we insert them in reverse order at index 0.
         extra_paths = [
             "/sbin", "/usr/sbin", "/bin", "/usr/local/bin", "/usr/bin",
             os.path.expanduser("~/.local/bin"),
@@ -116,6 +103,9 @@ try:
             if p not in current_path_list:
                 current_path_list.insert(0, p)
     
+    # Update PATH EARLY so get_settings() can use it for shutil.which
+    os.environ["PATH"] = os.pathsep.join(current_path_list)
+
     # Inject configured paths for ffmpeg and node if they are set
     config = file_io.get_settings()
     for key in ["ffmpeg_path", "node_path"]:
@@ -125,14 +115,8 @@ try:
             if dir_path not in current_path_list:
                 current_path_list.insert(0, dir_path)
                 
+    # Final PATH update with configured paths
     os.environ["PATH"] = os.pathsep.join(current_path_list)
-
-    # --- Logging Setup (Must be done BEFORE starting any threads) ---
-    from utils import logger
-    logger.initialize(DATA_DIR, SCRIPT_DIR)
-    
-    # Root logger for general logic
-    logging.info(f"[PY][MAIN] Native host starting. Version: 1.1.0. Data Dir: {DATA_DIR}")
 
     from mpv_session import MpvSessionManager
     import cli
@@ -148,8 +132,6 @@ try:
     TEMP_PLAYLISTS_DIR = os.path.join(DATA_DIR, "temp_playlists")
 
     # --- Run Janitor Startup Sweep (Threaded) ---
-    # This rotates logs, wipes temp files, and cleans up stale IPC/pycache.
-    # Now that logging is configured, its output will go to the file.
     janitor = Janitor(DATA_DIR, TEMP_PLAYLISTS_DIR)
     janitor_thread = threading.Thread(target=janitor.run_startup_sweep, kwargs={'extension_root': SCRIPT_DIR}, daemon=True)
     janitor_thread.start()
@@ -162,8 +144,7 @@ try:
         def add_error(self, context, error):
             with self.lock:
                 timestamp = datetime.now().isoformat()
-                # Apply path masking to diagnostic errors
-                masked_error = security.mask_path(str(error), DATA_DIR, SCRIPT_DIR)
+                masked_error = security.mask_path(str(error), DATA_DIR, SCRIPT_DIR, HOME_DIR)
                 self.errors.append({"timestamp": timestamp, "context": context, "error": masked_error})
                 if len(self.errors) > 50:
                     self.errors.pop(0)
@@ -176,10 +157,14 @@ try:
 
     def get_message():
         """Reads a message from stdin and decodes it."""
+        if sys.stdin is None:
+            raise EOFError("stdin is None")
+            
         raw_length = sys.stdin.buffer.read(4)
         if len(raw_length) == 0:
             logging.info("[PY][MAIN] Stdin closed (EOF). Exiting native host.")
             sys.exit(0)
+            
         message_length = struct.unpack('@I', raw_length)[0]
         # Security check: Limit incoming message size
         if message_length > security.SECURITY_LIMITS['MAX_IPC_MESSAGE_SIZE']:
@@ -195,7 +180,7 @@ try:
         """Encodes and sends a message to stdout."""
         try:
             with print_lock:
-                # Recursive Path Masking: Masks all strings in the payload to prevent info leaks
+                # Recursive Path Masking
                 if isinstance(message_content, dict):
                     def mask_recursive(obj):
                         if isinstance(obj, str):
@@ -208,7 +193,6 @@ try:
                     
                     message_content = mask_recursive(message_content)
 
-                # Standardize output for JS bridge
                 translated_content = native_link.responder._translate_keys(message_content)
                 encoded_content = json.dumps(translated_content).encode('utf-8')
                 message_length = struct.pack('@I', len(encoded_content))
@@ -216,8 +200,6 @@ try:
                 sys.stdout.buffer.write(encoded_content)
                 sys.stdout.buffer.flush()
         except BrokenPipeError:
-            # This happens when the browser closes the connection while we are trying to send a message.
-            # It's a normal occurrence during extension reloads or browser shutdown.
             logging.info("[PY] Browser disconnected (Broken Pipe). Normal shutdown.")
         except Exception as e:
             logging.error(f"[PY] Unexpected error in send_message: {e}")
@@ -256,7 +238,6 @@ try:
     def cleanup_ipc_socket(session_manager):
         """Remove the IPC socket file on exit, if it exists (non-Windows)."""
         logger.shutdown()
-        # Check if the MPV process is still running. If so, preserve the socket for reconnection.
         if session_manager.pid and ipc_utils.is_pid_running(session_manager.pid):
              logging.info(f"[PY] Preserving IPC socket {session_manager.ipc_path} because MPV (PID {session_manager.pid}) is still running.")
              return
@@ -276,23 +257,11 @@ try:
                     logging.info(f"[PY] Cleaned up empty IPC directory: {ipc_dir}")
                 except OSError as e:
                     logging.warning(f"[PY] Error removing IPC directory {ipc_dir}: {e}")
-        
-        # Also clean up the home-directory fallback if it's empty
-        fallback_ipc_dir = os.path.realpath(os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc"))
-        if os.path.exists(fallback_ipc_dir) and not os.listdir(fallback_ipc_dir):
-            try:
-                os.rmdir(fallback_ipc_dir)
-                logging.info(f"[PY] Cleaned up empty fallback IPC directory: {fallback_ipc_dir}")
-            except OSError:
-                pass
 
     def signal_handler(sig, frame):
         """Handles termination signals from the browser."""
         sig_name = "SIGTERM" if sig == signal.SIGTERM else "SIGHUP"
         logging.info(f"[PY] Received {sig_name}. Browser connection lost. Native host exiting...")
-        # NOTE: We do NOT call mpv_session.close() here. 
-        # We want to preserve MPV autonomy so it can be reconnected to later.
-        # Calling sys.exit(0) ensures that atexit handlers (like cleanup_ipc_socket) still run.
         sys.exit(0)
 
     # Register signal handlers for graceful shutdown (Unix only)
@@ -300,25 +269,18 @@ try:
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGHUP, signal_handler)
 
-    # Register a cleanup function to run when the script exits.
     atexit.register(cleanup_ipc_socket, mpv_session)
     atexit.register(handler_manager._stop_local_m3u_server)
     
-    # Import VolatileCookieManager to register cleanup
     from utils.url_analyzer import VolatileCookieManager
     atexit.register(VolatileCookieManager.cleanup_volatile_dir)
-
-    from concurrent.futures import ThreadPoolExecutor
 
     def main():
         """Main message loop for native messaging from the browser."""
         set_process_name()
-        
-        # Inject the UI notification bridge into the logger
         logger.set_ui_sender(send_message)
 
         # --- Pre-emptive Cleanup ---
-        # Resolve volatile leaks from previous crashes/SIGKILLs that bypassed atexit.
         try:
             from utils.url_analyzer import VolatileCookieManager
             VolatileCookieManager.cleanup_volatile_dir()
@@ -329,29 +291,24 @@ try:
         # --- Windows Graceful Shutdown Handler ---
         if sys.platform == "win32":
             def windows_ctrl_handler(ctrl_type):
-                # CTRL_CLOSE_EVENT = 2
-                if ctrl_type == 2:
+                if ctrl_type == 2: # CTRL_CLOSE_EVENT
                     logging.info("[PY] Received Windows close event. Native host exiting...")
                     sys.exit(0)
                 return False
             
-            # Create a callback reference to prevent it from being garbage collected
             self_callback = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)(windows_ctrl_handler)
             ctypes.windll.kernel32.SetConsoleCtrlHandler(self_callback, True)
             logging.info("[PY] Windows console control handler registered.")
 
-        # The delegation system: One receptionist (main loop), many workers (threads)
         executor = ThreadPoolExecutor(max_workers=10)
 
-        # Ensure stdin/stdout are available (critical for native messaging)
         if sys.stdin is None or sys.stdout is None:
-            logging.error("[PY][MAIN] Standard input/output is missing. If on Windows, ensure the registry key points to 'python.exe' and not 'pythonw.exe'.")
+            logging.error("[PY][MAIN] Standard input/output is missing.")
             sys.exit(1)
 
         # --- Built-in Meta Handlers ---
         @HandlerRegistry.command('ping')
         def handle_ping(request: native_link.BaseRequest):
-            """Returns basic system info to verify connectivity."""
             return native_link.success({
                 "python_version": sys.version,
                 "platform": platform.platform(),
@@ -360,10 +317,7 @@ try:
 
         @HandlerRegistry.command('restore_session')
         def handle_restore_session(request: native_link.BaseRequest):
-            """Manual trigger for session restoration from the extension."""
             res = mpv_session.restore()
-            
-            # Add current log level to the handshake response
             current_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
             return native_link.success(res, action="session_restored", log_level=current_level)
 
@@ -373,11 +327,7 @@ try:
 
         @HandlerRegistry.command('get_debug_bundle')
         def handle_get_debug_bundle(request: native_link.BaseRequest):
-            """Flushes logs and returns sanitized diagnostic data."""
-            # 1. Flush non-blocking queue to disk
             logger.shutdown()
-            
-            # 2. Re-initialize logging for future messages
             logger.initialize(DATA_DIR, SCRIPT_DIR)
             
             def read_safe(path):
@@ -400,13 +350,10 @@ try:
 
         @logger.catch(ui_alert=True)
         def task_wrapper(message):
-            """Worker thread task to execute handler and send response."""
-            # Set request ID context for this thread
             req_id = message.get('request_id')
             token = logger.request_id_var.set(req_id)
 
             try:
-                # 1. Mandatory Security Payload Validation
                 is_valid, err_msg = security.validate_payload(message)
                 if not is_valid:
                     logging.warning(f"[PY][SECURITY] Blocked malicious payload: {err_msg}")
@@ -418,8 +365,6 @@ try:
 
                 request = native_link.translate(message)
                 command_name = request.action
-
-                # Dynamic dispatch using the registry
                 handler = HandlerRegistry.get_handler(command_name)
 
                 if handler:
@@ -428,23 +373,17 @@ try:
                     response = native_link.failure(f"Unknown command: {command_name}")
 
                 if response:
-                    # Preserve request_id for the bridge
                     if req_id:
                         response['request_id'] = req_id
                     send_message(response)
             finally:
-                # Reset context for reuse in thread pool
                 logger.request_id_var.reset(token)
-        # --- Automatic Session Restoration (Threaded) ---
-        # Attempt to reconnect to an existing MPV session immediately upon startup.
-        # This is done in a thread to avoid blocking the main message loop.
+
         def async_restore():
             try:
                 restore_data = mpv_session.restore()
                 if restore_data:
                     logging.info(f"[PY][MAIN] Automatic restoration successful for folder '{mpv_session.owner_folder_id}'.")
-                    # Send unsolicited event to notify the extension
-                    # Small delay to ensure the browser port is fully ready
                     time.sleep(0.5)
                     current_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
                     send_message(native_link.success(restore_data, action="session_restored", log_level=current_level))
@@ -455,22 +394,17 @@ try:
 
         while True:
             try:
-                message = get_message()  # Blocks here waiting for browser input
+                message = get_message()
                 logging.info(f"[PY][RECV] (ID: {message.get('request_id')}): {message.get('action')}")
-                
-                # DELEGATION: hand off heavy work to the thread pool
                 executor.submit(task_wrapper, message)
-
             except Exception as e:
                 logging.error(f"[PY][MAIN] Error in main loop: {e}", exc_info=True)
-                # If get_message fails critically, the loop might need to break
                 if not sys.stdin or sys.stdin.closed:
                     break
 
     if __name__ == '__main__':
         logging.info(f"[PY][START] Args: {sys.argv}, TTY: {sys.stdin.isatty() if sys.stdin else 'None'}")
-
-        # Robust Browser Detection
+        
         is_browser = False
         if len(sys.argv) > 1:
             if sys.argv[1].startswith('chrome-extension://') or sys.argv[1].startswith('moz-extension://'):
@@ -484,10 +418,7 @@ try:
             main()
             sys.exit(0)
 
-        # handle_cli() will parse arguments and execute the command if it's a CLI call.
-        # It returns True if it was a CLI call, and False otherwise.
         try:
-            # Inject dependencies into the CLI module before handling any commands.
             cli.inject_dependencies({
                 'file_io': file_io,
                 'mpv_session': mpv_session,
@@ -495,32 +426,23 @@ try:
                 'time': time
             })
             if not cli.handle_cli():
-                # If it wasn't a CLI call, start the main message loop for the browser.
                 main()
         except SystemExit:
-            # Argparse calls sys.exit() on --help or on input errors. This is normal.
             pass
         except Exception as cli_error:
-            # Catch any other unexpected errors during CLI execution.
             logging.error(f"An unexpected CLI error occurred: {cli_error}", exc_info=True)
             print(f"Error: {cli_error}", file=sys.stderr)
             sys.exit(1)
 
 except Exception as e:
-    # This is the failsafe block that catches any error during script initialization or execution.
-    # Use the main LOG_FILE path if it was defined, otherwise use the crash-specific path.
-    log_path_to_use = 'LOG_FILE' in locals() and LOG_FILE or FAILSAFE_LOG_PATH
-    if log_path_to_use:
-        try:
-            with open(log_path_to_use, "a", encoding="utf-8") as f:
-                f.write("---\n--- Native Host Crashed ---\n")
-                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                f.write(f"Error: {str(e)}\n\n")
-                f.write(traceback.format_exc())
-                f.write("\n---------------------------\n\n")
-        except Exception:
-            # If even the failsafe logger fails, there's nothing more we can do.
-            pass
-    # It's critical to re-raise the exception so the process still exits with an error,
-    # which is the behavior the user is observing.
+    log_path_to_use = locals().get('LOG_FILE', FAILSAFE_LOG_PATH)
+    try:
+        with open(log_path_to_use, "a", encoding="utf-8") as f:
+            f.write("---\n--- Native Host Crashed ---\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            f.write(f"Error: {str(e)}\n\n")
+            f.write(traceback.format_exc())
+            f.write("\n---------------------------\n\n")
+    except Exception:
+        pass
     raise

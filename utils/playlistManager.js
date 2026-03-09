@@ -149,7 +149,7 @@ async function _scrapeAndAddUrl(
 	sender,
 	skipYouTubeCheck = false,
 ) {
-	const isYouTubeUrl = /youtube\.com\/(watch|playlist)/.test(urlToAdd);
+	const isYouTubeUrl = urlToAdd.includes("youtube.com/") || urlToAdd.includes("youtu.be/");
 
 	if (isYouTubeUrl && !skipYouTubeCheck) {
 		broadcastLog({
@@ -174,10 +174,12 @@ async function _scrapeAndAddUrl(
 			return await addUrlToFolder(folderId, urlToAdd, finalTitle, tab, sender);
 		} catch (e) {
 			broadcastLog({
-				text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Falling back to scanner.`,
-				type: "info",
+				text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Adding URL directly without scanner.`,
+				type: "warning",
 			});
-			return await _scrapeAndAddUrl(folderId, urlToAdd, tab, sender, true);
+			const isPlaylist = urlToAdd.includes("/playlist?list=");
+			const fallbackTitle = isPlaylist ? "YouTube Playlist" : "YouTube Video";
+			return await addUrlToFolder(folderId, urlToAdd, fallbackTitle, tab, sender);
 		}
 	} else {
 		broadcastLog({
