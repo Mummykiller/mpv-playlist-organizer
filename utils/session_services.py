@@ -53,6 +53,10 @@ class EnrichmentService(ItemProcessor):
                 
                 logging.info(f"[PY][Session] Background Flow: start_index={start_index}, history={len(history_items)}, future={len(future_items)}")
                 
+                total_to_process = len(future_items) + len(history_items)
+                if total_to_process > 0:
+                    self.send_message({"action": "log_from_native_host", "log": {"text": f"Restoring playlist: Processing {total_to_process} items for '{folder_id}'...", "type": "info"}})
+
                 # 1. Enrich and Batch Append Future Items
                 if future_items:
                     logging.info(f"[PY][Session] Background: Enriching {len(future_items)} future items sequentially.")
@@ -60,7 +64,7 @@ class EnrichmentService(ItemProcessor):
                     for item in future_items:
                         if not session.is_alive:
                             return
-                        res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session)
+                        res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session, quiet=True)
                         if res:
                             enriched_future.extend(res)
                     
@@ -75,7 +79,7 @@ class EnrichmentService(ItemProcessor):
                     for item in history_items:
                         if not session.is_alive:
                             return
-                        res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session)
+                        res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session, quiet=True)
                         if res:
                             enriched_history.extend(res)
                     

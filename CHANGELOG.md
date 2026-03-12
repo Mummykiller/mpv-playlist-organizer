@@ -6,6 +6,27 @@ All notable changes to the **MPV Playlist Organizer** project.
 >
 > **Security Warning:** While this update includes significant hardening against injection and path-related attacks, this application still facilitates the downloading and playback of media from external, potentially malicious third-party websites. Users should remain cautious and understand the inherent risks of streaming from unverified sources.
 
+## [2.8.0] - 2026-03-12 (Auto-Add & Stream Collector)
+
+### New Features & Capabilities
+- **Auto-Add (Stream Collector):** Introduced a powerful new "passive" mode for collecting media while browsing.
+    - **One-Click Activation:** Right-click the **"Add"** button in either the Popup or the On-Page Controller to toggle Auto-Add mode.
+    - **Visual Feedback:** When active, the Add button displays a smooth **green-to-purple pulsing animation** to indicate the collector is "watching" for streams.
+    - **Retroactive Detection:** Enabling Auto-Add immediately checks the current tab for previously detected streams and adds them automatically.
+    - **Scanner Bypass:** Auto-Add utilizes direct tab messaging and `PageScraper` logic to extract high-quality titles and URLs **without opening scanner windows**, ensuring a zero-interruption workflow.
+    - **Smart Inactivity Logic:** Added configurable settings to automatically disable Auto-Add after a period of inactivity (default 30s) to save resources.
+
+### UI & UX Improvements
+- **Log Consolidation:** Eliminated browser-log spam by grouping batch operations. Appending multiple items, restoring playlists, or preprocessing M3U files now show a single consolidated summary line (e.g., *"Adding X items to 'Folder'..."*) instead of individual "Running analysis..." entries.
+- **Enhanced Tooltips:** Updated "Add" button descriptions to improve discoverability of the new right-click toggle feature.
+
+### Stability & Bug Fixes
+- **Module Resolution:** Fixed a `SyntaxError` in `playlistManager.js` caused by incorrect module exports and missing `itemProcessor` aliases.
+- **Test Suite Robustness:** 
+    - Restored `initialize_paths` in `file_io.py` to allow stable mocking of data directories during testing.
+    - Increased heartbeat wait intervals in `test_robustness.py` to eliminate race conditions during throttled disk commits.
+- **Anti-Spam Filter:** Implemented a 5-second per-URL cooldown for Auto-Add to prevent redundant additions on pages that rapidly re-report the same stream.
+
 ## [2.7.0] - 2026-03-09 (Windows Reliability & UI Polish)
 
 ### Platform & Installer Hardening
