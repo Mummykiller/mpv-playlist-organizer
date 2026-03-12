@@ -262,6 +262,8 @@ export class StorageManager {
 						syncGlobalRemovalsLive: false,
 						autoAppendOnAdd: true,
 						liveRemoval: true,
+						autoAddInactivityTimeout: 30,
+						autoAddAutoOff: true,
 						confirmRemoveFolder: true,
 						confirmClearPlaylist: true,
 						confirmCloseMpv: true,

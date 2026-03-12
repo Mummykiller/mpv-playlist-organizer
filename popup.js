@@ -645,19 +645,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (loadingTimeout) clearTimeout(loadingTimeout);
 			}
 		}
-
 		function setPlaybackClosing(isClosing) {
 			if (!miniPlayBtn) return;
 			isPlaybackClosing = isClosing;
 			if (isClosing) isPlaybackLoading = false;
-			
+
 			miniPlayBtn.classList.toggle("btn-closing", isClosing);
+
 			if (isClosing) {
 				miniPlayBtn.classList.remove("btn-playing");
 				miniPlayBtn.classList.remove("btn-loading");
 				miniPlayBtn.title = "MPV is closing...";
 				miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`;
 			}
+		}
+
+		function updateAutoAddVisuals(isActive) {
+			if (!miniAddBtn) return;
+			miniAddBtn.classList.toggle("auto-add-active", isActive);
 		}
 
 		/**
@@ -1651,6 +1656,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 		});
 
 		miniAddBtn.addEventListener("click", handleMiniAdd);
+		miniAddBtn.addEventListener("contextmenu", (e) => {
+			e.preventDefault();
+			sendMessageAsync({ action: "toggle_auto_add" }).then(res => {
+				if (res?.success) updateAutoAddVisuals(res.active);
+			});
+		});
 
 		miniPlayBtn.addEventListener("click", () =>
 			handlePlaySelectedPlaylist(miniFolderSelect.value),
@@ -1901,10 +1912,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 					try {
 						// Update native host status (Async)
 						updateNativeHostStatusUI();
-						
+
+						sendMessageAsync({ action: "get_auto_add_state" }).then(res => {
+							if (res?.success) updateAutoAddVisuals(res.active);
+						});
+
 						// Request deep sync from manager
 						MPV.playbackStateManager.requestSync();
-
 						const tabs = await chrome.tabs
 							.query({ active: true, currentWindow: true })
 							.catch(() => []);
@@ -2024,6 +2038,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (currentFolderId === request.folderId) {
 					updateItemDelta(request.itemId, request.delta);
 				}
+			}
+
+			if (request.action === "auto_add_state_changed") {
+				updateAutoAddVisuals(request.active);
 			}
 
 			// Handle live playlist updates to keep the item count and playlist view in sync

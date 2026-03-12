@@ -213,6 +213,17 @@ export class OptionsManager {
 			},
 			{ key: "kbOpenPopup", elementId: "kb-open-popup-input", type: "input" },
 			{
+				key: "autoAddAutoOff",
+				elementId: "auto-add-auto-off-checkbox",
+				type: "checkbox",
+			},
+			{
+				key: "autoAddInactivityTimeout",
+				elementId: "auto-add-timeout-input",
+				type: "input",
+				transform: Number,
+			},
+			{
 				key: "enableSmartResume",
 				elementId: "enable-smart-resume-checkbox",
 				type: "checkbox",

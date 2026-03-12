@@ -227,6 +227,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					this.setMinimizedState(req.minimized);
 					send({ success: true });
 				},
+				auto_add_state_changed: (req) => {
+					this._updateAutoAddVisuals(req.active);
+				},
 				get_controller_state: (req, send) => {
 					send({
 						success: true,
@@ -239,6 +242,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				get_details_for_last_right_click: (req, send) =>
 					this._handleRightClickScrape(send),
 				ytdlp_update_confirm: () => this._handleYtdlpUpdateConfirm(),
+				scrape_and_get_details: (req, send) => {
+					const details = this.pageScraper.scrapePageDetails(req.detectedUrl || window.location.href);
+					send(details);
+				},
 			};
 
 			// Bind core lifecycle and event methods
@@ -1428,6 +1435,21 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			};
 		}
 
+		_updateAutoAddVisuals(isActive) {
+			if (!this.ui.shadowRoot) return;
+			const root = this.ui.shadowRoot;
+			const btn = root.getElementById("btn-add");
+			const compactBtn = root.getElementById("btn-compact-add");
+
+			if (isActive) {
+				btn?.classList.add("auto-add-active");
+				compactBtn?.classList.add("auto-add-active");
+			} else {
+				btn?.classList.remove("auto-add-active");
+				compactBtn?.classList.remove("auto-add-active");
+			}
+		}
+
 		isReloadError(e) {
 			const msg = e?.message || "";
 			return (
@@ -1594,6 +1616,23 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			root.getElementById("btn-clear-log")?.addEventListener("click", () => {
 				const logContainer = root.getElementById("log-container");
 				if (logContainer) logContainer.innerHTML = "";
+			});
+
+			// Auto-Add Toggle (Right Click)
+			const toggleAutoAdd = (e) => {
+				e.preventDefault();
+				this.bridge.send("toggle_auto_add").then(res => {
+					if (res?.success) {
+						this._updateAutoAddVisuals(res.active);
+					}
+				});
+			};
+			root.getElementById("btn-add")?.addEventListener("contextmenu", toggleAutoAdd);
+			root.getElementById("btn-compact-add")?.addEventListener("contextmenu", toggleAutoAdd);
+
+			// Initial state check
+			this.bridge.send("get_auto_add_state").then(res => {
+				if (res?.success) this._updateAutoAddVisuals(res.active);
 			});
 			root.getElementById("btn-filter-info")?.addEventListener("click", () => {
 				const filters = {
