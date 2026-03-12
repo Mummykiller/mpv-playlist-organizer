@@ -189,7 +189,9 @@ class PlaybackHandler(BaseHandler):
         
         job_id = None
         if len(items_to_process) > 1:
-            job_id = self.ctx.task_manager.create_job("append_batch", f"Adding {len(items_to_process)} items to '{canonical_id}'...", total=len(items_to_process))
+            log_msg = f"Adding {len(items_to_process)} items to '{canonical_id}'..."
+            self.ctx.sender({"action": "log_from_native_host", "log": {"text": log_msg, "type": "info"}})
+            job_id = self.ctx.task_manager.create_job("append_batch", log_msg, total=len(items_to_process))
             self.ctx.task_manager.update_job(job_id, status="processing")
 
         final_processed_items = []
@@ -203,7 +205,8 @@ class PlaybackHandler(BaseHandler):
                     session_cookies=self.mpv_session.session_cookies, 
                     sync_lock=self.mpv_session.sync_lock,
                     settings=settings, 
-                    session=self.mpv_session
+                    session=self.mpv_session,
+                    quiet=(len(items_to_process) > 1)
                 )
             
             futures = [executor.submit(process_wrapper, itm) for itm in items_to_process]

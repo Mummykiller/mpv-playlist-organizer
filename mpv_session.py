@@ -862,10 +862,12 @@ class MpvSessionManager:
             logging.info("[PY][Session] Input was raw. Checking for M3U flow or start-item enrichment.")
             is_m3u_flow = isinstance(url_items_or_m3u, str) and "youtube.com" not in url_items_or_m3u
             if is_m3u_flow:
-                logging.info("[PY][Session] M3U flow detected. Performing parallel enrichment.")
+                msg = f"Preprocessing {len(_url_items_list)} items for folder '{folder_id}'..."
+                self.send_message({"action": "log_from_native_host", "log": {"text": msg, "type": "info"}})
+                logging.info(f"[PY][Session] M3U flow detected. {msg}")
                 from concurrent.futures import ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=10) as executor:
-                    results = list(executor.map(lambda x: self.enricher.enrich_single_item(x, folder_id, self.session_cookies, self.sync_lock, settings=settings, session=self), _url_items_list))
+                    results = list(executor.map(lambda x: self.enricher.enrich_single_item(x, folder_id, self.session_cookies, self.sync_lock, settings=settings, session=self, quiet=True), _url_items_list))
                 _url_items_list = [i for r in results for i in r]
                 logging.info(f"[PY][Session] Parallel enrichment complete. {len(_url_items_list)} items total.")
                 return {
