@@ -25,6 +25,70 @@ import * as playlistManager from "./utils/playlistManager.js";
 
 // --- Shared State ---
 let nativeHostStatus = { status: "unknown", lastCheck: 0, info: null };
+let autoAddActive = false;
+let autoAddTimer = null;
+
+const startAutoAddTimer = async () => {
+	if (autoAddTimer) clearTimeout(autoAddTimer);
+	const data = await storage.get();
+	const timeout = (data.settings.uiPreferences.global.autoAddInactivityTimeout || 30) * 1000;
+	const autoOff = data.settings.uiPreferences.global.autoAddAutoOff !== false;
+
+	if (autoOff) {
+		autoAddTimer = setTimeout(() => {
+			if (autoAddActive) {
+				autoAddActive = false;
+				broadcastToTabs({ action: "auto_add_state_changed", active: false });
+				broadcastLog({ text: "[Auto-Add]: Disabled due to inactivity.", type: "info" });
+			}
+		}, timeout);
+	}
+};
+
+const autoAddCooldowns = new Map();
+
+const handleAutoAdd = async (url, tab) => {
+	if (!autoAddActive || !url) return;
+	
+	// URL-level cooldown to prevent "500 windows" if a page spams the same stream
+	const now = Date.now();
+	if (autoAddCooldowns.has(url) && now - autoAddCooldowns.get(url) < 5000) {
+		return;
+	}
+	autoAddCooldowns.set(url, now);
+
+	startAutoAddTimer();
+	
+	const data = await storage.get();
+	const folderId = data.settings.lastUsedFolderId;
+	if (!folderId) return;
+
+	// Request accurate details from the tab's PageScraper
+	let scrapeData = { url, title: tab?.title || url };
+	if (tab?.id) {
+		try {
+			const response = await chrome.tabs.sendMessage(tab.id, { 
+				action: "scrape_and_get_details",
+				detectedUrl: url
+			});
+			if (response && response.title) {
+				scrapeData = response;
+			}
+		} catch (e) {
+			console.warn("[Auto-Add] Failed to message tab for scrape:", e);
+		}
+	}
+
+	// Use handleAdd with isAutoAdd flag to ensure silent duplicate rejection
+	playlistManager.handleAdd({
+		action: "add",
+		folderId,
+		data: scrapeData,
+		tab,
+		isAutoAdd: true,
+		isStreamUrl: true
+	}, { tab }).catch(e => console.warn("[Auto-Add] Failed:", e));
+};
 
 chrome.runtime.onConnect.addListener((port) => {
 	if (port.name === "popup-lifecycle") {
@@ -52,10 +116,41 @@ const actionHandlers = {
 	get_ui_preferences: ui_state_handlers.handleGetUiPreferences,
 	get_default_automatic_flags: ui_state_handlers.handleGetDefaultAutomaticFlags,
 	set_minimized_state: ui_state_handlers.handleSetMinimizedState,
+	toggle_auto_add: async (request) => {
+		autoAddActive = !autoAddActive;
+		if (autoAddActive) {
+			startAutoAddTimer();
+			broadcastLog({ text: "[Auto-Add]: Enabled. Watching for streams...", type: "info" });
+			
+			// Retroactive detection: Check current tab if it already has a detected URL
+			try {
+				const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+				if (activeTab?.id) {
+					const detectedUrl = m3u8_scanner_handlers.handleGetDetectedUrlForTab(activeTab.id);
+					if (detectedUrl) {
+						broadcastLog({ text: "[Auto-Add]: Processing existing stream detection...", type: "info" });
+						handleAutoAdd(detectedUrl, activeTab);
+					}
+				}
+			} catch (e) {
+				console.warn("[Auto-Add] Retroactive check failed:", e);
+			}
+		} else {
+			if (autoAddTimer) clearTimeout(autoAddTimer);
+			broadcastLog({ text: "[Auto-Add]: Disabled.", type: "info" });
+		}
+		broadcastToTabs({ action: "auto_add_state_changed", active: autoAddActive });
+		return { success: true, active: autoAddActive };
+	},
+	get_auto_add_state: () => ({ success: true, active: autoAddActive }),
 	report_detected_url: (request, sender) => {
 		const tabId = sender.tab?.id;
-		if (tabId)
+		if (tabId) {
 			m3u8_scanner_handlers.handleUpdateDetectedUrlForTab(tabId, request.url);
+			if (autoAddActive && request.url) {
+				handleAutoAdd(request.url, sender.tab);
+			}
+		}
 	},
 	force_reload_settings: ui_state_handlers.handleForceReloadSettings,
 	force_refresh_dependencies: ui_state_handlers.handleForceRefreshDependencies,
@@ -145,6 +240,15 @@ addNativeListener("task_update", async (data) => {
 	// Sync to storage for UI observation
 	const taskList = Array.from(activeTasks.values());
 	await chrome.storage.local.set({ mpv_active_tasks: taskList });
+});
+
+m3u8_scanner_handlers.setDetectionCallback(async (url, tabId) => {
+	if (autoAddActive) {
+		try {
+			const tab = await chrome.tabs.get(tabId);
+			handleAutoAdd(url, tab);
+		} catch (e) {}
+	}
 });
 
 async function performNativeHostHeartbeat() {

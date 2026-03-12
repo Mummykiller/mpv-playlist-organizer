@@ -1653,3 +1653,16 @@ button.btn-closing::after {
 	pointer-events: none;
 	transition: all 0.3s ease;
 }
+
+/* Auto-Add Pulsing Animation */
+@keyframes pulse-green-purple {
+    0% { background-color: #4CAF50; box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7); }
+    50% { background-color: #9C27B0; box-shadow: 0 0 0 10px rgba(156, 39, 176, 0); }
+    100% { background-color: #4CAF50; box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+}
+
+.auto-add-active {
+    animation: pulse-green-purple 3s infinite !important;
+    border-color: #fff !important;
+    color: #fff !important;
+}

@@ -212,16 +212,22 @@ try:
 except Exception:
     pass
 
-FOLDERS_FILE = os.path.join(DATA_DIR, "folders.json")
-INDEX_FILE = os.path.join(DATA_DIR, "index.json")
-PLAYLISTS_DIR = os.path.join(DATA_DIR, "playlists")
-CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
-EXPORT_DIR = os.path.join(DATA_DIR, "exported")
+def initialize_paths():
+    """Updates all global paths based on the current DATA_DIR. Useful for testing."""
+    global FOLDERS_FILE, INDEX_FILE, PLAYLISTS_DIR, CONFIG_FILE, EXPORT_DIR
+    FOLDERS_FILE = os.path.join(DATA_DIR, "folders.json")
+    INDEX_FILE = os.path.join(DATA_DIR, "index.json")
+    PLAYLISTS_DIR = os.path.join(DATA_DIR, "playlists")
+    CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+    EXPORT_DIR = os.path.join(DATA_DIR, "exported")
 
-try:
-    os.makedirs(PLAYLISTS_DIR, exist_ok=True)
-except Exception:
-    pass
+    try:
+        os.makedirs(PLAYLISTS_DIR, exist_ok=True)
+    except Exception:
+        pass
+
+# Initialize paths once on module load
+initialize_paths()
 
 def migrate_to_shards():
     """

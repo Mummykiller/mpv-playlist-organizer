@@ -7,6 +7,11 @@ import { storage } from "../storage_instance.js";
 const lastDetectedUrls = {};
 const m3u8DetectionPromises = {};
 const _detectedUrlsState = {};
+let _onDetectionCallback = null;
+
+export function setDetectionCallback(cb) {
+	_onDetectionCallback = cb;
+}
 
 // We use an auto-init pattern since this module needs to register listeners immediately
 function setupListeners() {
@@ -52,6 +57,11 @@ function setupListeners() {
 			lastDetectedUrls[details.tabId] = { url: detectedUrl, timestamp: now };
 
 			_detectedUrlsState[details.tabId] = detectedUrl;
+			
+			if (_onDetectionCallback) {
+				_onDetectionCallback(detectedUrl, details.tabId);
+			}
+
 			broadcastToTabs({
 				action: "detected_url_changed",
 				tabId: details.tabId,
