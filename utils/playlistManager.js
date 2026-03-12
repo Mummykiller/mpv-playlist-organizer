@@ -5,7 +5,7 @@
 import { debouncedSyncToNativeHostFile } from "../background/core_services.js";
 import { findM3u8InUrl } from "../background/handlers/m3u8_scanner.js";
 import { createHandler } from "../background/handler_factory.js";
-import { broadcastPlaylistState } from "../background/ui_broadcaster.js";
+import { broadcastPlaylistState, isFolderActive } from "../background/ui_broadcaster.js";
 import { broadcastLog } from "../background/messaging.js";
 import { normalizeYouTubeUrl } from "./commUtils.module.js";
 import { nativeLink } from "./nativeLink.js";
@@ -79,8 +79,8 @@ async function addUrlToFolder(
 		});
 
 		// Check for live append
-		const isFolderActive = await nativeLink.isFolderActive(actualFolderId);
-		if (isFolderActive && data.settings.uiPreferences.global.autoAppendOnAdd) {
+		const isActive = isFolderActive(actualFolderId);
+		if (isActive && data.settings.uiPreferences.global.autoAppendOnAdd) {
 			nativeLink.call("add_item_live", {
 				folderId: actualFolderId,
 				item: newItem,

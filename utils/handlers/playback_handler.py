@@ -104,6 +104,15 @@ class PlaybackHandler(BaseHandler):
         self.mpv_session.launch_cancelled = False # Reset for new attempt
         launch_payload = items if len(items) > 1 else items[0]
         
+        # Log the intent to the browser
+        if len(items) > 1:
+            log_text = f"Launching batch playback ({len(items)} items) for '{folder_id}'..."
+        else:
+            item_title = items[0].get('title') or "Selected Item"
+            log_text = f"Launching playback for: {item_title}"
+        
+        self.ctx.sender({"action": "log_from_native_host", "log": {"text": log_text, "type": "info"}})
+
         try:
             logging.info(f"[PY][Handler] Calling mpv_session.start (first pass)...")
             first_call_result = self.mpv_session.start(
@@ -189,7 +198,7 @@ class PlaybackHandler(BaseHandler):
         
         job_id = None
         if len(items_to_process) > 1:
-            log_msg = f"Adding {len(items_to_process)} items to '{canonical_id}'..."
+            log_msg = f"Appending {len(items_to_process)} items to playlist '{canonical_id}'..."
             self.ctx.sender({"action": "log_from_native_host", "log": {"text": log_msg, "type": "info"}})
             job_id = self.ctx.task_manager.create_job("append_batch", log_msg, total=len(items_to_process))
             self.ctx.task_manager.update_job(job_id, status="processing")
@@ -388,7 +397,10 @@ class PlaybackHandler(BaseHandler):
         
         # 0.5 Log batch preparation
         if len(playlist) > 1:
-            self.ctx.sender({"log": {"text": f"[Background]: Preparing detached playlist ({len(playlist)} items)...", "type": "info"}})
+            self.ctx.sender({"action": "log_from_native_host", "log": {"text": f"Preparing unmanaged/detached playlist ({len(playlist)} items)...", "type": "info"}})
+        else:
+            item_title = (playlist[0] if isinstance(playlist[0], dict) else {}).get('title') or "Selected Item"
+            self.ctx.sender({"action": "log_from_native_host", "log": {"text": f"Launching unmanaged instance for: {item_title}", "type": "info"}})
 
         # 1. Enrich the items
         enriched_playlist = []
@@ -492,7 +504,7 @@ class PlaybackHandler(BaseHandler):
             observer = self.ctx.log_stream(tag="MPV-UNMANAGED", send_message_func=self.ctx.sender)
             threading.Thread(target=observer, args=(process.stderr,), daemon=True).start()
             
-            return native_link.success(message="Disconnected session launched.")
+            return native_link.success(message="Unmanaged session launched.")
         except Exception as e:
             import traceback
             logging.error(f"Error launching unmanaged mpv: {e}\n{traceback.format_exc()}")
