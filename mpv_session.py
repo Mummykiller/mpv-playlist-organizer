@@ -862,7 +862,7 @@ class MpvSessionManager:
             logging.info("[PY][Session] Input was raw. Checking for M3U flow or start-item enrichment.")
             is_m3u_flow = isinstance(url_items_or_m3u, str) and "youtube.com" not in url_items_or_m3u
             if is_m3u_flow:
-                msg = f"Preprocessing {len(_url_items_list)} items for folder '{folder_id}'..."
+                msg = f"Preparing {len(_url_items_list)} items for folder '{folder_id}'..."
                 self.send_message({"action": "log_from_native_host", "log": {"text": msg, "type": "info"}})
                 logging.info(f"[PY][Session] M3U flow detected. {msg}")
                 from concurrent.futures import ThreadPoolExecutor

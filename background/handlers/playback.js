@@ -694,135 +694,137 @@ const _sendMessageAsync = (payload) =>
 		});
 	});
 
-export const handlePlay = createHandler(async ({ request, folderId, data }) => {
-	const { urlItem, playNewInstance } = request;
+async function _handlePlayLogic(context) {
+    const { request, folderId, data } = context;
+    const { urlItem, playNewInstance } = request;
 
-	if (urlItem) {
-		if (!playNewInstance && folderId && !(await checkAndConfirmFolderSwitch(folderId))) {
-			return { success: true, message: "Folder switch cancelled by user." };
-		}
+    if (urlItem) {
+        if (!playNewInstance && folderId && !(await checkAndConfirmFolderSwitch(folderId))) {
+            return { success: true, message: "Folder switch cancelled by user." };
+        }
 
-		broadcastLog({
-			text: `[Background]: Received 'play' request for single item: ${urlItem.title || urlItem.url}${playNewInstance ? " (New Instance)" : ""}`,
-			type: "info",
-			itemId: urlItem.id,
-			folderId: folderId
-		});
+        const logText = `Received 'play' request for: ${urlItem.title || urlItem.url}${playNewInstance ? " (Unmanaged Instance)" : " (Managed Playback)"}`;
+        broadcastLog({
+            text: `[Background]: ${logText}`,
+            type: "info",
+            itemId: urlItem.id,
+            folderId: folderId
+        });
 
-		        const options = {
-		            playNewInstance: request.playNewInstance,
-		            playlistStartId: request.playlistStartId,
-		            geometry: request.geometry,
-		            customWidth: request.customWidth,
-		            customHeight: request.customHeight,
-		            customMpvFlags: request.customMpvFlags,
-		            startPaused: request.startPaused,
-		            clearOnCompletion: request.clearOnCompletion,
-		        };
-		
-		        console.log("[BG] handlePlay: Calling nativeLink.play with folderId:", folderId);
-		        const response = await nativeLink.play(urlItem, folderId, options);
-		
-		        if (response.success && !playNewInstance) {
-		            const { mpv_playback_cache: current } = await chrome.storage.local.get("mpv_playback_cache");
-		            if (current && current.folderId === folderId) {
-		                await chrome.storage.local.set({
-		                    mpv_playback_cache: { ...current, isLaunching: false }
-		                });
-		            }
-		
-		            const session = playbackManager.getSession(folderId);
-		            session.isPlaying = true;
-		
-		            let isLast = true;
-		            if (folderId && data.folders[folderId]) {
-		                const playlist = data.folders[folderId].playlist;
-		                if (playlist.length > 0) {
-		                    const lastItem = playlist[playlist.length - 1];
-		                    isLast = lastItem.id === urlItem.id;
-		                }
-		            }
-		
-		            session.currentPlayingItem = {
-		                urlItem: urlItem,
-		                folderId: folderId,
-		                isLastInFolder: isLast,
-		            };
-		        }
-		        return response;
-		    } else if (folderId) {
-		        const folder = data.folders[folderId];
-		        if (!folder || !folder.playlist || folder.playlist.length === 0) {
-		            return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
-		        }
-		
-		        return handlePlayM3U({
-		            action: "play_m3u",
-		            m3uData: { type: "items", value: folder.playlist },
-		            folderId: folderId,
-		            customMpvFlags: request.customMpvFlags,
-		            geometry: request.geometry,
-		            customWidth: request.customWidth,
-		            customHeight: request.customHeight,
-		            startPaused: request.startPaused,
-		            clearOnCompletion: request.clearOnCompletion,
-		            playNewInstance: playNewInstance,
-		        });
-		    }
-		    return { success: false, error: "No URL item or Folder ID provided to play." };
-		}, {
-		    broadcastPlaylist: true,
-		    onBefore: async ({ request, folderId }) => {
-		        if (!request.playNewInstance && folderId) {
-		            const session = playbackManager.findSessionByFolderId(folderId);
-		            if (!session || !session.isPlaying) {
-		                const cacheData = {
-		                    folderId,
-		                    isRunning: true,
-		                    isLaunching: true,
-		                    timestamp: Date.now(),
-		                };
-		                await chrome.storage.local.set({ mpv_playback_cache: cacheData });
-		                broadcastPlaybackState(folderId, { isLaunching: true, isRunning: true });
-		            }
-		        }
-		    },
-			onError: async (error, { folderId }) => {
-				// Revert optimistic state if playback failed to start
-				if (folderId) {
-					await chrome.storage.local.remove("mpv_playback_cache");
-					broadcastPlaybackState(folderId, { isLaunching: false, isRunning: false, isIdle: false });
-				}
-			}
-		});
-		
-		export const handlePlayM3U = createHandler(async ({ request, folderId, data }) => {
-		    const { m3uData, playNewInstance } = request;
-		
-		    if (!playNewInstance && folderId && !(await checkAndConfirmFolderSwitch(folderId))) {
-		        return { success: true, message: "Folder switch cancelled by user." };
-		    }
-		
-		    if (!playNewInstance) {
-		        const session = playbackManager.getSession(folderId);
-		        session.queue = [];
-		        if (session.folderId !== folderId || !session.isPlaying) {
-		            session.isPlaying = false;
-		            session.currentPlayingItem = null;
-		        }
-		        session.isProcessingQueue = false;
-		    }
-		
-		    const options = {
-		        playNewInstance: request.playNewInstance,
-		        playlistStartId: request.playlistStartId,
-		        geometry: request.geometry,
-		        customWidth: request.customWidth,
-		        customHeight: request.customHeight,
-		        customMpvFlags: request.customMpvFlags,
-		        startPaused: request.startPaused,
-		        clearOnCompletion: request.clearOnCompletion,
-		    };
+        const options = {
+            playNewInstance: request.playNewInstance,
+            playlistStartId: request.playlistStartId,
+            geometry: request.geometry,
+            customWidth: request.customWidth,
+            customHeight: request.customHeight,
+            customMpvFlags: request.customMpvFlags,
+            startPaused: request.startPaused,
+            clearOnCompletion: request.clearOnCompletion,
+        };
+
+        const response = await nativeLink.play(urlItem, folderId, options);
+
+        if (response.success && !playNewInstance) {
+            const { mpv_playback_cache: current } = await chrome.storage.local.get("mpv_playback_cache");
+            if (current && current.folderId === folderId) {
+                await chrome.storage.local.set({
+                    mpv_playback_cache: { ...current, isLaunching: false }
+                });
+            }
+
+            const session = playbackManager.getSession(folderId);
+            session.isPlaying = true;
+
+            let isLast = true;
+            if (folderId && data.folders[folderId]) {
+                const playlist = data.folders[folderId].playlist;
+                if (playlist.length > 0) {
+                    const lastItem = playlist[playlist.length - 1];
+                    isLast = lastItem.id === urlItem.id;
+                }
+            }
+
+            session.currentPlayingItem = {
+                urlItem: urlItem,
+                folderId: folderId,
+                isLastInFolder: isLast,
+            };
+        }
+        return response;
+    } else if (folderId) {
+        const folder = data.folders[folderId];
+        if (!folder || !folder.playlist || folder.playlist.length === 0) {
+            return { success: false, error: `Playlist in folder "${folderId}" is empty.` };
+        }
+
+        return _handlePlayM3ULogic({
+            action: "play_m3u",
+            m3uData: { type: "items", value: folder.playlist },
+            folderId: folderId,
+            customMpvFlags: request.customMpvFlags,
+            geometry: request.geometry,
+            customWidth: request.customWidth,
+            customHeight: request.customHeight,
+            startPaused: request.startPaused,
+            clearOnCompletion: request.clearOnCompletion,
+            playNewInstance: playNewInstance,
+        }, data);
+    }
+    return { success: false, error: "No URL item or Folder ID provided to play." };
+}
+
+export const handlePlay = createHandler(_handlePlayLogic, {
+    broadcastPlaylist: true,
+    onBefore: async ({ request, folderId }) => {
+        if (!request.playNewInstance && folderId) {
+            const session = playbackManager.findSessionByFolderId(folderId);
+            if (!session || !session.isPlaying) {
+                const cacheData = {
+                    folderId,
+                    isRunning: true,
+                    isLaunching: true,
+                    timestamp: Date.now(),
+                };
+                await chrome.storage.local.set({ mpv_playback_cache: cacheData });
+                broadcastPlaybackState(folderId, { isLaunching: true, isRunning: true });
+            }
+        }
+    },
+    onError: async (error, { folderId }) => {
+        if (folderId) {
+            await chrome.storage.local.remove("mpv_playback_cache");
+            broadcastPlaybackState(folderId, { isLaunching: false, isRunning: false, isIdle: false });
+        }
+    }
+});
+
+async function _handlePlayM3ULogic(request, data) {
+    const { m3uData, playNewInstance, folderId } = request;
+
+    if (!playNewInstance && folderId && !(await checkAndConfirmFolderSwitch(folderId))) {
+        return { success: true, message: "Folder switch cancelled by user." };
+    }
+
+    if (!playNewInstance) {
+        const session = playbackManager.getSession(folderId);
+        session.queue = [];
+        if (session.folderId !== folderId || !session.isPlaying) {
+            session.isPlaying = false;
+            session.currentPlayingItem = null;
+        }
+        session.isProcessingQueue = false;
+    }
+
+    const options = {
+        playNewInstance: request.playNewInstance,
+        playlistStartId: request.playlistStartId,
+        geometry: request.geometry,
+        customWidth: request.customWidth,
+        customHeight: request.customHeight,
+        customMpvFlags: request.customMpvFlags,
+        startPaused: request.startPaused,
+        clearOnCompletion: request.clearOnCompletion,
+    };
 	const response = await nativeLink.playM3U(m3uData, folderId, options);
 
 	if (response.success && !playNewInstance) {
@@ -859,6 +861,11 @@ export const handlePlay = createHandler(async ({ request, folderId, data }) => {
 			playlistItems: response.playlistItems,
 		};
 	}
+    return response;
+}
+
+export const handlePlayM3U = createHandler(async (context) => {
+    return _handlePlayM3ULogic(context.request, context.data);
 }, {
 	broadcastPlaylist: true,
 	onBefore: async ({ request, folderId }) => {
@@ -1066,7 +1073,7 @@ export const handlePlayNewInstance = createHandler(async ({ request, folderId })
 	if (!urlItem) return { success: false, error: "No URL item provided to play." };
 
 	broadcastLog({
-		text: `[Background]: Initiating disconnected session for: ${urlItem.title || urlItem.url}`,
+		text: `[Background]: Initiating unmanaged/detached session for: ${urlItem.title || urlItem.url}`,
 		type: "info",
 		itemId: urlItem.id,
 		folderId: folderId
