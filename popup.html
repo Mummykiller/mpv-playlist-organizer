@@ -5,16 +5,18 @@
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-    <!-- Confirmation Modal for Popup -->
-    <div id="popup-confirmation-modal" style="display: none;">
-        <div class="modal-content">
-            <p id="popup-modal-message"></p>
-            <div class="modal-actions">
-                <button id="popup-modal-confirm-btn">Confirm</button>
-                <button id="popup-modal-cancel-btn">Cancel</button>
+    <div id="main-app-container">
+        <div id="scrollable-content">
+            <!-- Confirmation Modal for Popup -->
+            <div id="popup-confirmation-modal" style="display: none;">
+                <div class="modal-content">
+                    <p id="popup-modal-message"></p>
+                    <div class="modal-actions">
+                        <button id="popup-modal-confirm-btn">Confirm</button>
+                        <button id="popup-modal-cancel-btn">Cancel</button>
+                    </div>
+                </div>
             </div>
-        </div>
-    </div>
 
     <!-- Rename Folder Modal -->
     <div id="rename-folder-modal" style="display: none;">
@@ -178,7 +180,6 @@
         <div id="mini-settings-controls" style="display: none;">
             <div id="mini-settings-placeholder" class="settings-placeholder"></div>
         </div>
-        <div id="mini-status-placeholder"></div>
         <div id="mini-anilist-placeholder"></div>
     </div>
 
@@ -217,7 +218,6 @@
         </div>
         <button id="btn-hide-on-page-controller" class="secondary-action">Hide On-Page Controller</button>
         <div id="full-settings-placeholder" class="settings-placeholder"></div>
-        <div id="full-status-placeholder"></div>
         <div id="full-anilist-placeholder"></div>
     </div>
 
@@ -240,9 +240,6 @@
                 </div>
     </details>
 
-    <!-- Shared Status Message Container (moved via JS) -->
-    <div id="status-message"></div>
-    
     <!-- Shared Settings Container (moved via JS) -->
     <div id="shared-settings-container" style="display: none;">
         <div class="settings-search-container">
@@ -927,6 +924,12 @@
             </details>
         </div>
     </div>
+
+        </div> <!-- END scrollable-content -->
+        <div id="fixed-log-footer">
+            <div id="status-message"></div>
+        </div>
+    </div> <!-- END main-app-container -->
 
     <script src="utils/security.js"></script>
     <script src="utils/commUtils.js"></script>

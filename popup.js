@@ -18,12 +18,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 		// <script src="settings.js"></script>
 
 		/**
-		 * Smoothly scrolls the window to a target vertical position with a custom animation.
-		 * @param {number} to - The target Y position to scroll to.
+		 * Smoothly scrolls the internal content container to a target vertical position.
+		 * @param {number} to - The target position to scroll to.
 		 * @param {number} duration - The duration of the scroll in milliseconds.
 		 */
 		function smoothScrollTo(to, duration) {
-			const start = window.scrollY;
+			const scrollContainer = document.getElementById("scrollable-content");
+			if (!scrollContainer) return;
+
+			const start = scrollContainer.scrollTop;
 			const change = to - start;
 			let startTime = null;
 
@@ -39,7 +42,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (startTime === null) startTime = currentTime;
 				const timeElapsed = currentTime - startTime;
 				const run = easeInOutQuad(timeElapsed, start, change, duration);
-				window.scrollTo(0, run);
+				scrollContainer.scrollTop = run;
 				if (timeElapsed < duration) {
 					requestAnimationFrame(animateScroll);
 				}
@@ -56,18 +59,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const statusMessageElement = document.getElementById("status-message");
 
 		/**
-		 * Displays a message to the user and fades it out.
+		 * SHOW STATUS (LOG BAR)
+		 * This function handles the text that appears in the fixed bottom bar.
+		 * 
 		 * @param {string} text - The message to display.
-		 * @param {boolean} isError - If true, styles the message as an error.
+		 * @param {boolean} isError - If true, styles the message as an error (red).
 		 */
 		function showStatus(text, isError = false) {
 			statusMessageElement.textContent = text;
+			
+			// Colors are defined in popup.css via variables
 			statusMessageElement.style.color = isError
 				? "var(--accent-danger)"
-				: "var(--accent-positive)";
-			setTimeout(() => {
-				statusMessageElement.textContent = "";
-			}, 3000);
+				: "var(--accent-success)";
 		}
 
 		// --- UI Mode Manager ---
@@ -90,17 +94,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 						mini: document.getElementById("mini-anilist-placeholder"),
 						full: document.getElementById("full-anilist-placeholder"),
 					},
-					status: {
-						mini: document.getElementById("mini-status-placeholder"),
-						full: document.getElementById("full-status-placeholder"),
-					},
+					// Status bar is now fixed at the bottom, no placeholders needed!
 				};
 
 				// Shared content elements
 				this.sharedElements = {
 					settings: document.getElementById("shared-settings-container"),
 					anilist: sharedAnilistSection,
-					status: statusMessageElement,
 				};
 			}
 
@@ -122,7 +122,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 				this.placeholders.anilist[mode].appendChild(
 					this.sharedElements.anilist,
 				);
-				this.placeholders.status[mode].appendChild(this.sharedElements.status);
 
 				// Only show settings if it was already visible or if we are in full mode
 				if (mode === "full") {
@@ -333,7 +332,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		// Reorder State
 		let isReorderModeActive = false;
 		let draggedItem = null;
-		const statusMessage = document.getElementById("status-message");
+		const statusMessage = statusMessageElement;
 
 		// --- UI Helper Functions ---
 
@@ -383,7 +382,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 				// Add keydown listener to the window, using capture to get it before other listeners.
 				window.addEventListener("keydown", handleKeyDown, true);
-				confirmBtn.focus(); // Set focus to the confirm button
+				confirmBtn.focus({ preventScroll: true }); // Set focus to the confirm button
 			});
 		}
 
@@ -518,7 +517,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			folderToRename = selectedFolder;
 			renameFolderInput.value = selectedFolder;
 			renameFolderModal.style.display = "flex";
-			renameFolderInput.focus();
+			renameFolderInput.focus({ preventScroll: true });
 			renameFolderInput.select();
 		}
 
@@ -583,7 +582,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		 * Fetches the playlist for a given folder and renders it.
 		 * @param {object} data Optional pre-fetched playlist data.
 		 */
-		async function refreshPlaylist(data = null) {
+		async function refreshPlaylist(data = null, preventScroll = false) {
 			const processResponse = (response) => {
 				if (response?.success) {
 					// 1. Update unified manager first
@@ -603,6 +602,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 						response.isRunning,
 						response.isPaused,
 						response.needsAppend,
+						null,
+						preventScroll,
 					);
 				}
 			};
@@ -680,6 +681,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			isPaused = null,
 			needsAppend = null,
 			completedIds = null,
+			preventScroll = false,
 		) {
 			// Update persistent state with whatever was provided
 			if (playlist) popupState.currentPlaylist = playlist;
@@ -712,7 +714,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 				isActive: effectiveIsFolderActive,
 				isPaused: effectiveIsPaused,
 				needsAppend: effectiveNeedsAppend,
-				completedIds: effectiveCompletedIds
+				completedIds: effectiveCompletedIds,
+				preventScroll: preventScroll
 			});
 
 			// 2. Update the play button based on current playback state
@@ -1036,7 +1039,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			exportFilenameInput.value = suggestedFilename;
 			exportFilenameModal.style.display = "flex";
-			exportFilenameInput.focus();
+			exportFilenameInput.focus({ preventScroll: true });
 			exportFilenameInput.select();
 		}
 
@@ -1893,6 +1896,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 						isFolderActive,
 						isPaused,
 						needsAppend,
+						null,
+						true,
 					);
 
 					// Show loading state instantly if cache says we are launching
@@ -1903,9 +1908,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 						MPV.playbackStateManager.setLoading(lastUsedFolderId);
 					}
 
-					if (miniAddBtn) miniAddBtn.focus();
+					if (miniAddBtn) miniAddBtn.focus({ preventScroll: true });
 				} else {
-					                if (prefs?.autofocusNewFolder) newFolderNameInput.focus();				}
+					if (prefs?.autofocusNewFolder) newFolderNameInput.focus({ preventScroll: true });
+				}
 
 				// 2. DEEP SYNC: Now fetch live/contextual data (Can be slow)
 				(async () => {
@@ -2070,6 +2076,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 							request.isPaused,
 							request.needsAppend,
 							request.completedIds,
+							true,
 						);
 					}
 				}
@@ -2079,7 +2086,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (request.action === "last_folder_changed") {
 				if (miniFolderSelect.value !== request.folderId) {
 					miniFolderSelect.value = request.folderId;
-					refreshPlaylist();
+					refreshPlaylist(null, true);
 				}
 			}
 
@@ -2224,7 +2231,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 				AniListRenderer.render(anilistReleasesContent, releases, offset);
 
 				if (anilistReleasesSection.open) {
-					setTimeout(() => smoothScrollTo(document.body.scrollHeight, 400), 50);
+					setTimeout(() => {
+						const container = document.getElementById("scrollable-content");
+						if (container) smoothScrollTo(container.scrollHeight, 400);
+					}, 50);
 				}
 			} catch (error) {
 				spinner.style.display = "none";
@@ -2295,9 +2305,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 				fetchAniListReleases();
 
 				// After a short delay to allow the content to render and the popup to resize,
-				// scroll the entire window to the bottom to ensure the new content is visible.
+				// scroll the internal content container to the bottom.
 				setTimeout(() => {
-					smoothScrollTo(document.body.scrollHeight, 400); // Scroll over 400ms
+					const container = document.getElementById("scrollable-content");
+					if (container) smoothScrollTo(container.scrollHeight, 400);
 				}, 50);
 			}
 		});
@@ -2322,7 +2333,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		// This recovers from missed broadcasts and handles Service Worker wakeup lag.
 		setInterval(() => {
 			if (uiManager.isMiniView()) {
-				refreshPlaylist();
+				refreshPlaylist(null, true);
 			}
 		}, 5000);
 	} catch (e) {
