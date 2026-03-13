@@ -62,13 +62,15 @@
             this.container.appendChild(fragment);
 
             const newItemCount = playlist.length;
-            if (newItemCount > oldItemCount && oldHeight > 0) {
-                this.container.scrollTop = this.container.scrollHeight;
-            } else {
-                this.container.scrollTop = oldScrollTop;
+            if (!state.preventScroll) {
+                if (newItemCount > oldItemCount && oldHeight > 0) {
+                    this.container.scrollTop = this.container.scrollHeight;
+                } else {
+                    this.container.scrollTop = oldScrollTop;
+                }
             }
 
-            if (isActive && lastPlayedId) {
+            if (!state.preventScroll && isActive && lastPlayedId) {
                 const activeItem = this.container.querySelector(".active-item");
                 if (activeItem) {
                     activeItem.scrollIntoView({ behavior: "smooth", block: "center" });
