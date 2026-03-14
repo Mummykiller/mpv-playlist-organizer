@@ -23,6 +23,7 @@
 			"js": [
 				"utils/security.js",
 				"utils/commUtils.js",
+				"utils/domUtils.js",
 				"utils/MessageBridge.js",
 				"utils/MpvInterface.js",
 				"utils/ContentState.js",

@@ -1,3 +1,4 @@
+import { domUtils } from "./utils/domUtils.module.js";
 import { AniListRenderer } from "./utils/anilist_renderer.module.js";
 import {
 	debounce,
@@ -16,39 +17,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		// IMPORTANT: You must include settings.js in your popup.html before this script, like so:
 		// <script src="settings.js"></script>
-
-		/**
-		 * Smoothly scrolls the internal content container to a target vertical position.
-		 * @param {number} to - The target position to scroll to.
-		 * @param {number} duration - The duration of the scroll in milliseconds.
-		 */
-		function smoothScrollTo(to, duration) {
-			const scrollContainer = document.getElementById("scrollable-content");
-			if (!scrollContainer) return;
-
-			const start = scrollContainer.scrollTop;
-			const change = to - start;
-			let startTime = null;
-
-			// Easing function: easeInOutQuad for a gentle acceleration and deceleration.
-			const easeInOutQuad = (t, b, c, d) => {
-				t /= d / 2;
-				if (t < 1) return (c / 2) * t * t + b;
-				t--;
-				return (-c / 2) * (t * (t - 2) - 1) + b;
-			};
-
-			const animateScroll = (currentTime) => {
-				if (startTime === null) startTime = currentTime;
-				const timeElapsed = currentTime - startTime;
-				const run = easeInOutQuad(timeElapsed, start, change, duration);
-				scrollContainer.scrollTop = run;
-				if (timeElapsed < duration) {
-					requestAnimationFrame(animateScroll);
-				}
-			};
-			requestAnimationFrame(animateScroll);
-		}
 
 		// --- Element Definitions ---
 		const sharedAnilistSection = document.getElementById(
@@ -970,7 +938,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			list.addEventListener("dragover", (e) => {
 				e.preventDefault();
 
-				const afterElement = getDragAfterElement(list, e.clientY);
+				const afterElement = domUtils.getDragAfterElement(list, e.clientY, ".reorder-item:not(.dragging), .list-item:not(.dragging)");
 				const existingIndicator = list.querySelector(".drag-over");
 
 				if (afterElement) {
@@ -995,26 +963,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 					list.insertBefore(draggedItem, dropTarget);
 				}
 			});
-		}
-
-		function getDragAfterElement(container, y) {
-			const draggableElements = [
-				...container.querySelectorAll(
-					".reorder-item:not(.dragging), .list-item:not(.dragging)",
-				),
-			];
-			return draggableElements.reduce(
-				(closest, child) => {
-					const box = child.getBoundingClientRect();
-					const offset = y - box.top - box.height / 2;
-					if (offset < 0 && offset > closest.offset) {
-						return { offset: offset, element: child };
-					} else {
-						return closest;
-					}
-				},
-				{ offset: Number.NEGATIVE_INFINITY },
-			).element;
 		}
 
 		// --- Export/Import Logic ---
@@ -2231,7 +2179,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (anilistReleasesSection.open) {
 					setTimeout(() => {
 						const container = document.getElementById("scrollable-content");
-						if (container) smoothScrollTo(container.scrollHeight, 400);
+						if (container) domUtils.smoothScrollTo(document.getElementById("scrollable-content"), container.scrollHeight, 400);
 					}, 50);
 				}
 			} catch (error) {
@@ -2306,7 +2254,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				// scroll the internal content container to the bottom.
 				setTimeout(() => {
 					const container = document.getElementById("scrollable-content");
-					if (container) smoothScrollTo(container.scrollHeight, 400);
+					if (container) domUtils.smoothScrollTo(document.getElementById("scrollable-content"), container.scrollHeight, 400);
 				}, 50);
 			}
 		});
