@@ -202,21 +202,7 @@
         }
 
         _formatTitle(span, item) {
-            const titleParts = item.title.split(" - ");
-            const isYT = item.url.indexOf("youtube.com/") !== -1 || item.url.indexOf("youtu.be/") !== -1 || item.url.indexOf("youtube.com/shorts/") !== -1;
-            const isEp = titleParts.length > 1 && /^(s\d+)?e\d+(\.\d+)?$/i.test(titleParts[0].trim());
-
-            if (isEp || (isYT && titleParts.length > 1)) {
-                const prefix = document.createElement("span");
-                prefix.textContent = titleParts.shift() + " - ";
-                const main = document.createElement("span");
-                main.className = "main-title-highlight";
-                main.textContent = titleParts.join(" - ");
-                span.appendChild(prefix);
-                span.appendChild(main);
-            } else {
-                span.textContent = item.title;
-            }
+            MPV.domUtils.formatTitle(span, item);
         }
 
         /**
@@ -226,49 +212,7 @@
             const itemDiv = this.container.querySelector(`[data-id="${itemId}"]`);
             if (!itemDiv) return;
 
-            const isYouTube = itemDiv.dataset.url?.includes("youtube.com") || itemDiv.dataset.url?.includes("youtu.be");
-
-            // 1. Gray out (watched)
-            if (delta.watched !== undefined) {
-                itemDiv.classList.toggle("item-watched", !!delta.watched);
-                
-                const existingIndexCheck = itemDiv.querySelector(".index-checkmark");
-                if (delta.watched && !isYouTube && !existingIndexCheck) {
-                    const check = document.createElement("span");
-                    check.className = "watched-checkmark index-checkmark";
-                    check.innerHTML = "✔";
-                    const indexSpan = itemDiv.querySelector(".url-index");
-                    if (indexSpan) indexSpan.after(check);
-                } else if (!delta.watched && existingIndexCheck) {
-                    existingIndexCheck.remove();
-                }
-            }
-
-            // 2. Checkbox & Checkmark (markedAsWatched vs watched)
-            if (delta.markedAsWatched !== undefined || delta.watched !== undefined) {
-                const checkbox = itemDiv.querySelector(".item-watched-checkbox");
-                
-                // Checkbox strictly follows sync status
-                if (delta.markedAsWatched !== undefined && checkbox) {
-                    checkbox.checked = !!delta.markedAsWatched;
-                    checkbox.title = delta.markedAsWatched ? "Already marked as watched" : "Click to mark as watched on YouTube";
-                }
-
-                // Checkmark strictly follows local watched status
-                const existingCheckboxCheck = itemDiv.querySelector(".checkbox-checkmark");
-                if (isYouTube && checkbox) {
-                    const currentlyWatched = delta.watched !== undefined ? delta.watched : !!itemDiv.classList.contains("item-watched");
-                    
-                    if (currentlyWatched && !existingCheckboxCheck) {
-                        const check = document.createElement("span");
-                        check.className = "watched-checkmark checkbox-checkmark";
-                        check.innerHTML = "✔";
-                        checkbox.after(check);
-                    } else if (!currentlyWatched && existingCheckboxCheck) {
-                        existingCheckboxCheck.remove();
-                    }
-                }
-            }
+            MPV.domUtils.updateItemDelta(itemDiv, delta);
         }
     };
 })();
