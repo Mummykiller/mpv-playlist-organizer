@@ -147,6 +147,127 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     }
                 }
             }
+        },
+
+        /**
+         * Displays a confirmation modal.
+         * @param {string} message - The message to display.
+         * @param {Object} options - Configuration options (modalId, messageId, confirmId, cancelId).
+         * @returns {Promise<boolean>} Resolves to true if confirmed, false otherwise.
+         */
+        confirm(message, options = {}) {
+            return new Promise((resolve) => {
+                // POPUP MODE: If IDs are provided, use existing DOM elements
+                if (options.modalId) {
+                    const modal = document.getElementById(options.modalId);
+                    const messageEl = document.getElementById(options.messageId);
+                    const confirmBtn = document.getElementById(options.confirmId);
+                    const cancelBtn = document.getElementById(options.cancelId);
+
+                    if (modal && messageEl && confirmBtn && cancelBtn) {
+                        messageEl.textContent = message;
+                        modal.style.display = "flex";
+
+                        const handleKeyDown = (e) => {
+                            if (e.key === "Enter") { e.preventDefault(); close(true); }
+                            else if (e.key === "Escape") { e.preventDefault(); close(false); }
+                        };
+
+                        const close = (result) => {
+                            modal.style.display = "none";
+                            window.removeEventListener("keydown", handleKeyDown, true);
+                            confirmBtn.onclick = null;
+                            cancelBtn.onclick = null;
+                            resolve(result);
+                        };
+
+                        confirmBtn.onclick = () => close(true);
+                        cancelBtn.onclick = () => close(false);
+                        window.addEventListener("keydown", handleKeyDown, true);
+                        confirmBtn.focus();
+                        return;
+                    }
+                }
+
+                // PAGE MODE: Create a fresh Shadow DOM modal
+                if (document.getElementById("mpv-page-level-modal-host")) {
+                    resolve(false);
+                    return;
+                }
+
+                const modalHost = document.createElement("div");
+                modalHost.id = "mpv-page-level-modal-host";
+                Object.assign(modalHost.style, {
+                    position: "fixed", top: "0", left: "0", width: "100%", height: "100%", zIndex: "2147483647"
+                });
+
+                const shadowRoot = modalHost.attachShadow({ mode: "open" });
+                const style = document.createElement("style");
+                style.textContent = `
+                    :host {
+                        --surface-color: #1d1f23; --border-color: #33363b; --text-primary: #e1e1e1;
+                        --accent-primary: #5865f2; --accent-primary-hover: #4f5bda;
+                        --surface-hover-color: #2c2e33; --font-sans: -apple-system, sans-serif;
+                        --border-radius: 6px;
+                    }
+                    #overlay {
+                        position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+                        background-color: rgba(0, 0, 0, 0.8); display: flex;
+                        align-items: center; justify-content: center; font-family: var(--font-sans);
+                    }
+                    .modal-content {
+                        background-color: var(--surface-color); color: var(--text-primary);
+                        padding: 24px; border-radius: var(--border-radius);
+                        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); text-align: center;
+                        border: 1px solid var(--border-color); display: flex;
+                        flex-direction: column; gap: 20px; max-width: 600px; width: 95%;
+                    }
+                    p { margin: 0; font-size: 16px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+                    .modal-actions { display: flex; justify-content: center; gap: 12px; }
+                    button {
+                        color: #fff; border: none; border-radius: var(--border-radius);
+                        padding: 10px 20px; font-size: 14px; font-weight: 600;
+                        cursor: pointer; transition: all 0.15s ease;
+                    }
+                    #confirm-btn { background-color: var(--accent-primary); }
+                    #confirm-btn:hover { background-color: var(--accent-primary-hover); }
+                    #cancel-btn { background-color: var(--surface-hover-color); }
+                    #cancel-btn:hover { background-color: var(--border-color); }
+                `;
+
+                const modalWrapper = document.createElement("div");
+                modalWrapper.id = "overlay";
+                modalWrapper.innerHTML = `
+                    <div class="modal-content">
+                        <p id="message"></p>
+                        <div class="modal-actions">
+                            <button id="confirm-btn">Confirm</button>
+                            <button id="cancel-btn">Cancel</button>
+                        </div>
+                    </div>
+                `;
+
+                shadowRoot.append(style, modalWrapper);
+                shadowRoot.getElementById("message").textContent = message;
+
+                const handleKeyDown = (e) => {
+                    if (e.key === "Enter") { e.preventDefault(); close(true); }
+                    else if (e.key === "Escape") { e.preventDefault(); close(false); }
+                };
+
+                const close = (result) => {
+                    window.removeEventListener("keydown", handleKeyDown, true);
+                    modalHost.remove();
+                    resolve(result);
+                };
+
+                shadowRoot.getElementById("confirm-btn").onclick = () => close(true);
+                shadowRoot.getElementById("cancel-btn").onclick = () => close(false);
+
+                window.addEventListener("keydown", handleKeyDown, true);
+                document.body.appendChild(modalHost);
+                shadowRoot.getElementById("confirm-btn").focus();
+            });
         }
     };
 
