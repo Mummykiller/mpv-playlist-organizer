@@ -310,47 +310,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 		 * @returns {Promise<boolean>} A promise that resolves to true if confirmed, false if cancelled.
 		 */
 		function showPopupConfirmation(message) {
-			return new Promise((resolve) => {
-				const modal = document.getElementById("popup-confirmation-modal");
-				const messageEl = document.getElementById("popup-modal-message");
-				const confirmBtn = document.getElementById("popup-modal-confirm-btn");
-				const cancelBtn = document.getElementById("popup-modal-cancel-btn");
-
-				if (!modal || !messageEl || !confirmBtn || !cancelBtn) {
-					// Fallback to browser confirm if the modal elements are not found
-					resolve(confirm(message));
-					return;
-				}
-
-				messageEl.textContent = message;
-				modal.style.display = "flex";
-
-				const handleKeyDown = (e) => {
-					if (e.key === "Enter") {
-						e.preventDefault();
-						close(true);
-					} else if (e.key === "Escape") {
-						e.preventDefault();
-						close(false);
-					}
-				};
-
-				const close = (result) => {
-					modal.style.display = "none";
-					// Remove listeners to prevent memory leaks
-					confirmBtn.onclick = null;
-					cancelBtn.onclick = null;
-					window.removeEventListener("keydown", handleKeyDown, true);
-					resolve(result);
-				};
-
-				// Assign new click handlers
-				confirmBtn.onclick = () => close(true);
-				cancelBtn.onclick = () => close(false);
-
-				// Add keydown listener to the window, using capture to get it before other listeners.
-				window.addEventListener("keydown", handleKeyDown, true);
-				confirmBtn.focus({ preventScroll: true }); // Set focus to the confirm button
+			return domUtils.confirm(message, {
+				modalId: "popup-confirmation-modal",
+				messageId: "popup-modal-message",
+				confirmId: "popup-modal-confirm-btn",
+				cancelId: "popup-modal-cancel-btn",
 			});
 		}
 
