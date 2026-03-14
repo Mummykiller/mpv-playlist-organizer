@@ -236,12 +236,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			labels.forEach((label, index) => {
 				const btn = document.createElement("button");
 				btn.className = "quick-action-btn";
-				btn.textContent = label;
 				
 				const isA = label === "A";
 				const isLast = label === "⚡";
 
 				if (isA) {
+					btn.id = "btn-osc-quick-a";
+					btn.innerHTML = `
+						<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<polygon points="19 20 9 12 19 4 19 20"></polygon>
+							<line x1="5" y1="19" x2="5" y2="5"></line>
+						</svg>
+					`;
 					btn.title = "Left-click: Play from start | Right-click: Pick start item";
 					btn.classList.add("btn-start-from-beginning");
 
@@ -274,6 +280,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						this._refreshQuickActionsBar();
 					};
 				} else if (isLast) {
+					btn.textContent = "⚡";
 					btn.title = "Toggle Disconnected Launch (Selection Mode)";
 					btn.classList.add("btn-disconnected-toggle");
 					btn.onclick = (e) => {
@@ -285,6 +292,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						this._refreshQuickActionsBar();
 					};
 				} else {
+					btn.textContent = label;
 					btn.title = "Placeholder " + label;
 					btn.onclick = (e) => {
 						e.stopPropagation();
@@ -318,9 +326,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Handle individual button active states
 			const buttons = bar.querySelectorAll(".quick-action-btn");
 			buttons.forEach(btn => {
-				if (btn.textContent === "A") {
+				if (btn.id === "btn-osc-quick-a") {
 					btn.classList.toggle("active", this.isPickStartModeActive);
-				} else if (btn.textContent === "⚡") {
+				} else if (btn.classList.contains("btn-disconnected-toggle")) {
 					btn.classList.toggle("active", this.isSelectionModeActive);
 				}
 			});

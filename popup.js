@@ -1688,9 +1688,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			playlistContainer.classList.toggle("pick-start-mode-active", isPickStartModeActive);
 
 			quickActionButtons.forEach(btn => {
-				if (btn.textContent === "A") {
+				if (btn.id === "btn-quick-a") {
 					btn.classList.toggle("active", isPickStartModeActive);
-				} else if (btn.textContent === "⚡") {
+				} else if (btn.classList.contains("btn-disconnected-toggle")) {
 					btn.classList.toggle("active", isSelectionModeActive);
 				}
 			});
@@ -1699,55 +1699,53 @@ document.addEventListener("DOMContentLoaded", async () => {
 		// Track pick start mode globally in popup scope
 		let isPickStartModeActive = false;
 
-		quickActionButtons.forEach((btn, index) => {
-			const label = btn.textContent;
-			const isA = label === "A";
-			const isLast = label === "⚡" || index === quickActionButtons.length - 1;
+			quickActionButtons.forEach((btn, index) => {
+				const isA = btn.id === "btn-quick-a" || index === 0;
+				const isLast = btn.classList.contains("btn-disconnected-toggle") || index === quickActionButtons.length - 1;
 
-			if (isA) {
-				btn.title = "Left-click: Play from start | Right-click: Pick start item";
-				btn.classList.add("btn-start-from-beginning");
-				
-				btn.onclick = (e) => {
-					e.stopPropagation();
-					if (isPickStartModeActive) {
-						isPickStartModeActive = false;
+				if (isA) {
+					btn.classList.add("btn-start-from-beginning");
+					
+					btn.onclick = (e) => {
+						e.stopPropagation();
+						if (isPickStartModeActive) {
+							isPickStartModeActive = false;
+							refreshQuickActionsBar();
+							return;
+						}
+
+						if (popupState.currentPlaylist.length > 0) {
+							const firstItem = popupState.currentPlaylist[0];
+							sendMessageAsync({
+								action: "play",
+								folderId: miniFolderSelect.value,
+								urlItem: firstItem,
+								playlistStartId: firstItem.id
+							});
+						} else {
+							showStatus("Cannot play from start - Playlist is empty.", true);
+						}
+					};
+
+					btn.oncontextmenu = (e) => {
+						e.preventDefault();
+						e.stopPropagation();
+						isSelectionModeActive = false;
+						isPickStartModeActive = !isPickStartModeActive;
 						refreshQuickActionsBar();
-						return;
-					}
+					};
+				} else if (isLast) {
+					btn.textContent = "⚡";
+					btn.title = "Toggle Disconnected Launch (Selection Mode)";
+					btn.classList.add("btn-disconnected-toggle");
 
-					if (popupState.currentPlaylist.length > 0) {
-						const firstItem = popupState.currentPlaylist[0];
-						sendMessageAsync({
-							action: "play",
-							folderId: miniFolderSelect.value,
-							urlItem: firstItem,
-							playlistStartId: firstItem.id
-						});
-					} else {
-						showStatus("Cannot play from start - Playlist is empty.", true);
-					}
-				};
-
-				btn.oncontextmenu = (e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					isSelectionModeActive = false;
-					isPickStartModeActive = !isPickStartModeActive;
-					refreshQuickActionsBar();
-				};
-			} else if (isLast) {
-				btn.textContent = "⚡";
-				btn.title = "Toggle Disconnected Launch (Selection Mode)";
-				btn.classList.add("btn-disconnected-toggle");
-
-				btn.onclick = (e) => {
-					e.stopPropagation();
-					isPickStartModeActive = false;
-					isSelectionModeActive = !isSelectionModeActive;
-					refreshQuickActionsBar();
-				};
-			} else {
+					btn.onclick = (e) => {
+						e.stopPropagation();
+						isPickStartModeActive = false;
+						isSelectionModeActive = !isSelectionModeActive;
+						refreshQuickActionsBar();
+					};
+				} else {
 				btn.addEventListener("click", () => {
 					console.log(`Quick Action ${btn.textContent} clicked`);
 				});
