@@ -270,6 +270,7 @@ try:
         signal.signal(signal.SIGHUP, signal_handler)
 
     atexit.register(cleanup_ipc_socket, mpv_session)
+    atexit.register(mpv_session.clear)
     atexit.register(handler_manager._stop_local_m3u_server)
     
     from utils.url_analyzer import VolatileCookieManager
