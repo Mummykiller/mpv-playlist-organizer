@@ -305,7 +305,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 		(async () => {
 			try {
 				const response = await handler(request, sender);
-				if (response !== undefined) sendResponse(response);
+				if (response !== undefined) {
+					sendResponse(response);
+				} else {
+					// Fallback for void handlers to prevent "channel closed" errors
+					sendResponse({ success: true });
+				}
 			} catch (e) {
 				logger.error(`[BG] Error handling action '${request.action}':`, e);
 				broadcastLog({
