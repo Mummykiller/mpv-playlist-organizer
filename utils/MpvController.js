@@ -124,7 +124,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 							req.lastPlayedId || this.state.state.lastPlayedId, 
 							req.isFolderActive ?? this.state.state.isFolderActive, 
 							req.isPaused, 
-							req.needsAppend
+							req.needsAppend,
+							req.completedIds || []
 						);
 					}
 				},
@@ -1055,7 +1056,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.refreshPlaylist(targetLastPlayed, targetIsActive, targetIsPaused, targetNeedsAppend);
 		}
 
-		refreshPlaylist(targetLastPlayed, targetIsActive, targetIsPaused, targetNeedsAppend) {
+		refreshPlaylist(targetLastPlayed, targetIsActive, targetIsPaused, targetNeedsAppend, completedIds = []) {
 			const folderId =
 				this.ui.shadowRoot?.getElementById("folder-select")?.value;
 
@@ -1077,14 +1078,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						needsAppend: targetNeedsAppend !== undefined ? targetNeedsAppend : (pbState.folderId === folderId ? pbState.needsAppend : false)
 					});
 
-					// 2. Structural Check: Only re-render if fingerprint changed
+					// 2. Structural Check: Only re-render if fingerprint changed or completed items need to be hidden
 					const newFingerprint = this._getPlaylistFingerprint(list);
-					if (newFingerprint !== this._lastPlaylistFingerprint) {
+					if (newFingerprint !== this._lastPlaylistFingerprint || completedIds.length > 0) {
 						this._lastPlaylistFingerprint = newFingerprint;
 						this.playlistUI?.render(
 							list,
 							this.state.state.lastPlayedId,
-							this.state.state.isFolderActive
+							this.state.state.isFolderActive,
+							completedIds
 						);
 					} else {
 						// Surgical highlight update

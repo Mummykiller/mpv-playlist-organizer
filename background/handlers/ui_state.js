@@ -10,6 +10,7 @@ import { createHandler } from "../handler_factory.js";
 import { broadcastLog, broadcastToTabs } from "../messaging.js";
 import { storage } from "../storage_instance.js";
 import { broadcastPlaylistState, getVisualPlaybackState, isFolderActive } from "../ui_broadcaster.js";
+import { playbackManager } from "../playback_manager.js";
 import * as m3u8_scanner_handlers from "./m3u8_scanner.js";
 import * as playback_handlers from "./playback.js";
 
@@ -88,6 +89,22 @@ export async function handleContentScriptInit(request, sender) {
 			playlist: folder?.playlist || [],
 			detectedUrl: detectedUrl,
 		}).catch(() => {});
+
+		// STICKY PROMPT: If there's a pending clear for THIS folder, re-trigger it
+		const session = playbackManager.findSessionByFolderId(folderId);
+		if (session && session.pendingClear) {
+			const { playedIds, sessionIds, scope, titles, isQuitting } = session.pendingClear;
+			chrome.tabs.sendMessage(tabId, {
+				action: "show_clear_confirmation",
+				folderId: folderId,
+				playedIds,
+				sessionIds,
+				scope,
+				count: (playedIds || []).length,
+				titles,
+				isQuitting
+			}).catch(() => {});
+		}
 	}
 }
 
