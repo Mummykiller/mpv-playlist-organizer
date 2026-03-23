@@ -14,6 +14,7 @@ export class PlaybackSession {
 		this.currentPlayingItem = null; // { urlItem, folderId, isLastInFolder }
 		this.completedItemIds = new Set();
 		this.watchedItemIds = new Set();
+		this.pendingClear = null; // { folderId, playedIds, sessionIds, scope, titles, isQuitting }
 	}
 
 	/**

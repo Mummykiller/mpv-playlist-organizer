@@ -20,6 +20,23 @@ const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;
 const RESUME_TIME_WRITE_THROTTLE_MS = 10000;
 const resumeTimeThrottles = new Map();
 
+/**
+ * Filters out the currently active item from a list of IDs to prevent 
+ * accidental removal of the video the user is currently watching.
+ * @param {string} folderId 
+ * @param {string[]} ids 
+ * @param {string|null} ignoreItemId Item that just finished and SHOULD be cleared even if still "active" in cache.
+ */
+async function filterActiveItem(folderId, ids, ignoreItemId = null) {
+	const { isActive, lastPlayedId } = await getVisualPlaybackState(folderId);
+	if (!isActive || !lastPlayedId) return ids;
+	
+	// If the active item is the one that just triggered completion, we definitely want to clear it.
+	if (lastPlayedId === ignoreItemId) return ids;
+	
+	return ids.filter(id => id !== lastPlayedId);
+}
+
 // Register listeners for unsolicited native host events
 addNativeListener("mpv_exited", (data) => handleMpvExited(data));
 addNativeListener("update_last_played", (data) => handleUpdateLastPlayed(data));
@@ -100,7 +117,8 @@ export async function handleItemNaturalCompletion(data) {
 			// Include ANY items that are already marked as watched in storage, plus this session's watched items
 			const watchedInStorage = folder.playlist.filter(i => i.watched || i.markedAsWatched).map(i => i.id);
 			const sessionWatchedIds = Array.from(session.watchedItemIds);
-			const allToClear = Array.from(new Set([itemId, ...sessionWatchedIds, ...watchedInStorage]));
+			const rawAllToClear = Array.from(new Set([itemId, ...sessionWatchedIds, ...watchedInStorage]));
+			const allToClear = await filterActiveItem(folderId, rawAllToClear, itemId);
 
 			await clearFolderPlaylist(folderId, {
 				playedIds: allToClear,
@@ -133,7 +151,8 @@ export async function handleItemNaturalCompletion(data) {
 				// MERGE completed (EOF), session-watched (>30s), and storage-watched items for the prompt
 				const watchedInStorage = folder.playlist.filter(i => i.watched || i.markedAsWatched).map(i => i.id);
 				const combinedIds = new Set([...session.completedItemIds, ...session.watchedItemIds, ...watchedInStorage]);
-				const targetList = Array.from(combinedIds).filter(id => existingIds.has(id));
+				const rawTargetList = Array.from(combinedIds).filter(id => existingIds.has(id));
+				const targetList = await filterActiveItem(folderId, rawTargetList, itemId);
 
 				if (targetList.length === 0) {
 					console.debug(`[Background]: No items in completion stack remain in playlist for '${folderId}'. Skipping prompt.`);
@@ -144,6 +163,15 @@ export async function handleItemNaturalCompletion(data) {
 					const item = folder.playlist.find(i => i.id === id);
 					return item ? (item.title || item.url) : id;
 				});
+
+				// PERSISTENCE: Save to session so it can be re-triggered if tab navigates
+				session.pendingClear = {
+					folderId,
+					playedIds: targetList,
+					sessionIds: targetList,
+					scope: "played",
+					titles: titles
+				};
 
 				chrome.tabs
 					.sendMessage(activeTab.id, {
@@ -200,7 +228,8 @@ export async function handleMpvQuitting(data) {
 
 			if (clearMode === "yes") {
 				const watchedInStorage = folder.playlist.filter(i => i.watched || i.markedAsWatched).map(i => i.id);
-				const mergedPlayedIds = Array.from(new Set([...(playedIds || []), ...watchedInStorage]));
+				const rawMergedPlayedIds = Array.from(new Set([...(playedIds || []), ...watchedInStorage]));
+				const mergedPlayedIds = await filterActiveItem(folderId, rawMergedPlayedIds);
 
 				await clearFolderPlaylist(folderId, {
 					playedIds: mergedPlayedIds,
@@ -224,18 +253,31 @@ export async function handleMpvQuitting(data) {
 						? folder.playlist.map(i => i.id) 
 						: (clearScope === "session" ? sessionIds : mergedPlayedIds);
 					
-					const targetIds = (rawTargetIds || []).filter(id => existingIds.has(id));
+					const filteredTargetIds = (rawTargetIds || []).filter(id => existingIds.has(id));
+					const targetIds = await filterActiveItem(folderId, filteredTargetIds);
 
 					if (targetIds.length === 0) {
 						console.debug(`[Background]: No items from scope '${clearScope}' remain in playlist for '${folderId}'. Skipping prompt.`);
 						return;
 					}
 
-					const titles = targetIds.map(id => {
-						const item = folder.playlist.find(i => i.id === id);
-						return item ? (item.title || item.url) : id;
-					});
+				const titles = targetIds.map(id => {
+					const item = folder.playlist.find(i => i.id === id);
+					return item ? (item.title || item.url) : id;
+				});
 
+				// PERSISTENCE: Save to session
+				const session = playbackManager.getSession(folderId);
+				session.pendingClear = {
+					folderId,
+					playedIds: targetIds,
+					sessionIds: targetIds,
+					scope: clearScope,
+					titles: titles,
+					isQuitting: true
+				};
+
+				if (activeTab) {
 					chrome.tabs
 						.sendMessage(activeTab.id, {
 							action: "show_clear_confirmation",
@@ -248,6 +290,7 @@ export async function handleMpvQuitting(data) {
 							isQuitting: true
 						})
 						.catch(() => {});
+				}
 				}
 			}
 		}
@@ -329,7 +372,8 @@ export async function handleMpvExited(data) {
 				});
 
 				const watchedInStorage = folder.playlist.filter(i => i.watched || i.markedAsWatched).map(i => i.id);
-				const mergedPlayedIds = Array.from(new Set([...(playedIds || []), ...watchedInStorage]));
+				const rawMergedPlayedIds = Array.from(new Set([...(playedIds || []), ...watchedInStorage]));
+				const mergedPlayedIds = await filterActiveItem(folderId, rawMergedPlayedIds);
 
 				await clearFolderPlaylist(folderId, {
 					playedIds: mergedPlayedIds,
@@ -357,7 +401,8 @@ export async function handleMpvExited(data) {
 						? folder.playlist.map(i => i.id) 
 						: (clearScope === "session" ? sessionIds : mergedPlayedIds);
 					
-					const targetIds = (rawTargetIds || []).filter(id => existingIds.has(id));
+					const filteredTargetIds = (rawTargetIds || []).filter(id => existingIds.has(id));
+					const targetIds = await filterActiveItem(folderId, filteredTargetIds);
 
 					if (targetIds.length === 0) {
 						console.debug(`[Background]: No items from scope '${clearScope}' remain in playlist for '${folderId}'. Skipping prompt.`);
@@ -369,18 +414,32 @@ export async function handleMpvExited(data) {
 						return item ? (item.title || item.url) : id;
 					});
 
-					chrome.tabs
-						.sendMessage(activeTab.id, {
-							action: "show_clear_confirmation",
-							folderId: folderId,
-							playedIds: targetIds, // Pass filtered list
-							sessionIds: targetIds, // Pass filtered list
+					// PERSISTENCE: Save to session
+					if (session) {
+						session.pendingClear = {
+							folderId,
+							playedIds: targetIds,
+							sessionIds: targetIds,
 							scope: clearScope,
-							count: targetIds.length,
 							titles: titles,
 							isQuitting: true
-						})
-						.catch(() => {});
+						};
+					}
+
+					if (activeTab) {
+						chrome.tabs
+							.sendMessage(activeTab.id, {
+								action: "show_clear_confirmation",
+								folderId: folderId,
+								playedIds: targetIds, // Pass filtered list
+								sessionIds: targetIds, // Pass filtered list
+								scope: clearScope,
+								count: targetIds.length,
+								titles: titles,
+								isQuitting: true
+							})
+							.catch(() => {});
+					}
 				}
 			}
 		} else if (isNaturalCompletion === false && (storageData?.settings?.uiPreferences?.global?.clearOnCompletion || "no") !== "no") {
@@ -394,7 +453,7 @@ export async function handleMpvExited(data) {
 	}
 
 	// Cleanup the session from manager if it's finished
-	if (session && session.queue.length === 0) {
+	if (session && session.queue.length === 0 && !session.pendingClear) {
 		playbackManager.cleanupSession(folderId);
 	}
 
@@ -548,8 +607,18 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 	const sessionIds = request.sessionIds;
 	const scope = request.scope;
 
+	// CLEAR PERSISTENCE
+	const session = playbackManager.findSessionByFolderId(folderId);
+	if (session) {
+		session.pendingClear = null;
+	}
+
 	if (request.confirmed) {
-		const clearCount = playedIds?.length || 0;
+		// Safety check: Never clear the currently active item even if it was in the prompt list
+		const filteredPlayedIds = await filterActiveItem(folderId, playedIds || []);
+		const filteredSessionIds = await filterActiveItem(folderId, sessionIds || []);
+
+		const clearCount = filteredPlayedIds.length;
 		broadcastLog({
 			text: `[Background]: Confirmed! Removing ${clearCount} item(s) from '${folderId}'.`,
 			type: "info",
@@ -557,15 +626,15 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 
 		// PERMANENT DELETE only on confirm
 		await clearFolderPlaylist(folderId, {
-			playedIds,
-			sessionIds,
+			playedIds: filteredPlayedIds,
+			sessionIds: filteredSessionIds,
 			scope,
 		});
 
 		// Clear the staged list
 		const session = playbackManager.findSessionByFolderId(folderId);
 		if (session) {
-			const confirmedIds = new Set(playedIds || []);
+			const confirmedIds = new Set(filteredPlayedIds);
 			for (const id of session.completedItemIds) {
 				if (confirmedIds.has(id)) {
 					session.completedItemIds.delete(id);
@@ -582,6 +651,7 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 		const session = playbackManager.findSessionByFolderId(folderId);
 		if (session) {
 			session.completedItemIds.clear();
+			session.pendingClear = null;
 			await broadcastPlaylistState(folderId);
 		}
 		// Critical: Remove from early clears so next completion isn't blocked
