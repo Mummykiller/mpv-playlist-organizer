@@ -60,32 +60,44 @@ class EnrichmentService(ItemProcessor):
                 # 1. Enrich and Batch Append Future Items
                 if future_items:
                     logging.info(f"[PY][Session] Background: Enriching {len(future_items)} future items sequentially.")
-                    enriched_future = []
+                    enriched_batch = []
                     for item in future_items:
                         if not session.is_alive:
                             return
                         res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session, quiet=True)
                         if res:
-                            enriched_future.extend(res)
+                            enriched_batch.extend(res)
+                        
+                        # BATCH UPDATE: Every 5 items, push to MPV to keep UI alive
+                        if len(enriched_batch) >= 5:
+                            logging.info(f"[PY][Session] Background: Pushing batch of {len(enriched_batch)} future items.")
+                            session.append_batch(enriched_batch, mode="append", folder_id=folder_id, quiet=True)
+                            enriched_batch = []
                     
-                    if enriched_future and session.is_alive:
-                        logging.info(f"[PY][Session] Background: Appending batch of {len(enriched_future)} future items.")
-                        session.append_batch(enriched_future, mode="append", folder_id=folder_id, quiet=True)
+                    if enriched_batch and session.is_alive:
+                        logging.info(f"[PY][Session] Background: Pushing final batch of {len(enriched_batch)} future items.")
+                        session.append_batch(enriched_batch, mode="append", folder_id=folder_id, quiet=True)
 
                 # 2. Enrich and Batch Append History Items
                 if history_items:
                     logging.info(f"[PY][Session] Background: Enriching {len(history_items)} history items sequentially.")
-                    enriched_history = []
-                    for item in history_items:
+                    enriched_batch = []
+                    for item in reversed(history_items): # Process backwards so we can prepend in order
                         if not session.is_alive:
                             return
                         res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session, quiet=True)
                         if res:
-                            enriched_history.extend(res)
+                            # Prepend to batch so we maintain original order when prepending to MPV
+                            enriched_batch = res + enriched_batch
+                        
+                        if len(enriched_batch) >= 5:
+                            logging.info(f"[PY][Session] Background: Pushing batch of {len(enriched_batch)} history items.")
+                            session.append_batch(enriched_batch, mode="prepend", folder_id=folder_id, quiet=True)
+                            enriched_batch = []
                     
-                    if enriched_history and session.is_alive:
-                        logging.info(f"[PY][Session] Background: Prepending batch of {len(enriched_history)} history items.")
-                        session.append_batch(enriched_history, mode="prepend", folder_id=folder_id, quiet=True)
+                    if enriched_batch and session.is_alive:
+                        logging.info(f"[PY][Session] Background: Pushing final batch of {len(enriched_batch)} history items.")
+                        session.append_batch(enriched_batch, mode="prepend", folder_id=folder_id, quiet=True)
 
                 if session.playlist_tracker:
                     session.playlist_tracker.update_playlist_order(session.playlist)
