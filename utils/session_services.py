@@ -538,17 +538,28 @@ class IPCService:
             return {"success": False, "message": "Session mismatch."}
         
         # Ensure internal playlist matches MPV reality before reordering
-        self.session._sync_playlist_from_mpv()
+        sync_success = self.session._sync_playlist_from_mpv()
+        if not sync_success:
+            logging.warning("[PY][IPC] reorder_live: Reality sync failed. Proceeding with caution.")
 
         simulated_playlist = list(self.session.playlist)
-        for target_index, item_data in enumerate(new_order_items):
+        actual_mpv_index = 0
+        
+        for item_data in new_order_items:
             target_id = item_data.get('id')
+            # Find where this UI item currently lives in MPV's memory
             current_index = next((idx for idx, item in enumerate(simulated_playlist) if item.get('id') == target_id), -1)
             
-            if current_index != -1 and current_index != target_index:
-                self.session.ipc_manager.send({"command": ["playlist-move", current_index, target_index]})
-                item_to_move = simulated_playlist.pop(current_index)
-                simulated_playlist.insert(target_index, item_to_move)
+            if current_index != -1:
+                # Only move if it's not already at the correct relative position
+                if current_index != actual_mpv_index:
+                    logging.debug(f"[PY][IPC] Moving item {target_id} from {current_index} to {actual_mpv_index}")
+                    self.session.ipc_manager.send({"command": ["playlist-move", current_index, actual_mpv_index]})
+                    item_to_move = simulated_playlist.pop(current_index)
+                    simulated_playlist.insert(actual_mpv_index, item_to_move)
+                
+                # Increment the target index for the NEXT found item
+                actual_mpv_index += 1
         
         self.session.playlist = simulated_playlist
         

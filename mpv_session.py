@@ -539,6 +539,15 @@ class MpvSessionManager:
             mpv_playlist = res.get("data", [])
             logging.debug(f"[PY][Session] Sync: MPV reported {len(mpv_playlist)} items.")
             
+            # Get current item's ID directly from user-data to match even if resolved/filename changed
+            current_id = None
+            try:
+                id_res = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=0.3)
+                if id_res and id_res.get("error") == "success":
+                    current_id = id_res.get("data")
+            except Exception:
+                pass
+
             # Get latest shard data to match IDs back to metadata
             folder_data = file_io.get_folder_data(self.owner_folder_id)
             shard_playlist = folder_data.get("playlist", []) if folder_data else []
@@ -554,6 +563,10 @@ class MpvSessionManager:
                 match = ID_MATCH_RE.search(path)
                 found_id = match.group(1) if match else None
                 
+                # If this is the current item and fragment ID failed, try the direct user-data property
+                if not found_id and mpv_item.get('current') and current_id:
+                    found_id = current_id
+
                 # Strip our tracking fragment
                 base_path = re.sub(r'[#&]mpv_organizer_id=[^#&]+', '', path)
                 # Normalize the resulting URL to remove junk params (t, index, etc.)
