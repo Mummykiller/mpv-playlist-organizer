@@ -25,7 +25,7 @@ YOUTUBE_RE = re.compile(r"(youtube\.com|youtu\.be)")
 VAULT_RE = re.compile(r"(vault-\d+|na-\d+|cdn-\d+)\.(owocdn|uwucdn)\.top/stream/.*uwu\.m3u8")
 # Common direct stream extensions
 DIRECT_STREAM_RE = re.compile(r"\.(m3u8|mp4|mkv|webm|avi|mov)(\?.*)?$", re.IGNORECASE)
-KWIK_RE = re.compile(r"kwik\.cx/(f|e)/[a-zA-Z0-9]+")
+KWIK_RE = re.compile(r"(kwik\.cx|animepahe\.(com|org|si|ru))/(f|e|play)/[a-zA-Z0-9]+")
 
 # Global cache for the cookies file to avoid re-extracting for every item in a playlist
 _COOKIES_CACHE = {
@@ -338,20 +338,34 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         if is_other_cookies_enabled and browser and browser != "None":
             cookies_browser = browser
 
+        # Animepahe/Kwik vault CDNs strictly require kwik.cx as the referer and origin
+        # even for owocdn/uwucdn mirror domains.
+        referer = "https://kwik.cx/"
+        origin = "https://kwik.cx"
+        
+        # Detection for direct .m3u8 streams vs landing pages
+        is_direct_vault = (".m3u8" in url.lower()) and ("owocdn" in url or "uwucdn" in url or VAULT_RE.search(url))
+        
+        # Anti-bot args for yt-dlp just in case it's used elsewhere (landing pages)
+        ytdl_args = "--extractor-args \"generic:impersonate;youtube:player_client=android,ios\""
+
         return {
             "success": True,
             "url": url, 
             "headers": {
                 "User-Agent": effective_user_agent,
-                "Referer": "https://kwik.cx/",
-                "Origin": "https://kwik.cx",
+                "Referer": referer,
+                "Origin": origin,
             },
-            "ytdl_raw_options": None,
-            "use_ytdl_mpv": True, # Force ytdl to use the native Kwik extractor
+            "ytdl_raw_options": ytdl_args if not is_direct_vault else None,
+
+            # Only use ytdl for kwik.cx pages or unknown mirrors. 
+            # Direct vault streams MUST use native ffmpeg to avoid Cloudflare challenges.
+            "use_ytdl_mpv": not is_direct_vault, 
             "is_youtube": False,
             "disable_http_persistent": False,
-            "cookies_file": None, # No more RAM files
-            "cookies_browser": cookies_browser
+            "cookies_file": None, 
+            "cookies_browser": cookies_browser if not is_direct_vault else None
         }
 
     # --- Case 1b: Generic Direct Stream Detection ---

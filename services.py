@@ -77,6 +77,28 @@ def get_mark_watched(item, settings):
         return val.lower() in ("true", "yes", "1")
     return bool(val)
 
+def force_sanitize_headers(url, headers):
+    """
+    LAST STAND OVERRIDE: Detects AnimePahe/Kwik CDN URLs and forces the correct 
+    headers regardless of what metadata was stored in the item or sent by the browser.
+    """
+    if not url:
+        return headers
+    
+    # Standardize detection
+    url_low = str(url).lower()
+    is_pahe_cdn = (".owocdn.top" in url_low) or (".uwucdn.top" in url_low) or ("kwik.cx" in url_low)
+    
+    if is_pahe_cdn:
+        if not headers:
+            headers = {}
+        # Force the only working referer for these CDNs
+        headers["Referer"] = "https://kwik.cx/"
+        headers["Origin"] = "https://kwik.cx"
+        logging.debug(f"[PY][Services] Forced Kwik headers for: {url}")
+        
+    return headers
+
 def construct_lua_options(item, settings, script_dir, index=None):
     """
     Centralized helper to construct the options dictionary passed to adaptive_headers.lua.
@@ -103,10 +125,13 @@ def construct_lua_options(item, settings, script_dir, index=None):
         
     logging.info(f"[PY][Services] construct_lua_options: item='{item.get('title')}', resume_time={resume_time}")
 
+    # FORCE SANITIZE: Override stale headers from browser storage
+    sanitized_headers = force_sanitize_headers(item_url, item.get('headers'))
+
     lua_options = {
         "id": item.get('id'), 
         "title": item.get('title'),
-        "headers": item.get('headers'),
+        "headers": sanitized_headers,
         "ytdl_raw_options": final_opts,
         "use_ytdl_mpv": item.get('use_ytdl_mpv', False) or item.get('is_youtube', False),
         "ytdl_format": item.get('ytdl_format'),

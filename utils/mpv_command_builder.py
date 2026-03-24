@@ -341,6 +341,8 @@ class MpvCommandBuilder:
 
         if self.use_ytdl_mpv or (self.is_youtube and not self.is_youtube_override):
             args.append('--ytdl=yes')
+        else:
+            args.append('--ytdl=no')
 
         if self.automatic_flags:
             for f_info in self.automatic_flags:

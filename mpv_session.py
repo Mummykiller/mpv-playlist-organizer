@@ -909,7 +909,7 @@ class MpvSessionManager:
                 if currently_alive:
                     if self.ipc_manager and self.ipc_manager.is_connected():
                         logging.info("[PY][Session] start() - Sending verification ping to MPV.")
-                        res = self.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
+                        res = self.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=2.0, expect_response=True)
                         if not res or res.get("error") != "success":
                             logging.info("[PY][Session] start() - Ping failed, checking PID existence.")
                             if not ipc_utils.is_pid_running(self.pid):

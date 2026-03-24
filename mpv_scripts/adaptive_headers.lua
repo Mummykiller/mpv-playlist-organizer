@@ -12,6 +12,7 @@ local initial_ua = mp.get_property("user-agent") or "libmpv"
 local initial_referrer = mp.get_property("referrer") or ""
 local initial_ytdl_raw = mp.get_property("ytdl-raw-options") or ""
 local initial_ytdl_format = mp.get_property("ytdl-format") or ""
+local initial_ytdl = mp.get_property("ytdl") or "yes"
 local initial_max_bytes = mp.get_property("demuxer-max-bytes")
 local initial_max_back_bytes = mp.get_property("demuxer-max-back-bytes")
 local initial_cache_secs = mp.get_property("cache-secs")
@@ -159,6 +160,7 @@ local function apply_adaptive_settings()
         set_property_if_diff("cookies-file", "")
         set_property_if_diff("ytdl-raw-options", initial_ytdl_raw)
         set_property_if_diff("ytdl-format", initial_ytdl_format)
+        set_property_if_diff("ytdl", initial_ytdl)
         set_property_if_diff("demuxer-lavf-o", initial_lavf_opts)
         
         -- Reset metadata strictly
@@ -272,14 +274,26 @@ local function apply_adaptive_settings()
 
     if not opts then return end
 
+    -- 5.5. Apply YTDL state
+    local target_ytdl = opts.use_ytdl_mpv and "yes" or "no"
+    debug_log("Setting YTDL to: " .. target_ytdl .. " (from use_ytdl_mpv=" .. tostring(opts.use_ytdl_mpv) .. ")")
+    set_property_if_diff("ytdl", target_ytdl)
+
     -- 6. ALWAYS apply Authentication Headers (Essential for connection)
     if opts.headers then
         local h_list = {}
         for k, v in pairs(opts.headers) do
             local kl = k:lower()
-            if kl == "user-agent" then set_property_if_diff("user-agent", v)
-            elseif kl == "referer" then set_property_if_diff("referrer", v)
-            else table.insert(h_list, k .. ": " .. v) end
+            if kl == "user-agent" then 
+                debug_log("Setting User-Agent: " .. v)
+                set_property_if_diff("user-agent", v)
+            elseif kl == "referer" then 
+                debug_log("Setting Referrer: " .. v)
+                set_property_if_diff("referrer", v)
+            else 
+                debug_log("Adding to http-header-fields: " .. k .. ": " .. v)
+                table.insert(h_list, k .. ": " .. v) 
+            end
         end
         if #h_list > 0 then mp.set_property_native("http-header-fields", h_list) end
     end
@@ -312,9 +326,10 @@ local function apply_adaptive_settings()
         local reconnect_val = (opts.enable_reconnect ~= false) and "1" or "0"
         local r_delay = tonumber(opts.reconnect_delay) or 4
         
-        -- Use robust reconnect flags (excluding at_eof to avoid VOD loops)
+        -- Use robust reconnect flags
         local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d,analyzeduration=%s,probesize=%s", 
                                  persistence, reconnect_val, r_delay, tostring(opts.analyzeduration or 0), tostring(opts.probesize or 32))
+        
         set_property_if_diff("demuxer-lavf-o", lp)
     else
         -- 8. Apply "Turbo" Networking Overrides (Only if NOT bypassed)
@@ -349,6 +364,8 @@ local function apply_adaptive_settings()
             if opts.demuxer_max_back_bytes then set_property_if_diff("demuxer-max-back-bytes", opts.demuxer_max_back_bytes) end
             if opts.cache_secs then set_property_if_diff("cache-secs", tostring(opts.cache_secs)) end
             if opts.demuxer_readahead_secs then set_property_if_diff("demuxer-readahead-secs", tostring(opts.demuxer_readahead_secs)) end
+            if opts.cache_secs then set_property_if_diff("cache-secs", tostring(opts.cache_secs)) end
+            if opts.demuxer_readahead_secs then set_property_if_diff("demuxer-readahead-secs", tostring(opts.demuxer_readahead_secs)) end
             if opts.stream_buffer_size then set_property_if_diff("stream-buffer-size", opts.stream_buffer_size) end
         end
 
@@ -371,7 +388,7 @@ local function apply_adaptive_settings()
     if opts.original_url then mp.set_property_native("user-data/original-url", opts.original_url) end
 end
 
-mp.add_hook("on_load", -10, function()
+mp.add_hook("on_load", -100, function()
     local ok, err = pcall(apply_adaptive_settings)
     if not ok then
         mp.msg.error("AdaptiveHeaders: Error in on_load hook: " .. tostring(err))
