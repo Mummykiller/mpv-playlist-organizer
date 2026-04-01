@@ -127,7 +127,7 @@ export function normalizeKeys(data) {
 		return data.map(normalizeKeys);
 	}
 
-	const WHITELIST = new Set(["request_id", "url", "m3u8"]);
+	const WHITELIST = new Set(["request_id", "url", "m3u8", "mp4"]);
 
 	const snakeToCamel = (str) => {
 		if (WHITELIST.has(str)) return str;

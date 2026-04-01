@@ -157,8 +157,31 @@ end)
 
 debug_log("Python interaction script loaded.")
 
--- Monitor logs for yt-dlp errors
+-- Monitor logs for yt-dlp and ffmpeg errors
 mp.enable_messages("info")
+local reconnect_counter = 0
+local total_reconnects = 0
+local last_reconnect_offset = ""
+
+mp.register_event("start-file", function()
+    session_duration = 0
+    last_time_pos = nil
+    playback_active = true
+    fallback_attempted = false
+    fallback_skip_notified = false
+    reconnect_counter = 0
+    total_reconnects = 0
+    last_reconnect_offset = ""
+    
+    -- Sync IDs immediately so tracker is ready
+    local fid = clean_value(mp.get_property("user-data/folder-id"))
+    local iid = clean_value(mp.get_property("user-data/id"))
+    
+    mp.add_timeout(0.2, function()
+        run_fallback_sync({last_played = true})
+    end)
+end)
+
 mp.register_event("log-message", function(e)
     if e.prefix == "ytdl_hook" then
         if e.text:find("Requested format is not available") or 
@@ -169,6 +192,27 @@ mp.register_event("log-message", function(e)
             
             debug_log("Detected YTDL Error: " .. e.text)
             mp.commandv("script-message", "ytdl_error_detected", e.text)
+        end
+    elseif e.prefix == "ffmpeg" then
+        -- Pattern: https: Will reconnect at 192888 in 1 second(s).
+        local offset = e.text:match("Will reconnect at (%d+)")
+        if offset then
+            total_reconnects = total_reconnects + 1
+            if offset == last_reconnect_offset then
+                reconnect_counter = reconnect_counter + 1
+            else
+                reconnect_counter = 1
+                last_reconnect_offset = offset
+            end
+
+            -- Trigger if we see 3 attempts at the same offset OR 10 total for the file
+            if reconnect_counter >= 3 or total_reconnects >= 10 then
+                debug_log(string.format("Detected ffmpeg Reconnect Loop (count=%d, total=%d) at offset %s", reconnect_counter, total_reconnects, offset))
+                mp.commandv("script-message", "ffmpeg_reconnect_loop_detected", e.text)
+                -- Reset so we don't spam if reload fails to fix it immediately
+                reconnect_counter = 0
+                total_reconnects = 0
+            end
         end
     end
 end)
