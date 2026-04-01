@@ -29,7 +29,7 @@ function setupListeners() {
 						if (m3u8DetectionPromises[details.tabId]) {
 							m3u8DetectionPromises[details.tabId].reject(
 								new Error(
-									`M3U8 detection timed out after ${timeoutMs / 1000}s.`,
+									`Stream detection timed out after ${timeoutMs / 1000}s.`,
 								),
 							);
 						}
@@ -37,11 +37,17 @@ function setupListeners() {
 				});
 			}
 
-			if (!details.url.toLowerCase().includes(".m3u8")) return;
+			const urlLower = details.url.toLowerCase();
+			const isM3u8 = urlLower.includes(".m3u8");
+			const isMp4 = urlLower.includes(".mp4");
+
+			if (!isM3u8 && !isMp4) return;
 
 			const detectedUrl = details.url;
+			const typeLabel = isM3u8 ? "M3U8" : "MP4";
+			
 			broadcastLog({
-				text: `[Scanner]: Detected stream: ${detectedUrl}`,
+				text: `[Scanner]: Detected ${typeLabel} stream: ${detectedUrl}`,
 				type: "info",
 			});
 
@@ -154,10 +160,10 @@ async function _createScannerWindow(url) {
 }
 
 /**
- * Waits for the webRequest listener to detect an M3U8 stream in a specific tab.
+ * Waits for the webRequest listener to detect an M3U8 or MP4 stream in a specific tab.
  * @param {number} tabId The ID of the tab to listen on.
  * @param {number} timeoutInSeconds The number of seconds to wait before timing out.
- * @returns {Promise<string>} A promise that resolves with the detected M3U8 URL.
+ * @returns {Promise<string>} A promise that resolves with the detected stream URL.
  */
 async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
 	// Refinement 1: Check if already detected during the tab's loading phase
@@ -173,7 +179,7 @@ async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
 				delete m3u8DetectionPromises[tabId];
 				reject(
 					new Error(
-						`M3U8 detection timed out. User did not initiate video playback within ${timeoutInSeconds} seconds.`,
+						`Stream detection timed out. User did not initiate video playback within ${timeoutInSeconds} seconds.`,
 					),
 				);
 			}
@@ -277,7 +283,7 @@ async function _focusOriginalTab(originalTab) {
 }
 
 /**
- * Opens a URL in a hidden tab to find an M3U8 stream URL.
+ * Opens a URL in a hidden tab to find an M3U8 or MP4 stream URL.
  * @param {string} url The page URL to scan.
  * @returns {Promise<{url: string, title: string, scannerTab: chrome.tabs.Tab}>} A promise that resolves with the detected URL, title, and the scanner tab.
  */

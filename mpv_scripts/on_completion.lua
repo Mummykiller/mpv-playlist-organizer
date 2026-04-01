@@ -146,6 +146,7 @@ local completion_triggered = false
 local has_started = false
 local last_error = false
 local max_playback_time = 0
+local playing_pos = nil
 
 -- Track max playback time to prevent reset race conditions at EOF
 mp.observe_property("playback-time", "number", function(_, val)
@@ -159,7 +160,8 @@ mp.register_event("start-file", function()
     completion_triggered = false
     last_error = false
     max_playback_time = 0
-    log("File started. Resetting error state.")
+    playing_pos = mp.get_property_number("playlist-pos")
+    log("File started (pos=" .. tostring(playing_pos) .. "). Resetting error state.")
     if not has_started then
         log("First file started. Watch history tracking active.")
         has_started = true
@@ -210,7 +212,7 @@ function on_end_file(event)
     local pos = mp.get_property_number("playlist-pos")
     local count = mp.get_property_number("playlist-count", 0)
     
-    log(string.format("File ended. Reason: %s, pos: %s, count: %d", tostring(event.reason), tostring(pos), count))
+    log(string.format("File ended. Reason: %s, pos: %s, count: %d (playing_pos: %s)", tostring(event.reason), tostring(pos), count, tostring(playing_pos)))
 
     if event.reason == 'error' then
         last_error = true
@@ -221,9 +223,9 @@ function on_end_file(event)
     -- Case 1: The file finished naturally
     if event.reason == 'eof' then
         -- Always notify Python that THIS item finished if it was natural
-        -- Note: At EOF, pos is usually the index of the file that just finished,
-        -- but we check if it's nil or out of bounds to be safe.
-        local effective_pos = pos
+        -- Note: At EOF, pos is often already the index of the NEXT file. 
+        -- We use playing_pos which was captured at start-file for the current item.
+        local effective_pos = playing_pos or pos
         if not effective_pos or effective_pos < 0 or effective_pos >= count then
              -- If pos is invalid, it's likely we were at the end and it's now nil/out of bounds
              effective_pos = count - 1

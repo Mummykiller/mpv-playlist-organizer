@@ -891,6 +891,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 			list.addEventListener("dragstart", (e) => {
 				draggedItem = e.target;
 				setTimeout(() => e.target.classList.add("dragging"), 0);
+
+				// Carry URL in drag data if it exists (allows dragging to address bar/other apps)
+				const url = e.target.dataset.url;
+				if (url && e.dataTransfer) {
+					e.dataTransfer.setData("text/plain", url);
+				}
 			});
 
 			list.addEventListener("dragend", () => {
