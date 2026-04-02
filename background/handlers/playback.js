@@ -1304,8 +1304,8 @@ export function handleSessionRestored(request) {
 		const cacheData = {
 			folderId: result.folderId,
 			isRunning: true,
-			isPaused: false,
-			isIdle: false,
+			isPaused: result.isPaused ?? false,
+			isIdle: result.isIdle ?? false,
 			lastPlayedId: result.lastPlayedId,
 			sessionIds: (result.playlist || []).map(i => i.id).filter(Boolean),
 			isLaunching: false,
