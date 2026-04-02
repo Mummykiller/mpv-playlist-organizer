@@ -67,64 +67,6 @@ class MpvSessionManager:
     def register_ipc_callbacks(self):
         if self.ipc_manager:
             self.ipc_manager.register_script_message_handler("ytdl_error_detected", self._handle_ytdl_error)
-            self.ipc_manager.register_script_message_handler("ffmpeg_reconnect_loop_detected", self._handle_ffmpeg_reconnect_loop)
-
-    def _handle_ffmpeg_reconnect_loop(self, args):
-        """Handles detection of ffmpeg reconnection loops by disabling auto-reconnect for the item."""
-        with self.sync_lock:
-            if not self.is_alive or not self.ipc_manager:
-                return
-            
-            try:
-                # 1. Identify current item
-                id_resp = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=1.0)
-                item_id = id_resp.get("data") if id_resp else None
-                
-                if not item_id: return
-                
-                # 2. Find item and disable reconnect
-                target_item = next((i for i in self.playlist if i.get('id') == item_id), None)
-                if not target_item: return
-
-                if target_item.get('enable_reconnect') == False:
-                    # Already disabled, don't loop
-                    return
-
-                logging.info(f"[PY][IPC] ffmpeg reconnect loop detected for {item_id}. Disabling auto-reconnect.")
-                target_item['enable_reconnect'] = False
-                
-                # 3. Notify extension for persistence
-                self.send_message({
-                    "action": "item_settings_updated",
-                    "folder_id": self.owner_folder_id,
-                    "item_id": item_id,
-                    "settings": {"enable_reconnect": False},
-                    "log": {
-                        "text": f"[Native Host]: Reconnect loop detected. Auto-reconnect disabled for this video.",
-                        "type": "warning"
-                    }
-                })
-
-                # 4. Update Lua and Reload
-                import file_io
-                settings = file_io.get_settings()
-                lua_options, item_url = services.construct_lua_options(target_item, settings, self.SCRIPT_DIR)
-                
-                # Force the setting in the message and ENSURE ID is present
-                lua_options["enable_reconnect"] = False
-                lua_options["id"] = item_id 
-                
-                # Immediate OSD feedback before the reload happens
-                self.ipc_manager.send({"command": ["show-text", "Reconnect Loop Detected: Disabling auto-reconnect...", 4000]})
-
-                self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options)]})
-                
-                # Reload to apply demuxer-lavf-o changes
-                url = target_item.get('original_url') or target_item.get('url')
-                self.ipc_manager.send({"command": ["loadfile", url, "replace"]})
-
-            except Exception as e:
-                logging.error(f"Failed to handle ffmpeg reconnect loop: {e}")
 
     def _start_health_watcher(self):
         """Starts a background thread to poll MPV health via IPC."""

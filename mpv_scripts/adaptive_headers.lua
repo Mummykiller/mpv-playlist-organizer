@@ -324,13 +324,12 @@ local function apply_adaptive_settings()
         if opts.http_persistence == "off" then persistence = "0"
         elseif opts.http_persistence == "auto" and opts.disable_http_persistent then persistence = "0" end
         
-        local is_reconnect_enabled = (opts.enable_reconnect ~= false)
-        local reconnect_val = is_reconnect_enabled and "1" or "0"
+        local reconnect_val = (opts.enable_reconnect ~= false) and "1" or "0"
         local r_delay = tonumber(opts.reconnect_delay) or 4
         
-        -- Use robust reconnect flags (Synchronized)
-        local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=%s,reconnect_on_network_error=%s,reconnect_delay_max=%d,analyzeduration=%s,probesize=%s", 
-                                 persistence, reconnect_val, reconnect_val, reconnect_val, r_delay, tostring(opts.analyzeduration or 0), tostring(opts.probesize or 32))
+        -- Use robust reconnect flags
+        local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d,analyzeduration=%s,probesize=%s", 
+                                 persistence, reconnect_val, r_delay, tostring(opts.analyzeduration or 0), tostring(opts.probesize or 32))
         
         set_property_if_diff("demuxer-lavf-o", lp)
     else
@@ -376,13 +375,9 @@ local function apply_adaptive_settings()
             if opts.http_persistence == "off" then persistence = "0"
             elseif opts.http_persistence == "auto" and opts.disable_http_persistent then persistence = "0" end
             
-            local is_reconnect_enabled = (opts.enable_reconnect ~= false)
-            local reconnect_val = is_reconnect_enabled and "1" or "0"
+            local reconnect_val = (opts.enable_reconnect ~= false) and "1" or "0"
             local r_delay = tonumber(opts.reconnect_delay) or 4
-            
-            -- Synchronize all reconnect flags to respect the user/auto preference
-            local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=%s,reconnect_on_network_error=%s,reconnect_delay_max=%d", 
-                                     persistence, reconnect_val, reconnect_val, reconnect_val, r_delay)
+            local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d", persistence, reconnect_val, r_delay)
             set_property_if_diff("demuxer-lavf-o", lp)
         end
     end

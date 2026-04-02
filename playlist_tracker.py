@@ -162,8 +162,9 @@ class PlaylistTracker:
         # Immediate Heartbeat to register Python presence
         self.ipc_manager.send({"command": ["script-message", "tracker_heartbeat"]})
         
-        # Register handler for individual item completion
+        # Register handlers for individual item completion
         self.ipc_manager.register_script_message_handler("item_natural_completion", self._handle_item_completion)
+        self.ipc_manager.register_script_message_handler("item_natural_completion_by_id", self._handle_item_completion_by_id)
 
         # Proactive Status Push: Notify the UI immediately upon connection
         # This clears the 'isLaunching' state in the background cache instantly.
@@ -248,7 +249,7 @@ class PlaylistTracker:
                             self.last_played_id = new_id
                             self.pending_last_played_id = new_id # Mark as pending
                             self.current_session_duration = 0
-                            self.last_time_pos = None
+                            self.last_time_pos = None # CRITICAL: Reset last_time_pos to ignore the first jump
 
                             # Try to find title for better logs/OSD
                             display_name = self.current_id
@@ -277,13 +278,13 @@ class PlaylistTracker:
                             self._remote_log(f"AdaptiveHeaders: Tracking: {display_name}{status_info}")
                             
                             # NEW: Proactive Redundancy Sync
-                            # If the item has the old flag but not the new one, fix it immediately upon tracking start
+                            # ONLY if this is the CURRENT active item being tracked.
+                            # If the item has the old flag but not the new one, fix it immediately.
                             with self.lock:
                                 for item in self.playlist:
                                     if item.get('id') == self.current_id:
                                         if item.get('marked_as_watched') and not item.get('watched'):
                                             logging.info(f"[PY][Tracker] Proactively backfilling 'watched' mark for {self.current_id}")
-                                            # Correctly pass watched_status=True
                                             self._update_marked_as_watched(self.current_id, watched_status=True, persist=bool(self.folder_id))
                                         break
 
@@ -362,8 +363,8 @@ class PlaylistTracker:
                     
                     if reason == 'eof':
                         # Attribution logic: 
-                        # In most cases, current_id is the item that just finished.
-                        # If we just switched IDs and immediately got an EOF, it might belong to previous_id.
+                        # We now rely primarily on 'item_natural_completion_by_id' from Lua
+                        # but we still want to update the resume time and played_ids set.
                         target_id_for_eof = self.current_id
                         
                         # Only fallback to previous_id if we literally just switched and haven't played anything.
@@ -372,21 +373,17 @@ class PlaylistTracker:
                             target_id_for_eof = self.previous_id
                         
                         if target_id_for_eof:
-                            # PROTECTION: Only treat as "finished" if we actually played for at least 2s
-                            # or if it's a very short video that finished naturally.
-                            if self.current_session_duration >= 2:
-                                self._check_mark_watched(target_id_for_eof)
-                                self.played_item_ids.add(target_id_for_eof)
-                                self._update_resume_time(target_id_for_eof, 0)
+                            # We mark as played and reset resume, but we NO LONGER force mark-as-watched here.
+                            # Lua will send the explicit 'item_natural_completion_by_id' signal.
+                            self.played_item_ids.add(target_id_for_eof)
+                            self._update_resume_time(target_id_for_eof, 0)
 
-                                # --- Early Clear Hint Logic ---
-                                # Check if this item is the last in our tracked playlist
-                                with self.lock:
-                                    if self.playlist and self.playlist[-1].get('id') == target_id_for_eof:
-                                        logging.info(f"[PY][Tracker] Last item in session playlist finished naturally ({target_id_for_eof}). Setting completion flag.")
-                                        self.is_naturally_completed = True
-                            else:
-                                logging.warning(f"[PY][Tracker] EOF detected for {target_id_for_eof} but session duration was too short ({self.current_session_duration}s). Preserving progress.")
+                            # --- Early Clear Hint Logic ---
+                            # Check if this item is the last in our tracked playlist
+                            with self.lock:
+                                if self.playlist and self.playlist[-1].get('id') == target_id_for_eof:
+                                    logging.info(f"[PY][Tracker] Last item in session playlist finished naturally ({target_id_for_eof}). Setting completion flag.")
+                                    self.is_naturally_completed = True
                             
                     elif reason == 'stop' or reason == 'quit':
                         if self.current_id and current_time > 1:
@@ -435,6 +432,39 @@ class PlaylistTracker:
         # Clean up the local manager when loop exits
         if self.ipc_manager:
             self.ipc_manager.close()
+
+    def _handle_item_completion_by_id(self, args):
+        """Handles the notification from Lua that a specific item ID finished naturally."""
+        logging.info(f"[PY][Tracker] Received item_natural_completion_by_id with args: {args}")
+        try:
+            target_id = args[0] if args else None
+            if not target_id:
+                return
+            
+            # CRITICAL: Strip quotes from Lua string
+            target_id = target_id.strip('"').strip("'")
+
+            logging.info(f"[PY][Tracker] Item ID {target_id} finished naturally. Notifying extension.")
+            
+            # Critical: Add to watched_this_session IMMEDIATELY to block any late 
+            # time-pos updates from trying to save or mark it again.
+            self.watched_this_session.add(target_id)
+            self.played_item_ids.add(target_id)
+            
+            # Reset its disk state to 0 so even if a sync happens, it's clean
+            self._update_resume_time(target_id, 0)
+            
+            # NEW: Mark as watched locally for all videos upon natural completion
+            self._update_marked_as_watched(target_id, watched_status=True, persist=bool(self.folder_id))
+            
+            # Send specialized clear message
+            self.send_message({
+                "action": "item_natural_completion",
+                "folder_id": self.folder_id,
+                "item_id": target_id
+            })
+        except Exception as e:
+            logging.error(f"[PY][Tracker] Error handling item completion by ID: {e}")
 
     def _handle_item_completion(self, args):
         """Handles the notification from Lua that a specific item finished naturally."""
