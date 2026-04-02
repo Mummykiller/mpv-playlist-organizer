@@ -114,11 +114,19 @@ export async function handleItemNaturalCompletion(data) {
 				folderId: folderId
 			});
 			
-			// Include ANY items that are already marked as watched in storage, plus this session's watched items
-			const watchedInStorage = folder.playlist.filter(i => i.watched || i.markedAsWatched).map(i => i.id);
-			const sessionWatchedIds = Array.from(session.watchedItemIds);
-			const rawAllToClear = Array.from(new Set([itemId, ...sessionWatchedIds, ...watchedInStorage]));
-			const allToClear = await filterActiveItem(folderId, rawAllToClear, itemId);
+			// DIRECTIONAL CLEAR: Clear this item + any PREVIOUS items that are marked as watched.
+			// This prevents 'ahead of me' bugs by only looking backwards in the list.
+			const finishedItemIndex = folder.playlist.findIndex(i => i.id === itemId);
+			const allToClearRaw = folder.playlist
+				.filter((i, idx) => {
+					const isTarget = i.id === itemId;
+					const isPreviousWatched = idx < finishedItemIndex && (i.watched || i.markedAsWatched);
+					const isSessionWatched = idx < finishedItemIndex && session.watchedItemIds.has(i.id);
+					return isTarget || isPreviousWatched || isSessionWatched;
+				})
+				.map(i => i.id);
+
+			const allToClear = await filterActiveItem(folderId, allToClearRaw, itemId);
 
 			await clearFolderPlaylist(folderId, {
 				playedIds: allToClear,
@@ -146,13 +154,19 @@ export async function handleItemNaturalCompletion(data) {
 			});
 			
 			if (activeTab) {
+				const finishedItemIndex = folder.playlist.findIndex(i => i.id === itemId);
 				const existingIds = new Set(folder.playlist.map(i => i.id));
 				
-				// MERGE completed (EOF), session-watched (>30s), and storage-watched items for the prompt
-				const watchedInStorage = folder.playlist.filter(i => i.watched || i.markedAsWatched).map(i => i.id);
-				const combinedIds = new Set([...session.completedItemIds, ...session.watchedItemIds, ...watchedInStorage]);
-				const rawTargetList = Array.from(combinedIds).filter(id => existingIds.has(id));
-				const targetList = await filterActiveItem(folderId, rawTargetList, itemId);
+				// DIRECTIONAL LIST: completed items + any PREVIOUS items marked as watched
+				const targetIdsRaw = folder.playlist
+					.filter((i, idx) => {
+						const isCompleted = session.completedItemIds.has(i.id) || i.id === itemId;
+						const isPreviousWatched = idx < finishedItemIndex && (i.watched || i.markedAsWatched || session.watchedItemIds.has(i.id));
+						return isCompleted || isPreviousWatched;
+					})
+					.map(i => i.id);
+
+				const targetList = await filterActiveItem(folderId, targetIdsRaw, itemId);
 
 				if (targetList.length === 0) {
 					console.debug(`[Background]: No items in completion stack remain in playlist for '${folderId}'. Skipping prompt.`);
@@ -227,9 +241,22 @@ export async function handleMpvQuitting(data) {
 			playbackManager.earlyClearsInProgress.add(folderId);
 
 			if (clearMode === "yes") {
-				const watchedInStorage = folder.playlist.filter(i => i.watched || i.markedAsWatched).map(i => i.id);
-				const rawMergedPlayedIds = Array.from(new Set([...(playedIds || []), ...watchedInStorage]));
-				const mergedPlayedIds = await filterActiveItem(folderId, rawMergedPlayedIds);
+				// DIRECTIONAL: Only clear what finished + its predecessors
+				const finishedIdSet = new Set(playedIds || []);
+				let maxFinishedIndex = -1;
+				folder.playlist.forEach((item, idx) => {
+					if (finishedIdSet.has(item.id)) maxFinishedIndex = idx;
+				});
+
+				const finishedIds = folder.playlist
+					.filter((i, idx) => {
+						const isFinished = finishedIdSet.has(i.id);
+						const isPreviousWatched = idx < maxFinishedIndex && (i.watched || i.markedAsWatched);
+						return isFinished || isPreviousWatched;
+					})
+					.map(i => i.id);
+
+				const mergedPlayedIds = await filterActiveItem(folderId, finishedIds);
 
 				await clearFolderPlaylist(folderId, {
 					playedIds: mergedPlayedIds,
@@ -245,16 +272,26 @@ export async function handleMpvQuitting(data) {
 					// Identify target IDs based on scope, but only if they still exist in the playlist
 					const existingIds = new Set(folder.playlist.map(i => i.id));
 					
-					// Merge storage-watched items into the session-watched list for the "played" scope
-					const watchedInStorage = folder.playlist.filter(i => i.watched || i.markedAsWatched).map(i => i.id);
-					const mergedPlayedIds = Array.from(new Set([...(playedIds || []), ...watchedInStorage]));
+					// DIRECTIONAL: Find the max index that reached EOF
+					const finishedIdSet = new Set(playedIds || []);
+					let maxFinishedIndex = -1;
+					folder.playlist.forEach((item, idx) => {
+						if (finishedIdSet.has(item.id)) maxFinishedIndex = idx;
+					});
 
-					const rawTargetIds = clearScope === "all" 
-						? folder.playlist.map(i => i.id) 
-						: (clearScope === "session" ? sessionIds : mergedPlayedIds);
+					const finishedIds = folder.playlist
+						.filter((i, idx) => {
+							const isFinished = finishedIdSet.has(i.id);
+							const isPreviousWatched = idx < maxFinishedIndex && (i.watched || i.markedAsWatched);
+							return isFinished || isPreviousWatched;
+						})
+						.map(i => i.id);
+
+					const targetIdsRaw = (clearScope === "all" ? Array.from(existingIds) : finishedIds)
+						.filter(id => existingIds.has(id));
 					
-					const filteredTargetIds = (rawTargetIds || []).filter(id => existingIds.has(id));
-					const targetIds = await filterActiveItem(folderId, filteredTargetIds);
+					const ignoreId = finishedIds.length > 0 ? finishedIds[finishedIds.length - 1] : null;
+					const targetIds = await filterActiveItem(folderId, targetIdsRaw, ignoreId);
 
 					if (targetIds.length === 0) {
 						console.debug(`[Background]: No items from scope '${clearScope}' remain in playlist for '${folderId}'. Skipping prompt.`);

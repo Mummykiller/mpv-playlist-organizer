@@ -32,6 +32,21 @@ The project is a hybrid media management application consisting of three distinc
 
 *Note:* Bridge Actions (the `action` key) remain `snake_case`. All payload keys are automatically converted: `camelCase` (JS) ↔ `snake_case` (Python).
 
+## 2.1 Documentation Standards (Comment Architecture)
+**Core Principle:** Code explains the *Action*; comments explain the *Intent*. Prioritize self-documenting code over narration.
+### Permitted Comment Types
+1. **Functional Logic-Guards:**
+- **Role:** Signals intentional logic boundaries to prevent accidental "optimizations" or regressions.
+- **Usage:** Mandatory for index checks, safety rails, and EOF boundary logic.
+- **Example:** `if index < len(queue) - 1: # Guard: Prevents premature EOF termination`
+2. **Architectural Context:**
+- **Role:** Explains non-obvious workarounds for cross-platform or IPC limitations.
+- **Usage:** Use when the "Why" cannot be inferred from the syntax (e.g., race conditions, OS-specific delays).
+- **Example:** `# Workaround: 10ms delay required for Windows pipe initialization.`
+### Prohibited Comment Types
+- **Redundant "What" Narration:** Do not describe literal code operations that are self-explanatory (e.g., `# Loop through list`, `# Increment counter`).
+- **Style Rewrites:** Do not modify existing comments for subjective "improvement." If a comment lacks technical value per the standards above, **omit or remove it**. 
+
 ## 3. Communication Protocol
 - **Schema:** Responses are `{ success, request_id, result?, error?, log? }`.
 - **Requests:** JS sends `request_id` (preserved during conversion).

@@ -973,7 +973,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			
 			if (existingHost && existingHost.dataset.folderId === folderId) {
 				const shadow = existingHost.shadowRoot;
-				const messageEl = shadow.getElementById("page-level-modal-message");
+				const messageEl = shadow.getElementById("message");
 				const contentEl = shadow.querySelector(".modal-content");
 				
 				if (messageEl) {

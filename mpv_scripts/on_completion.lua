@@ -223,17 +223,22 @@ function on_end_file(event)
     -- Case 1: The file finished naturally
     if event.reason == 'eof' then
         -- Always notify Python that THIS item finished if it was natural
-        -- Note: At EOF, pos is often already the index of the NEXT file. 
-        -- We use playing_pos which was captured at start-file for the current item.
-        local effective_pos = playing_pos or pos
-        if not effective_pos or effective_pos < 0 or effective_pos >= count then
-             -- If pos is invalid, it's likely we were at the end and it's now nil/out of bounds
-             effective_pos = count - 1
-        end
-
-        if effective_pos >= 0 then
-            log("Item finished (EOF). Notifying Python for pos: " .. tostring(effective_pos))
-            mp.commandv("script-message", "item_natural_completion", tostring(effective_pos))
+        -- Note: We use the unique ID if available, as it is index-independent.
+        local effective_id = mp.get_property("user-data/id")
+        
+        if effective_id and effective_id ~= "" then
+            log("Item finished (EOF). Notifying Python for ID: " .. effective_id)
+            mp.commandv("script-message", "item_natural_completion_by_id", effective_id)
+        else
+            -- Fallback to position if ID is missing (should be rare)
+            local effective_pos = playing_pos or pos
+            if not effective_pos or effective_pos < 0 or effective_pos >= count then
+                 effective_pos = count - 1
+            end
+            if effective_pos >= 0 then
+                log("Item finished (EOF). Notifying Python for pos: " .. tostring(effective_pos))
+                mp.commandv("script-message", "item_natural_completion", tostring(effective_pos))
+            end
         end
 
         -- If we just finished the last item in the playlist
