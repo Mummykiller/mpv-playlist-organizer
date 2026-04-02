@@ -264,6 +264,25 @@ class MpvSessionManager:
         session_file_to_remove = None
 
         with self.sync_lock:
+            # --- ORPHANED EXIT GUARD ---
+            # If we are clearing because the Native Host is exiting (mpv_return_code is None)
+            # but MPV is still actually running, we MUST NOT clear the PID or delete the session file.
+            # This allows a subsequent Native Host process (e.g. after extension reload) to restore.
+            if mpv_return_code is None and self.pid and ipc_utils.is_pid_running(self.pid):
+                logging.info(f"[PY][Session] Native Host exit detected. Preserving session state for PID {self.pid}.")
+                
+                # We still want to stop the tracker and close our local IPC manager
+                # to ensure a clean exit for the CURRENT process.
+                if self.playlist_tracker:
+                    tracker_to_stop = self.playlist_tracker
+                    self.playlist_tracker = None
+                if self.ipc_manager:
+                    ipc_to_close = self.ipc_manager
+                    self.ipc_manager = None
+                
+                self.is_alive = False
+                return {}
+
             # 1. Immediate State Inactivation
             self.is_alive = False
             self.is_closing = False
@@ -495,6 +514,8 @@ class MpvSessionManager:
                         "was_stale": False, 
                         "folder_id": owner_folder_id, 
                         "last_played_id": last_played_id, 
+                        "is_paused": self.get_pause_state(),
+                        "is_idle": self.get_idle_state(),
                         "token": token,
                         "playlist": self.playlist
                     }
