@@ -223,27 +223,31 @@ function on_end_file(event)
     -- Case 1: The file finished naturally
     if event.reason == 'eof' then
         -- Always notify Python that THIS item finished if it was natural
-        -- Note: We use the unique ID if available, as it is index-independent.
-        local effective_id = mp.get_property("user-data/id")
-        
-        if effective_id and effective_id ~= "" then
-            log("Item finished (EOF). Notifying Python for ID: " .. effective_id)
-            mp.commandv("script-message", "item_natural_completion_by_id", effective_id)
+        -- We use the ID and POS captured at start-file to avoid the race condition
+        -- where MPV has already advanced to the next item.
+        if playing_id and playing_id ~= "" then
+            log("Item finished (EOF). Notifying Python for ID: " .. playing_id)
+            mp.commandv("script-message", "item_natural_completion_by_id", playing_id)
+        elseif playing_pos then
+            log("Item finished (EOF). Notifying Python for captured pos: " .. tostring(playing_pos))
+            mp.commandv("script-message", "item_natural_completion", tostring(playing_pos))
         else
-            -- Fallback to position if ID is missing (should be rare)
-            local effective_pos = playing_pos or pos
+            -- Ultimate fallback if start-file somehow missed it
+            local effective_pos = pos
             if not effective_pos or effective_pos < 0 or effective_pos >= count then
                  effective_pos = count - 1
             end
             if effective_pos >= 0 then
-                log("Item finished (EOF). Notifying Python for pos: " .. tostring(effective_pos))
+                log("Item finished (EOF). Notifying Python for fallback pos: " .. tostring(effective_pos))
                 mp.commandv("script-message", "item_natural_completion", tostring(effective_pos))
             end
         end
 
         -- If we just finished the last item in the playlist
-        -- We trigger completion if pos is already nil (past the end) or pointing at the last item
-        if not pos or pos < 0 or (count > 0 and pos >= count - 1) then
+        -- We trigger completion ONLY if pos is nil (nothing next) 
+        -- and we are not looping the playlist.
+        local loop_playlist = mp.get_property("loop-playlist")
+        if (not pos or pos < 0) and loop_playlist == "no" then
             handle_natural_completion("Reached end of playlist (EOF on last item)")
         end
     

@@ -222,11 +222,15 @@ export async function handleMpvQuitting(data) {
 
 		// THE DECIDER: Use items that actually passed the threshold OR are already marked in storage
 		const watchedSet = new Set(watchedIds || playedIds || []);
+		const sessionFinishedIds = new Set(playedIds || []);
 		
 		// If everything currently in the folder is marked as "watched" (either now or previously), we clear all.
-		const isFullFolderComplete = folder.playlist.length > 0 && folder.playlist.every(item => 
-			item.watched || item.markedAsWatched || watchedSet.has(item.id)
-		);
+		// But only if we actually finished at least one item in THIS session, to prevent clearing on accidental loads.
+		const isFullFolderComplete = folder.playlist.length > 0 && 
+			sessionFinishedIds.size > 0 && 
+			folder.playlist.every(item => 
+				item.watched || item.markedAsWatched || watchedSet.has(item.id)
+			);
 		
 		const globalPrefs = storageData.settings.uiPreferences.global;
 		const clearMode = globalPrefs.clearOnCompletion || "no";
