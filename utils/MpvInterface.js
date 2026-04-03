@@ -144,6 +144,20 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		/**
+		 * Sends a live reorder request to MPV.
+		 * @param {string} folderId 
+		 * @param {string[]} itemIds Array of IDs in the new order.
+		 */
+		static async reorderLive(folderId, itemIds) {
+			if (!folderId) throw new Error("Folder ID is required.");
+			return await sendMessageAsync({
+				action: "reorder_live",
+				folderId,
+				newOrder: itemIds
+			});
+		}
+
+		/**
 		 * Updates the marked_as_watched status (YouTube sync).
 		 */
 		static async updateMarkedAsWatched(folderId, itemId, isMarked) {

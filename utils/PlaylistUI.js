@@ -30,6 +30,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.currentPlaylist = [];
 			this.isSelectionModeActive = false;
 			this.isPickStartModeActive = false;
+			this.isLiveReorderModeActive = false;
+			this.reorderDebounceTimer = null;
 		}
 
 		bindEvents() {
@@ -276,7 +278,26 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						
 						// ENFORCE MUTUAL EXCLUSIVITY
 						this.isSelectionModeActive = false;
+						this.isLiveReorderModeActive = false;
 						this.isPickStartModeActive = !this.isPickStartModeActive;
+						this._refreshQuickActionsBar();
+					};
+				} else if (label === "C") {
+					btn.id = "btn-osc-quick-c";
+					btn.innerHTML = `
+						<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<line x1="3" y1="12" x2="21" y2="12"></line>
+							<line x1="3" y1="6" x2="21" y2="6"></line>
+							<line x1="3" y1="18" x2="21" y2="18"></line>
+						</svg>
+					`;
+					btn.title = "Live Reorder: Mirror changes to MPV";
+					btn.onclick = (e) => {
+						e.stopPropagation();
+						// ENFORCE MUTUAL EXCLUSIVITY
+						this.isPickStartModeActive = false;
+						this.isSelectionModeActive = false;
+						this.isLiveReorderModeActive = !this.isLiveReorderModeActive;
 						this._refreshQuickActionsBar();
 					};
 				} else if (isLast) {
@@ -288,6 +309,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						
 						// ENFORCE MUTUAL EXCLUSIVITY
 						this.isPickStartModeActive = false;
+						this.isLiveReorderModeActive = false;
 						this.isSelectionModeActive = !this.isSelectionModeActive;
 						this._refreshQuickActionsBar();
 					};
@@ -315,12 +337,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Handle Bar Classes
 			bar.classList.toggle("selection-mode-active", this.isSelectionModeActive);
 			bar.classList.toggle("pick-start-mode-active", this.isPickStartModeActive);
+			bar.classList.toggle("live-reorder-active", this.isLiveReorderModeActive);
 			
 			// Handle Container Classes (Global observer for list items)
 			const container = this.fullContainer || this.uiManager.shadowRoot?.getElementById("playlist-container");
 			if (container) {
 				container.classList.toggle("selection-mode-active", this.isSelectionModeActive);
 				container.classList.toggle("pick-start-mode-active", this.isPickStartModeActive);
+				container.classList.toggle("live-reorder-active", this.isLiveReorderModeActive);
 			}
 
 			// Handle individual button active states
@@ -328,6 +352,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			buttons.forEach(btn => {
 				if (btn.id === "btn-osc-quick-a") {
 					btn.classList.toggle("active", this.isPickStartModeActive);
+				} else if (btn.id === "btn-osc-quick-c") {
+					btn.classList.toggle("active", this.isLiveReorderModeActive);
 				} else if (btn.classList.contains("btn-disconnected-toggle")) {
 					btn.classList.toggle("active", this.isSelectionModeActive);
 				}
@@ -541,9 +567,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.fullContainer.insertBefore(this.draggedItem, dropTarget);
 				const folderId = this.folderSelect.value;
 				if (!folderId) return;
-				const newOrder = [
-					...this.fullContainer.querySelectorAll(".list-item"),
-				].map((item) => {
+				
+				const playlistItems = [...this.fullContainer.querySelectorAll(".list-item")];
+				const newOrder = playlistItems.map((item) => {
 					const originalItem = this.currentPlaylist.find(
 						(i) => i.id === item.dataset.id,
 					);
@@ -556,11 +582,28 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						}
 					);
 				});
+				
+				// Always save to browser storage immediately
 				this.controller.sendCommandToBackground(
 					"set_playlist_order",
 					folderId,
 					{ data: { order: newOrder } },
 				);
+
+				// If Live Reorder mode is active, also sync to MPV with a 2s debounce
+				if (this.isLiveReorderModeActive) {
+					if (this.reorderDebounceTimer) clearTimeout(this.reorderDebounceTimer);
+					
+					this.reorderDebounceTimer = setTimeout(() => {
+						const itemIds = newOrder.map(item => item.id);
+						this.controller.sendCommandToBackground("reorder_live", folderId, {
+							new_order: itemIds
+						}).catch((err) => {
+							this.controller.addLogEntry({ text: "[UI]: Live reorder sync failed: " + err.message, type: "error" });
+						});
+						this.reorderDebounceTimer = null;
+					}, 2000);
+				}
 			});
 		}
 
