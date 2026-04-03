@@ -147,6 +147,7 @@ local has_started = false
 local last_error = false
 local max_playback_time = 0
 local playing_pos = nil
+local playing_id = nil
 
 -- Track max playback time to prevent reset race conditions at EOF
 mp.observe_property("playback-time", "number", function(_, val)
@@ -161,7 +162,11 @@ mp.register_event("start-file", function()
     last_error = false
     max_playback_time = 0
     playing_pos = mp.get_property_number("playlist-pos")
-    log("File started (pos=" .. tostring(playing_pos) .. "). Resetting error state.")
+    playing_id = mp.get_property("user-data/id")
+    
+    log(string.format("File started (pos=%s, id=%s). Resetting error state.", 
+        tostring(playing_pos), tostring(playing_id)))
+        
     if not has_started then
         log("First file started. Watch history tracking active.")
         has_started = true

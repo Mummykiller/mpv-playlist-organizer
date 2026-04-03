@@ -173,6 +173,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const miniPlayBtn = document.getElementById("btn-mini-play");
 		const miniClearBtn = document.getElementById("btn-mini-clear");
 		const miniCloseMpvBtn = document.getElementById("btn-mini-close-mpv");
+		const btnQuickC = document.getElementById("btn-quick-c");
+		
+		// Reorder Debounce Timer
+		let reorderDebounceTimer = null;
 		const showOnPageControllerBtn = document.getElementById(
 			"btn-show-on-page-controller",
 		);
@@ -1562,17 +1566,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 				const folderId = miniFolderSelect.value;
 				if (!folderId) return;
 
-				const newOrder = [
-					...playlistContainer.querySelectorAll(".list-item"),
-				].map((item) => ({
+				const playlistItems = [...playlistContainer.querySelectorAll(".list-item")];
+				const newOrder = playlistItems.map((item) => ({
 					url: item.dataset.url,
 					title: item.dataset.title,
 					id: item.dataset.id,
 				}));
-				
+
+				// Always save the new order to browser storage immediately
 				MpvInterface.setPlaylistOrder(folderId, newOrder).catch((err) => {
 					showStatus("Failed to save playlist order: " + err.message, true);
 				});
+
+				// If Live Reorder mode is active, also sync to MPV with a 2s debounce
+				if (isLiveReorderModeActive) {
+					if (reorderDebounceTimer) clearTimeout(reorderDebounceTimer);
+					
+					reorderDebounceTimer = setTimeout(() => {
+						const itemIds = newOrder.map(item => item.id);
+						MpvInterface.reorderLive(folderId, itemIds).catch((err) => {
+							showStatus("Live reorder sync failed: " + err.message, true);
+						});
+						reorderDebounceTimer = null;
+					}, 2000);
+				}
 			}
 		});
 
@@ -1602,20 +1619,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			bar.classList.toggle("selection-mode-active", isSelectionModeActive);
 			bar.classList.toggle("pick-start-mode-active", isPickStartModeActive);
+			bar.classList.toggle("live-reorder-active", isLiveReorderModeActive);
+			
 			playlistContainer.classList.toggle("selection-mode-active", isSelectionModeActive);
 			playlistContainer.classList.toggle("pick-start-mode-active", isPickStartModeActive);
+			playlistContainer.classList.toggle("live-reorder-active", isLiveReorderModeActive);
 
 			quickActionButtons.forEach(btn => {
 				if (btn.id === "btn-quick-a") {
 					btn.classList.toggle("active", isPickStartModeActive);
+				} else if (btn.id === "btn-quick-c") {
+					btn.classList.toggle("active", isLiveReorderModeActive);
 				} else if (btn.classList.contains("btn-disconnected-toggle")) {
 					btn.classList.toggle("active", isSelectionModeActive);
 				}
 			});
 		};
 
-		// Track pick start mode globally in popup scope
+		// Track modes globally in popup scope
 		let isPickStartModeActive = false;
+		let isLiveReorderModeActive = false;
 
 			quickActionButtons.forEach((btn, index) => {
 				const isA = btn.id === "btn-quick-a" || index === 0;
@@ -1649,7 +1672,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 						e.preventDefault();
 						e.stopPropagation();
 						isSelectionModeActive = false;
+						isLiveReorderModeActive = false;
 						isPickStartModeActive = !isPickStartModeActive;
+						refreshQuickActionsBar();
+					};
+				} else if (btn.id === "btn-quick-c") {
+					btn.onclick = (e) => {
+						e.stopPropagation();
+						isPickStartModeActive = false;
+						isSelectionModeActive = false;
+						isLiveReorderModeActive = !isLiveReorderModeActive;
 						refreshQuickActionsBar();
 					};
 				} else if (isLast) {

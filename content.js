@@ -15,18 +15,26 @@
 		return;
 	}
 
-	const controller = new MPV.MpvController();
-	window.mpvControllerInstance = controller;
-
 	const isScannerWindow =
 		new URL(window.location.href).searchParams.get("mpv_playlist_scanner") ===
 		"true";
 
-	if (!isScannerWindow) {
-		controller.init();
-	} else {
-		chrome.runtime.onMessage.addListener((req, sender, send) =>
-			controller.handleMessage(req, sender, send),
-		);
+	// 1. Initialize site-specific automations (Runs in ALL frames)
+	if (MPV.Janitor) {
+		new MPV.Janitor();
+	}
+
+	// 2. Initialize Main Controller (Top frame only, or scanner)
+	if (window.top === window.self) {
+		const controller = new MPV.MpvController();
+		window.mpvControllerInstance = controller;
+
+		if (!isScannerWindow) {
+			controller.init();
+		} else {
+			chrome.runtime.onMessage.addListener((req, sender, send) =>
+				controller.handleMessage(req, sender, send),
+			);
+		}
 	}
 })();

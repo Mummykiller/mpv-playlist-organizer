@@ -787,10 +787,58 @@ class MpvSessionManager:
             logging.warning(f"[PY][Session] remove() failed: could not identify item '{item_id}' in live playlist.")
             return {"success": False, "message": "Item not found in live session."}
 
-    def reorder(self, folder_id, new_order_items):
-        """Delegates reordering to the IPC service."""
+    def reorder(self, folder_id, new_order_ids):
+        """
+        Reorders the live MPV playlist to match the new order of IDs.
+        Uses playlist-move commands to shift items into position.
+        """
         with self.sync_lock:
-            return self.ipc_service.reorder_live(folder_id, new_order_items)
+            if not self.is_alive or not self.ipc_manager:
+                return {"success": False, "error": "No active session."}
+
+            if not self.owner_folder_id or self.owner_folder_id.lower() != folder_id.lower():
+                return {"success": False, "error": "Folder mismatch for live reorder."}
+
+            # 1. Reality Sync: Get exactly what MPV currently has
+            self._sync_playlist_from_mpv()
+            
+            logging.info(f"[PY][Session] Reordering live playlist for '{folder_id}'. New order size: {len(new_order_ids)}")
+
+            # 2. Reconcile Order
+            # We iterate through the target order and move items in MPV to match.
+            moves_made = 0
+            # Track the internal state during moves to keep indices correct
+            current_playlist = list(self.playlist)
+
+            for target_idx, target_id in enumerate(new_order_ids):
+                # Find where this item is CURRENTLY in our synced playlist
+                current_idx = -1
+                for i, itm in enumerate(current_playlist):
+                    if itm.get('id') == target_id:
+                        current_idx = i
+                        break
+                
+                if current_idx != -1 and current_idx != target_idx:
+                    # Move item in MPV
+                    # Note: playlist-move(old, new) shifts the item from old to new.
+                    res = self.ipc_manager.send({"command": ["playlist-move", current_idx, target_idx]})
+                    if res and res.get("error") == "success":
+                        # Move item in our temporary list to stay in sync for the next loop iteration
+                        item = current_playlist.pop(current_idx)
+                        current_playlist.insert(target_idx, item)
+                        moves_made += 1
+                    else:
+                        logging.warning(f"[PY][Session] Failed to move item {target_id} from {current_idx} to {target_idx}: {res}")
+
+            if moves_made > 0:
+                self.playlist = current_playlist
+                logging.info(f"[PY][Session] Live reorder complete. Performed {moves_made} moves.")
+                if self.playlist_tracker:
+                    self.playlist_tracker.update_playlist_order(self.playlist)
+                
+                self.ipc_manager.send({"command": ["show-text", f"Playlist reordered ({moves_made} moves)", 2000]})
+
+            return {"success": True, "moves": moves_made}
 
     def clear_live(self, folder_id):
         """Clears all items from the active MPV playlist."""

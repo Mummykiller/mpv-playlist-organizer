@@ -455,6 +455,24 @@ select:focus-visible {
 	box-shadow: 0 0 8px #00bcd4;
 }
 
+.quick-actions-bar .quick-action-btn.active.live-reorder-active {
+	background-color: #9c27b0;
+	color: white;
+	border-color: white;
+	box-shadow: 0 0 10px #9c27b0;
+	animation: sparkle 1.5s infinite;
+}
+
+#playlist-container.live-reorder-active .list-item {
+	border-color: #9c27b0;
+	cursor: grabbing;
+}
+
+#playlist-container.live-reorder-active .list-item:hover {
+	background-color: rgba(156, 39, 176, 0.1);
+	box-shadow: 0 0 8px #9c27b0;
+}
+
 @keyframes sparkle {
 	0% { opacity: 1; }
 	50% { opacity: 0.7; }

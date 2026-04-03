@@ -36,10 +36,11 @@
 				"utils/PageScraper.js",
 				"utils/Draggable.js",
 				"utils/Resizable.js",
+				"utils/janitor.js",
 				"utils/MpvController.js",
 				"content.js"
 			],
-			"all_frames": false
+			"all_frames": true
 		}
 	],
 	"web_accessible_resources": [
