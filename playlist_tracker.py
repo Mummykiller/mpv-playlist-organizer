@@ -277,17 +277,6 @@ class PlaylistTracker:
                             # 3. Notify the MPV terminal that we are tracking this new video
                             self._remote_log(f"AdaptiveHeaders: Tracking: {display_name}{status_info}")
                             
-                            # NEW: Proactive Redundancy Sync
-                            # ONLY if this is the CURRENT active item being tracked.
-                            # If the item has the old flag but not the new one, fix it immediately.
-                            with self.lock:
-                                for item in self.playlist:
-                                    if item.get('id') == self.current_id:
-                                        if item.get('marked_as_watched') and not item.get('watched'):
-                                            logging.info(f"[PY][Tracker] Proactively backfilling 'watched' mark for {self.current_id}")
-                                            self._update_marked_as_watched(self.current_id, watched_status=True, persist=bool(self.folder_id))
-                                        break
-
                             # 4. Immediately notify the extension to update the UI highlight (Visual only)
                             logging.info(f"[PY][Tracker] Active episode changed to ID {self.current_id}. Notifying UI (Visual).")
                             
