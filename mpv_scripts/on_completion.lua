@@ -161,16 +161,21 @@ mp.register_event("start-file", function()
     completion_triggered = false
     last_error = false
     max_playback_time = 0
-    playing_pos = mp.get_property_number("playlist-pos")
-    playing_id = mp.get_property("user-data/id")
     
-    log(string.format("File started (pos=%s, id=%s). Resetting error state.", 
-        tostring(playing_pos), tostring(playing_id)))
+    log("[TRACE] start-file: resetting state")
         
     if not has_started then
         log("First file started. Watch history tracking active.")
         has_started = true
     end
+end)
+
+-- Capture IDENTITY only once the file is fully loaded and headers processed
+mp.register_event("file-loaded", function()
+    playing_pos = mp.get_property_number("playlist-pos")
+    playing_id = mp.get_property("user-data/id")
+    log(string.format("[TRACE] file-loaded: captured pos=%s, id=%s", 
+        tostring(playing_pos), tostring(playing_id)))
 end)
 
 local function handle_natural_completion(reason)
@@ -227,6 +232,8 @@ function on_end_file(event)
 
     -- Case 1: The file finished naturally
     if event.reason == 'eof' then
+        log(string.format("[TRACE] on_end_file (eof): reporting id=%s, pos=%s", tostring(playing_id), tostring(playing_pos)))
+        
         -- Always notify Python that THIS item finished if it was natural
         -- We use the ID and POS captured at start-file to avoid the race condition
         -- where MPV has already advanced to the next item.
