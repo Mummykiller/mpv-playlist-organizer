@@ -1994,6 +1994,33 @@ document.addEventListener("DOMContentLoaded", async () => {
 				}
 			}
 
+			// Consolidate playback and playlist updates
+			if (request.action === "playback_state_changed" || request.action === "playlist_dirty") {
+				const currentFolderId = miniFolderSelect.value;
+				const state = request.state || request;
+				
+				if (currentFolderId === state.folderId) {
+					// 1. Update manager
+					MPV.playbackStateManager.update(state);
+					
+					// 2. Trigger fresh fetch for playlist content if dirty
+					if (request.action === "playlist_dirty") {
+						refreshPlaylist(null, true);
+					} else {
+						// Lightweight re-render for status flags
+						renderPlaylist(
+							null,
+							state.lastPlayedId,
+							state.isRunning,
+							state.isPaused,
+							state.needsAppend,
+							state.completedIds,
+							true
+						);
+					}
+				}
+			}
+
 			if (request.action === "auto_add_state_changed") {
 				updateAutoAddVisuals(request.active);
 			}
@@ -2277,13 +2304,31 @@ document.addEventListener("DOMContentLoaded", async () => {
 		optionsManager.initializeEventListeners();
 		initializePopup();
 
-		// Periodic Sync: Ensure the popup stays in sync with background state while open.
-		// This recovers from missed broadcasts and handles Service Worker wakeup lag.
-		setInterval(() => {
-			if (uiManager.isMiniView()) {
-				refreshPlaylist(null, true);
+		// Periodic Sync: Now replaced by reactive storage listener for better performance.
+		chrome.storage.onChanged.addListener((changes, areaName) => {
+			if (areaName !== "local") return;
+			
+			if (changes.active_playback_state) {
+				const newState = changes.active_playback_state.newValue;
+				if (newState && newState.folderId === miniFolderSelect?.value) {
+					console.log("[Popup] Reactive Storage Sync:", newState);
+					
+					// Update manager
+					MPV.playbackStateManager.update(newState);
+					
+					// Re-render
+					renderPlaylist(
+						null,
+						newState.lastPlayedId,
+						newState.isRunning,
+						newState.isPaused,
+						newState.needsAppend,
+						newState.completedIds,
+						true
+					);
+				}
 			}
-		}, 5000);
+		});
 	} catch (e) {
 		console.error("Error in DOMContentLoaded handler:", e);
 		showStatus(`Critical error: ${e.message}`, true);
