@@ -385,9 +385,25 @@ export const handleGetDefaultAutomaticFlags = createHandler(async () => {
 	return { success: true, flags: defaultData.settings.uiPreferences.global.automaticMpvFlags };
 });
 
-export const handleSetMinimizedState = createHandler(async ({ request }) => {
-	const { minimized } = request;
+export const handleSetMinimizedState = createHandler(async ({ request, data }) => {
+	const { minimized, tabId } = request;
 	
+	// PERSISTENCE: If we have a tabId, update the domain preference
+	if (tabId) {
+		try {
+			const tab = await chrome.tabs.get(tabId);
+			if (tab?.url && (tab.url.startsWith("http:") || tab.url.startsWith("https:"))) {
+				const domain = new URL(tab.url).hostname;
+				if (!data.settings.uiPreferences.domains) data.settings.uiPreferences.domains = {};
+				if (!data.settings.uiPreferences.domains[domain]) data.settings.uiPreferences.domains[domain] = {};
+				data.settings.uiPreferences.domains[domain].minimized = minimized;
+				console.log(`[Background]: Persisted minimized=${minimized} for domain: ${domain}`);
+			}
+		} catch (e) {
+			console.warn("[Background]: Failed to persist minimized state for domain:", e);
+		}
+	}
+
 	// Broadcast to ALL tabs to ensure UI consistency
 	broadcastToTabs({
 		action: "set_minimized_state",

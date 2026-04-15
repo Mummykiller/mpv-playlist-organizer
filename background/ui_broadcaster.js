@@ -86,6 +86,20 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 	const { mpv_playback_cache: storageCache } = await chrome.storage.local.get("mpv_playback_cache");
 	const mpv_playback_cache = storageCache || playbackManager.syncCache;
 
+	// Standardize state object to ensure all flags are present for UI syncing.
+	const pbState = {
+		folderId: folderId,
+		isRunning: isActive,
+		isLaunching: !!mpv_playback_cache?.isLaunching,
+		isAppending: false, // Background is source of truth
+		isPaused: isPaused,
+		isIdle: !!mpv_playback_cache?.isIdle,
+		needsAppend: needsAppend,
+		health: mpv_playback_cache?.health || "ok",
+		lastPlayedId: lastPlayedId || mpv_playback_cache?.last_played_id || data.folders[folderId]?.lastPlayedId,
+		completedIds: completedIds
+	};
+
 	// PROACTIVE: Sync to storage so all tabs see it instantly without broadcast
 	await chrome.storage.local.set({ active_playback_state: pbState });
 

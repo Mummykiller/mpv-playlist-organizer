@@ -191,7 +191,7 @@ class IPCSocketManager:
                                     logging.error(f"Error in script handler for {msg_name}: {e}")
 
                     if not handled:
-                        ipc_logger.info(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
+                        ipc_logger.debug(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
                         with self._buffer_lock:
                             self._event_buffer.append(event)
                             # NEW: Limit buffer size to prevent memory leaks/performance degradation
@@ -239,7 +239,7 @@ class IPCSocketManager:
             else:
                 req_id = command_dict["request_id"]
 
-            logging.info(f"[PY][IPC] SEND: {json.dumps(command_dict)}")
+            ipc_logger.debug(f"[PY][IPC] SEND: {json.dumps(command_dict)}")
             command_str = json.dumps(command_dict) + '\n'
 
             try:
@@ -283,7 +283,7 @@ class IPCSocketManager:
                             if item.get("request_id") == req_id:
                                 del self._event_buffer[i] 
                                 response = item
-                                ipc_logger.info(f"IPC RECV (from buffer): {json.dumps(response)}")
+                                ipc_logger.debug(f"IPC RECV (from buffer): {json.dumps(response)}")
                                 return response
                         
                         elapsed = time.time() - start_read_time
@@ -317,7 +317,7 @@ class IPCSocketManager:
             while True:
                 if self._event_buffer:
                     event = self._event_buffer.popleft()
-                    ipc_logger.info(f"IPC EVENT (from buffer): {json.dumps(event)}")
+                    ipc_logger.debug(f"IPC EVENT (from buffer): {json.dumps(event)}")
                     return event
                 
                 if not self._event_reader_running:
@@ -404,9 +404,9 @@ def is_process_alive(pid, ipc_path):
         if actual_pid == pid:
             return True
         else:
-            logging.warning(f"[PY][IPC] is_process_alive: PID mismatch. Expected {pid}, got {actual_pid}. (Socket is alive)")
+            ipc_logger.debug(f"[PY][IPC] is_process_alive: PID mismatch. Expected {pid}, got {actual_pid}. (Socket is alive)")
     else:
-        logging.warning(f"[PY][IPC] is_process_alive: Failed to get PID from MPV. Response: {ipc_response}")
+        ipc_logger.debug(f"[PY][IPC] is_process_alive: Failed to get PID from MPV. Response: {ipc_response}")
             
     return False
 
