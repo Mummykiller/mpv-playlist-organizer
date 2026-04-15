@@ -107,15 +107,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 			 * @param {boolean} isHttp - Whether the current tab is on an HTTP/S page.
 			 * @param {object} uiState - The saved UI state for the current tab.
 			 * @param {object} prefs - The user's global preferences.
+			 * @param {boolean} isContentScriptDead - Whether the content script on page is dead/blocked.
 			 */
-			determineAndSetInitialMode(isHttp, uiState, prefs) {
+			determineAndSetInitialMode(isHttp, uiState, prefs, isContentScriptDead) {
 				let showMiniView = false;
 				if (isHttp) {
-					showMiniView = uiState?.minimized ?? prefs?.mode === "minimized";
+					// If the content script is dead/blocked, we MUST use the mini-popup view.
+					showMiniView = isContentScriptDead || (uiState?.minimized ?? prefs?.mode === "minimized");
 				} else {
 					// On restricted pages (like brave://), use the global preference.
-					// This allows users to access playback controls via the mini-popup
-					// even when the on-page controller cannot be injected.
 					showMiniView = prefs?.mode === "minimized";
 				}
 				this.setMode(showMiniView ? "mini" : "full");
@@ -689,33 +689,36 @@ document.addEventListener("DOMContentLoaded", async () => {
 						// Quick Action Bar Listeners
 				
 
-		showOnPageControllerBtn.addEventListener("click", () => {
-			// Send a message to the background script to update the minimized state for the current tab.
-			// The background script will then relay this to the correct content script.
+		showOnPageControllerBtn.addEventListener("click", async () => {
+			const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+			const tabId = tabs[0]?.id;
+
 			sendMessageAsync({
 				action: "set_minimized_state",
 				minimized: false,
+				tabId: tabId
 			}).then((response) => {
 				if (response?.success) {
-					window.close(); // Close the popup on success
+					uiManager.setMode("full");
 				} else {
-					// Show an error if the background script couldn't find the tab or another error occurred.
 					showStatus(response?.error || "Could not show controller.", true);
 				}
 			});
 		});
 
-		hideOnPageControllerBtn.addEventListener("click", () => {
-			// Send a message to the background script to update the minimized state for the current tab.
-			// The background script will then relay this to the correct content script.
+		hideOnPageControllerBtn.addEventListener("click", async () => {
+			const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+			const tabId = tabs[0]?.id;
+
 			sendMessageAsync({
 				action: "set_minimized_state",
 				minimized: true,
+				tabId: tabId
 			}).then((response) => {
 				if (response?.success) {
-					window.close(); // Close the popup on success
+					uiManager.setMode("mini");
+					refreshPlaylist(null, true);
 				} else {
-					// Show an error if the background script couldn't find the tab or another error occurred.
 					showStatus(response?.error || "Could not hide controller.", true);
 				}
 			});
@@ -1907,12 +1910,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 						// Sync Mode: Correct initial mode if tab-specific state differs
 						let uiState = null;
 						if (isHttp && tabId) {
+							// PING CHECK: Detect if content script is blocked or dead
+							const isContentScriptDead = await new Promise((resolve) => {
+								chrome.tabs.sendMessage(tabId, { action: "ping" }, (res) => {
+									if (chrome.runtime.lastError) resolve(true);
+									else resolve(false);
+								});
+								// 200ms timeout for the ping to avoid hanging if the script is blocked
+								setTimeout(() => resolve(true), 200);
+							});
+
 							const uiStateResponse = await sendMessageAsync({
 								action: "get_ui_state_for_tab",
 								tabId,
 							});
 							uiState = uiStateResponse?.state;
-							uiManager.determineAndSetInitialMode(isHttp, uiState, prefs);
+							uiManager.determineAndSetInitialMode(isHttp, uiState, cachedPrefs || prefs, isContentScriptDead);
 
 							if (uiState?.preferences) {
 								cachedPrefs = uiState.preferences;
@@ -2023,6 +2036,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			if (request.action === "auto_add_state_changed") {
 				updateAutoAddVisuals(request.active);
+			}
+
+			if (request.action === "set_minimized_state") {
+				uiManager.setMode(request.minimized ? "mini" : "full");
+				if (request.minimized) refreshPlaylist(null, true);
 			}
 
 			// Handle live playlist updates to keep the item count and playlist view in sync

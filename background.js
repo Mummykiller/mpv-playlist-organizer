@@ -28,6 +28,19 @@ let nativeHostStatus = { status: "unknown", lastCheck: 0, info: null };
 let autoAddActive = false;
 let autoAddTimer = null;
 
+// HAIL MARY RECOVERY: Check if we just restarted due to an injection failure
+chrome.storage.local.get("hail_mary_pending", (data) => {
+	if (data.hail_mary_pending) {
+		setTimeout(() => {
+			broadcastLog({ 
+				text: "[System]: Extension was automatically restarted to recover from a blocked or unresponsive on-page controller.", 
+				type: "info"
+			});
+			chrome.storage.local.remove("hail_mary_pending");
+		}, 1000); // Small delay to ensure UIs are ready to receive the log
+	}
+});
+
 const startAutoAddTimer = async () => {
 	if (autoAddTimer) clearTimeout(autoAddTimer);
 	const data = await storage.get();
@@ -380,14 +393,38 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 	}
 });
 
-async function injectIntoTab(tab) {
-	if (!tab.id || !tab.url) return;
+async function injectIntoTab(tabOrId, attempt = 1) {
+	const tabId = typeof tabOrId === "object" ? tabOrId.id : tabOrId;
+	if (!tabId) {
+		logger.warn("[Background] injectIntoTab called without valid tabId.", { persist: true });
+		return;
+	}
+
+	logger.info(`[Background] injectIntoTab ENTRY: Tab ${tabId} (Attempt ${attempt})`, { persist: true });
+
+	// 1. Fetch fresh tab data
+	const tab = await chrome.tabs.get(tabId).catch(() => null);
+	if (!tab) {
+		logger.info(`[Background] injectIntoTab: Tab ${tabId} no longer exists. Skipping.`, { persist: true });
+		return;
+	}
+
+	if (!tab.url) {
+		logger.info(`[Background] injectIntoTab: Tab ${tabId} has no URL. (Attempt ${attempt}). Skipping.`, { persist: true });
+		return;
+	}
+
 	if (
 		tab.url.startsWith("chrome://") ||
 		tab.url.startsWith("about:") ||
 		tab.url.includes("chrome.google.com/webstore")
-	)
+	) {
+		logger.info(`[Background] injectIntoTab: Tab ${tabId} is a restricted extension page. Skipping.`, { persist: true });
 		return;
+	}
+
+	const MAX_ATTEMPTS = 3;
+	const RETRY_DELAY = 2000;
 
 	const manifest = chrome.runtime.getManifest();
 	const jsFiles = manifest.content_scripts[0].js;
@@ -396,36 +433,42 @@ async function injectIntoTab(tab) {
 		const data = await storage.get();
 		const restrictedDomains =
 			data.settings.uiPreferences.global.restrictedDomains || [];
-		try {
-			const url = new URL(tab.url);
-			if (
-				restrictedDomains.some(
-					(domain) =>
-						url.hostname === domain || url.hostname.endsWith("." + domain),
-				)
+		
+		const url = new URL(tab.url);
+		if (
+			restrictedDomains.some(
+				(domain) =>
+					url.hostname === domain || url.hostname.endsWith("." + domain),
 			)
+		) {
+			logger.info(`[Background] Skipping injection for restricted domain: ${url.hostname}`, { persist: true });
+			return;
+		}
+
+		// 2. Early Exit Check - ONLY on the first attempt.
+		if (attempt === 1) {
+			const isAlive = await chrome.tabs
+				.sendMessage(tab.id, { action: "ping" })
+				.then((res) => res?.success)
+				.catch(() => false);
+
+			if (isAlive) {
+				logger.info(`[Background] Tab ${tab.id} already has a responsive script. Syncing...`, { persist: true });
+				let origin = null;
+				try {
+					origin = new URL(tab.url).origin;
+				} catch (e) {}
+				await ui_state_handlers.handleContentScriptInit(
+					{},
+					{ tab: tab, origin: origin },
+				);
 				return;
-		} catch (e) {
-			return;
+			}
 		}
 
-		const isAlive = await chrome.tabs
-			.sendMessage(tab.id, { action: "ping" })
-			.then((res) => res?.success)
-			.catch(() => false);
-		if (isAlive) {
-			// Script is already there, but might have stale data. Refresh it.
-			let origin = null;
-			try {
-				origin = new URL(tab.url).origin;
-			} catch (e) {}
-			await ui_state_handlers.handleContentScriptInit(
-				{},
-				{ tab: tab, origin: origin },
-			);
-			return;
-		}
+		logger.info(`[Background] Injecting content script into tab ${tab.id} (Attempt ${attempt}/${MAX_ATTEMPTS})...`, { persist: true });
 
+		// 3. Cleanup & Inject
 		await chrome.scripting
 			.executeScript({
 				target: { tabId: tab.id },
@@ -436,7 +479,8 @@ async function injectIntoTab(tab) {
 						"anilist-panel-host",
 						"mpv-organizer-host-styles",
 					].forEach((id) => {
-						document.getElementById(id)?.remove();
+						const el = document.getElementById(id);
+						if (el) el.remove();
 					});
 					window.mpvControllerInitialized = false;
 				},
@@ -447,7 +491,33 @@ async function injectIntoTab(tab) {
 			target: { tabId: tab.id },
 			files: jsFiles,
 		});
-	} catch (err) {}
+
+		// 4. Verification Ping (with a small delay to allow scripts to boot)
+		await new Promise(r => setTimeout(r, 200));
+		const confirmedAlive = await chrome.tabs
+			.sendMessage(tab.id, { action: "ping" })
+			.then((res) => res?.success)
+			.catch(() => false);
+
+		if (!confirmedAlive && attempt < MAX_ATTEMPTS) {
+			logger.warn(`[Background] Injection Verification FAILED for tab ${tab.id}. Retrying in ${RETRY_DELAY/1000}s...`, { persist: true });
+			setTimeout(() => injectIntoTab(tabId, attempt + 1), RETRY_DELAY);
+		} else if (!confirmedAlive && attempt === MAX_ATTEMPTS) {
+			logger.error(`[Background] ALL injection attempts failed for tab ${tab.id}. Triggering Hail Mary reload...`, { persist: true });
+			await chrome.storage.local.set({ hail_mary_pending: true });
+			chrome.runtime.reload();
+		} else if (confirmedAlive) {
+			logger.info(`[Background] Content script successfully injected and verified for tab ${tab.id} (Attempt ${attempt}).`, { persist: true });
+		}
+	} catch (err) {
+		const errorMsg = err.message || "Unknown error";
+		if (attempt < MAX_ATTEMPTS) {
+			logger.warn(`[Background] Error in injection attempt ${attempt} for tab ${tabId}: ${errorMsg}. Retrying...`, { persist: true });
+			setTimeout(() => injectIntoTab(tabId, attempt + 1), RETRY_DELAY);
+		} else {
+			logger.error(`[Background] Fatal injection error after ${MAX_ATTEMPTS} attempts for tab ${tabId}: ${errorMsg}`, { persist: true });
+		}
+	}
 }
 
 async function reinjectContentScripts() {
