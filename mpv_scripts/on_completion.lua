@@ -148,6 +148,7 @@ local last_error = false
 local max_playback_time = 0
 local playing_pos = nil
 local playing_id = nil
+local playing_path = nil
 
 -- Track max playback time to prevent reset race conditions at EOF
 mp.observe_property("playback-time", "number", function(_, val)
@@ -174,8 +175,22 @@ end)
 mp.register_event("file-loaded", function()
     playing_pos = mp.get_property_number("playlist-pos")
     playing_id = mp.get_property("user-data/id")
-    log(string.format("[TRACE] file-loaded: captured pos=%s, id=%s", 
-        tostring(playing_pos), tostring(playing_id)))
+    playing_path = mp.get_property("path")
+    log(string.format("[TRACE] file-loaded: captured pos=%s, id=%s, path=%s", 
+        tostring(playing_pos), tostring(playing_id), tostring(playing_path)))
+end)
+
+-- Dynamically keep playing_pos updated when reordering, but guard against race conditions on file transition
+mp.observe_property("playlist-pos", "number", function(_, val)
+    if val and val >= 0 then
+        local current_id = mp.get_property("user-data/id")
+        local current_path = mp.get_property("path")
+        if (playing_id and playing_id ~= "" and current_id == playing_id) or
+           (playing_path and playing_path ~= "" and current_path == playing_path) then
+            playing_pos = val
+            log(string.format("[TRACE] playlist-pos observed change: playing_pos=%s", tostring(playing_pos)))
+        end
+    end
 end)
 
 local function handle_natural_completion(reason)

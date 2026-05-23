@@ -198,6 +198,10 @@ const actionHandlers = {
 	clear: playlistManager.handleClear,
 	remove_item: playlistManager.handleRemoveItem,
 	set_playlist_order: playlistManager.handleSetPlaylistOrder,
+	reorder_live: async (request) => {
+		const newOrder = request.new_order || request.newOrder;
+		return nativeLink.reorderLive(request.folderId, newOrder);
+	},
 	// Import/Export
 	export_all_playlists_separately:
 		import_export_handlers.handleExportAllPlaylistsSeparately,
