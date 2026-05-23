@@ -1,35 +1,68 @@
-# Smart Reorder Feature (Right-Click)
+# Smart Reorder Feature (Two-Stage Sync)
 
-Adds a "Smart Reorder" feature to the playlist triggered by a right-click (context menu) on the "Live Reorder" button. This feature automatically groups similar shows, handles season/episode detection, and organizes the playlist for a better binge-watching experience.
+Adds a "Smart Reorder" feature to the playlist triggered by a right-click (context menu) on the "Live Reorder" button. This feature uses a two-stage workflow to organize the playlist locally before optionally syncing to an active MPV session.
 
 ## User Review Required
 
-> [!IMPORTANT]
-> This feature relies on string similarity and regex-based extraction. While 85% is the requested threshold, some highly generic titles (e.g., "Episode 1") might require manual adjustment if multiple unrelated shows use identical naming conventions.
+> [!NOTE]
+> This implementation splits sorting and syncing into two distinct user actions to prevent accidental playlist disruption during playback. The first right-click sorts the UI; the second right-click (indicated by a glowing button) syncs to MPV.
 
 ## Proposed Changes
 
-### UI Layer (Popup)
+### UI Layer (Popup & CSS)
+
+#### [MODIFY] [popup.css](file:///home/shinku/Documents/mpv-playlist-organizer/popup.css)
+Add a "glow" animation and a class to indicate a pending sync.
+
+```css
+@keyframes smart-glow {
+    0% { box-shadow: 0 0 5px var(--accent-primary); }
+    50% { box-shadow: 0 0 15px var(--accent-primary); border-color: var(--accent-primary); }
+    100% { box-shadow: 0 0 5px var(--accent-primary); }
+}
+
+.smart-sync-pending {
+    animation: smart-glow 1.5s infinite;
+    color: var(--accent-primary) !important;
+    border-color: var(--accent-primary) !important;
+}
+```
 
 #### [MODIFY] [popup.js](file:///home/shinku/Documents/mpv-playlist-organizer/popup.js)
-- Add a `contextmenu` listener to `btn-quick-c` (and its mini counterpart).
-- Trigger a new bridge action `smart_reorder_live`.
-- Display a "Smart Reordering..." status message while the operation is in progress.
+- Implement the two-stage logic in the `oncontextmenu` handler for `btn-quick-c`.
+- **Stage 1 (Sort UI):** Call `get_smart_reorder`. Update `popupState.currentPlaylist` and re-render. If MPV is running, add `smart-sync-pending` class.
+- **Stage 2 (Sync MPV):** If `smart-sync-pending` is active, call `reorder_live` and remove the class.
 
 ```javascript
-// Example implementation in btn-quick-c listener section
 btn.oncontextmenu = (e) => {
     e.preventDefault();
-    showStatus("Smart Reordering...");
+    const folderId = miniFolderSelect.value;
+    
+    // Stage 2: Sync to MPV
+    if (btn.classList.contains("smart-sync-pending")) {
+        const itemIds = popupState.currentPlaylist.map(item => item.id);
+        MpvInterface.reorderLive(folderId, itemIds).then(res => {
+            if (res.success) {
+                showStatus("MPV playlist synchronized.");
+                btn.classList.remove("smart-sync-pending");
+            }
+        });
+        return;
+    }
+
+    // Stage 1: Sort UI
+    showStatus("Calculating smart order...");
     sendMessageAsync({
-        action: "smart_reorder_live",
-        folderId: miniFolderSelect.value
+        action: "get_smart_reorder",
+        folderId: folderId
     }).then(res => {
-        if (res.success) {
-            showStatus("Playlist organized by show/episode.");
-            refreshPlaylist();
-        } else {
-            showStatus(res.error || "Smart reorder failed.", true);
+        if (res.success && res.playlist) {
+            renderPlaylist(res.playlist, popupState.lastPlayedId, popupState.isFolderActive);
+            showStatus("Playlist organized. Right-click again to sync MPV.");
+            
+            if (popupState.isFolderActive) {
+                btn.classList.add("smart-sync-pending");
+            }
         }
     });
 };
@@ -40,55 +73,31 @@ btn.oncontextmenu = (e) => {
 ### Bridge Layer (Background)
 
 #### [MODIFY] [background.js](file:///home/shinku/Documents/mpv-playlist-organizer/background.js)
-- Register the `smart_reorder_live` action in `actionHandlers`.
-- Forward the request to the Python backend via `nativeLink`.
+- Register `get_smart_reorder` action.
+- Call `nativeLink.getSmartReorder(folderId)`.
 
 ---
 
 ### Backend Layer (Python)
 
-#### [NEW] `utils/smart_reorder.py`
-Create a dedicated utility for playlist organization logic.
-
-- **Similarity Engine:** Use `difflib.SequenceMatcher` to calculate the 85% similarity threshold.
-- **Title Normalization:** Strip "Season X", "S2", etc., for the comparison phase.
-- **Extraction Regex:**
-    - Season: `(?:Season\s*(\d+)|S(\d+))`
-    - Episode: `(?:e(\d+)|Episode\s*(\d+)|(?:\s|^)(\d+)(?:\s|$))`
-- **Sorting Logic:**
-    1. Group items by normalized title.
-    2. Sort groups by the earliest appearance in the original playlist (to preserve general user intent).
-    3. Within each group:
-        - Primary Sort: Season Number (0 if not found).
-        - Secondary Sort: Episode Number (float for versions like 1.5).
-
-#### [MODIFY] `playlist_server.py` or `native_host_handlers.py`
-- Add the `smart_reorder_live` action handler.
-- Load the playlist for the specified `folder_id`.
-- Apply the `smart_reorder` logic.
-- Update the playlist in memory and sync to MPV using the existing `reorder_live` IPC logic.
+#### [MODIFY] `native_host_handlers.py`
+- Add `get_smart_reorder` handler.
+- Use the `SmartReorder` utility created in `utils/smart_reorder.py` to organize the folder's playlist.
+- Return the sorted items to the extension.
 
 ---
 
-### MPV Integration
-- The existing `reorder_live` implementation in `mpv_session.py` and `on_completion.lua` already handles dynamic playlist updates. No changes are required to the player layer.
+### Verification Plan
 
-## Verification Plan
+#### Manual Verification
+1. Load a folder with mixed episodes (e.g., Ep 1, Ep 10, Ep 2).
+2. Start MPV.
+3. **Right-click** "Live Reorder" button.
+4. Verify the UI list sorts correctly (Ep 1, Ep 2, Ep 10).
+5. Verify the button starts **glowing**.
+6. **Right-click** again.
+7. Verify MPV's internal playlist matches the new UI order.
 
-### Manual Verification
-1. Open the popup.
-2. Load a folder with disorganized items like:
-    - "e7 - Show A"
-    - "e1 - Show B"
-    - "e6 - Show A"
-    - "S2 e1 - Show A"
-3. Right-click the "Live Reorder" button.
-4. Verify the playlist becomes:
-    - "e6 - Show A"
-    - "e7 - Show A"
-    - "S2 e1 - Show A"
-    - "e1 - Show B"
-5. Verify that natural completion still works and points to the correct "next" item in the new order.
-
-### Automated Tests
-- Create `testing_tools/scripts/test_smart_reorder.py` to verify the grouping and sorting logic against a variety of edge-case strings (mixed case, different season formats, non-numeric episode titles).
+#### Automated Tests
+- Test `utils/smart_reorder.py` against edge cases (S1 vs No Season).
+- Mock `get_smart_reorder` in JS tests to verify the `smart-sync-pending` class toggle.
