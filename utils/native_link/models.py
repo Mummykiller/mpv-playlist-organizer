@@ -86,6 +86,7 @@ class LiveUpdateRequest(BaseRequest):
 
 @dataclass
 class DataSyncRequest(BaseRequest):
+    folder_id: Optional[str] = None
     data: Optional[Dict[str, Any]] = None
     is_incremental: bool = False
     filename: Optional[str] = None

@@ -134,6 +134,10 @@ class NativeLink {
 		return this.call("reorder_live", { folderId, newOrder: newOrder });
 	}
 
+	async getSmartReorder(folderId) {
+		return this.call("get_smart_reorder", { folderId });
+	}
+
 	// --- UI State & Preferences ---
 	/**
 	 * Syncs the current state to the native host's persistent storage.

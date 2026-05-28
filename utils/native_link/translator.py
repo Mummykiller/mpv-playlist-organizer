@@ -30,6 +30,7 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
     'import_from_file': DataSyncRequest,
     'set_ui_preferences': DataSyncRequest,
     'get_unified_diagnostics': DataSyncRequest,
+    'get_smart_reorder': DataSyncRequest,
     
     # Services
     'get_anilist_releases': ServiceRequest,
@@ -113,6 +114,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
         return DataSyncRequest(
             action=action,
             request_id=request_id,
+            folder_id=norm_message.get('folder_id'),
             data=norm_message.get('data'),
             is_incremental=norm_message.get('is_incremental', False),
             filename=norm_message.get('filename'),

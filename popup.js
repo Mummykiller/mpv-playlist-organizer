@@ -1687,6 +1687,46 @@ document.addEventListener("DOMContentLoaded", async () => {
 						isLiveReorderModeActive = !isLiveReorderModeActive;
 						refreshQuickActionsBar();
 					};
+
+					btn.oncontextmenu = (e) => {
+						e.preventDefault();
+						e.stopPropagation();
+						const folderId = miniFolderSelect.value;
+						if (!folderId) return;
+
+						// Stage 2: Sync to MPV (if already glowing)
+						if (btn.classList.contains("smart-sync-pending")) {
+							const itemIds = popupState.currentPlaylist.map(item => item.id);
+							MpvInterface.reorderLive(folderId, itemIds).then(res => {
+								if (res.success) {
+									showStatus("MPV playlist synchronized.");
+									btn.classList.remove("smart-sync-pending");
+								} else {
+									showStatus(res.error || "Sync failed.", true);
+								}
+							}).catch(err => showStatus("Sync error: " + err.message, true));
+							return;
+						}
+
+						// Stage 1: Sort UI
+						showStatus("Calculating smart order...");
+						MpvInterface.getSmartReorder(folderId).then(res => {
+							if (res.success && res.playlist) {
+								// Update UI immediately
+								renderPlaylist(res.playlist, popupState.lastPlayedId, popupState.isFolderActive);
+								showStatus("Playlist organized. Right-click again to sync MPV.");
+								
+								// Enter glowing state and update title if playback is active
+								if (popupState.isFolderActive) {
+									btn.classList.add("smart-sync-pending");
+									btn.dataset.originalTitle = btn.title;
+									btn.title = "Right-click again to sync MPV playlist";
+								}
+							} else {
+								showStatus(res.error || "Smart reorder failed.", true);
+							}
+						}).catch(err => showStatus("Reorder error: " + err.message, true));
+					};
 				} else if (isLast) {
 					btn.textContent = "⚡";
 					btn.title = "Toggle Disconnected Launch (Selection Mode)";

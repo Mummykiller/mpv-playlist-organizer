@@ -63,7 +63,7 @@ export function createHandler(logic, options = {}) {
 
 			// Persistence: Auto-save if logic was successful and not manual
 			if (!manualPersistence) {
-				await storage.set(data, context.folderId);
+				await storage.set(context.data, context.folderId);
 			}
 
 			// Side-Effects
