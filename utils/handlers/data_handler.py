@@ -5,6 +5,7 @@ import platform
 from .base_handler import BaseHandler
 from .registry import command
 from .. import native_link
+from ..smart_reorder import SmartReorder
 
 class DataHandler(BaseHandler):
     def __init__(self, ctx):
@@ -165,3 +166,27 @@ class DataHandler(BaseHandler):
             self.ctx.task_manager.cancel_job(task_id)
             return native_link.success(message=f"Task {task_id} cancellation requested.")
         return native_link.failure("Missing task_id.")
+
+    @command('get_smart_reorder')
+    def handle_get_smart_reorder(self, request: native_link.DataSyncRequest):
+        folder_id = getattr(request, 'folder_id', None)
+        if not folder_id:
+            return native_link.failure("No folder ID provided.")
+        
+        try:
+            # get_playlist_shard returns a LIST of items, not a dict
+            playlist = self.file_io.get_playlist_shard(folder_id)
+            
+            if not playlist:
+                return native_link.success({"playlist": []})
+
+            reorderer = SmartReorder(threshold=0.85)
+            new_playlist = reorderer.organize(playlist)
+            
+            # Save the new order to disk (expects folder_id and the playlist list)
+            self.file_io.save_playlist_shard(folder_id, new_playlist)
+            
+            return native_link.success({"playlist": new_playlist})
+        except Exception as e:
+            logging.error(f"Smart reorder failed: {e}")
+            return native_link.failure(str(e))

@@ -479,6 +479,18 @@ select:focus-visible {
 	100% { opacity: 1; }
 }
 
+@keyframes smart-glow {
+    0% { box-shadow: 0 0 5px var(--accent-primary); }
+    50% { box-shadow: 0 0 15px var(--accent-primary); border-color: var(--accent-primary); }
+    100% { box-shadow: 0 0 5px var(--accent-primary); }
+}
+
+.smart-sync-pending {
+    animation: smart-glow 1.5s infinite !important;
+    color: var(--accent-primary) !important;
+    border-color: var(--accent-primary) !important;
+}
+
 /* --- Playlist --- */
 #playlist-container {
 	max-height: 120px; /* Slightly taller */

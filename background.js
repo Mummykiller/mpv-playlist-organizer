@@ -202,6 +202,7 @@ const actionHandlers = {
 		const newOrder = request.new_order || request.newOrder;
 		return nativeLink.reorderLive(request.folderId, newOrder);
 	},
+	get_smart_reorder: playlistManager.handleGetSmartReorder,
 	// Import/Export
 	export_all_playlists_separately:
 		import_export_handlers.handleExportAllPlaylistsSeparately,

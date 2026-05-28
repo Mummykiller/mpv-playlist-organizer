@@ -337,6 +337,32 @@ export const handleSetPlaylistOrder = createHandler(async ({ request, folderId, 
 	broadcastPlaylist: true
 });
 
+export const handleGetSmartReorder = createHandler(async (context) => {
+	const { folderId, storage } = context;
+	const response = await nativeLink.getSmartReorder(folderId);
+	
+	if (response.success && response.playlist) {
+		// RE-FETCH FRESH DATA to avoid overwriting concurrent changes (e.g. from heartbeats or other tabs)
+		// while we were waiting for the Python reorder.
+		const freshData = await storage.get(true);
+		context.data = freshData;
+
+		const actualFolderId = Object.keys(freshData.folders).find(
+			(id) => id.toLowerCase() === folderId.toLowerCase()
+		);
+
+		if (actualFolderId && freshData.folders[actualFolderId]) {
+			freshData.folders[actualFolderId].playlist = response.playlist;
+			return { success: true, playlist: response.playlist };
+		}
+	}
+	
+	return response;
+}, {
+	requireFolder: true,
+	broadcastPlaylist: true
+});
+
 export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
 	if (scrapingInProgress.has(urlToAdd)) return { success: true };
 	scrapingInProgress.add(urlToAdd);

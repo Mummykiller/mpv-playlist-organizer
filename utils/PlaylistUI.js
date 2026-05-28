@@ -291,7 +291,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 							<line x1="3" y1="18" x2="21" y2="18"></line>
 						</svg>
 					`;
-					btn.title = "Live Reorder: Mirror changes to MPV";
+					btn.title = "Live Reorder: Mirror changes to MPV | Right-click: Smart Reorder";
 					btn.onclick = (e) => {
 						e.stopPropagation();
 						// ENFORCE MUTUAL EXCLUSIVITY
@@ -299,6 +299,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						this.isSelectionModeActive = false;
 						this.isLiveReorderModeActive = !this.isLiveReorderModeActive;
 						this._refreshQuickActionsBar();
+					};
+
+					btn.oncontextmenu = (e) => {
+						this.controller.handleSmartReorder(e, btn);
 					};
 				} else if (isLast) {
 					btn.textContent = "⚡";

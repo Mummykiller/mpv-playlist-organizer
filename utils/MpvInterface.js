@@ -163,6 +163,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		/**
+		 * Requests a smart-sorted version of the playlist from the backend.
+		 * @param {string} folderId 
+		 */
+		static async getSmartReorder(folderId) {
+			if (!folderId) throw new Error("Folder ID is required.");
+			return await sendMessageAsync({
+				action: "get_smart_reorder",
+				folderId
+			});
+		}
+
+		/**
 		 * Updates the marked_as_watched status (YouTube sync).
 		 */
 		static async updateMarkedAsWatched(folderId, itemId, isMarked) {

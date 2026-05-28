@@ -1255,6 +1255,54 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 		}
 
+		async handleSmartReorder(e, btn) {
+			e.preventDefault();
+			e.stopPropagation();
+			const folderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
+			if (!folderId) return;
+
+			// Stage 2: Sync to MPV (if already glowing)
+			if (btn.classList.contains("smart-sync-pending")) {
+				const itemIds = this.playlistUI?.currentPlaylist?.map(item => item.id);
+				if (!itemIds) return;
+
+				const res = await MPV.MpvInterface.reorderLive(folderId, itemIds);
+				if (res.success) {
+					this.addLogEntry({ text: "[Content]: MPV playlist synchronized.", type: "info" });
+					btn.classList.remove("smart-sync-pending");
+					if (btn.dataset.originalTitle) {
+						btn.title = btn.dataset.originalTitle;
+						delete btn.dataset.originalTitle;
+					}
+				} else {
+					this.addLogEntry({ text: `[Content]: Sync failed: ${res.error}`, type: "error" });
+				}
+				return;
+			}
+
+			// Stage 1: Sort UI
+			this.addLogEntry({ text: "[Content]: Calculating smart order...", type: "info" });
+			const res = await MPV.MpvInterface.getSmartReorder(folderId);
+			if (res.success && res.playlist) {
+				// Update UI immediately (Fingerprint observation will handle the render)
+				this.playlistUI?.render(
+					res.playlist,
+					this.state.state.lastPlayedId,
+					this.state.state.isFolderActive
+				);
+				this.addLogEntry({ text: "[Content]: Playlist organized. Right-click again to sync MPV.", type: "info" });
+				
+				// Enter glowing state if playback is active
+				if (this.state.state.isFolderActive) {
+					btn.classList.add("smart-sync-pending");
+					btn.dataset.originalTitle = btn.title;
+					btn.title = "Right-click again to sync MPV playlist";
+				}
+			} else {
+				this.addLogEntry({ text: `[Content]: Smart reorder failed: ${res.error}`, type: "error" });
+			}
+		}
+
 		sendCommandToBackground(action, folderId, data = {}) {
 			const MPV = window.MPV_INTERNAL;
 			
@@ -1480,8 +1528,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						));
 					if (confirmed) this.sendCommandToBackground("clear", fid);
 				});
-			root
-				.getElementById("btn-compact-close-mpv")
+			root.getElementById("btn-compact-close-mpv")
 				?.addEventListener("click", async () => {
 					const fid = root.getElementById("compact-folder-select")?.value;
 					if (!fid) return;
