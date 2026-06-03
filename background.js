@@ -70,37 +70,59 @@ const handleAutoAdd = async (url, tab) => {
 	}
 	autoAddCooldowns.set(url, now);
 
+	// 1. CAPTURE SNAPSHOT IMMEDIATELY (Lock-on to the current page state)
+	const snapshot = {
+		title: tab?.title || url,
+		url: tab?.url || null,
+		tabId: tab?.id
+	};
+
 	startAutoAddTimer();
 	
 	const data = await storage.get();
 	const folderId = data.settings.lastUsedFolderId;
 	if (!folderId) return;
 
-	// Request accurate details from the tab's PageScraper
-	let scrapeData = { url, title: tab?.title || url };
-	if (tab?.id) {
-		try {
-			const response = await chrome.tabs.sendMessage(tab.id, { 
-				action: "scrape_and_get_details",
-				detectedUrl: url
-			});
-			if (response && response.title) {
-				scrapeData = response;
-			}
-		} catch (e) {
-			console.warn("[Auto-Add] Failed to message tab for scrape:", e);
-		}
-	}
-
-	// Use handleAdd with isAutoAdd flag to ensure silent duplicate rejection
-	playlistManager.handleAdd({
+	// 2. Add IMMEDIATELY with the snapshot title
+	const initialScrape = { url, title: snapshot.title, isProvisional: true };
+	
+	const addPromise = playlistManager.handleAdd({
 		action: "add",
 		folderId,
-		data: scrapeData,
+		data: initialScrape,
 		tab,
 		isAutoAdd: true,
 		isStreamUrl: true
-	}, { tab }).catch(e => console.warn("[Auto-Add] Failed:", e));
+	}, { tab });
+
+	// 3. Start ASYNC Watcher IN PARALLEL (Locked to the snapshot)
+	if (snapshot.tabId) {
+		(async () => {
+			try {
+				const finalDetails = await m3u8_scanner_handlers._safeScrapeDetails(
+					snapshot.tabId, 
+					url, 
+					snapshot.title,
+					snapshot.url,
+					snapshot.title // originTitle snapshot
+				);
+				
+				if (finalDetails && finalDetails.title && !finalDetails.isProvisional) {
+					// We need the itemId from the addPromise to update it
+					const response = await addPromise;
+					if (response?.success && response.item?.id) {
+						playlistManager.handleUpdateItemTitle({
+							folderId,
+							itemId: response.item.id,
+							newTitle: finalDetails.title
+						});
+					}
+				}
+			} catch (e) {
+				console.warn("[Auto-Add] Failed to watch for better title:", e);
+			}
+		})();
+	}
 };
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -198,6 +220,7 @@ const actionHandlers = {
 	clear: playlistManager.handleClear,
 	remove_item: playlistManager.handleRemoveItem,
 	set_playlist_order: playlistManager.handleSetPlaylistOrder,
+	update_item_title: playlistManager.handleUpdateItemTitle,
 	reorder_live: async (request) => {
 		const newOrder = request.new_order || request.newOrder;
 		return nativeLink.reorderLive(request.folderId, newOrder);

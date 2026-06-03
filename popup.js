@@ -1289,17 +1289,38 @@ document.addEventListener("DOMContentLoaded", async () => {
 		});
 
 		// Helper to scrape page details directly from popup
-		const getPageDetails = (tabId) =>
-			new Promise((resolve) => {
-				chrome.tabs.sendMessage(
-					tabId,
-					{ action: "scrape_and_get_details" },
-					(response) => {
-						if (chrome.runtime.lastError) return resolve(null);
-						resolve(response);
-					},
-				);
-			});
+		const getPageDetails = async (tabId, url) => {
+			const maxRetries = 2;
+			for (let i = 0; i <= maxRetries; i++) {
+				try {
+					const response = await new Promise((resolve, reject) => {
+						chrome.tabs.sendMessage(
+							tabId,
+							{ action: "scrape_and_get_details", detectedUrl: url },
+							(response) => {
+								if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+								else resolve(response);
+							},
+						);
+					});
+
+					if (response && response.title && !response.isProvisional) {
+						return response;
+					}
+					
+					// If it's provisional, we can wait a bit and retry if we have retries left
+					if (i < maxRetries) {
+						await new Promise(r => setTimeout(r, 1000));
+					} else {
+						return response; // Return whatever we have on last try
+					}
+				} catch (e) {
+					if (i < maxRetries) await new Promise(r => setTimeout(r, 800));
+					else return null;
+				}
+			}
+			return null;
+		};
 
 		/**
 		 * Fetches the native host status from the background script and updates the UI.
@@ -1356,17 +1377,18 @@ document.addEventListener("DOMContentLoaded", async () => {
 					throw new Error("No active tab");
 				}
 
-				// 1. Try to get details from the on-page controller
-				const details = await getPageDetails(tabId);
-
 				// Check if we actually have a detected stream URL or if it's YouTube
 				const isYouTube = activeTab.url.includes("youtube.com/watch");
 				const streamUrl =
-					details?.url ||
 					currentDetectedUrl ||
 					(isYouTube ? activeTab.url : null);
 
-				if (!streamUrl) {
+				// 1. Try to get details from the on-page controller
+				const details = await getPageDetails(tabId, streamUrl);
+
+				const finalStreamUrl = details?.url || streamUrl;
+
+				if (!finalStreamUrl) {
 					console.log(
 						"[Popup] No stream detected. Add action ignored to match OSC behavior.",
 					);
@@ -1379,13 +1401,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 				const originalIcon = miniAddBtn.innerHTML;
 				miniAddBtn.innerHTML = `<svg class="spin-animation" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
 
-				let title = details?.title || activeTab.title || streamUrl;
+				let title = details?.title || activeTab.title || finalStreamUrl;
 				if (title && title.length > 255) {
 					title = title.substring(0, 252) + "...";
 				}
 
 				const addResponse = await MpvInterface.add(folderId, {
-					url: streamUrl,
+					url: finalStreamUrl,
 					title: title,
 				}, { tabId, tab: activeTab });
 

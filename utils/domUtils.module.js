@@ -99,14 +99,23 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
         /**
          * Performs a surgical delta update on a playlist item node.
          * @param {HTMLElement} itemDiv - The .list-item DOM node.
-         * @param {Object} delta - The changes to apply (watched, markedAsWatched).
+         * @param {Object} delta - The changes to apply (watched, markedAsWatched, title).
          */
         updateItemDelta(itemDiv, delta) {
             if (!itemDiv) return;
             const url = itemDiv.dataset.url || "";
             const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
 
-            // 1. Gray out (watched)
+            // 1. Title Update
+            if (delta.title !== undefined) {
+                itemDiv.dataset.title = delta.title;
+                const titleSpan = itemDiv.querySelector(".url-text");
+                if (titleSpan) {
+                    this.formatTitle(titleSpan, { url, title: delta.title });
+                }
+            }
+
+            // 2. Gray out (watched)
             if (delta.watched !== undefined) {
                 itemDiv.classList.toggle("item-watched", !!delta.watched);
                 

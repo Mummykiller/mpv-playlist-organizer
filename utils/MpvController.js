@@ -214,16 +214,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						});
 					}
 				},
-				scrape_and_get_details: (req, send) => {
-					// Prefer the URL passed in the request (from background scanner)
-					// otherwise fall back to local state.
-					const detectedUrl = req.detectedUrl || this.state.state.detectedUrl;
-					if (detectedUrl) {
-						send(this.pageScraper.scrapePageDetails(detectedUrl));
-					} else {
-						send({ url: null, title: document.title });
-					}
-				},
 				set_minimized_state: (req, send) => {
 					this.setMinimizedState(req.minimized);
 					send({ success: true });
@@ -243,8 +233,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				get_details_for_last_right_click: (req, send) =>
 					this._handleRightClickScrape(send),
 				ytdlp_update_confirm: () => this._handleYtdlpUpdateConfirm(),
-				scrape_and_get_details: (req, send) => {
-					const details = this.pageScraper.scrapePageDetails(req.detectedUrl || window.location.href);
+				scrape_and_get_details: async (req, send) => {
+					// Prefer the URL passed in the request (from background scanner)
+					// otherwise fall back to local state or current location.
+					const url = req.detectedUrl || this.state.state.detectedUrl || window.location.href;
+					const details = await this.waitForAccurateDetails(url, 3000, req.originPageUrl);
 					send(details);
 				},
 			};
@@ -966,6 +959,73 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 
 			send({ url, title });
+		}
+
+		/**
+		 * Scrapes page details and waits if the detected title is provisional.
+		 * @param {string} url - The URL to scrape details for.
+		 * @param {number} timeoutMs - Maximum time to wait for a better title.
+		 * @param {string} originPageUrl - The URL of the page where the stream was detected.
+		 * @returns {Promise<object>}
+		 */
+		async waitForAccurateDetails(url, timeoutMs = 3000, originPageUrl = null) {
+			const currentUrl = window.location.href;
+			
+			// Cross-Check: Ensure the URL we are scraping for matches the page we are on.
+			// If the user navigated away, returning 'AnimeHeaven.Me' for an old stream is bad.
+			if (originPageUrl) {
+				if (currentUrl !== originPageUrl) {
+					console.warn("[Controller] Scrape Page URL mismatch. Tab navigated away.", { 
+						origin: originPageUrl, 
+						current: currentUrl 
+					});
+					return { url, title: url, isProvisional: true };
+				}
+			}
+
+			let details = this.pageScraper.scrapePageDetails(url);
+			const startFingerprint = details.fingerprint;
+
+			// If title is already good, return immediately
+			if (!details.isProvisional) return details;
+
+			return new Promise((resolve) => {
+				const startTime = Date.now();
+				let observer = null;
+
+				const finalize = () => {
+					if (observer) observer.disconnect();
+					resolve(this.pageScraper.scrapePageDetails(url));
+				};
+
+				// Setup MutationObserver to watch for title or metadata changes
+				observer = new MutationObserver(() => {
+					const currentDetails = this.pageScraper.scrapePageDetails(url);
+					
+					// Fingerprint Guard: If the fingerprint changed, the user navigated (even on static URL)
+					// We should abort and return what we have (or the provisional title)
+					if (currentDetails.fingerprint !== startFingerprint) {
+						console.warn("[Controller] Page content changed during wait. Aborting accurate scrape.");
+						finalize();
+						return;
+					}
+
+					if (!currentDetails.isProvisional) {
+						finalize();
+					} else if (Date.now() - startTime > timeoutMs) {
+						finalize();
+					}
+				});
+
+				observer.observe(document.documentElement, {
+					childList: true,
+					subtree: true,
+					characterData: true
+				});
+
+				// Fallback timeout
+				setTimeout(finalize, timeoutMs);
+			});
 		}
 
 		showStackedClearConfirmation(folderId, message, requestData) {

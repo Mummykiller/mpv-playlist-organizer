@@ -34,19 +34,82 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		/**
+		 * Checks if a title is likely a provisional/fallback title (e.g., URL or "Loading...").
+		 * @param {string} title - The title to check.
+		 * @param {string} url - The URL to compare against.
+		 * @returns {boolean}
+		 */
+		isTitleProvisional(title, url) {
+			if (!title || !url) return true;
+			const cleanTitle = title.trim();
+			const cleanUrl = url.trim();
+
+			// 1. Title is just the URL
+			if (cleanTitle === cleanUrl) return true;
+
+			// 2. Title is a known "loading" or generic placeholder
+			const provisionalPatterns = [
+				/^loading\.{0,3}$/i,
+				/^connecting\.{0,3}$/i,
+				/^please wait\.{0,3}$/i,
+				/^untitled$/i,
+				/^youtube$/i, // Generic YouTube title before video metadata loads
+				/^animeheaven\.me$/i, // Generic site title
+				/^animepahe$/i,
+				/^gogoanime$/i,
+			];
+			if (provisionalPatterns.some((p) => p.test(cleanTitle))) return true;
+
+			// 3. Title is identical to the site name (Case-insensitive)
+			try {
+				const hostname = window.location.hostname.replace(/^www\./, "");
+				if (cleanTitle.toLowerCase() === hostname.toLowerCase()) return true;
+			} catch (e) {}
+
+			// 4. Title is too short and looks like a site name (weak heuristic)
+			if (cleanTitle.length < 5 && !/\d/.test(cleanTitle)) return true;
+
+			return false;
+		}
+
+		/**
+		 * Generates a unique fingerprint for the current episode view.
+		 * Used to detect internal navigation on static-URL sites like AnimeHeaven.
+		 * @returns {string|null}
+		 */
+		getEpisodeFingerprint() {
+			const hostname = window.location.hostname;
+			
+			// 1. AnimeHeaven Logic
+			if (hostname.includes("animeheaven.me")) {
+				// Try to find the active episode in the sidebar/list
+				const activeEp = document.querySelector(".ep.active, .episode.active, [class*='active'] .num");
+				if (activeEp) return `animeheaven-${activeEp.textContent.trim()}`;
+			}
+
+			// 2. Generic Logic: Use the H1 or a specific episode indicator
+			const h1 = document.querySelector("h1");
+			if (h1) return `h1-${h1.textContent.trim()}`;
+
+			return document.title;
+		}
+
+		/**
 		 * Scrapes the page for the best possible title and URL.
 		 * @param {string} url - The URL to scrape details for.
-		 * @returns {object} { url, title }
+		 * @returns {object} { url, title, isProvisional, fingerprint }
 		 */
 		scrapePageDetails(url) {
-			if (!url) return { url: null, title: document.title };
+			if (!url) return { url: null, title: document.title, isProvisional: true, fingerprint: this.getEpisodeFingerprint() };
+
+			const fingerprint = this.getEpisodeFingerprint();
 
 			const hostname = window.location.hostname;
 
 			// --- 1. Specialized YouTube Logic ---
 			if (hostname.includes("youtube.com")) {
 				if (window.location.pathname.includes("/playlist")) {
-					return { url: url, title: null };
+					return { url: url, title: null, isProvisional: true };
 				}
 
 				const titleSelectors = [
@@ -80,9 +143,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					.replace(/^\(\d+\)\s*/, "")
 					.replace(/\s-\sYouTube$/, "")
 					.trim();
+				const resultUrl = MPV.sanitizeString(url);
+				const resultTitle = MPV.sanitizeString(channelName ? `${channelName} - ${videoTitle}` : videoTitle);
 				return {
-					url: url,
-					title: channelName ? `${channelName} - ${videoTitle}` : videoTitle,
+					url: resultUrl,
+					title: resultTitle,
+					isProvisional: this.isTitleProvisional(resultTitle, resultUrl),
+					fingerprint: fingerprint
 				};
 			}
 
@@ -201,9 +268,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				: cleanTitle;
 
 			const resultTitle = finalTitle || url;
+			const sanitizedUrl = MPV.sanitizeString(url);
+			const sanitizedTitle = MPV.sanitizeString(resultTitle);
+
 			return {
-				url: MPV.sanitizeString(url),
-				title: MPV.sanitizeString(resultTitle),
+				url: sanitizedUrl,
+				title: sanitizedTitle,
+				isProvisional: this.isTitleProvisional(sanitizedTitle, sanitizedUrl),
+				fingerprint: fingerprint
 			};
 		}
 	};
