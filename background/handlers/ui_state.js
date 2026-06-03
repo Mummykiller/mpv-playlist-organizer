@@ -3,6 +3,7 @@
 import {
 	isYouTubeUrl,
 	normalizeYouTubeUrl,
+	DOMAIN_SPECIFIC_KEYS,
 } from "../../utils/commUtils.module.js";
 import { updateContextMenus } from "../../utils/contextMenu.js";
 import { nativeLink } from "../../utils/nativeLink.js";
@@ -199,18 +200,6 @@ export const handleSwitchPlaylist = createHandler(async ({ data }) => {
 	}
 });
 
-// Settings that are allowed to have domain-level overrides
-const DOMAIN_SPECIFIC_KEYS = [
-	"minimized",
-	"mode",
-	"position",
-	"minimizedStubPosition",
-	"pinned",
-	"anilistPanelVisible",
-	"anilistPanelPosition",
-	"anilistPanelSize",
-];
-
 // Settings that are strictly UI-side and should not be synced to the native host
 const UI_ONLY_KEYS = [
 	...DOMAIN_SPECIFIC_KEYS,
@@ -387,13 +376,14 @@ export const handleGetDefaultAutomaticFlags = createHandler(async () => {
 
 export const handleSetMinimizedState = createHandler(async ({ request, data }) => {
 	const { minimized, tabId } = request;
+	let domain = null;
 	
 	// PERSISTENCE: If we have a tabId, update the domain preference
 	if (tabId) {
 		try {
 			const tab = await chrome.tabs.get(tabId);
 			if (tab?.url && (tab.url.startsWith("http:") || tab.url.startsWith("https:"))) {
-				const domain = new URL(tab.url).hostname;
+				domain = new URL(tab.url).hostname;
 				if (!data.settings.uiPreferences.domains) data.settings.uiPreferences.domains = {};
 				if (!data.settings.uiPreferences.domains[domain]) data.settings.uiPreferences.domains[domain] = {};
 				data.settings.uiPreferences.domains[domain].minimized = minimized;
@@ -404,10 +394,12 @@ export const handleSetMinimizedState = createHandler(async ({ request, data }) =
 		}
 	}
 
-	// Broadcast to ALL tabs to ensure UI consistency
+	// Broadcast to tabs. If it was a domain-specific action (via tabId), specify the domain
+	// so that other domains don't mirror the change.
 	broadcastToTabs({
 		action: "set_minimized_state",
 		minimized,
+		domain: domain,
 	});
 	
 	return { success: true };

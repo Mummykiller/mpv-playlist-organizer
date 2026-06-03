@@ -11,6 +11,21 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	 * The global version is auto-generated from this file.
 	 */
 
+	/**
+	 * Settings that are allowed to have domain-level overrides.
+	 * Shared between background and content scripts.
+	 */
+	const DOMAIN_SPECIFIC_KEYS = MPV.DOMAIN_SPECIFIC_KEYS = [
+		"minimized",
+		"mode",
+		"position",
+		"minimizedStubPosition",
+		"pinned",
+		"anilistPanelVisible",
+		"anilistPanelPosition",
+		"anilistPanelSize",
+	];
+
 	const debounce = MPV.debounce = function debounce(func, wait) {
 		let timeout;
 		return function executedFunction(...args) {

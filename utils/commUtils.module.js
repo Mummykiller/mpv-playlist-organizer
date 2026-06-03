@@ -7,6 +7,21 @@
  * The global version is auto-generated from this file.
  */
 
+/**
+ * Settings that are allowed to have domain-level overrides.
+ * Shared between background and content scripts.
+ */
+export const DOMAIN_SPECIFIC_KEYS = [
+	"minimized",
+	"mode",
+	"position",
+	"minimizedStubPosition",
+	"pinned",
+	"anilistPanelVisible",
+	"anilistPanelPosition",
+	"anilistPanelSize",
+];
+
 export function debounce(func, wait) {
 	let timeout;
 	return function executedFunction(...args) {

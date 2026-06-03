@@ -169,7 +169,23 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				log: (req) => this.addLogEntry(req.log),
 				preferences_changed: (req) => {
 					if (req.preferences && Object.keys(req.preferences).length > 0) {
-						this.applyPreferences(req.preferences);
+						let prefsToApply = req.preferences;
+
+						// If a domain is specified and it's not the current domain,
+						// only apply non-domain-specific preferences (global ones).
+						if (req.domain && req.domain !== window.location.hostname) {
+							const DOMAIN_KEYS = MPV.DOMAIN_SPECIFIC_KEYS || [];
+							prefsToApply = {};
+							for (const [key, value] of Object.entries(req.preferences)) {
+								if (!DOMAIN_KEYS.includes(key)) {
+									prefsToApply[key] = value;
+								}
+							}
+						}
+
+						if (Object.keys(prefsToApply).length > 0) {
+							this.applyPreferences(prefsToApply);
+						}
 					} else {
 						this.applyInitialState().then(() => this.refreshPlaylist());
 					}
@@ -215,8 +231,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					}
 				},
 				set_minimized_state: (req, send) => {
+					if (req.domain && req.domain !== window.location.hostname) {
+						if (send) send({ success: true });
+						return;
+					}
 					this.setMinimizedState(req.minimized);
-					send({ success: true });
+					if (send) send({ success: true });
 				},
 				auto_add_state_changed: (req) => {
 					this._updateAutoAddVisuals(req.active);
