@@ -205,7 +205,7 @@ async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
 /**
  * Safely attempts to scrape details from a tab with retries and readiness checks.
  */
-async function _safeScrapeDetails(tabId, detectedUrl, fallbackTitle) {
+export async function _safeScrapeDetails(tabId, detectedUrl, fallbackTitle, originPageUrl = null, originTitle = null) {
 	const maxRetries = 2;
 	for (let i = 0; i <= maxRetries; i++) {
 		try {
@@ -219,6 +219,31 @@ async function _safeScrapeDetails(tabId, detectedUrl, fallbackTitle) {
 
 			if (!tab) return { title: fallbackTitle, url: detectedUrl };
 
+			// Snapshot Guard: If the tab title has already changed significantly, 
+			// it means the user navigated away. Abort to prevent cross-page scraping.
+			if (originTitle && tab.title && tab.title !== originTitle) {
+				// Basic heuristic: check if the core title part changed (ignoring (1) notifications etc)
+				const cleanCurrent = tab.title.replace(/^\(\d+\)\s*/, "").trim();
+				const cleanOrigin = originTitle.replace(/^\(\d+\)\s*/, "").trim();
+				
+				if (cleanCurrent !== cleanOrigin) {
+					console.warn("[Scanner] Tab title changed before scrape. Aborting to prevent mismatch.", {
+						current: cleanCurrent,
+						origin: cleanOrigin
+					});
+					return { title: fallbackTitle, url: detectedUrl, isProvisional: true };
+				}
+			}
+
+			// If tab has already moved away from the original page URL, stop immediately
+			if (originPageUrl && tab.url !== originPageUrl) {
+				console.warn("[Scanner] Tab URL changed. Aborting.", {
+					current: tab.url,
+					origin: originPageUrl
+				});
+				return { title: fallbackTitle, url: detectedUrl, isProvisional: true };
+			}
+
 			// If tab is still loading, wait briefly (only on first try)
 			if (i === 0 && tab.status === "loading") {
 				await new Promise((r) => setTimeout(r, 1000));
@@ -228,6 +253,7 @@ async function _safeScrapeDetails(tabId, detectedUrl, fallbackTitle) {
 			const response = await chrome.tabs.sendMessage(tabId, {
 				action: "scrape_and_get_details",
 				detectedUrl: detectedUrl,
+				originPageUrl: originPageUrl
 			});
 
 			if (response && response.title) {

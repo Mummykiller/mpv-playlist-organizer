@@ -5,7 +5,7 @@
 import { debouncedSyncToNativeHostFile } from "../background/core_services.js";
 import { findM3u8InUrl } from "../background/handlers/m3u8_scanner.js";
 import { createHandler } from "../background/handler_factory.js";
-import { broadcastPlaylistState, isFolderActive } from "../background/ui_broadcaster.js";
+import { broadcastPlaylistState, broadcastItemUpdate, isFolderActive } from "../background/ui_broadcaster.js";
 import { broadcastLog } from "../background/messaging.js";
 import { normalizeYouTubeUrl } from "./commUtils.module.js";
 import { nativeLink } from "./nativeLink.js";
@@ -14,6 +14,35 @@ import { processPlaylistItem } from "./item_processor.js";
 
 // Keep track of URLs currently being processed to avoid concurrent duplicates
 const scrapingInProgress = new Set();
+
+export async function handleUpdateItemTitle(req) {
+	const { folderId, itemId, newTitle } = req;
+	if (!folderId || !itemId || !newTitle) return { success: false };
+
+	const data = await storage.get();
+	const actualFolderId = Object.keys(data.folders).find(
+		(id) => id.toLowerCase() === folderId.toLowerCase()
+	);
+	
+	if (!actualFolderId || !data.folders[actualFolderId]) return { success: false };
+
+	const folder = data.folders[actualFolderId];
+	const item = folder.playlist.find((i) => i.id === itemId);
+	if (!item) return { success: false };
+
+	if (item.title !== newTitle) {
+		item.title = newTitle;
+		item.lastModified = Date.now();
+		await storage.set(data, actualFolderId);
+		
+		// Surgical update for all UIs (instantly updates the single line)
+		broadcastItemUpdate(actualFolderId, itemId, { title: newTitle });
+		
+		// Full state sync for consistency
+		broadcastPlaylistState(actualFolderId);
+	}
+	return { success: true };
+}
 
 /**
  * Low-level helper to add a URL to a specific folder's data object.
