@@ -401,15 +401,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.folderSelect.value = newFolderId;
 				this.compactFolderSelect.value = newFolderId;
 
-				// Reset UI state for the new folder
-				MPV.playbackStateManager.update({
-					folderId: newFolderId,
-					isRunning: false,
-					isIdle: false,
-					isPaused: false,
-					isClosing: false
-				});
-
 				chrome.runtime.sendMessage({
 					action: "set_last_folder_id",
 					folderId: newFolderId,

@@ -38,7 +38,7 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 			const { mpv_playback_cache } = await chrome.storage.local.get(
 				"mpv_playback_cache",
 			);
-			if (mpv_playback_cache && mpv_playback_cache.folderId === folderId) {
+			if (mpv_playback_cache && mpv_playback_cache.folderId?.toLowerCase() === folderId?.toLowerCase()) {
 				finalStatus = {
 					isRunning: mpv_playback_cache.isRunning !== false,
 					isPaused: mpv_playback_cache.isPaused,
@@ -56,7 +56,7 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 		const isProcessRunning = !!finalStatus.isRunning;
 		const isManagerActive = isFolderActive(folderId);
 		
-		let isActive = (isProcessRunning || isManagerActive) && (finalStatus.folderId === folderId || !finalStatus.folderId);
+		let isActive = (isProcessRunning || isManagerActive) && (finalStatus.folderId?.toLowerCase() === folderId?.toLowerCase() || !finalStatus.folderId);
 		
 		const isPaused = (finalStatus.isPaused || finalStatus.isIdle) ?? false;
 		let needsAppend = false;
@@ -148,13 +148,14 @@ export async function broadcastPlaybackState(folderId, statusOverride = {}) {
 	if (!targetFolderId) return;
 
 	const isActive = isFolderActive(targetFolderId);
-	const cacheIsActive = !!(mpv_playback_cache && mpv_playback_cache.isRunning !== false && mpv_playback_cache.folderId === targetFolderId);
+	const cacheIsActive = !!(mpv_playback_cache && mpv_playback_cache.isRunning !== false && mpv_playback_cache.folderId?.toLowerCase() === targetFolderId?.toLowerCase());
 	const isRunning = isActive || cacheIsActive;
 	
 	let needsAppend = false;
 	if (isRunning) {
 		const storageData = await storage.get();
-		const folder = storageData.folders[targetFolderId];
+		const folderKey = Object.keys(storageData.folders || {}).find(k => k.toLowerCase() === targetFolderId.toLowerCase());
+		const folder = folderKey ? storageData.folders[folderKey] : storageData.folders[targetFolderId];
 		const rawSessionIds = mpv_playback_cache?.sessionIds;
 		
 		if (folder && folder.playlist && rawSessionIds) {

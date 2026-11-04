@@ -166,7 +166,13 @@ export class PlaybackManager {
 	}
 
 	findSessionByFolderId(folderId) {
-		return this.sessions.get(folderId);
+		if (!folderId) return null;
+		if (this.sessions.has(folderId)) return this.sessions.get(folderId);
+		const lower = folderId.toLowerCase();
+		for (const [key, session] of this.sessions.entries()) {
+			if (key.toLowerCase() === lower) return session;
+		}
+		return null;
 	}
 }
 

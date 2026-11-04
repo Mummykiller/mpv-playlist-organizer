@@ -33,8 +33,8 @@ export class MpvInterface {
 		
 		// Optimistic "Loading" state
 		const isToggle = isRunning && !isLaunching && !needsAppend && !options.playNewInstance && !options.urlItem;
-		if (!isToggle) {
-			if (needsAppend && isRunning && !options.playNewInstance && !isAlreadyInMpv) {
+		if (!isToggle && !options.playNewInstance) {
+			if (needsAppend && isRunning && !options.urlItem) {
 				MPV.playbackStateManager.setAppending(folderId);
 			} else {
 				MPV.playbackStateManager.setLoading(folderId);
@@ -49,31 +49,37 @@ export class MpvInterface {
 			});
 
 			if (response?.success) {
-				MPV.playbackStateManager.update({
-					folderId: folderId,
-					isRunning: response.isRunning ?? true,
-					isPaused: response.isPaused,
-					needsAppend: response.needsAppend,
-					lastPlayedId: response.lastPlayedId,
-					sessionIds: response.sessionIds,
-					isLaunching: false, // Clear optimistic launch flag on response
-					isAppending: false  // Clear optimistic append flag on response
-				});
+				if (!options.playNewInstance) {
+					MPV.playbackStateManager.update({
+						folderId: folderId,
+						isRunning: response.isRunning ?? true,
+						isPaused: response.isPaused,
+						needsAppend: response.needsAppend !== undefined ? response.needsAppend : (needsAppend ? false : undefined),
+						lastPlayedId: response.lastPlayedId,
+						sessionIds: response.sessionIds,
+						isLaunching: false, // Clear optimistic launch flag on response
+						isAppending: false  // Clear optimistic append flag on response
+					});
+				}
 			} else {
 				// Rollback loading state on failure
+				if (!options.playNewInstance) {
+					MPV.playbackStateManager.update({ 
+						isRunning: isRunning,
+						isLaunching: false,
+						isAppending: false
+					});
+				}
+			}
+			return response;
+		} catch (error) {
+			if (!options.playNewInstance) {
 				MPV.playbackStateManager.update({ 
 					isRunning: isRunning,
 					isLaunching: false,
 					isAppending: false
 				});
 			}
-			return response;
-		} catch (error) {
-			MPV.playbackStateManager.update({ 
-				isRunning: isRunning,
-				isLaunching: false,
-				isAppending: false
-			});
 			throw error;
 		}
 	}
@@ -81,10 +87,10 @@ export class MpvInterface {
 	/**
 	 * Closes the active MPV instance.
 	 */
-	static async closeMpv() {
+	static async closeMpv(folderId = null) {
 		const MPV = window.MPV_INTERNAL;
 		try {
-			const response = await sendMessageAsync({ action: "close_mpv" });
+			const response = await sendMessageAsync({ action: "close_mpv", folderId });
 			if (response?.success) {
 				MPV.playbackStateManager.update({ isClosing: true });
 			}
@@ -103,12 +109,23 @@ export class MpvInterface {
 	 */
 	static async add(folderId, data, extra = {}) {
 		if (!folderId) throw new Error("Folder ID is required.");
-		return await sendMessageAsync({
+		const res = await sendMessageAsync({
 			action: "add",
 			folderId,
 			data,
 			...extra
 		});
+		if (res?.success) {
+			const MPV = window.MPV_INTERNAL;
+			const pbState = MPV?.playbackStateManager?.state;
+			if (pbState?.isRunning && (!pbState.folderId || pbState.folderId.toLowerCase() === folderId.toLowerCase())) {
+				MPV.playbackStateManager.update({
+					folderId: folderId,
+					needsAppend: true
+				});
+			}
+		}
+		return res;
 	}
 
 	/**

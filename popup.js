@@ -266,15 +266,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 		// Unified Playback State Subscription
 		const MPV = window.MPV_INTERNAL;
 		const playbackUnsubscribe = MPV.playbackStateManager.subscribe((pbState) => {
-			// Update local persistent state
-			popupState.isFolderActive = pbState.status !== "stopped";
-			popupState.lastPlayedId = pbState.lastPlayedId;
-			popupState.isPaused = pbState.status === "paused";
-			popupState.needsAppend = pbState.needsAppend;
-
-			// Only update UI if we are looking at the relevant folder
 			const currentFolderId = miniFolderSelect?.value;
-			if (pbState.folderId === currentFolderId) {
+			const isCurrentFolder = pbState.folderId && currentFolderId && pbState.folderId.toLowerCase() === currentFolderId.toLowerCase();
+
+			if (isCurrentFolder) {
+				// Update local persistent state
+				popupState.isFolderActive = pbState.status !== "stopped";
+				popupState.lastPlayedId = pbState.lastPlayedId;
+				popupState.isPaused = pbState.status === "paused";
+				popupState.needsAppend = pbState.needsAppend;
+
 				setPlaybackLoading(pbState.status === "loading");
 				setPlaybackClosing(pbState.isClosing);
 				
@@ -285,6 +286,20 @@ document.addEventListener("DOMContentLoaded", async () => {
 					pbState.status !== "stopped",
 					pbState.status === "paused",
 					pbState.needsAppend
+				);
+			} else {
+				// Inactive folder view: reset local playback visual state
+				popupState.isFolderActive = false;
+				popupState.isPaused = false;
+				popupState.needsAppend = false;
+				setPlaybackLoading(false);
+				setPlaybackClosing(false);
+				renderPlaylist(
+					null,
+					popupState.lastPlayedId,
+					false,
+					false,
+					false
 				);
 			}
 		});
@@ -344,12 +359,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 					miniFolderSelect.appendChild(option);
 				});
 
-				if (
-					response.lastUsedFolderId &&
-					response.folderIds.includes(response.lastUsedFolderId)
-				) {
-					miniFolderSelect.value = response.lastUsedFolderId;
-					removeFolderSelect.value = response.lastUsedFolderId;
+				const currentVal = miniFolderSelect.value;
+				const targetFolderId = (currentVal && response.folderIds.includes(currentVal))
+					? currentVal
+					: (response.lastUsedFolderId && response.folderIds.includes(response.lastUsedFolderId)
+						? response.lastUsedFolderId
+						: response.folderIds[0]);
+
+				if (targetFolderId) {
+					miniFolderSelect.value = targetFolderId;
+					removeFolderSelect.value = targetFolderId;
 				}
 
 				updateRemoveButtonState();
@@ -522,16 +541,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 		async function refreshPlaylist(data = null, preventScroll = false) {
 			const processResponse = (response) => {
 				if (response?.success) {
-					// 1. Update unified manager first
-					MPV.playbackStateManager.update({
-						folderId: miniFolderSelect.value,
-						isRunning: response.isRunning,
-						isPaused: response.isPaused,
-						isIdle: response.isIdle,
-						lastPlayedId: response.lastPlayedId,
-						needsAppend: response.needsAppend,
-						sessionIds: response.sessionIds,
-					});
+					const currentFolder = miniFolderSelect?.value;
+					const pbActive = MPV.playbackStateManager.state;
+					const isFolderMatch = pbActive?.folderId && currentFolder && pbActive.folderId.toLowerCase() === currentFolder.toLowerCase();
+
+					// 1. Update unified manager only if this folder is running or matches the active playback folder
+					if (response.isRunning || isFolderMatch) {
+						MPV.playbackStateManager.update({
+							folderId: currentFolder,
+							isRunning: response.isRunning,
+							isPaused: response.isPaused,
+							isIdle: response.isIdle,
+							lastPlayedId: response.lastPlayedId,
+							needsAppend: response.needsAppend,
+							sessionIds: response.sessionIds,
+						});
+					}
 
 					// 2. Heavy data sync
 					renderPlaylist(
@@ -1457,7 +1482,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					}
 				}
 
-				const response = await MpvInterface.closeMpv();
+				const response = await MpvInterface.closeMpv(miniFolderSelect.value);
 				if (response.success) showStatus(response.message);
 				else showStatus(response.error, true);
 			} catch (error) {
@@ -1685,9 +1710,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 						if (popupState.currentPlaylist.length > 0) {
 							const firstItem = popupState.currentPlaylist[0];
-							sendMessageAsync({
-								action: "play",
-								folderId: miniFolderSelect.value,
+							MpvInterface.play(miniFolderSelect.value, {
 								urlItem: firstItem,
 								playlistStartId: firstItem.id
 							});
@@ -1882,19 +1905,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 					isRunning: playbackCache.isRunning || !playbackCache.isIdle,
 					isPaused: playbackCache.isPaused,
 					isIdle: playbackCache.isIdle,
-					lastPlayedId: playbackCache.lastPlayedId
+					lastPlayedId: playbackCache.lastPlayedId,
+					sessionIds: playbackCache.sessionIds,
+					needsAppend: playbackCache.needsAppend
 				});
 
 				if (uiManager.isMiniView()) {
 					// Render playlist instantly from storage (Static state + Playback cache)
+					const isFolderMatch = playbackCache.folderId && lastUsedFolderId && playbackCache.folderId.toLowerCase() === lastUsedFolderId.toLowerCase();
 					const isFolderActive =
-						playbackCache.folderId === lastUsedFolderId &&
+						isFolderMatch &&
 						(playbackCache.isRunning || !playbackCache.isIdle);
 					const isPaused = (playbackCache.isPaused || playbackCache.isIdle) || false;
 
 					// Priority for lastPlayedId: Cache (real-time) > Storage (backup)
 					const effectiveLastPlayedId =
-						playbackCache.folderId === lastUsedFolderId &&
+						isFolderMatch &&
 						playbackCache.lastPlayedId
 							? playbackCache.lastPlayedId
 							: lastPlayedId;
@@ -1921,7 +1947,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					// Show loading state instantly if cache says we are launching
 					if (
 						playbackCache.isLaunching &&
-						playbackCache.folderId === lastUsedFolderId
+						isFolderMatch
 					) {
 						MPV.playbackStateManager.setLoading(lastUsedFolderId);
 					}
@@ -1957,7 +1983,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 									});
 								});
 
-								if (tabState && tabState.success && tabState.folderId === lastUsedFolderId) {
+								if (tabState && tabState.success && tabState.folderId && lastUsedFolderId && tabState.folderId.toLowerCase() === lastUsedFolderId.toLowerCase()) {
 									renderPlaylist(
 										tabState.playlist,
 										tabState.lastPlayedId,
@@ -2066,7 +2092,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			if (request.action === "update_playlist_item") {
 				const currentFolderId = miniFolderSelect.value;
-				if (currentFolderId === request.folderId) {
+				if (currentFolderId && request.folderId && currentFolderId.toLowerCase() === request.folderId.toLowerCase()) {
 					updateItemDelta(request.itemId, request.delta);
 				}
 			}
@@ -2075,8 +2101,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (request.action === "playback_state_changed" || request.action === "playlist_dirty") {
 				const currentFolderId = miniFolderSelect.value;
 				const state = request.state || request;
+				const isFolderMatch = currentFolderId && state.folderId && currentFolderId.toLowerCase() === state.folderId.toLowerCase();
 				
-				if (currentFolderId === state.folderId) {
+				if (isFolderMatch) {
 					// 1. Update manager
 					MPV.playbackStateManager.update(state);
 					
@@ -2111,20 +2138,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (request.action === "render_playlist") {
 				const isMiniView = uiManager.isMiniView();
 				const currentFolderId = miniFolderSelect.value;
+				const activePbFolder = MPV.playbackStateManager.state.folderId;
+				const isMatchingActiveFolder = activePbFolder && request.folderId && activePbFolder.toLowerCase() === request.folderId.toLowerCase();
 
-				// 1. Update unified manager first
-				MPV.playbackStateManager.update({
-					folderId: request.folderId,
-					isRunning: request.isFolderActive,
-					isPaused: request.isPaused,
-					isIdle: request.isIdle,
-					isClosing: request.isClosing,
-					lastPlayedId: request.lastPlayedId,
-					needsAppend: request.needsAppend
-				});
+				// 1. Update unified manager only if active or matches active session
+				if (request.isFolderActive || isMatchingActiveFolder || !activePbFolder) {
+					MPV.playbackStateManager.update({
+						folderId: request.folderId,
+						isRunning: request.isFolderActive,
+						isPaused: request.isPaused,
+						isIdle: request.isIdle,
+						isClosing: request.isClosing,
+						lastPlayedId: request.lastPlayedId,
+						needsAppend: request.needsAppend,
+						sessionIds: request.sessionIds,
+					});
+				}
 
 				// 2. Heavy data sync (If looking at the right folder)
-				if (currentFolderId === request.folderId) {
+				if (currentFolderId && request.folderId && currentFolderId.toLowerCase() === request.folderId.toLowerCase()) {
 					if (isMiniView) {
 						renderPlaylist(
 							request.playlist,
@@ -2141,7 +2173,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			// Sync folder selection if it changed in another context (e.g. on page)
 			if (request.action === "last_folder_changed") {
-				if (miniFolderSelect.value !== request.folderId) {
+				if (miniFolderSelect.value && request.folderId && miniFolderSelect.value.toLowerCase() !== request.folderId.toLowerCase()) {
 					miniFolderSelect.value = request.folderId;
 					refreshPlaylist(null, true);
 				}
@@ -2391,7 +2423,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			
 			if (changes.active_playback_state) {
 				const newState = changes.active_playback_state.newValue;
-				if (newState && newState.folderId === miniFolderSelect?.value) {
+				if (newState && miniFolderSelect?.value && newState.folderId?.toLowerCase() === miniFolderSelect.value.toLowerCase()) {
 					console.log("[Popup] Reactive Storage Sync:", newState);
 					
 					// Update manager
