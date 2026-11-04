@@ -80,8 +80,7 @@ class PlaybackHandler(BaseHandler):
         if not request.play_new_instance and self.mpv_session.is_alive and not getattr(self.mpv_session, 'is_closing', False) and self.mpv_session.owner_folder_id == folder_id:
             logging.info(f"[PY][Handler] Session already alive for folder '{folder_id}'. Checking for pause cycle.")
             if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
-                res = self.mpv_session.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=0.5)
-                current_playing_id = res.get("data") if res and res.get("error") == "success" else None
+                current_playing_id = self.mpv_session.ipc_manager.get_property("user-data/id", timeout=0.5)
                 
                 should_toggle_pause = False
                 if effective_input_type == 'single' and request.url_item:
@@ -319,8 +318,7 @@ class PlaybackHandler(BaseHandler):
         # 2. Socket check if PID seems alive
         if is_running:
             if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
-                res = self.mpv_session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.3, expect_response=True)
-                if not res or res.get("error") != "success":
+                if self.mpv_session.ipc_manager.get_property("pid", timeout=0.3) is None:
                     is_running = False
             else:
                 is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
@@ -431,33 +429,20 @@ class PlaybackHandler(BaseHandler):
 
         try:
             # 2.5 Generate Metadata Handshake File
-            import uuid
-            import json
-            handshake_data = {
-                "folder_id": folder_id,
-                "project_root": self.ctx.script_dir,
-                "flag_dir": os.path.join(os.path.dirname(self.ctx.temp_playlists_dir), "flags"),
-                "playlist_start_index": 0,
-                "is_youtube": is_youtube,
-                "use_ytdl_mpv": use_ytdl_mpv,
-                "title": first_item.get('title'),
-                "id": first_item.get('id'),
-                "original_url": self.services.sanitize_url(first_item.get('original_url') or first_item.get('url', '')),
-                "headers": headers,
-                "cookies_browser": cookies_browser,
-                "lua_options": self.services.construct_lua_options(first_item, settings, self.ctx.script_dir)[0],
-                "is_unmanaged": True
-            }
-            
-            # Ensure flags directory exists
-            os.makedirs(handshake_data["flag_dir"], exist_ok=True)
-            
-            handshake_path = os.path.join(handshake_data["flag_dir"], f"handshake_unmanaged_{uuid.uuid4().hex}.json")
-            with open(handshake_path, 'w', encoding='utf-8') as f:
-                json.dump(handshake_data, f)
-            
-            # Inject handshake into custom flags
-            handshake_flag = f"--script-opts=mpv_organizer-handshake={handshake_path}"
+            flag_dir = os.path.join(os.path.dirname(self.ctx.temp_playlists_dir), "flags")
+            handshake_path, handshake_flag = self.services.create_handshake_file(
+                flag_dir=flag_dir,
+                folder_id=folder_id,
+                script_dir=self.ctx.script_dir,
+                item=first_item,
+                settings=settings,
+                playlist_start_index=0,
+                is_unmanaged=True,
+                is_youtube=is_youtube,
+                use_ytdl_mpv=use_ytdl_mpv,
+                headers=headers,
+                cookies_browser=cookies_browser
+            )
             updated_custom_flags = f"{custom_mpv_flags or ''} {handshake_flag}".strip()
 
             # NOTE: We do NOT pass start_time here via CLI args, because it creates a global

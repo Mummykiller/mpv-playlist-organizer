@@ -11,6 +11,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import uuid
+import json
 
 # Prevent __pycache__ generation
 sys.dont_write_bytecode = True
@@ -27,6 +29,42 @@ SAFE_MPV_FLAGS_ALLOWLIST = security.SAFE_MPV_FLAGS_ALLOWLIST
 def sanitize_url(url):
     """Sanitizes a URL by removing potentially dangerous characters."""
     return file_io.sanitize_string(url, is_filename=False)
+
+def create_handshake_file(flag_dir, folder_id, script_dir, item, settings,
+                          playlist_start_index=0, is_unmanaged=False,
+                          is_youtube=False, use_ytdl_mpv=False,
+                          headers=None, cookies_browser=None):
+    """
+    Creates an atomic metadata handshake JSON file for mpv/lua initialization.
+    Returns (handshake_path, handshake_flag).
+    """
+    os.makedirs(flag_dir, exist_ok=True)
+    handshake_data = {
+        "folder_id": folder_id,
+        "project_root": script_dir,
+        "flag_dir": flag_dir,
+        "playlist_start_index": playlist_start_index,
+        "is_youtube": is_youtube,
+        "use_ytdl_mpv": use_ytdl_mpv,
+        "title": item.get('title'),
+        "id": item.get('id'),
+        "original_url": sanitize_url(item.get('original_url') or item.get('url', '')),
+        "headers": headers or item.get('headers'),
+        "cookies_browser": cookies_browser or item.get('cookies_browser'),
+        "lua_options": construct_lua_options(item, settings, script_dir)[0],
+        "is_unmanaged": is_unmanaged
+    }
+
+    prefix = "handshake_unmanaged_" if is_unmanaged else "handshake_"
+    handshake_path = os.path.join(flag_dir, f"{prefix}{uuid.uuid4().hex}.json")
+    if platform.system() == "Windows":
+        handshake_path = handshake_path.replace("\\", "/")
+
+    with open(handshake_path, 'w', encoding='utf-8') as f:
+        json.dump(handshake_data, f)
+
+    handshake_flag = f"--script-opts=mpv_organizer-handshake={handshake_path}"
+    return handshake_path, handshake_flag
 
 def get_gpu_vendor():
     system = platform.system()

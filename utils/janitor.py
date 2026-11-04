@@ -132,12 +132,10 @@ class Janitor:
                                 try:
                                     manager = IPCSocketManager()
                                     if manager.connect(item_path, timeout=0.5):
-                                        resp = manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=0.5)
+                                        mpv_pid = manager.get_property("pid", timeout=0.5)
                                         manager.close()
-                                        if resp and resp.get("error") == "success":
-                                            mpv_pid = resp.get("data")
-                                            if mpv_pid and is_pid_running(mpv_pid):
-                                                is_socket_responsive = True
+                                        if mpv_pid and is_pid_running(mpv_pid):
+                                            is_socket_responsive = True
                                 except Exception:
                                     pass
 

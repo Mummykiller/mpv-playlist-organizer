@@ -792,11 +792,8 @@ class PlaylistTracker:
             return
 
         try:
-            pause_res = self.ipc_manager.send({"command": ["get_property", "pause"]}, expect_response=True, timeout=0.2)
-            idle_res = self.ipc_manager.send({"command": ["get_property", "idle-active"]}, expect_response=True, timeout=0.2)
-            
-            is_paused = pause_res.get("data") if pause_res and pause_res.get("error") == "success" else False
-            is_idle = idle_res.get("data") if idle_res and idle_res.get("error") == "success" else False
+            is_paused = self.ipc_manager.get_property("pause", timeout=0.2, default=False)
+            is_idle = self.ipc_manager.get_property("idle-active", timeout=0.2, default=False)
             
             # Send status update back to Python Host
             self.send_message({
