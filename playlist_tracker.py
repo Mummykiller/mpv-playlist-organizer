@@ -202,15 +202,7 @@ class PlaylistTracker:
                     # Connection lost but no event? (EOF)
                     if not self.ipc_manager.is_connected() and self.is_tracking:
                         logging.info(f"[PY][Tracker] IPC connection lost unexpectedly for folder '{self.folder_id}'. Signaling shutdown.")
-                        
-                        # Final commit before exiting due to connection loss
-                        self._commit_to_disk()
-
-                        self.send_message({
-                            "action": "mpv_quitting",
-                            "folder_id": self.folder_id
-                        })
-                        self.is_tracking = False
+                        self._notify_quitting()
                         break
                     
                     time.sleep(0.05) # Tiny timer for stability
@@ -380,21 +372,7 @@ class PlaylistTracker:
 
                 elif event.get('event') == 'shutdown':
                     logging.info(f"[PY][Tracker] MPV shutdown detected for folder '{self.folder_id}'. Notifying UI.")
-                    
-                    # Final commit before exiting
-                    self._commit_to_disk()
-
-                    # 1. IMMEDIATE notification with early clear hint
-                    self.send_message({
-                        "action": "mpv_quitting",
-                        "folder_id": self.folder_id,
-                        "is_natural_completion": self.is_naturally_completed,
-                        "played_ids": list(self.played_item_ids),
-                        "watched_ids": list(self.threshold_met_ids),
-                        "session_ids": list(self.session_item_ids)
-                    })
-                    # 2. Stop loop
-                    self.is_tracking = False 
+                    self._notify_quitting()
                     break
 
             except Exception as e:
@@ -402,19 +380,7 @@ class PlaylistTracker:
                 # If the socket is explicitly closed or we get a connection error, stop tracking
                 if self.ipc_manager and not self.ipc_manager.is_connected():
                     logging.info("[PY][Tracker] MPV IPC connection lost. Signaling shutdown.")
-                    
-                    # Final commit before exiting due to error-induced connection loss
-                    self._commit_to_disk()
-
-                    self.send_message({
-                        "action": "mpv_quitting",
-                        "folder_id": self.folder_id,
-                        "is_natural_completion": self.is_naturally_completed,
-                        "played_ids": list(self.played_item_ids),
-                        "watched_ids": list(self.threshold_met_ids),
-                        "session_ids": list(self.session_item_ids)
-                    })
-                    self.is_tracking = False
+                    self._notify_quitting()
                     break
                 time.sleep(0.1) # Small backoff
 
@@ -552,6 +518,19 @@ class PlaylistTracker:
         
         thread = threading.Thread(target=heartbeat_loop, daemon=True)
         thread.start()
+
+    def _notify_quitting(self):
+        """Performs final disk commit and dispatches mpv_quitting message with full context."""
+        self._commit_to_disk()
+        self.send_message({
+            "action": "mpv_quitting",
+            "folder_id": self.folder_id,
+            "is_natural_completion": self.is_naturally_completed,
+            "played_ids": list(self.played_item_ids),
+            "watched_ids": list(self.threshold_met_ids),
+            "session_ids": list(self.session_item_ids)
+        })
+        self.is_tracking = False
 
     def _commit_to_disk(self):
         """Performs a single read-modify-write to the playlist shard with all cached changes."""
