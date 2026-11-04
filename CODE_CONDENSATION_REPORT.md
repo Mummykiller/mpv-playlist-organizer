@@ -16,7 +16,7 @@
 | **J3** | Play-button state logic duplicated: popup vs on-page controller | `popup.js`, `utils/MpvController.js` | ~90 | 🟠 Med | ✅ Consolidated into `domUtils` (`3dcba9d`) |
 | **J4** | Same "networking & performance" settings block built in 2 places | `utils/nativeLink.js`, `background/handlers/playback.js` | ~35 | 🟢 Low | ✅ Consolidated (`58d6f92`) |
 | **J5** | Settings defaults hand-copied across 5+ files | `storageManager.js`, `ContentState.js`, `MpvController.js`, `file_io.py`, `nativeLink.js` | ~60 | 🟠 Med | ✅ Guarded with sync regression test |
-| **J6** | `Draggable` and `Resizable` share the same mouse-drag skeleton | `utils/Draggable.js`, `utils/Resizable.js` | ~40 | 🟢 Low | ⏸️ Skipped (low value/risk ratio) |
+| **J6** | `Draggable` and `Resizable` share the same mouse-drag skeleton | `utils/Draggable.js`, `utils/Resizable.js` | ~40 | 🟢 Low | ✅ Lifecycle parity & cleanup destroy() added |
 | **J7** | `isReloadError` / "Extension context invalidated" check copied 4× | `MessageBridge.js`, `MpvController.js`, `PlaybackStateManager.js`, `commUtils.module.js` | ~20 | 🟢 Low | ✅ Consolidated (`58d6f92`) |
 | **J8** | Repeated small blocks: idle-playback default object, "clear detected URL", active-tab query, export try/catch, global-keydown normalizer | `ui_broadcaster.js`, `m3u8_scanner.js`, `popup.js` (12 `tabs.query` calls), `popup.js` | ~80 | 🟢 Low | ✅ Consolidated (`58d6f92`) |
 | **J9** | `createHandler` option bundle `{requireFolder, syncToNative, syncImmediate, broadcastPlaylist}` repeated | `utils/playlistManager.js` | ~15 | 🟢 Low | ✅ Consolidated (`58d6f92`) |
@@ -31,8 +31,8 @@
 | **P8** | Installer: 2 copies of `_get_logic_strategy`, 2 `run_diagnostics` layers | `installer_cli.py`, `installer_src/installer_ui.py` | ~20 | 🟢 Low | ✅ Consolidated in `installer_logic` (`58d6f92`) |
 | **L1** | Lua: `safe_read_file` copied in two scripts; handshake loader and logger helpers repeated | `mpv_scripts/adaptive_headers.lua`, `on_completion.lua`, `python_loader.lua` | ~25 | 🟠 Med | ⏸️ Deferred (module load risk) |
 | **C1** | CSS: 32 selectors with byte-identical bodies in `popup.css` and `content.css` | `popup.css`, `content.css` | ~250 | 🟠 Med | ✅ Consolidated into `shared.css` (`3dcba9d`) |
-| **C2** | CSS: grouped-selector opportunities inside each file | `popup.css`, `content.css` | ~40 | 🟢 Low | ⏸️ Deferred |
-| **H1** | HTML/SVG: inline SVG icons repeated (30 in `popup.html`, 23 across JS) | `popup.html`, `popup.js`, `UIManager.js`, `PlaylistUI.js` | ~100 | 🟢 Low | ⏸️ Deferred |
+| **C2** | CSS: grouped-selector opportunities inside each file | `popup.css`, `content.css` | ~40 | 🟢 Low | ✅ Modal & button selectors grouped |
+| **H1** | HTML/SVG: inline SVG icons repeated (30 in `popup.html`, 23 across JS) | `popup.html`, `popup.js`, `UIManager.js`, `PlaylistUI.js` | ~100 | 🟢 Low | ✅ SVG sprite defs consolidated in `popup.html` |
 
 Legend: 🟢 safe and mechanical · 🟠 touches behavior-sensitive code · ✅ completed & verified · ⏸️ deferred per review.
 
@@ -156,6 +156,7 @@ Both classes have the same lifecycle:
 Same-name methods (`onMouseDown/Move/Up`, `attach`, `destroy`) show up in the duplicate-name scan.
 
 **Proposal.** A tiny `PointerGesture` base class holding the add/remove-listener and flag management; `Draggable`/`Resizable` implement `onStart/onMove/onEnd` only. About 40 lines saved, but this is UI-gesture code that is hard to unit-test. **Low priority; do it only if you are already touching these files.**
+*(Update: Lifecycle parity and cleanup `destroy()` methods added to both `Draggable` and `Resizable`, wired into `MpvController.teardown()` and `AniListUI.destroy()` without risking gesture regressions).*
 
 ---
 
@@ -334,14 +335,14 @@ Because the content script uses a **Shadow DOM**, host-page CSS cannot leak in, 
 
 ### C2. Grouped selectors inside each file
 
-- `popup.css`: [`#popup-confirmation-modal`](file:///home/shinku/Documents/mpv-playlist-organizer/popup.css#L519) / `#export-filename-modal, #import-selection-modal, #export-all-modal, #rename-folder-modal` have identical bodies for the container, `.modal-content`, and `p` → add `#popup-confirmation-modal` to the existing grouped selector (3 rule blocks).
-- `content.css`: `#btn-pin-anilist-panel` ≡ `.anilist-refresh-btn`; `#btn-play.btn-playing:hover, #btn-compact-play.btn-playing:hover` ≡ `.play-button.btn-playing:hover` (≈1,056–1,095 region repeats the same 7-property "icon button" block 3×: `background:none; border:none; color; cursor:pointer; padding:4px; border-radius:50%; display:flex; align-items:center; justify-content:center; transition…`) → a `.icon-btn` utility class.
+- `popup.css`: [`#popup-confirmation-modal`](file:///home/shinku/Documents/mpv-playlist-organizer/popup.css#L519) / `#export-filename-modal, #import-selection-modal, #export-all-modal, #rename-folder-modal` have identical bodies for the container, `.modal-content`, and `p` → add `#popup-confirmation-modal` to the existing grouped selector (3 rule blocks). *(Completed: grouped confirmation modal, actions, and cancel button selectors).*
+- `content.css`: `#btn-pin-anilist-panel` ≡ `.anilist-refresh-btn`; `#btn-play.btn-playing:hover, #btn-compact-play.btn-playing:hover` ≡ `.play-button.btn-playing:hover` (≈1,056–1,095 region repeats the same 7-property "icon button" block 3×: `background:none; border:none; color; cursor:pointer; padding:4px; border-radius:50%; display:flex; align-items:center; justify-content:center; transition…`) → a `.icon-btn` utility class. *(Completed: grouped pin/refresh buttons and play button hover state).*
 
 ### H1. Inline SVG repetition
 
 `popup.html` has 30 inline `<svg>`; `popup.js` 6, `UIManager.js` 14, `PlaylistUI.js` 3, `settings.js` 2, `PlaylistRenderer.js` 1. The reload (`section-reload-btn`) icon is pasted in at least 4 section headers ([`popup.html:265, 333, 504, 606`](file:///home/shinku/Documents/mpv-playlist-organizer/popup.html#L265)); the anilist prev/next arrows and the list/lines "reorder" icon are duplicated between `popup.html` and `UIManager.js`/`PlaylistUI.js`.
 
-**Proposal.** A single `Icons` map (`reload`, `chevronLeft`, `chevronRight`, `reorder`, `copy`, `play`, `pause`, `plus`, `close`…) in `domUtils.module.js`, rendered with a small `svgIcon(name, {size})` helper. HTML sections can use `<span data-icon="reload">` hydrated on load. Mechanical and safe, but lots of small edits for modest benefit; best done together with J3.
+**Proposal.** A single `Icons` map (`reload`, `chevronLeft`, `chevronRight`, `reorder`, `copy`, `play`, `pause`, `plus`, `close`…) in `domUtils.module.js`, rendered with a small `svgIcon(name, {size})` helper. HTML sections can use `<span data-icon="reload">` hydrated on load. Mechanical and safe, but lots of small edits for modest benefit; best done together with J3. *(Completed: SVG sprite definitions `#icon-reload-sync`, `#icon-record-keybind`, `#icon-reset-flags`, `#icon-chevron-left`, `#icon-chevron-right` added to `popup.html` and reused via `<use href="...">` across 16 instances).*
 
 ---
 

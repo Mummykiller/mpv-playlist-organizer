@@ -175,7 +175,8 @@ button:active {
 }
 
 #btn-play.btn-playing:hover,
-#btn-compact-play.btn-playing:hover {
+#btn-compact-play.btn-playing:hover,
+.play-button.btn-playing:hover {
 	background-color: var(--accent-primary-hover) !important;
 	box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6) !important; /* Vibrant blue glow */
 }
@@ -961,7 +962,8 @@ select:focus-visible {
 	box-shadow: none;
 }
 
-#btn-pin-anilist-panel {
+#btn-pin-anilist-panel,
+.anilist-refresh-btn {
 	background: none;
 	border: none;
 	color: var(--text-secondary);
@@ -975,7 +977,8 @@ select:focus-visible {
 	box-shadow: none;
 }
 
-#btn-pin-anilist-panel:hover {
+#btn-pin-anilist-panel:hover,
+.anilist-refresh-btn:hover {
 	background-color: var(--bg-tertiary);
 	color: var(--text-primary);
 }
@@ -990,23 +993,6 @@ select:focus-visible {
 	opacity: 1;
 	background: none;
 	border: none;
-}
-.anilist-refresh-btn {
-	background: none;
-	border: none;
-	color: var(--text-secondary);
-	cursor: pointer;
-	padding: 4px;
-	border-radius: 50%;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	transition: all 0.2s ease;
-	box-shadow: none;
-}
-.anilist-refresh-btn:hover {
-	background-color: var(--surface-hover-color);
-	color: var(--text-primary);
 }
 
 /* Override the default item style for the one inside the floating panel */
@@ -1234,10 +1220,6 @@ button.btn-closing {
 	box-shadow: 0 0 10px 2px rgba(100, 116, 139, 0.6); /* Add a grey glow */
 }
 
-.play-button.btn-playing:hover {
-	background-color: var(--accent-primary-hover) !important;
-	box-shadow: 0 0 10px 2px rgba(88, 101, 242, 0.6) !important;
-}
 
 #m3u8-minimized-play-btn svg {
 	width: 14px; /* The size of the play triangle icon. */

@@ -499,61 +499,6 @@ button:disabled {
 	min-height: calc(1.2em + 8px);
 }
 
-/* --- Confirmation Modal --- */
-#popup-confirmation-modal {
-	position: fixed; /* Cover the entire popup viewport */
-	top: 0;
-	left: 0;
-	right: 0;
-	bottom: 0;
-	background-color: rgba(0, 0, 0, 0.8); /* Darker overlay for popups */
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	z-index: 100;
-	padding: 16px; /* Match body padding */
-	box-sizing: border-box;
-}
-
-#popup-confirmation-modal .modal-content {
-	background-color: var(--bg-secondary);
-	padding: 20px;
-	border-radius: var(--radius);
-	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
-	text-align: center;
-	border: 1px solid var(--border-primary);
-	display: flex;
-	flex-direction: column;
-	gap: 16px;
-	width: 100%; /* Take up available width within padding */
-}
-
-#popup-confirmation-modal #popup-modal-message {
-	margin: 0;
-	font-size: 14px;
-	color: var(--text-primary);
-	line-height: 1.4;
-}
-
-#popup-confirmation-modal .modal-actions {
-	display: flex;
-	justify-content: center;
-	gap: 12px;
-}
-
-#popup-confirmation-modal .modal-actions button {
-	background-color: var(--accent-danger);
-}
-#popup-confirmation-modal .modal-actions button:hover {
-	background-color: var(--accent-danger-hover);
-}
-#popup-confirmation-modal .modal-actions #popup-modal-cancel-btn {
-	background-color: var(--bg-tertiary);
-}
-#popup-confirmation-modal .modal-actions #popup-modal-cancel-btn:hover {
-	background-color: var(--bg-tertiary);
-}
-
 /* --- Settings Search --- */
 .settings-search-container {
 	padding: 8px 0;
@@ -661,7 +606,8 @@ button:disabled {
 	cursor: pointer;
 }
 
-/* --- Generic Modals (Export, Import, Rename) --- */
+/* --- Modals (Confirmation, Export, Import, Rename) --- */
+#popup-confirmation-modal,
 #export-filename-modal,
 #import-selection-modal,
 #export-all-modal,
@@ -680,6 +626,7 @@ button:disabled {
 	box-sizing: border-box;
 }
 
+#popup-confirmation-modal .modal-content,
 #export-filename-modal .modal-content,
 #import-selection-modal .modal-content,
 #export-all-modal .modal-content,
@@ -696,6 +643,7 @@ button:disabled {
 	width: 100%; /* Take up available width within padding */
 }
 
+#popup-confirmation-modal #popup-modal-message,
 #export-filename-modal .modal-content p,
 #import-selection-modal .modal-content p,
 #export-all-modal .modal-content p,
@@ -706,6 +654,7 @@ button:disabled {
 	line-height: 1.4;
 }
 
+#popup-confirmation-modal .modal-actions,
 #export-filename-modal .modal-actions,
 #import-selection-modal .modal-actions,
 #export-all-modal .modal-actions,
@@ -715,6 +664,12 @@ button:disabled {
 	gap: 12px;
 }
 
+#popup-confirmation-modal .modal-actions button {
+	background-color: var(--accent-danger);
+}
+#popup-confirmation-modal .modal-actions button:hover {
+	background-color: var(--accent-danger-hover);
+}
 #export-filename-modal #export-save-btn,
 #import-selection-modal #import-confirm-btn,
 #export-all-modal #export-all-confirm-btn,
@@ -727,12 +682,14 @@ button:disabled {
 #rename-folder-modal #rename-save-btn:hover {
 	background-color: var(--accent-primary-hover);
 }
+#popup-confirmation-modal .modal-actions #popup-modal-cancel-btn,
 #export-filename-modal #export-cancel-btn,
 #import-selection-modal #import-cancel-btn,
 #export-all-modal #export-all-cancel-btn,
 #rename-folder-modal #rename-cancel-btn {
 	background-color: var(--bg-tertiary);
 }
+#popup-confirmation-modal .modal-actions #popup-modal-cancel-btn:hover,
 #export-filename-modal #export-cancel-btn:hover,
 #import-selection-modal #import-cancel-btn:hover,
 #export-all-modal #export-all-cancel-btn:hover,

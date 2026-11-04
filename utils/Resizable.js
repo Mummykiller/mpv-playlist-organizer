@@ -78,5 +78,17 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		attach() {
 			this.handle.addEventListener("mousedown", this.onMouseDown);
 		}
+
+		destroy() {
+			if (this.handle) {
+				this.handle.removeEventListener("mousedown", this.onMouseDown);
+			}
+			if (this.isResizing) {
+				this.isResizing = false;
+				document.body.classList.remove("mpv-anilist-resizing");
+			}
+			document.removeEventListener("mousemove", this.onMouseMove);
+			document.removeEventListener("mouseup", this.onMouseUp);
+		}
 	};
 })();
