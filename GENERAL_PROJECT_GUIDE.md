@@ -250,7 +250,7 @@ python3 verify_changes.py
 ```
 This script sequentially:
 1. Rebuilds all generated `utils/*.js` files from `utils/*.module.js`.
-2. Runs **Batch 1: Backend Logic & Robustness** (Python unit tests, handshake generation, settings drift guard, crash repro).
+2. Runs **Batch 1: Backend Logic & Robustness** (Python unit tests, handshake generation, settings drift guard, crash repro, and security claim regressions).
 3. Runs **Batch 2: Frontend Logic & Bridge** (Node/JSDOM protocol tests, build syntax checks for generated files and background handlers).
 4. Runs **Batch 3: Cross-Environment Integration** (Logging pipeline and diagnostics).
 
