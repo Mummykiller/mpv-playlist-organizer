@@ -31,10 +31,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		update_last_played: [],
 		update_item_resume_time: [],
 		update_item_marked_as_watched: [],
+		update_item_title: [],
 		playback_status_changed: [],
+		playback_health_changed: [],
 		item_natural_completion: [],
 		mpv_quitting: [],
 		session_restored: [],
+		task_update: [],
 		log: [],
 	};
 
@@ -42,9 +45,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	 * Registers a listener for unsolicited native host events.
 	 */
 	const addNativeListener = MPV.addNativeListener = function addNativeListener(action, callback) {
-		if (eventListeners[action]) {
-			eventListeners[action].push(callback);
+		if (!eventListeners[action]) {
+			eventListeners[action] = [];
 		}
+		eventListeners[action].push(callback);
 	}
 
 	/**
@@ -143,9 +147,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					});
 
 					// Synchronize Log Level
-					if (responseData.log_level) {
-						logger.setLevel(responseData.log_level);
-						logger.info(`Log level synced to ${responseData.log_level}`);
+					const syncedLogLevel = responseData.logLevel || responseData.log_level;
+					if (syncedLogLevel) {
+						logger.setLevel(syncedLogLevel);
+						logger.info(`Log level synced to ${syncedLogLevel}`);
 					}
 
 					if (responseData.action === "session_restored")
@@ -220,7 +225,5 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			return { success: false, error: errorMessage };
 		}
 	}
-
-	const injectDependencies = MPV.injectDependencies = function injectDependencies() {}
 
 })();

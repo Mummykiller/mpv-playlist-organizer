@@ -96,7 +96,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						isIdle: req.isIdle,
 						isClosing: req.isClosing,
 						lastPlayedId: req.lastPlayedId,
-						needsAppend: req.needsAppend
+						needsAppend: req.needsAppend,
+						sessionIds: req.sessionIds,
 					});
 
 					// 2. Folder Guard for rendering
@@ -240,15 +241,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				},
 				auto_add_state_changed: (req) => {
 					this._updateAutoAddVisuals(req.active);
-				},
-				get_controller_state: (req, send) => {
-					send({
-						success: true,
-						isFolderActive: this.state.state.isFolderActive,
-						lastPlayedId: this.state.state.lastPlayedId,
-						isClosing: this.state.state.isClosing,
-						playlist: this.playlistUI?.currentPlaylist,
-					});
 				},
 				get_details_for_last_right_click: (req, send) =>
 					this._handleRightClickScrape(send),
@@ -415,6 +407,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.playlistUI.bindEvents();
 			this.anilistUI.bindEvents();
 			this._bindControllerEvents();
+
+			// Check for any active tasks now that the UI shadowRoot exists
+			chrome.storage.local.get("mpv_active_tasks", (data) => {
+				if (data.mpv_active_tasks) {
+					this._updateTaskUI(data.mpv_active_tasks);
+				}
+			});
 
 			// 3. Start Observation Modules
 			this.nav.init();
@@ -1155,7 +1154,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						lastPlayedId: targetLastPlayed || folderData.lastPlayedId || (pbState.folderId === folderId ? pbState.lastPlayedId : null),
 						isRunning: targetIsActive !== undefined ? targetIsActive : (pbState.folderId === folderId ? pbState.isRunning : false),
 						isPaused: targetIsPaused !== undefined ? targetIsPaused : (pbState.folderId === folderId ? pbState.isPaused : false),
-						needsAppend: targetNeedsAppend !== undefined ? targetNeedsAppend : (pbState.folderId === folderId ? pbState.needsAppend : false)
+						needsAppend: targetNeedsAppend !== undefined ? targetNeedsAppend : (pbState.folderId === folderId ? pbState.needsAppend : false),
+						sessionIds: pbState.folderId === folderId ? pbState.sessionIds : [],
 					});
 
 					// 2. Structural Check: Only re-render if fingerprint changed or completed items need to be hidden
@@ -1190,8 +1190,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const isMarked = isChecked;
 			// Manual UI toggle: strictly only update the SYNC flag
 			this.bridge.send("update_item_marked_as_watched", folderId, {
-				item_id: itemId,
-				marked_as_watched: isMarked,
+				itemId: itemId,
+				markedAsWatched: isMarked,
 			});
 
 			this.addLogEntry({
@@ -1924,7 +1924,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				minute: "2-digit",
 				second: "2-digit",
 			});
-			entry.innerHTML = `<span class="log-time">[${timestamp}]</span> <span class="log-text">${logText}</span>`;
+			const timeSpan = document.createElement("span");
+			timeSpan.className = "log-time";
+			timeSpan.textContent = `[${timestamp}]`;
+			const textSpan = document.createElement("span");
+			textSpan.className = "log-text";
+			textSpan.textContent = logText;
+			entry.append(timeSpan, " ", textSpan);
 
 			container.appendChild(entry);
 			container.scrollTop = container.scrollHeight;

@@ -40,9 +40,8 @@ YouTube URLs must be normalized to strip non-essential tracking parameters (`t`,
 - **OSD/Metadata:** Strips `" ` ` and newlines (`\n`, `\r`, `\t`).
 
 ### 3.2 M3U Injection Hardening
-**Standard:** All metadata written to M3U files MUST have shell metacharacters (`$`, `` ` `) escaped or stripped to prevent command injection when MPV processes the file.
-- *Current Implementation:* Strips `\n`, `\r`, and `,`.
-- *Required Upgrade:* Escape/Strip `$`, `` ` ` from titles.
+**Standard:** All metadata written to M3U files MUST have shell metacharacters (`$`, `` ` ``) escaped or stripped to prevent command injection when MPV processes the file.
+- *Current Implementation:* Strips `"`, `` ` ``, `$`, `\n`, `\r`, `\t`, and `,` via `sanitize_string()`.
 
 ---
 

@@ -1,6 +1,5 @@
 import uuid
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from . import native_link
 
 class ItemProcessor:
@@ -116,39 +115,6 @@ class ItemProcessor:
 
         return [item]
 
-    def process_batch(self, items, folder_id, settings, session=None, max_workers=5):
-        """Enriches a batch of items in parallel."""
-        final_items = []
-        job_id = None
-        
-        if self.task_manager and len(items) > 1:
-            job_id = self.task_manager.create_job("batch_enrich", f"Enriching {len(items)} items...", total=len(items))
-            self.task_manager.update_job(job_id, status="processing")
-
-        processed_count = 0
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(self.enrich_single_item, item, folder_id, settings=settings, session=session, quiet=True) for item in items]
-            for future in futures:
-                # Check for cancellation
-                if job_id and self.task_manager.is_cancelled(job_id):
-                    logging.info(f"[ItemProcessor] Batch enrichment for job {job_id} cancelled.")
-                    break
-
-                try:
-                    final_items.extend(future.result())
-                except Exception as e:
-                    logging.error(f"Error enriching item in batch: {e}")
-                
-                processed_count += 1
-                if job_id:
-                    self.task_manager.update_job(job_id, progress=processed_count)
-
-        if job_id:
-            status = "completed" if not self.task_manager.is_cancelled(job_id) else "cancelled"
-            self.task_manager.update_job(job_id, status=status)
-
-        return final_items
-
     def resolve_input_items(self, url_items_or_m3u, enriched_items_list, headers):
         """Resolves raw input (URL, Path, M3U content, or List) into a list of items."""
         if enriched_items_list is not None:
@@ -198,19 +164,28 @@ class ItemProcessor:
 
     def _fetch_remote_m3u(self, url, headers):
         """Fetches M3U content from a remote URL."""
-        from urllib.request import urlopen, Request
+        from urllib.request import Request, HTTPRedirectHandler, build_opener
+        from urllib.error import HTTPError
         from .url_analyzer import is_safe_url
         
         if not is_safe_url(url):
             logging.error(f"SSRF Protection: Blocked fetch of unsafe M3U URL: {url}")
             return None
 
+        class SafeRedirectHandler(HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+                if not is_safe_url(newurl):
+                    logging.error(f"SSRF Protection: Blocked unsafe redirect to: {newurl}")
+                    raise HTTPError(newurl, 403, "Blocked unsafe redirect", hdrs, fp)
+                return super().redirect_request(req, fp, code, msg, hdrs, newurl)
+
         try:
             fetch_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
             if headers:
                 fetch_headers.update(headers)
             req = Request(url, headers=fetch_headers)
-            with urlopen(req, timeout=10) as response:
+            opener = build_opener(SafeRedirectHandler())
+            with opener.open(req, timeout=10) as response:
                 return response.read().decode('utf-8')
         except Exception as e:
             logging.error(f"Failed to fetch remote M3U: {e}")

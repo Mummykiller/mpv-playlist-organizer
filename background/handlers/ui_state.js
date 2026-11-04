@@ -201,15 +201,27 @@ export const handleSwitchPlaylist = createHandler(async ({ data }) => {
 });
 
 // Settings that are strictly UI-side and should not be synced to the native host
-const UI_ONLY_KEYS = [
+export const UI_ONLY_KEYS = [
 	...DOMAIN_SPECIFIC_KEYS,
 	"logVisible",
+	"launchGeometry",
+	"customGeometryWidth",
+	"customGeometryHeight",
+	"customMpvFlags",
+	"forceTerminal",
+	"showPlayNewButton",
+	"duplicateUrlBehavior",
+	"syncGlobalRemovals",
+	"syncGlobalRemovalsLive",
 	"autoAppendOnAdd",
+	"autoAddInactivityTimeout",
+	"autoAddAutoOff",
 	"confirmRemoveFolder",
 	"confirmClearPlaylist",
 	"confirmCloseMpv",
 	"confirmPlayNew",
 	"confirmFolderSwitch",
+	"clearScope",
 	"enableDblclickCopy",
 	"anilistImageHeight",
 	"lockAnilistPanel",
@@ -218,6 +230,8 @@ const UI_ONLY_KEYS = [
 	"popupWidth",
 	"showWatchedStatusGui",
 	"showMinimizedStub",
+	"oneClickAdd",
+	"restrictedDomains",
 	"kbAddPlaylist",
 	"kbPlayPlaylist",
 	"kbToggleController",
@@ -357,6 +371,12 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 				if (Object.keys(syncPrefs).length > 0) await nativeLink.setUiPreferences(syncPrefs);
 			} catch (e) {
 				console.warn("Failed to sync preferences to native host:", e);
+			}
+
+			if (result.globalPrefs && "oneClickAdd" in result.globalPrefs) {
+				updateContextMenus(storage).catch((e) =>
+					console.error("Failed to update context menus:", e),
+				);
 			}
 		}
 	}

@@ -54,7 +54,12 @@ class VolatileCookieManager:
             base_dir = file_io.TEMP_DIR
             
         cookie_dir = os.path.join(base_dir, "mpv_organizer_cookies")
-        os.makedirs(cookie_dir, exist_ok=True)
+        os.makedirs(cookie_dir, mode=0o700, exist_ok=True)
+        if platform.system() != "Windows":
+            try:
+                os.chmod(cookie_dir, 0o700)
+            except OSError:
+                pass
         return cookie_dir
 
     @staticmethod
@@ -192,7 +197,7 @@ class VolatileCookieManager:
                 ytdlp_path,
                 '--cookies-from-browser', f"{browser}:{os.path.dirname(os.path.dirname(db_rel_path)) if system == 'Windows' else os.path.dirname(db_rel_path)}",
                 '--cookies', target_path,
-                '--skip-download', '--quiet', '--no-warnings', url
+                '--skip-download', '--quiet', '--no-warnings', '--', url
             ]
             if ignore_config:
                 cmd.insert(1, '--ignore-config')
@@ -248,6 +253,7 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
             '--skip-download',
             '--quiet',
             '--no-warnings',
+            '--',
             url
         ]
         
@@ -415,7 +421,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                             cmd.extend(['--cookies-from-browser', browser])
                             cookies_browser = browser
 
-                cmd.append(url)
+                cmd.extend(['--', url])
 
                 result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
                 lines = result.stdout.strip().split('\n')
@@ -517,7 +523,6 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
             '--geo-bypass-country', 'US',
             '--default-search', 'auto',
             '--user-agent', effective_user_agent,
-            url
         ]
         
         if is_yt_ignore_config_enabled: 
@@ -525,6 +530,8 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
 
         if is_other_cookies_enabled and browser and browser != "None":
             cmd.extend(['--cookies-from-browser', browser])
+        
+        cmd.extend(['--', url])
         
         logging.info(f"Resolving non-YouTube URL externally: {url} with format {ytdl_format}")
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)

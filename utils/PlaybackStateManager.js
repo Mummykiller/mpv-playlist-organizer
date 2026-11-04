@@ -21,6 +21,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				status: PlaybackStatus.STOPPED,
 				folderId: null,
 				lastPlayedId: null,
+				sessionIds: [],
 				isPaused: false,
 				isIdle: false,
 				isRunning: false,
@@ -85,6 +86,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// 1. Handle folder and ID tracking
 			if (newData.folderId) this.state.folderId = newData.folderId;
 			if (newData.lastPlayedId) this.state.lastPlayedId = newData.lastPlayedId;
+			if (Array.isArray(newData.sessionIds)) this.state.sessionIds = newData.sessionIds;
 			if (newData.needsAppend !== undefined) this.state.needsAppend = newData.needsAppend;
 			if (newData.isClosing !== undefined) this.state.isClosing = newData.isClosing;
 			if (newData.isLaunching !== undefined) this.state.isLaunching = newData.isLaunching;
@@ -103,6 +105,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// If the player is NOT running OR health is dead, we must clear states
 			if (!isRunning || health === "dead") {
 				this.state.needsAppend = false;
+				this.state.sessionIds = [];
 				// Only clear isClosing if we are TRULY stopped (isRunning is false)
 				if (!isRunning) {
 					this.state.isClosing = false;

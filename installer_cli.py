@@ -65,8 +65,11 @@ class CommandLineApp:
         
         # 1. Get Extension ID
         current_id = ""
-        manifest_filename = f"{HOST_NAME}-chrome.json" if platform.system() == "Windows" else f"{HOST_NAME}.json"
-        manifest_path = os.path.join(file_io.DATA_DIR, manifest_filename)
+        manifest_candidates = [
+            os.path.join(file_io.DATA_DIR, f"{HOST_NAME}-chrome.json"),
+            os.path.join(file_io.DATA_DIR, f"{HOST_NAME}.json"),
+        ]
+        manifest_path = next((p for p in manifest_candidates if os.path.exists(p)), manifest_candidates[0])
         if os.path.exists(manifest_path):
             try:
                 with open(manifest_path, 'r') as f:

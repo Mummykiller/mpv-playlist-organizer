@@ -133,7 +133,7 @@ try:
 
     # --- Run Janitor Startup Sweep (Threaded) ---
     janitor = Janitor(DATA_DIR, TEMP_PLAYLISTS_DIR)
-    janitor_thread = threading.Thread(target=janitor.run_startup_sweep, kwargs={'extension_root': SCRIPT_DIR}, daemon=True)
+    janitor_thread = threading.Thread(target=janitor.run_startup_sweep, daemon=True)
     janitor_thread.start()
 
     class DiagnosticCollector:
@@ -322,33 +322,6 @@ try:
             current_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
             return native_link.success(res, action="session_restored", log_level=current_level)
 
-        @HandlerRegistry.command('get_native_diagnostics')
-        def handle_get_native_diagnostics(request: native_link.BaseRequest):
-            return {"success": True, "errors": diagnostic_collector.get_errors()}
-
-        @HandlerRegistry.command('get_debug_bundle')
-        def handle_get_debug_bundle(request: native_link.BaseRequest):
-            logger.shutdown()
-            logger.initialize(DATA_DIR, SCRIPT_DIR)
-            
-            def read_safe(path):
-                if os.path.exists(path):
-                    try:
-                        with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                            return f.read()[-50000:] # Last 50KB
-                    except Exception as e:
-                        return f"Error reading file: {e}"
-                return "File not found."
-
-            bundle = {
-                "native_host_log": read_safe(os.path.join(DATA_DIR, "native_host.log")),
-                "ipc_events_log": read_safe(os.path.join(DATA_DIR, "ipc_events.log")),
-                "session_json": read_safe(os.path.join(DATA_DIR, "session.json")),
-                "diagnostics": diagnostic_collector.get_errors(),
-                "timestamp": datetime.now().isoformat()
-            }
-            return native_link.success(bundle)
-
         @logger.catch(ui_alert=True)
         def task_wrapper(message):
             req_id = message.get('request_id')
@@ -358,6 +331,7 @@ try:
                 is_valid, err_msg = security.validate_payload(message)
                 if not is_valid:
                     logging.warning(f"[PY][SECURITY] Blocked malicious payload: {err_msg}")
+                    diagnostic_collector.add_error("SECURITY", err_msg)
                     error_resp = native_link.failure(f"Security block: {err_msg}")
                     if req_id:
                         error_resp['request_id'] = req_id
@@ -370,13 +344,19 @@ try:
 
                 if handler:
                     response = handler(request)
+                    if isinstance(response, dict) and response.get("success") is False and response.get("error"):
+                        diagnostic_collector.add_error(command_name, response.get("error"))
                 else:
+                    diagnostic_collector.add_error("DISPATCH", f"Unknown command: {command_name}")
                     response = native_link.failure(f"Unknown command: {command_name}")
 
                 if response:
                     if req_id:
                         response['request_id'] = req_id
                     send_message(response)
+            except Exception as e:
+                diagnostic_collector.add_error(message.get("action", "TASK"), e)
+                raise
             finally:
                 logger.request_id_var.reset(token)
 
@@ -407,12 +387,13 @@ try:
         logging.info(f"[PY][START] Args: {sys.argv}, TTY: {sys.stdin.isatty() if sys.stdin else 'None'}")
         
         is_browser = False
-        if len(sys.argv) > 1:
+        is_cli_command = len(sys.argv) > 1 and sys.argv[1] in ('play', 'list', '-h', '--help')
+        if len(sys.argv) > 1 and not is_cli_command:
             if sys.argv[1].startswith('chrome-extension://') or sys.argv[1].startswith('moz-extension://'):
                 is_browser = True
             elif sys.argv[1].endswith('.json') and os.path.isabs(sys.argv[1]):
                 is_browser = True
-        if not is_browser and sys.stdin and not sys.stdin.isatty():
+        if not is_browser and not is_cli_command and sys.stdin and not sys.stdin.isatty():
             is_browser = True
 
         if is_browser:

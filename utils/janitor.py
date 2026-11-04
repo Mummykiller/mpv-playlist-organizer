@@ -4,7 +4,6 @@ import platform
 import sys
 import time
 import re
-import shutil
 from utils.ipc_utils import IPC_DIR_LINUX, is_pid_running, IPCSocketManager
 import mpv_session
 from utils import url_analyzer, m3u_server
@@ -174,32 +173,6 @@ class Janitor:
             except Exception as e:
                 logging.warning(f"Janitor: Error during IPC cleanup in {ipc_dir}: {e}")
 
-    def cleanup_pycache(self, root_path):
-        """
-        Removes __pycache__ directories recursively starting from root_path.
-        """
-        if not root_path or not os.path.exists(root_path):
-            return
-
-        # Check for directory permissions before proceeding
-        if not os.access(root_path, os.R_OK):
-            logging.debug(f"Janitor: Skipping pycache cleanup due to lack of permissions on {root_path}")
-            return
-
-        logging.info(f"Janitor: Cleaning up __pycache__ in {root_path}")
-        for root, dirs, files in os.walk(root_path):
-            if "__pycache__" in dirs:
-                pycache_path = os.path.join(root, "__pycache__")
-                try:
-                    # Double check we have permission to write/delete in this specific pycache dir
-                    if os.access(pycache_path, os.W_OK):
-                        shutil.rmtree(pycache_path)
-                        logging.info(f"Janitor: Removed {pycache_path}")
-                    # Remove from dirs so os.walk doesn't try to go into it
-                    dirs.remove("__pycache__")
-                except Exception as e:
-                    logging.warning(f"Janitor: Failed to remove {pycache_path}: {e}")
-
     def cleanup_flags(self):
         """Scans for stale natural completion flags in the dedicated flags directory."""
         flag_dir = os.path.join(self.data_dir, "flags")
@@ -230,7 +203,7 @@ class Janitor:
         except Exception as e:
             logging.warning(f"Janitor: Error during flag cleanup: {e}")
 
-    def run_startup_sweep(self, extension_root=None):
+    def run_startup_sweep(self):
         """Executes a full cleanup suite on startup with concurrency protection."""
         lock_file = os.path.join(self.data_dir, ".janitor.lock")
         try:
@@ -245,7 +218,6 @@ class Janitor:
             self.clean_temp_dir()
             self.cleanup_stale_ipc()
             self.cleanup_flags()
-            # We skip pycache cleanup on standard startup to avoid race conditions and unnecessary disk I/O.
         except Exception as e:
             logging.warning(f"Janitor: Startup sweep encountered an error: {e}")
         finally:

@@ -10,7 +10,7 @@ import re
 import services
 import file_io
 from utils import ipc_utils, url_analyzer
-from utils.session_services import EnrichmentService, LauncherService, IPCService
+from utils.session_services import EnrichmentService, LauncherService
 
 # Prevent __pycache__ generation
 sys.dont_write_bytecode = True
@@ -57,7 +57,6 @@ class MpvSessionManager:
         # --- Specialized Services ---
         self.enricher = EnrichmentService(services, self.send_message, file_io, metadata_cache=self.metadata_cache, task_manager=self.task_manager)
         self.launcher = LauncherService(self)
-        self.ipc_service = IPCService(self)
 
         try:
             os.makedirs(self.FLAG_DIR, exist_ok=True)
@@ -228,17 +227,6 @@ class MpvSessionManager:
             except Exception as e:
                 logging.error(f"Fallback failed: {e}")
 
-    def _log_audit(self, message):
-        """Appends a message to the human-readable audit file."""
-        try:
-            import file_io
-            from datetime import datetime
-            inspection_path = os.path.join(file_io.DATA_DIR, "last_mpv_command.txt")
-            with open(inspection_path, 'a', encoding='utf-8') as f:
-                f.write(f"\n[{datetime.now().strftime('%H:%M:%S')}] SESSION UPDATE: {message}\n")
-        except Exception:
-            pass
-
     def persist_session(self):
         """Saves current session metadata to disk."""
         try:
@@ -250,6 +238,11 @@ class MpvSessionManager:
             }
             with open(self.session_file, 'w', encoding='utf-8') as f:
                 json.dump(session_data, f)
+            if platform.system() != "Windows":
+                try:
+                    os.chmod(self.session_file, 0o600)
+                except OSError:
+                    pass
             logging.info(f"[PY][Session] Saved session data to {self.session_file}")
         except Exception as e:
             logging.warning(f"[PY][Session] Failed to write session file: {e}")
@@ -809,8 +802,13 @@ class MpvSessionManager:
             moves_made = 0
             # Track the internal state during moves to keep indices correct
             current_playlist = list(self.playlist)
+            actual_mpv_index = 0
 
-            for target_idx, target_id in enumerate(new_order_ids):
+            for entry in (new_order_ids or []):
+                target_id = entry.get('id') if isinstance(entry, dict) else entry
+                if not target_id:
+                    continue
+
                 # Find where this item is CURRENTLY in our synced playlist
                 current_idx = -1
                 for i, itm in enumerate(current_playlist):
@@ -818,23 +816,33 @@ class MpvSessionManager:
                         current_idx = i
                         break
                 
-                if current_idx != -1 and current_idx != target_idx:
-                    # Move item in MPV
-                    # Note: playlist-move(old, new) shifts the item from old to new.
-                    res = self.ipc_manager.send({"command": ["playlist-move", current_idx, target_idx]})
-                    if res and res.get("error") == "success":
-                        # Move item in our temporary list to stay in sync for the next loop iteration
-                        item = current_playlist.pop(current_idx)
-                        current_playlist.insert(target_idx, item)
-                        moves_made += 1
-                    else:
-                        logging.warning(f"[PY][Session] Failed to move item {target_id} from {current_idx} to {target_idx}: {res}")
+                if current_idx != -1:
+                    if current_idx != actual_mpv_index:
+                        # Move item in MPV
+                        # Note: playlist-move(old, new) shifts the item from old to new.
+                        res = self.ipc_manager.send({"command": ["playlist-move", current_idx, actual_mpv_index]})
+                        if res and res.get("error") == "success":
+                            # Move item in our temporary list to stay in sync for the next loop iteration
+                            item = current_playlist.pop(current_idx)
+                            current_playlist.insert(actual_mpv_index, item)
+                            moves_made += 1
+                        else:
+                            logging.warning(f"[PY][Session] Failed to move item {target_id} from {current_idx} to {actual_mpv_index}: {res}")
+                    actual_mpv_index += 1
 
             if moves_made > 0:
                 self.playlist = current_playlist
                 logging.info(f"[PY][Session] Live reorder complete. Performed {moves_made} moves.")
                 if self.playlist_tracker:
                     self.playlist_tracker.update_playlist_order(self.playlist)
+
+                if self.ipc_manager and self.ipc_manager.is_connected():
+                    settings = file_io.get_settings()
+                    for idx, item in enumerate(self.playlist):
+                        lua_options, item_url = services.construct_lua_options(
+                            item, settings, self.SCRIPT_DIR, index=idx
+                        )
+                        self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]}, expect_response=False)
                 
                 self.ipc_manager.send({"command": ["show-text", f"Playlist reordered ({moves_made} moves)", 2000]})
 

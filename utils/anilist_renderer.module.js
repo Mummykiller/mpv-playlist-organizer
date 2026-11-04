@@ -68,17 +68,45 @@ export class AniListRenderer {
 		releases.releases.forEach((item) => {
 			const li = document.createElement("li");
 			li.className = "anilist-release-item";
-			li.innerHTML = `
-                <a href="https://anilist.co/anime/${item.id}" target="_blank" title="View on AniList">
-                    <img src="${item.coverImage}" alt="${item.title}" class="release-cover-image">
-                </a>
-                <div class="release-details">
-                    <div class="release-title" title="${item.title}">${item.title}</div>
-                    <div class="release-bottom-info">
-                        <div class="release-episode-info">Ep ${item.episode}</div>
-                        <div class="release-airing-time">${item.airingAt}</div>
-                    </div>
-                </div>`;
+
+			const link = document.createElement("a");
+			const safeId = encodeURIComponent(String(item.id || ""));
+			link.href = `https://anilist.co/anime/${safeId}`;
+			link.target = "_blank";
+			link.rel = "noopener noreferrer";
+			link.title = "View on AniList";
+
+			const img = document.createElement("img");
+			const coverUrl = String(item.coverImage || "");
+			if (coverUrl.startsWith("https://") || coverUrl.startsWith("http://")) {
+				img.src = coverUrl;
+			}
+			img.alt = String(item.title || "");
+			img.className = "release-cover-image";
+			link.appendChild(img);
+
+			const details = document.createElement("div");
+			details.className = "release-details";
+
+			const titleDiv = document.createElement("div");
+			titleDiv.className = "release-title";
+			titleDiv.title = String(item.title || "");
+			titleDiv.textContent = String(item.title || "");
+
+			const bottomInfo = document.createElement("div");
+			bottomInfo.className = "release-bottom-info";
+
+			const epInfo = document.createElement("div");
+			epInfo.className = "release-episode-info";
+			epInfo.textContent = `Ep ${item.episode ?? ""}`;
+
+			const airingTime = document.createElement("div");
+			airingTime.className = "release-airing-time";
+			airingTime.textContent = String(item.airingAt || "");
+
+			bottomInfo.append(epInfo, airingTime);
+			details.append(titleDiv, bottomInfo);
+			li.append(link, details);
 			list.appendChild(li);
 		});
 		container.appendChild(list);

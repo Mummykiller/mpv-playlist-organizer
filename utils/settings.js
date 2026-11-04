@@ -374,11 +374,11 @@ export class OptionsManager {
 			: "none";
 
 		const videoSyncCheckbox = document.getElementById(
-			"ultra-video-sync-checkbox",
+			"enable-display-sync-checkbox",
 		);
 		const interpSelect = document.getElementById("ultra-interpolation-select");
 		if (videoSyncCheckbox && interpSelect) {
-			const isSyncEnabled = videoSyncCheckbox.checked;
+			const isSyncEnabled = !!prefs.enableDisplaySync;
 			interpSelect.disabled = !isSyncEnabled;
 			interpSelect.parentElement.style.opacity = isSyncEnabled ? "1" : "0.5";
 		}
@@ -907,7 +907,7 @@ export class OptionsManager {
 					});
 				}
 
-				if (mapping.elementId === "ultra-video-sync-checkbox") {
+				if (mapping.elementId === "enable-display-sync-checkbox") {
 					control.addEventListener("change", () => {
 						const interpSelect = document.getElementById(
 							"ultra-interpolation-select",
@@ -1193,6 +1193,8 @@ export class OptionsManager {
 				this._renderDependencyStatus({
 					mpv: response.mpv,
 					ytdlp: response.ytdlp,
+					ffmpeg: response.ffmpeg,
+					node: response.node,
 				});
 				this.showStatus("Dependencies refreshed!");
 			} else {

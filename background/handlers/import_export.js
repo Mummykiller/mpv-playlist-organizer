@@ -4,6 +4,7 @@ import { sanitizeString } from "../../utils/commUtils.module.js";
 import { nativeLink } from "../../utils/nativeLink.js";
 import { createHandler } from "../handler_factory.js";
 import { processPlaylist } from "../../utils/item_processor.js";
+import { UI_ONLY_KEYS } from "./ui_state.js";
 
 export const handleImportFromFile = createHandler(async ({ request, data }) => {
 	const filename = request.filename;
@@ -163,20 +164,13 @@ async function _importSettingsLogic(importedData, localData) {
 
 	// Sync to native host
 	try {
-		const nativeSyncKeys = [
-			"mpvPath", "mpvDecoder", "enableUrlAnalysis", "browserForUrlAnalysis",
-			"enableYoutubeAnalysis", "userAgentString", "enableSmartResume",
-			"enableActiveItemHighlight", "disableNetworkOverrides", "enableCache",
-			"httpPersistence", "demuxerMaxBytes", "demuxerMaxBackBytes",
-			"cacheSecs", "demuxerReadaheadSecs", "streamBufferSize",
-			"ytdlpConcurrentFragments", "enableReconnect", "reconnectDelay",
-			"automaticMpvFlags",
-		];
 		const syncPrefs = {};
 		const globalPrefs = localData.settings.uiPreferences?.global || {};
-		nativeSyncKeys.forEach((key) => {
-			if (globalPrefs[key] !== undefined) syncPrefs[key] = globalPrefs[key];
-		});
+		for (const key in globalPrefs) {
+			if (!UI_ONLY_KEYS.includes(key) && globalPrefs[key] !== undefined) {
+				syncPrefs[key] = globalPrefs[key];
+			}
+		}
 		if (Object.keys(syncPrefs).length > 0) {
 			await nativeLink.setUiPreferences(syncPrefs);
 		}

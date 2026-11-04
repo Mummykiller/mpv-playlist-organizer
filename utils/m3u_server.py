@@ -58,10 +58,15 @@ class M3UServer:
                     
                     # Try to read line without blocking indefinitely
                     # We use a simple read-and-check approach for compatibility
-                    import fcntl
-                    fd = self.process.stdout.fileno()
-                    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-                    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+                    try:
+                        import fcntl
+                    except ImportError:
+                        fcntl = None
+
+                    if fcntl is not None:
+                        fd = self.process.stdout.fileno()
+                        fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                        fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
                     
                     try:
                         line = self.process.stdout.readline()
@@ -80,9 +85,11 @@ class M3UServer:
                     time.sleep(0.1)
                 
                 # Restore blocking mode for safety
-                try:
-                    fcntl.fcntl(fd, fcntl.F_SETFL, fl)
-                except: pass
+                if fcntl is not None:
+                    try:
+                        fcntl.fcntl(fd, fcntl.F_SETFL, fl)
+                    except Exception:
+                        pass
                 
                 def consume_stderr(proc):
                     for line in iter(proc.stderr.readline, ''):

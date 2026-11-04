@@ -382,10 +382,11 @@ class WindowsLogic(InstallerLogic):
                 self.log(f"Removed: {os.path.basename(file_path)}")
 
     def install_cli(self):
+        python_executable = self._get_console_python()
         script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
         wrapper_path = os.path.join(INSTALL_DIR, "mpv-cli.bat")
         with open(wrapper_path, 'w') as f:
-            f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\npython3 "{script_path}" %*\n')
+            f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\n"{python_executable}" "{script_path}" %*\n')
         self.log("Created Windows CLI wrapper: mpv-cli.bat")
 
     def add_to_path(self):
@@ -443,6 +444,7 @@ class UnixLogic(InstallerLogic):
             f.write(f"#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\n\n\"{sys.executable}\" \"$(dirname \"$0\")/{SCRIPT_NAME}\" \"$@\"")
         os.chmod(wrapper_path, 0o755)
 
+        manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
         native_manifest_path = os.path.normpath(manifest_path)
         with open(native_manifest_path, 'w') as f:
             json.dump({"name": HOST_NAME, "description": HOST_DESCRIPTION, "path": wrapper_path, "type": "stdio", "allowed_origins": [f"chrome-extension://{extension_id}/"]}, f, indent=4)
@@ -470,7 +472,12 @@ class UnixLogic(InstallerLogic):
                     os.remove(symlink_path)
                 except OSError:
                     pass
-        for f in [os.path.join(DATA_DIR, f"{HOST_NAME}.json"), os.path.join(INSTALL_DIR, "run_native_host.sh"), os.path.join(INSTALL_DIR, "mpv-cli")]:
+        for f in [
+            os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json"),
+            os.path.join(DATA_DIR, f"{HOST_NAME}.json"),
+            os.path.join(INSTALL_DIR, "run_native_host.sh"),
+            os.path.join(INSTALL_DIR, "mpv-cli"),
+        ]:
             if os.path.exists(f):
                 os.remove(f)
 

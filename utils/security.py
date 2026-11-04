@@ -189,7 +189,7 @@ def validate_safe_path(path, data_dir, script_dir, temp_dir, allow_user_content=
             # 3. Fallback IPC dir in home
             allowed.append(os.path.realpath(os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")))
 
-        if any(resolved.startswith(prefix) for prefix in allowed):
+        if any(os.path.commonpath([resolved, prefix]) == prefix for prefix in allowed):
             return resolved
         
         if allow_user_content: return resolved

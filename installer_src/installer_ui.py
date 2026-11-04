@@ -12,8 +12,8 @@ from .installer_logic import (
     HOST_NAME, INSTALL_DIR, WindowsLogic, LinuxLogic, MacOSLogic, UnixLogic
 )
 
-MODERN_FONT = ("Segoe UI", "Roboto", "Ubuntu", "Helvetica Neue", "Arial")
-MONO_FONT = ("Consolas", "Monaco", "DejaVu Sans Mono", "monospace")
+MODERN_FONT = "Segoe UI"
+MONO_FONT = "Consolas" if platform.system() == "Windows" else "Monospace"
 
 class Tooltip:
     """
@@ -167,8 +167,11 @@ class HostManagerApp:
 
         self.bypass_checkbutton.config(command=toggle_url_analysis_widgets)
 
-        manifest_filename = f"{HOST_NAME}-chrome.json" if platform.system() == "Windows" else f"{HOST_NAME}.json"
-        manifest_file_path = os.path.join(file_io.DATA_DIR, manifest_filename)
+        manifest_candidates = [
+            os.path.join(file_io.DATA_DIR, f"{HOST_NAME}-chrome.json"),
+            os.path.join(file_io.DATA_DIR, f"{HOST_NAME}.json"),
+        ]
+        manifest_file_path = next((p for p in manifest_candidates if os.path.exists(p)), manifest_candidates[0])
         if os.path.exists(manifest_file_path):
             try:
                 with open(manifest_file_path, 'r', encoding='utf-8') as f:

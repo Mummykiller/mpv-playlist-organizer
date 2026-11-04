@@ -60,8 +60,12 @@ class DataHandler(BaseHandler):
             "data_dir": self.ctx.data_dir
         }
         
+        diag_collector = getattr(self.ctx, 'diagnostic_collector', None)
+        native_errors = diag_collector.get_errors() if diag_collector else []
+
         return native_link.success({
             "js_diagnostics": js_diagnostics,
+            "native_diagnostics": native_errors,
             "native_log": native_log,
             "ipc_log": ipc_log,
             "system_info": system_info
@@ -116,10 +120,10 @@ class DataHandler(BaseHandler):
     def handle_import_from_file(self, request: native_link.DataSyncRequest):
         if not request.filename: return native_link.failure("No filename provided.")
         try:
-            target_path = os.path.join(self.file_io.EXPORT_DIR, request.filename)
-            filepath = os.path.abspath(target_path)
-            export_dir_abs = os.path.abspath(self.file_io.EXPORT_DIR)
-            if not filepath.startswith(export_dir_abs):
+            export_dir_real = os.path.realpath(self.file_io.EXPORT_DIR)
+            target_path = os.path.join(export_dir_real, request.filename)
+            filepath = os.path.realpath(target_path)
+            if os.path.commonpath([export_dir_real, filepath]) != export_dir_real or not filepath.lower().endswith('.json'):
                 msg = "Access denied: Path outside export directory."
                 return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
             

@@ -110,10 +110,10 @@ async function addUrlToFolder(
 		// Check for live append
 		const isActive = isFolderActive(actualFolderId);
 		if (isActive && data.settings.uiPreferences.global.autoAppendOnAdd) {
-			nativeLink.call("add_item_live", {
-				folderId: actualFolderId,
-				item: newItem,
-			}).catch((e) => console.warn("[PlaylistManager] Live append failed:", e));
+			nativeLink
+				.append(newItem, actualFolderId)
+				.then(() => broadcastPlaylistState(actualFolderId))
+				.catch((e) => console.warn("[PlaylistManager] Live append failed:", e));
 		}
 
 		return { success: true, item: newItem };
@@ -356,7 +356,6 @@ export const handleSetPlaylistOrder = createHandler(async ({ request, folderId, 
 	if (!actualFolderId || !data.folders[actualFolderId]) return { success: false };
 
 	data.folders[actualFolderId].playlist = order;
-	nativeLink.reorderLive(actualFolderId, order).catch(() => {});
 	
 	return { success: true };
 }, {
@@ -448,6 +447,7 @@ export async function handleGetPlaylist(request) {
 		lastPlayedId: lastPlayedId,
 		isRunning: isActive,
 		needsAppend: needsAppend,
+		sessionIds: isActive ? finalStatus?.sessionIds || [] : [],
 		isPaused: (finalStatus?.isPaused || finalStatus?.isIdle) ?? false,
 		isIdle: finalStatus?.isIdle ?? false
 	};

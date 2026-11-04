@@ -528,7 +528,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 						isPaused: response.isPaused,
 						isIdle: response.isIdle,
 						lastPlayedId: response.lastPlayedId,
-						needsAppend: response.needsAppend
+						needsAppend: response.needsAppend,
+						sessionIds: response.sessionIds,
 					});
 
 					// 2. Heavy data sync
@@ -1212,10 +1213,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 			btn.addEventListener("click", toggleReorderMode),
 		);
 
-		importCancelBtn.addEventListener("click", () => {
-			importSelectionModal.style.display = "none";
-		});
-
 		const optionsManager = new OptionsManager({
 			sendMessageAsync,
 			showStatus,
@@ -1592,11 +1589,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (!folderId) return;
 
 				const playlistItems = [...playlistContainer.querySelectorAll(".list-item")];
-				const newOrder = playlistItems.map((item) => ({
-					url: item.dataset.url,
-					title: item.dataset.title,
-					id: item.dataset.id,
-				}));
+				const newOrder = playlistItems.map((item) => {
+					const originalItem = popupState.currentPlaylist.find(
+						(i) => i.id === item.dataset.id,
+					);
+					return (
+						originalItem || {
+							url: item.dataset.url,
+							title: item.dataset.title,
+							id: item.dataset.id,
+						}
+					);
+				});
+				popupState.currentPlaylist = newOrder;
 
 				// Always save the new order to browser storage immediately
 				MpvInterface.setPlaylistOrder(folderId, newOrder).catch((err) => {
@@ -1723,6 +1728,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 								if (res.success) {
 									showStatus("MPV playlist synchronized.");
 									btn.classList.remove("smart-sync-pending");
+									btn.title = btn.dataset.originalTitle || "Live Reorder: Mirror changes to MPV | Right-click: Smart Reorder";
 								} else {
 									showStatus(res.error || "Sync failed.", true);
 								}
@@ -1757,6 +1763,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					btn.onclick = (e) => {
 						e.stopPropagation();
 						isPickStartModeActive = false;
+						isLiveReorderModeActive = false;
 						isSelectionModeActive = !isSelectionModeActive;
 						refreshQuickActionsBar();
 					};
