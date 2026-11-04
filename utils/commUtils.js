@@ -50,6 +50,25 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			});
 		});
 
+	const isExtensionReloadError = MPV.isExtensionReloadError = function isExtensionReloadError(errOrMsg) {
+		const msg = typeof errOrMsg === "string" ? errOrMsg : (errOrMsg?.message || "");
+		return (
+			msg.includes("Extension context invalidated") ||
+			msg.includes("Receiving end does not exist") ||
+			msg.includes("message channel closed")
+		);
+	}
+
+	/**
+	 * Returns the currently active tab in the current window, or null if none/inaccessible.
+	 * @returns {Promise<chrome.tabs.Tab|null>}
+	 */
+	const getActiveTab = MPV.getActiveTab = async function getActiveTab() {
+		if (typeof chrome === "undefined" || !chrome.tabs?.query) return null;
+		const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+		return tabs[0] || null;
+	}
+
 	/**
 	 * Sanitizes strings for safe use in filenames or OSD titles.
 	 * @param {string} str The string to sanitize.

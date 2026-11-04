@@ -217,54 +217,64 @@ class NativeLink {
 	 * Enriches the payload with global preferences and caller overrides.
 	 */
 	_enrichPayload(globalPrefs, overrides = {}) {
-		return {
-			geometry:
-				overrides.geometry ||
-				(globalPrefs.launchGeometry === "custom"
-					? null
-					: globalPrefs.launchGeometry),
-			customWidth:
-				overrides.customWidth ||
-				(globalPrefs.launchGeometry === "custom"
-					? globalPrefs.customGeometryWidth
-					: null),
-			customHeight:
-				overrides.customHeight ||
-				(globalPrefs.launchGeometry === "custom"
-					? globalPrefs.customGeometryHeight
-					: null),
-			customMpvFlags:
-				overrides.customMpvFlags || globalPrefs.customMpvFlags || "",
-			automaticMpvFlags: globalPrefs.automaticMpvFlags || [],
-			forceTerminal: globalPrefs.forceTerminal ?? false,
-			clearOnCompletion:
-				overrides.clearOnCompletion ?? globalPrefs.clearOnCompletion ?? false,
-			startPaused: overrides.startPaused ?? false,
-			// Networking & Performance Sync
-			disableNetworkOverrides: globalPrefs.disableNetworkOverrides ?? false,
-			targetedDefaults: globalPrefs.targetedDefaults || "all-none-yt",
-			enableCache: globalPrefs.enableCache ?? true,
-			httpPersistence: globalPrefs.httpPersistence || "auto",
-			demuxerMaxBytes: globalPrefs.demuxerMaxBytes || "1G",
-			demuxerMaxBackBytes: globalPrefs.demuxerMaxBackBytes || "500M",
-			cacheSecs: globalPrefs.cacheSecs || 500,
-			demuxerReadaheadSecs: globalPrefs.demuxerReadaheadSecs || 500,
-			streamBufferSize: globalPrefs.streamBufferSize || "10M",
-			ytdlpConcurrentFragments: globalPrefs.ytdlpConcurrentFragments || 4,
-			enableReconnect: globalPrefs.enableReconnect ?? true,
-			reconnectDelay: globalPrefs.reconnectDelay || 4,
-			mpvDecoder: globalPrefs.mpvDecoder || "auto",
-			ytdlQuality: globalPrefs.ytdlQuality || "best",
-			performanceProfile: globalPrefs.performanceProfile || "default",
-			enablePreciseResume: globalPrefs.enablePreciseResume ?? true,
-			ultraScalers: globalPrefs.ultraScalers ?? true,
-			enableDisplaySync: globalPrefs.enableDisplaySync ?? true,
-			overrideDisplayFps: globalPrefs.overrideDisplayFps || "",
-			ultraInterpolation: globalPrefs.ultraInterpolation || "oversample",
-			ultraDeband: globalPrefs.ultraDeband ?? true,
-			ultraFbo: globalPrefs.ultraFbo ?? true,
-		};
+		return buildPlaybackSettingsPayload(globalPrefs, overrides);
 	}
+}
+
+/**
+ * Builds playback and network configuration payload from global preferences and optional overrides.
+ * @param {Object} globalPrefs 
+ * @param {Object} [overrides={}] 
+ * @returns {Object}
+ */
+export function buildPlaybackSettingsPayload(globalPrefs = {}, overrides = {}) {
+	return {
+		geometry:
+			overrides.geometry ||
+			(globalPrefs.launchGeometry === "custom"
+				? null
+				: globalPrefs.launchGeometry),
+		customWidth:
+			overrides.customWidth ||
+			(globalPrefs.launchGeometry === "custom"
+				? globalPrefs.customGeometryWidth
+				: null),
+		customHeight:
+			overrides.customHeight ||
+			(globalPrefs.launchGeometry === "custom"
+				? globalPrefs.customGeometryHeight
+				: null),
+		customMpvFlags:
+			overrides.customMpvFlags || globalPrefs.customMpvFlags || "",
+		automaticMpvFlags: globalPrefs.automaticMpvFlags || [],
+		forceTerminal: globalPrefs.forceTerminal ?? false,
+		clearOnCompletion:
+			overrides.clearOnCompletion ?? globalPrefs.clearOnCompletion ?? false,
+		startPaused: overrides.startPaused ?? false,
+		// Networking & Performance Sync
+		disableNetworkOverrides: globalPrefs.disableNetworkOverrides ?? false,
+		targetedDefaults: globalPrefs.targetedDefaults || "all-none-yt",
+		enableCache: globalPrefs.enableCache ?? true,
+		httpPersistence: globalPrefs.httpPersistence || "auto",
+		demuxerMaxBytes: globalPrefs.demuxerMaxBytes || "1G",
+		demuxerMaxBackBytes: globalPrefs.demuxerMaxBackBytes || "500M",
+		cacheSecs: globalPrefs.cacheSecs || 500,
+		demuxerReadaheadSecs: globalPrefs.demuxerReadaheadSecs || 500,
+		streamBufferSize: globalPrefs.streamBufferSize || "10M",
+		ytdlpConcurrentFragments: globalPrefs.ytdlpConcurrentFragments || 4,
+		enableReconnect: globalPrefs.enableReconnect ?? true,
+		reconnectDelay: globalPrefs.reconnectDelay || 4,
+		mpvDecoder: globalPrefs.mpvDecoder || "auto",
+		ytdlQuality: globalPrefs.ytdlQuality || "best",
+		performanceProfile: globalPrefs.performanceProfile || "default",
+		enablePreciseResume: globalPrefs.enablePreciseResume ?? true,
+		ultraScalers: globalPrefs.ultraScalers ?? true,
+		enableDisplaySync: globalPrefs.enableDisplaySync ?? true,
+		overrideDisplayFps: globalPrefs.overrideDisplayFps || "",
+		ultraInterpolation: globalPrefs.ultraInterpolation || "oversample",
+		ultraDeband: globalPrefs.ultraDeband ?? true,
+		ultraFbo: globalPrefs.ultraFbo ?? true,
+	};
 }
 
 export const nativeLink = new NativeLink();

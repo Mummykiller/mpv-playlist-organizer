@@ -4,7 +4,7 @@ import platform
 import json
 import file_io
 from installer_src.installer_logic import (
-    HOST_NAME, INSTALL_DIR, WindowsLogic, LinuxLogic, MacOSLogic, UnixLogic
+    HOST_NAME, INSTALL_DIR, get_logic_for_platform
 )
 
 class CommandLineApp:
@@ -12,18 +12,11 @@ class CommandLineApp:
         self.logic = self._get_logic_strategy()
 
     def _get_logic_strategy(self):
-        system = platform.system()
         def ask_dir_cli(title):
             print(f"\n[ACTION REQUIRED] {title}")
             return input("Path (Enter to skip): ").strip()
         
-        if system == "Windows":
-            return WindowsLogic(print, ask_dir_func=ask_dir_cli)
-        elif system == "Linux":
-            return LinuxLogic(print, ask_dir_func=ask_dir_cli)
-        elif system == "Darwin":
-            return MacOSLogic(print, ask_dir_func=ask_dir_cli)
-        return UnixLogic(print, ask_dir_func=ask_dir_cli)
+        return get_logic_for_platform(log_func=print, ask_dir_func=ask_dir_cli)
 
     def _print_header(self, text):
         print("\n" + "="*60)

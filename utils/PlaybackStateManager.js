@@ -188,8 +188,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					if (response) this.update(response);
 				});
 			} catch (e) {
-				const msg = e?.message || "";
-				if (msg.includes("Extension context invalidated")) {
+				const MPV_INT = window.MPV_INTERNAL || {};
+				if (MPV_INT.isExtensionReloadError && MPV_INT.isExtensionReloadError(e)) {
 					return;
 				}
 				console.warn("[StateManager] Sync request failed:", e);

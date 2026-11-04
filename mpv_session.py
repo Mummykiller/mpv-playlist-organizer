@@ -532,11 +532,8 @@ class MpvSessionManager:
 
     def _remote_log(self, message):
         """Sends a message to MPV to be printed in its terminal."""
-        if self.ipc_manager and self.ipc_manager.is_connected():
-            try:
-                self.ipc_manager.send({"command": ["script-message", "python_log", message]})
-            except Exception:
-                pass
+        if self.ipc_manager:
+            self.ipc_manager.log_to_mpv(message)
 
     def _sync_playlist_from_mpv(self):
         """Forces a real-time synchronization of the internal playlist from MPV reality."""

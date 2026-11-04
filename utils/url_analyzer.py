@@ -122,11 +122,7 @@ class VolatileCookieManager:
                     matches = glob.glob(pat)
                     candidates.extend(matches)
             
-            # Use the first one that exists
-            for path in candidates:
-                if os.path.exists(path):
-                    db_rel_path = path
-                    break
+            db_rel_path = next((p for p in candidates if os.path.exists(p)), None)
                     
             if not db_rel_path:
                 # Fallback to the old simple mapping if no specific candidate matched
@@ -163,10 +159,7 @@ class VolatileCookieManager:
                     candidates.extend(glob.glob(pat_new))
                     candidates.extend(glob.glob(pat_old))
 
-            for path in candidates:
-                if os.path.exists(path):
-                    db_rel_path = path
-                    break
+            db_rel_path = next((p for p in candidates if os.path.exists(p)), None)
 
             if not db_rel_path:
                 mapping = {
@@ -297,9 +290,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     url = file_io.sanitize_string(url, is_filename=False)
     
     # --- Protocol Validation ---
-    # Must match services.ALLOWED_PROTOCOLS
-    ALLOWED_PROTOCOLS = ('http://', 'https://', 'file://', 'udp://', 'rtmp://', 'rtsp://', 'mms://')
-    if not url.lower().startswith(ALLOWED_PROTOCOLS):
+    if not url.lower().startswith(security.ALLOWED_PROTOCOLS):
         logging.warning(f"Security: Rejected URL with unsafe protocol: {url}")
         return {
             "success": False,
@@ -465,16 +456,18 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 logging.warning(f"Failed to expand YouTube playlist: {e}")
 
         # 2b. Handle Single YouTube Video
+        yt_fallback_response = {
+            "success": True,
+            "url": url,
+            "headers": {"User-Agent": effective_user_agent},
+            "use_ytdl_mpv": True,
+            "is_youtube": True,
+            "disable_http_persistent": False
+        }
+
         if not is_yt_enabled:
             logging.info(f"YouTube resolution disabled in settings. Passing original URL to MPV: {url}")
-            return {
-                "success": True,
-                "url": url,
-                "headers": {"User-Agent": effective_user_agent},
-                "use_ytdl_mpv": True,
-                "is_youtube": True,
-                "disable_http_persistent": False
-            }
+            return yt_fallback_response
 
         try:
             cookies_file = None
@@ -504,14 +497,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
             }
         except Exception as e:
             logging.warning(f"YouTube analysis failed: {e}. Falling back to original URL.")
-            return {
-                "success": True,
-                "url": url,
-                "headers": {"User-Agent": effective_user_agent},
-                "use_ytdl_mpv": True,
-                "is_youtube": True,
-                "disable_http_persistent": False
-            }
+            return yt_fallback_response
 
     # --- Case 3: Other URLs (External resolution as fallback) ---
     try:

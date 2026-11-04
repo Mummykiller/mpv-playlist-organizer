@@ -1470,12 +1470,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		isReloadError(e) {
-			const msg = e?.message || "";
-			return (
-				msg.includes("Extension context invalidated") ||
-				msg.includes("Receiving end does not exist") ||
-				msg.includes("message channel closed")
-			);
+			const MPV = window.MPV_INTERNAL || {};
+			return MPV.isExtensionReloadError ? MPV.isExtensionReloadError(e) : false;
 		}
 
 		_bindControllerEvents() {

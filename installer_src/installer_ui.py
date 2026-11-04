@@ -9,7 +9,7 @@ import json
 import file_io
 import services
 from .installer_logic import (
-    HOST_NAME, INSTALL_DIR, WindowsLogic, LinuxLogic, MacOSLogic, UnixLogic
+    HOST_NAME, INSTALL_DIR, get_logic_for_platform
 )
 
 MODERN_FONT = "Segoe UI"
@@ -71,17 +71,11 @@ class HostManagerApp:
         self.root.after(200, self._check_dependencies_async)
 
     def _get_logic_strategy(self):
-        system = platform.system()
-        ask_file_func = self._ask_file_path_sync
-        ask_dir_func = self._ask_directory_sync
-        if system == "Windows":
-            return WindowsLogic(self.log, ask_file_func, ask_dir_func)
-        elif system == "Linux":
-            return LinuxLogic(self.log, ask_file_func, ask_dir_func)
-        elif system == "Darwin":
-            return MacOSLogic(self.log, ask_file_func, ask_dir_func)
-        else:
-            return UnixLogic(self.log, ask_file_func, ask_dir_func)
+        return get_logic_for_platform(
+            log_func=self.log,
+            ask_file_func=self._ask_file_path_sync,
+            ask_dir_func=self._ask_directory_sync
+        )
 
     def _ask_file_path_sync(self, title, filetypes):
         q = queue.Queue()
