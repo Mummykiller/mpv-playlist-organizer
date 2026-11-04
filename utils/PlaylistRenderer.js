@@ -202,7 +202,10 @@
         }
 
         _formatTitle(span, item) {
-            MPV.domUtils.formatTitle(span, item);
+            const dom = MPV.domUtils || (typeof window !== "undefined" && window.MPV_INTERNAL?.domUtils);
+            if (dom?.formatTitle) {
+                dom.formatTitle(span, item);
+            }
         }
 
         /**
@@ -212,7 +215,10 @@
             const itemDiv = this.container.querySelector(`[data-id="${itemId}"]`);
             if (!itemDiv) return;
 
-            MPV.domUtils.updateItemDelta(itemDiv, delta);
+            const dom = MPV.domUtils || (typeof window !== "undefined" && window.MPV_INTERNAL?.domUtils);
+            if (dom?.updateItemDelta) {
+                dom.updateItemDelta(itemDiv, delta);
+            }
         }
     };
 })();
