@@ -15,6 +15,14 @@ export function isFolderActive(folderId) {
 	return !!(session && session.isPlaying);
 }
 
+export const IDLE_VISUAL_STATE = Object.freeze({
+	isActive: false,
+	isRunning: false,
+	isPaused: false,
+	needsAppend: false,
+	sessionIds: [],
+});
+
 /**
  * Robust async check for visual playback state.
  * Returns { isActive, isPaused } and accounts for sync status (UI Reversion).
@@ -42,13 +50,7 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 		}
 
 		if (!finalStatus)
-			return {
-				isActive: false,
-				isRunning: false,
-				isPaused: false,
-				needsAppend: false,
-				sessionIds: [],
-			};
+			return { ...IDLE_VISUAL_STATE };
 
 		// Rely on automated normalization
 		const isProcessRunning = !!finalStatus.isRunning;
@@ -77,13 +79,7 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 		};
 	} catch (e) {
 		console.error("[UIBroadcaster] Error getting playback state:", e);
-		return {
-			isActive: false,
-			isRunning: false,
-			isPaused: false,
-			needsAppend: false,
-			sessionIds: [],
-		};
+		return { ...IDLE_VISUAL_STATE };
 	}
 }
 

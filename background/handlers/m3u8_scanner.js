@@ -13,6 +13,16 @@ export function setDetectionCallback(cb) {
 	_onDetectionCallback = cb;
 }
 
+function clearDetectedUrl(tabId) {
+	delete lastDetectedUrls[tabId];
+	delete _detectedUrlsState[tabId];
+	broadcastToTabs({
+		action: "detected_url_changed",
+		tabId: tabId,
+		url: null,
+	});
+}
+
 // We use an auto-init pattern since this module needs to register listeners immediately
 function setupListeners() {
 	chrome.webRequest.onBeforeRequest.addListener(
@@ -95,13 +105,7 @@ function setupListeners() {
 
 	chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 		if (changeInfo.url) {
-			delete lastDetectedUrls[tabId];
-			delete _detectedUrlsState[tabId];
-			broadcastToTabs({
-				action: "detected_url_changed",
-				tabId: tabId,
-				url: null,
-			});
+			clearDetectedUrl(tabId);
 		} else if (
 			changeInfo.status === "loading" &&
 			tab.url &&
@@ -110,13 +114,7 @@ function setupListeners() {
 			const now = Date.now();
 			const lastData = lastDetectedUrls[tabId];
 			if (!lastData || now - lastData.timestamp > 5000) {
-				delete lastDetectedUrls[tabId];
-				delete _detectedUrlsState[tabId];
-				broadcastToTabs({
-					action: "detected_url_changed",
-					tabId: tabId,
-					url: null,
-				});
+				clearDetectedUrl(tabId);
 			}
 		}
 	});

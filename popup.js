@@ -2,6 +2,7 @@ import { domUtils } from "./utils/domUtils.module.js";
 import { AniListRenderer } from "./utils/anilist_renderer.module.js";
 import {
 	debounce,
+	getActiveTab,
 	getYoutubeId,
 	isYouTubeUrl,
 	normalizeYouTubeUrl,
@@ -691,8 +692,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 				
 
 		showOnPageControllerBtn.addEventListener("click", async () => {
-			const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
-			const tabId = tabs[0]?.id;
+			const activeTab = await getActiveTab();
+			const tabId = activeTab?.id;
 
 			sendMessageAsync({
 				action: "set_minimized_state",
@@ -708,8 +709,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		});
 
 		hideOnPageControllerBtn.addEventListener("click", async () => {
-			const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
-			const tabId = tabs[0]?.id;
+			const activeTab = await getActiveTab();
+			const tabId = activeTab?.id;
 
 			sendMessageAsync({
 				action: "set_minimized_state",
@@ -1945,10 +1946,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 						// Request deep sync from manager
 						MPV.playbackStateManager.requestSync();
-						const tabs = await chrome.tabs
-							.query({ active: true, currentWindow: true })
-							.catch(() => []);
-						const activeTab = tabs && tabs.length > 0 ? tabs[0] : null;
+						const activeTab = await getActiveTab();
 						const isHttp = activeTab?.url?.startsWith("http") ?? false;
 						const tabId = activeTab?.id;
 
@@ -2159,9 +2157,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			// Handle live changes to the detected URL to update the "Add" button's state
 			if (request.action === "detected_url_changed") {
-				chrome.tabs
-					.query({ active: true, currentWindow: true })
-					.then(([activeTab]) => {
+				getActiveTab()
+					.then((activeTab) => {
 						// The miniAddBtn is for the mini-controller view.
 						// We check if the message is for the currently active tab.
 						if (activeTab && activeTab.id === request.tabId && miniAddBtn) {
@@ -2190,8 +2187,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 			// If preferences changed in another context (e.g., dragging the anilist panel), update our UI.
 			if (request.action === "preferences_changed") {
 				const getPrefs = async () => {
-					const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
-					const tabId = tabs && tabs.length > 0 ? tabs[0].id : null;
+					const activeTab = await getActiveTab();
+					const tabId = activeTab?.id || null;
 					return sendMessageAsync({ action: "get_ui_preferences", tabId });
 				};
 

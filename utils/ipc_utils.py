@@ -333,6 +333,14 @@ class IPCSocketManager:
                     self._buffer_lock.wait()
 
 
+    def log_to_mpv(self, message):
+        """Sends a message to MPV to be printed in its terminal via script-message."""
+        if self.is_connected():
+            try:
+                self.send({"command": ["script-message", "python_log", message]}, expect_response=False)
+            except Exception:
+                pass
+
     def close(self):
         """Closes the IPC socket handle and marks it as disconnected."""
         # 1. Stop the reader thread first if it's running

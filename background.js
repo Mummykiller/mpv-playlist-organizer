@@ -18,6 +18,7 @@ import { broadcastPlaylistState, getVisualPlaybackState } from "./background/ui_
 import { broadcastLog, broadcastToTabs } from "./background/messaging.js";
 import { storage } from "./background/storage_instance.js";
 import { updateContextMenus } from "./utils/contextMenu.js";
+import { getActiveTab } from "./utils/commUtils.module.js";
 import { logger } from "./utils/SystemLogger.module.js";
 import { addNativeListener } from "./utils/nativeConnection.module.js";
 import { nativeLink } from "./utils/nativeLink.js";
@@ -159,7 +160,7 @@ const actionHandlers = {
 			
 			// Retroactive detection: Check current tab if it already has a detected URL
 			try {
-				const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+				const activeTab = await getActiveTab();
 				if (activeTab?.id) {
 					const detectedUrl = m3u8_scanner_handlers.handleGetDetectedUrlForTab(activeTab.id);
 					if (detectedUrl) {

@@ -286,6 +286,13 @@ export async function handleAdd(request, sender) {
 	}
 }
 
+const PLAYLIST_MUTATION_OPTIONS = Object.freeze({
+	requireFolder: true,
+	syncToNative: true,
+	syncImmediate: true,
+	broadcastPlaylist: true,
+});
+
 export const handleClear = createHandler(async ({ folderId, data }) => {
 	const actualFolderId = Object.keys(data.folders).find(
 		(id) => id.toLowerCase() === folderId.toLowerCase()
@@ -301,12 +308,7 @@ export const handleClear = createHandler(async ({ folderId, data }) => {
 	}
 	
 	return { success: true, message: `Playlist for '${actualFolderId}' cleared.` };
-}, {
-	requireFolder: true,
-	syncToNative: true,
-	syncImmediate: true,
-	broadcastPlaylist: true
-});
+}, PLAYLIST_MUTATION_OPTIONS);
 
 export const handleRemoveItem = createHandler(async ({ request, folderId, data }) => {
 	const indexToRemove = request.data?.index;
@@ -340,12 +342,7 @@ export const handleRemoveItem = createHandler(async ({ request, folderId, data }
 		}
 	}
 	return { success: false, error: "Invalid item index or ID." };
-}, {
-	requireFolder: true,
-	syncToNative: true,
-	syncImmediate: true,
-	broadcastPlaylist: true
-});
+}, PLAYLIST_MUTATION_OPTIONS);
 
 export const handleSetPlaylistOrder = createHandler(async ({ request, folderId, data }) => {
 	const { order } = request.data;
@@ -358,12 +355,7 @@ export const handleSetPlaylistOrder = createHandler(async ({ request, folderId, 
 	data.folders[actualFolderId].playlist = order;
 	
 	return { success: true };
-}, {
-	requireFolder: true,
-	syncToNative: true,
-	syncImmediate: true,
-	broadcastPlaylist: true
-});
+}, PLAYLIST_MUTATION_OPTIONS);
 
 export const handleGetSmartReorder = createHandler(async (context) => {
 	const { folderId, storage } = context;

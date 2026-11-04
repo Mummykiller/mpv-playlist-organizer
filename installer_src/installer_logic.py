@@ -537,3 +537,15 @@ class LinuxLogic(UnixLogic):
             "opera": os.path.join(base_path, "opera"),
         }
         return mapping.get(browser_name.lower())
+
+def get_logic_for_platform(system=None, log_func=print, ask_file_func=None, ask_dir_func=None):
+    if system is None:
+        system = platform.system()
+    if system == "Windows":
+        return WindowsLogic(log_func, ask_file_func=ask_file_func, ask_dir_func=ask_dir_func)
+    elif system == "Linux":
+        return LinuxLogic(log_func, ask_file_func=ask_file_func, ask_dir_func=ask_dir_func)
+    elif system == "Darwin":
+        return MacOSLogic(log_func, ask_file_func=ask_file_func, ask_dir_func=ask_dir_func)
+    return UnixLogic(log_func, ask_file_func=ask_file_func, ask_dir_func=ask_dir_func)
+

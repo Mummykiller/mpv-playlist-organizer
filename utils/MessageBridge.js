@@ -48,12 +48,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		_isReloadError(msg) {
-			if (!msg) return false;
-			return (
-				msg.includes("Extension context invalidated") ||
-				msg.includes("Receiving end does not exist") ||
-				msg.includes("message channel closed")
-			);
+			return (MPV.isExtensionReloadError || Boolean)(msg);
 		}
 
 		destroy() {

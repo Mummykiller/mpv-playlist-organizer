@@ -33,21 +33,3 @@ export function isValidUrl(urlString) {
 		return ALLOWED_PROTOCOLS.some((p) => urlString.toLowerCase().startsWith(p));
 	}
 }
-
-/**
- * Sanitizes strings for safe OSD display or communication.
- */
-export function sanitizeString(str, isFilename = false) {
-	if (typeof str !== "string") return str;
-
-	const limit = isFilename
-		? SECURITY_LIMITS.MAX_FOLDER_NAME_LENGTH
-		: SECURITY_LIMITS.MAX_TITLE_LENGTH;
-	let sanitized = str.substring(0, limit);
-
-	if (isFilename) {
-		return sanitized.replace(/[\\/:*?"<>|$;&`\n\r\t]/g, "").trim();
-	} else {
-		return sanitized.replace(/["`$\n\r\t]/g, "").trim();
-	}
-}

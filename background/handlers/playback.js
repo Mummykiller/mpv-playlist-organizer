@@ -1,7 +1,7 @@
 import {
 	addNativeListener,
 } from "../../utils/nativeConnection.module.js";
-import { nativeLink } from "../../utils/nativeLink.js";
+import { nativeLink, buildPlaybackSettingsPayload } from "../../utils/nativeLink.js";
 import { normalizeYouTubeUrl } from "../../utils/commUtils.module.js";
 import { debouncedSyncToNativeHostFile } from "../core_services.js";
 import { broadcastLog, broadcastToTabs } from "../messaging.js";
@@ -1200,36 +1200,7 @@ export const handlePlayNewInstance = createHandler(async ({ request, folderId })
 	const options = {
 		playNewInstance: true,
 		isUnmanaged: true,
-		geometry: request.geometry || (globalPrefs.launchGeometry === "custom" ? null : globalPrefs.launchGeometry),
-		customWidth: request.customWidth || (globalPrefs.launchGeometry === "custom" ? globalPrefs.customGeometryWidth : null),
-		customHeight: request.customHeight || (globalPrefs.launchGeometry === "custom" ? globalPrefs.customGeometryHeight : null),
-		customMpvFlags: request.customMpvFlags || globalPrefs.customMpvFlags || "",
-		automaticMpvFlags: globalPrefs.automaticMpvFlags || [],
-		forceTerminal: globalPrefs.forceTerminal ?? false,
-		startPaused: request.startPaused ?? false,
-		// Networking & Performance Sync
-		disableNetworkOverrides: globalPrefs.disableNetworkOverrides ?? false,
-		targetedDefaults: globalPrefs.targetedDefaults || "all-none-yt",
-		enableCache: globalPrefs.enableCache ?? true,
-		httpPersistence: globalPrefs.httpPersistence || "auto",
-		demuxerMaxBytes: globalPrefs.demuxerMaxBytes || "1G",
-		demuxerMaxBackBytes: globalPrefs.demuxerMaxBackBytes || "500M",
-		cacheSecs: globalPrefs.cacheSecs || 500,
-		demuxerReadaheadSecs: globalPrefs.demuxerReadaheadSecs || 500,
-		streamBufferSize: globalPrefs.streamBufferSize || "10M",
-		ytdlpConcurrentFragments: globalPrefs.ytdlpConcurrentFragments || 4,
-		enableReconnect: globalPrefs.enableReconnect ?? true,
-		reconnectDelay: globalPrefs.reconnectDelay || 4,
-		mpvDecoder: globalPrefs.mpvDecoder || "auto",
-		ytdlQuality: globalPrefs.ytdlQuality || "best",
-		performanceProfile: globalPrefs.performanceProfile || "default",
-		enablePreciseResume: globalPrefs.enablePreciseResume ?? true,
-		ultraScalers: globalPrefs.ultraScalers ?? true,
-		enableDisplaySync: globalPrefs.enableDisplaySync ?? true,
-		overrideDisplayFps: globalPrefs.overrideDisplayFps || "",
-		ultraInterpolation: globalPrefs.ultraInterpolation || "oversample",
-		ultraDeband: globalPrefs.ultraDeband ?? true,
-		ultraFbo: globalPrefs.ultraFbo ?? true,
+		...buildPlaybackSettingsPayload(globalPrefs, request),
 	};
 
 	return nativeLink.call("play_new_instance", {
