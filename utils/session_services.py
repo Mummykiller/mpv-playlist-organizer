@@ -40,8 +40,7 @@ class EnrichmentService(ItemProcessor):
                         return
                     if session.ipc_manager and session.ipc_manager.is_connected():
                         # Optional: Ping to ensure responsiveness
-                        ping = session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.5, expect_response=True)
-                        if ping:
+                        if session.ipc_manager.get_property("pid", timeout=0.5):
                             break
                     time.sleep(0.2)
                 
@@ -291,30 +290,19 @@ class LauncherService:
         try:
             # 2.5 Generate Metadata Handshake File
             logging.info("[PY][Session] Generating handshake file...")
-            handshake_data = {
-                "folder_id": folder_id,
-                "project_root": self.session.SCRIPT_DIR,
-                "flag_dir": self.session.FLAG_DIR,
-                "playlist_start_index": playlist_start_index,
-                "is_youtube": is_youtube,
-                "use_ytdl_mpv": use_ytdl_mpv,
-                "title": url_item.get('title'),
-                "id": url_item.get('id'),
-                "original_url": services.sanitize_url(url_item.get('original_url') or url_item.get('url', '')),
-                "headers": kwargs.get('headers') or url_item.get('headers'),
-                "cookies_browser": kwargs.get('cookies_browser') or url_item.get('cookies_browser'),
-                "lua_options": services.construct_lua_options(url_item, settings, self.session.SCRIPT_DIR)[0],
-                "is_unmanaged": kwargs.get('is_unmanaged', False)
-            }
-            
-            handshake_path = os.path.join(self.session.FLAG_DIR, f"handshake_{uuid.uuid4().hex}.json")
-            if platform.system() == "Windows":
-                handshake_path = handshake_path.replace("\\", "/")
-                
-            with open(handshake_path, 'w', encoding='utf-8') as f:
-                json.dump(handshake_data, f)
-            
-            handshake_flag = f"--script-opts=mpv_organizer-handshake={handshake_path}"
+            handshake_path, handshake_flag = services.create_handshake_file(
+                flag_dir=self.session.FLAG_DIR,
+                folder_id=folder_id,
+                script_dir=self.session.SCRIPT_DIR,
+                item=url_item,
+                settings=settings,
+                playlist_start_index=playlist_start_index,
+                is_unmanaged=kwargs.get('is_unmanaged', False),
+                is_youtube=is_youtube,
+                use_ytdl_mpv=use_ytdl_mpv,
+                headers=kwargs.get('headers') or url_item.get('headers'),
+                cookies_browser=kwargs.get('cookies_browser') or url_item.get('cookies_browser')
+            )
             current_custom_flags = kwargs.get('custom_mpv_flags') or ""
             updated_custom_flags = f"{current_custom_flags} {handshake_flag}".strip()
 
@@ -357,9 +345,9 @@ class LauncherService:
                 logging.error(f"[PY][Session] IPC connection timeout: {ipc_path}")
                 raise RuntimeError(f"Failed to connect to MPV IPC at {self.session.ipc_path}")
 
-            pid_res = self.session.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=5.0, expect_response=True)
-            if pid_res and pid_res.get("error") == "success":
-                self.session.pid = pid_res.get("data")
+            mpv_pid = self.session.ipc_manager.get_property("pid", timeout=5.0)
+            if mpv_pid:
+                self.session.pid = mpv_pid
                 logging.info(f"[PY][Session] MPV PID resolved: {self.session.pid}")
             else:
                 self.session.pid = process.pid

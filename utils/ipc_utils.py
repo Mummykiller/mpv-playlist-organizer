@@ -333,6 +333,19 @@ class IPCSocketManager:
                     self._buffer_lock.wait()
 
 
+    def get_property(self, name, timeout=1.0, default=None):
+        """
+        Queries an MPV property by name via IPC.
+        Returns the property value from 'data' if error == 'success', otherwise default.
+        """
+        try:
+            resp = self.send({"command": ["get_property", name]}, timeout=timeout, expect_response=True)
+            if resp and resp.get("error") == "success":
+                return resp.get("data", default)
+        except Exception:
+            pass
+        return default
+
     def log_to_mpv(self, message):
         """Sends a message to MPV to be printed in its terminal via script-message."""
         if self.is_connected():
@@ -404,17 +417,15 @@ def is_process_alive(pid, ipc_path):
         return False
 
     # If connected, send a command to verify the PID.
-    ipc_response = temp_manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=1.0)
+    actual_pid = temp_manager.get_property("pid", timeout=1.0)
     temp_manager.close() # Always close the temporary connection.
 
-    if ipc_response and ipc_response.get("error") == "success":
-        actual_pid = ipc_response.get("data")
-        if actual_pid == pid:
-            return True
-        else:
-            ipc_logger.debug(f"[PY][IPC] is_process_alive: PID mismatch. Expected {pid}, got {actual_pid}. (Socket is alive)")
+    if actual_pid == pid:
+        return True
+    elif actual_pid is not None:
+        ipc_logger.debug(f"[PY][IPC] is_process_alive: PID mismatch. Expected {pid}, got {actual_pid}. (Socket is alive)")
     else:
-        ipc_logger.debug(f"[PY][IPC] is_process_alive: Failed to get PID from MPV. Response: {ipc_response}")
+        ipc_logger.debug(f"[PY][IPC] is_process_alive: Failed to get PID from MPV.")
             
     return False
 

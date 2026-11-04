@@ -77,8 +77,7 @@ class MpvSessionManager:
             while self.is_alive and self.ipc_manager:
                 try:
                     # Ping MPV with a tight timeout
-                    res = self.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=0.3, expect_response=True)
-                    if res and res.get("error") == "success":
+                    if self.ipc_manager.get_property("pid", timeout=0.3):
                         current_health = "ok"
                         consecutive_failures = 0
                     else:
@@ -144,8 +143,7 @@ class MpvSessionManager:
             
             try:
                 # 1. Identify current item via user-data/id (set by adaptive_headers.lua)
-                id_resp = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=1.0)
-                item_id = id_resp.get("data") if id_resp else None
+                item_id = self.ipc_manager.get_property("user-data/id", timeout=1.0)
                 
                 if not item_id: 
                     logging.debug("Fallback: Could not identify current item ID.")
@@ -360,26 +358,14 @@ class MpvSessionManager:
         with self.sync_lock:
             if not self.is_alive or not self.ipc_manager:
                 return None
-            try:
-                res = self.ipc_manager.send({"command": ["get_property", "pause"]}, expect_response=True, timeout=0.5)
-                if res and res.get("error") == "success":
-                    return res.get("data")
-            except Exception:
-                pass
-            return None
+            return self.ipc_manager.get_property("pause", timeout=0.5)
 
     def get_idle_state(self):
         """Queries the current idle state from MPV via IPC."""
         with self.sync_lock:
             if not self.is_alive or not self.ipc_manager:
                 return None
-            try:
-                res = self.ipc_manager.send({"command": ["get_property", "idle-active"]}, expect_response=True, timeout=0.5)
-                if res and res.get("error") == "success":
-                    return res.get("data")
-            except Exception:
-                pass
-            return None
+            return self.ipc_manager.get_property("idle-active", timeout=0.5)
 
     def restore(self):
         """Checks for a persisted session file and restores state if the process is still alive."""
@@ -416,12 +402,7 @@ class MpvSessionManager:
                 actual_mpv_pid = None
                 temp_manager = ipc_utils.IPCSocketManager()
                 if temp_manager.connect(ipc_path, timeout=1.5, start_event_reader=False):
-                    try:
-                        pid_resp = temp_manager.send({"command": ["get_property", "pid"]}, expect_response=True, timeout=1.0)
-                        if pid_resp and pid_resp.get("error") == "success":
-                            actual_mpv_pid = pid_resp.get("data")
-                    except Exception:
-                        pass
+                    actual_mpv_pid = temp_manager.get_property("pid", timeout=1.0)
                     temp_manager.close()
 
                 # 3. Validation Logic
@@ -466,14 +447,11 @@ class MpvSessionManager:
                     last_played_id = None
                     try:
                         # Priority 1: user-data/id (Solid ID from fragment)
-                        id_resp = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=1.0)
-                        if id_resp and id_resp.get("error") == "success":
-                            last_played_id = id_resp.get("data")
+                        last_played_id = self.ipc_manager.get_property("user-data/id", timeout=1.0)
                         
                         # Priority 2: Fallback to path matching
                         if not last_played_id:
-                            path_resp = self.ipc_manager.send({"command": ["get_property", "path"]}, expect_response=True)
-                            curr_path = path_resp.get("data") if path_resp else None
+                            curr_path = self.ipc_manager.get_property("path")
                             if curr_path:
                                 for item in self.playlist:
                                     if item.get('url') == curr_path or item.get('original_url') == curr_path:
@@ -542,22 +520,15 @@ class MpvSessionManager:
             return False
         
         try:
-            res = self.ipc_manager.send({"command": ["get_property", "playlist"]}, expect_response=True, timeout=2.0)
-            if not res or res.get("error") != "success":
-                logging.warning(f"[PY][Session] Sync: Failed to get playlist from MPV: {res}")
+            mpv_playlist = self.ipc_manager.get_property("playlist", timeout=2.0)
+            if mpv_playlist is None:
+                logging.warning("[PY][Session] Sync: Failed to get playlist from MPV.")
                 return False
 
-            mpv_playlist = res.get("data", [])
             logging.debug(f"[PY][Session] Sync: MPV reported {len(mpv_playlist)} items.")
             
             # Get current item's ID directly from user-data to match even if resolved/filename changed
-            current_id = None
-            try:
-                id_res = self.ipc_manager.send({"command": ["get_property", "user-data/id"]}, expect_response=True, timeout=0.3)
-                if id_res and id_res.get("error") == "success":
-                    current_id = id_res.get("data")
-            except Exception:
-                pass
+            current_id = self.ipc_manager.get_property("user-data/id", timeout=0.3)
 
             # Get latest shard data to match IDs back to metadata
             folder_data = file_io.get_folder_data(self.owner_folder_id)
@@ -638,9 +609,7 @@ class MpvSessionManager:
         # If sync failed but we are prepend/appending, we should at least try to get a count
         # to avoid index-based mapping errors (even though we use ID-based mapping mostly)
         if not sync_success:
-            count_res = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True, timeout=1.0)
-            if count_res and count_res.get("error") == "success":
-                current_mpv_count = count_res.get("data") or current_mpv_count
+            current_mpv_count = self.ipc_manager.get_property("playlist-count", timeout=1.0, default=current_mpv_count)
 
         # 2. Filter based on ACTIVE items only
         # We only skip if the item is already physically inside the MPV instance.
@@ -664,23 +633,11 @@ class MpvSessionManager:
             self.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(target_idx)]})
 
         # 4. Atomic Load via M3U
-        m3u_lines = ["#EXTM3U"]
-        for itm in items_to_add:
-            url = itm['url']
-            if itm.get('is_youtube') and itm.get('original_url'):
-                url = itm['original_url']
-            if itm.get('id'):
-                sep = "#" if "#" not in url else "&"
-                url = f"{url}{sep}mpv_organizer_id={itm['id']}"
-            m3u_lines.append(f"#EXTINF:-1,{file_io.sanitize_string(itm.get('title', 'Unknown'))}")
-            # Ensure the URL is sanitized for M3U and shell safety
-            m3u_lines.append(services.sanitize_url(url))
-        
         temp_path = os.path.join(self.TEMP_PLAYLISTS_DIR, f"batch_{uuid.uuid4().hex[:8]}.m3u")
         try:
             os.makedirs(self.TEMP_PLAYLISTS_DIR, exist_ok=True)
             with open(temp_path, 'w', encoding='utf-8') as f:
-                f.write("\n".join(m3u_lines))
+                f.write(self._generate_m3u_content(items_to_add))
             
             res = self.ipc_manager.send({"command": ["loadlist", temp_path, "append"]}, expect_response=True, timeout=5.0)
             if res and res.get("error") == "success":
@@ -698,8 +655,7 @@ class MpvSessionManager:
                     self.playlist_tracker.update_playlist_order(self.playlist)
                 
                 # Force start if MPV was finished/idle
-                idle = self.ipc_manager.send({"command": ["get_property", "idle-active"]}, expect_response=True)
-                if idle and idle.get("data"):
+                if self.ipc_manager.get_property("idle-active"):
                     # We might need to unpause if idle-active is true because of a pause-at-end
                     self.ipc_manager.send({"command": ["set_property", "pause", False]})
                     self.ipc_manager.send({"command": ["playlist-next", "weak"]})
@@ -996,8 +952,7 @@ class MpvSessionManager:
                 if currently_alive:
                     if self.ipc_manager and self.ipc_manager.is_connected():
                         logging.info("[PY][Session] start() - Sending verification ping to MPV.")
-                        res = self.ipc_manager.send({"command": ["get_property", "pid"]}, timeout=2.0, expect_response=True)
-                        if not res or res.get("error") != "success":
+                        if self.ipc_manager.get_property("pid", timeout=2.0) is None:
                             logging.info("[PY][Session] start() - Ping failed, checking PID existence.")
                             if not ipc_utils.is_pid_running(self.pid):
                                 currently_alive = False
@@ -1017,13 +972,8 @@ class MpvSessionManager:
                         logging.info(f"Hot Swap: Switching active session to item: {launch_item.get('title')}")
                         
                         self._sync_playlist_from_mpv()
-                        mpv_playlist_urls = []
-                        try:
-                            logging.info("[PY][Session] hot-swap - Getting MPV playlist.")
-                            pl_res = self.ipc_manager.send({"command": ["get_property", "playlist"]}, expect_response=True)
-                            mpv_playlist_urls = pl_res.get("data", []) if pl_res else []
-                        except Exception:
-                            pass
+                        logging.info("[PY][Session] hot-swap - Getting MPV playlist.")
+                        mpv_playlist_urls = self.ipc_manager.get_property("playlist", default=[])
 
                         target_url = services.sanitize_url(launch_item['url'])
                         if launch_item.get('is_youtube') and launch_item.get('original_url'):
@@ -1088,9 +1038,8 @@ class MpvSessionManager:
                             self.ipc_manager.send({"command": ["loadfile", target_url, "append"]})
                             time.sleep(0.1)
                             
-                            pl_count_res = self.ipc_manager.send({"command": ["get_property", "playlist-count"]}, expect_response=True)
-                            new_idx = (pl_count_res.get("data", 1) if pl_count_res else 1) - 1
-                            self.ipc_manager.send({"command": ["set_property", "playlist-pos", new_idx]})
+                            new_count = self.ipc_manager.get_property("playlist-count", default=1)
+                            self.ipc_manager.send({"command": ["set_property", "playlist-pos", new_count - 1]})
                             
                             if self.playlist is not None:
                                 self.playlist.append(launch_item)
