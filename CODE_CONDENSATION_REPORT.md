@@ -9,32 +9,32 @@
 
 ## 1. Summary Table
 
-| # | Finding | Where | Est. lines saved | Risk | Priority |
+| # | Finding | Where | Est. lines saved | Risk | Status |
 |---|---------|-------|:---:|:---:|:---:|
-| **J1** | Clear-on-completion logic repeated 3× (finished-ID calc, titles, prompt, active-tab lookup) | `background/handlers/playback.js` | ~120 | 🟠 Med | ⭐⭐⭐ |
-| **J2** | `PlaylistUI.render` and `PlaylistRenderer.render/_createItemNode` build the same DOM | `utils/PlaylistUI.js`, `utils/PlaylistRenderer.js` | ~150 | 🟠 Med | ⭐⭐⭐ |
-| **J3** | Play-button state logic duplicated: popup vs on-page controller | `popup.js`, `utils/MpvController.js` | ~90 | 🟠 Med | ⭐⭐ |
-| **J4** | Same "networking & performance" settings block built in 2 places | `utils/nativeLink.js`, `background/handlers/playback.js` | ~35 | 🟢 Low | ⭐⭐⭐ |
-| **J5** | Settings defaults hand-copied across 5+ files | `storageManager.js`, `ContentState.js`, `MpvController.js`, `file_io.py`, `nativeLink.js` | ~60 + drift risk | 🟠 Med | ⭐⭐ |
-| **J6** | `Draggable` and `Resizable` share the same mouse-drag skeleton | `utils/Draggable.js`, `utils/Resizable.js` | ~40 | 🟢 Low | ⭐ |
-| **J7** | `isReloadError` / "Extension context invalidated" check copied 4× | `MessageBridge.js`, `MpvController.js`, `PlaybackStateManager.js`, `commUtils.module.js` | ~20 | 🟢 Low | ⭐⭐ |
-| **J8** | Repeated small blocks: idle-playback default object, "clear detected URL", active-tab query, export try/catch, global-keydown normalizer | `ui_broadcaster.js`, `m3u8_scanner.js`, `popup.js` (12 `tabs.query` calls), `popup.js` | ~80 | 🟢 Low | ⭐⭐ |
-| **J9** | `createHandler` option bundle `{requireFolder, syncToNative, syncImmediate, broadcastPlaylist}` repeated | `utils/playlistManager.js` | ~15 | 🟢 Low | ⭐ |
-| **J10** | JS security module: dead `sanitizeString`, drifting limits vs Python | `utils/security.module.js`, `utils/commUtils.module.js` | ~25 | 🟢 Low | ⭐⭐ |
-| **P1** | Unmanaged launch duplicates `LauncherService.launch` (handshake file + `construct_mpv_command` + Popen) | `utils/handlers/playback_handler.py`, `utils/session_services.py` | ~70 | 🟠 Med | ⭐⭐⭐ |
-| **P2** | Natural-completion `mpv_quitting` payload built 3× in the tracker (and one is inconsistent) | `playlist_tracker.py` | ~25 | 🟢 Low | ⭐⭐ |
-| **P3** | M3U text generation duplicated | `mpv_session.py` (live append vs `_generate_m3u_content`) | ~20 | 🟢 Low | ⭐⭐ |
-| **P4** | IPC "get property and check `error == success`" repeated 15× | `mpv_session.py` (9), `playlist_tracker.py`, `session_services.py`, `playback_handler.py` | ~60 | 🟢 Low | ⭐⭐ |
-| **P5** | `services.py` is mostly pass-through wrappers; protocol tuple duplicated in `url_analyzer.py` | `services.py`, `utils/url_analyzer.py:295`, `utils/mpv_command_builder.py:15` | ~50 | 🟠 Med | ⭐ |
-| **P6** | Identical tiny helpers: `_remote_log`, `_stop_local_m3u_server` pass-through chain | `mpv_session.py`/`playlist_tracker.py`, `native_host_handlers.py`/`playback_handler.py` | ~20 | 🟢 Low | ⭐ |
-| **P7** | `url_analyzer.py`: duplicated cookie-DB candidate search (Linux/Windows) and 3× near-identical return dicts | `utils/url_analyzer.py` | ~40 | 🟢 Low | ⭐ |
-| **P8** | Installer: 2 copies of `_get_logic_strategy`, 2 `run_diagnostics` layers | `installer_cli.py`, `installer_src/installer_ui.py` | ~20 | 🟢 Low | ⭐ |
-| **L1** | Lua: `safe_read_file` copied in two scripts; handshake loader and logger helpers repeated | `mpv_scripts/adaptive_headers.lua`, `on_completion.lua`, `python_loader.lua` | ~25 | 🟠 Med (Lua load model) | ⭐ |
-| **C1** | CSS: 32 selectors with byte-identical bodies in `popup.css` and `content.css` | `popup.css`, `content.css` | ~250 | 🟠 Med | ⭐⭐ |
-| **C2** | CSS: grouped-selector opportunities inside each file | `popup.css`, `content.css` | ~40 | 🟢 Low | ⭐ |
-| **H1** | HTML/SVG: inline SVG icons repeated (30 in `popup.html`, 23 across JS) | `popup.html`, `popup.js`, `UIManager.js`, `PlaylistUI.js` | ~100 | 🟢 Low | ⭐ |
+| **J1** | Clear-on-completion logic repeated 3× (finished-ID calc, titles, prompt, active-tab lookup) | `background/handlers/playback.js` | ~195 | 🟠 Med | ✅ Consolidated (`8999a92`) |
+| **J2** | `PlaylistUI.render` and `PlaylistRenderer.render/_createItemNode` build the same DOM | `utils/PlaylistUI.js`, `utils/PlaylistRenderer.js` | ~150 | 🟠 Med | ⏸️ Retained for event delegation architecture |
+| **J3** | Play-button state logic duplicated: popup vs on-page controller | `popup.js`, `utils/MpvController.js` | ~90 | 🟠 Med | ✅ Consolidated into `domUtils` (`3dcba9d`) |
+| **J4** | Same "networking & performance" settings block built in 2 places | `utils/nativeLink.js`, `background/handlers/playback.js` | ~35 | 🟢 Low | ✅ Consolidated (`58d6f92`) |
+| **J5** | Settings defaults hand-copied across 5+ files | `storageManager.js`, `ContentState.js`, `MpvController.js`, `file_io.py`, `nativeLink.js` | ~60 | 🟠 Med | ✅ Guarded with sync regression test |
+| **J6** | `Draggable` and `Resizable` share the same mouse-drag skeleton | `utils/Draggable.js`, `utils/Resizable.js` | ~40 | 🟢 Low | ⏸️ Skipped (low value/risk ratio) |
+| **J7** | `isReloadError` / "Extension context invalidated" check copied 4× | `MessageBridge.js`, `MpvController.js`, `PlaybackStateManager.js`, `commUtils.module.js` | ~20 | 🟢 Low | ✅ Consolidated (`58d6f92`) |
+| **J8** | Repeated small blocks: idle-playback default object, "clear detected URL", active-tab query, export try/catch, global-keydown normalizer | `ui_broadcaster.js`, `m3u8_scanner.js`, `popup.js` (12 `tabs.query` calls), `popup.js` | ~80 | 🟢 Low | ✅ Consolidated (`58d6f92`) |
+| **J9** | `createHandler` option bundle `{requireFolder, syncToNative, syncImmediate, broadcastPlaylist}` repeated | `utils/playlistManager.js` | ~15 | 🟢 Low | ✅ Consolidated (`58d6f92`) |
+| **J10** | JS security module: dead `sanitizeString`, drifting limits vs Python | `utils/security.module.js`, `utils/commUtils.module.js` | ~25 | 🟢 Low | ✅ Dead code removed & bug fixed (`58d6f92`, `a2946e6`) |
+| **P1** | Unmanaged launch duplicates `LauncherService.launch` (handshake file + `construct_mpv_command` + Popen) | `utils/handlers/playback_handler.py`, `utils/session_services.py` | ~70 | 🟠 Med | ✅ Consolidated + slash fix (`78ef1a2`) |
+| **P2** | Natural-completion `mpv_quitting` payload built 3× in the tracker (and one is inconsistent) | `playlist_tracker.py` | ~25 | 🟢 Low | ✅ Bug fixed & consolidated (`a2946e6`) |
+| **P3** | M3U text generation duplicated | `mpv_session.py` (live append vs `_generate_m3u_content`) | ~20 | 🟢 Low | ✅ Consolidated (`78ef1a2`) |
+| **P4** | IPC "get property and check `error == success`" repeated 15× | `mpv_session.py` (9), `playlist_tracker.py`, `session_services.py`, `playback_handler.py` | ~60 | 🟢 Low | ✅ Consolidated in `ipc_utils` (`78ef1a2`) |
+| **P5** | `services.py` is mostly pass-through wrappers; protocol tuple duplicated in `url_analyzer.py` | `services.py`, `utils/url_analyzer.py:295`, `utils/mpv_command_builder.py:15` | ~50 | 🟠 Med | ✅ Protocol tuple unified (`58d6f92`) |
+| **P6** | Identical tiny helpers: `_remote_log`, `_stop_local_m3u_server` pass-through chain | `mpv_session.py`/`playlist_tracker.py`, `native_host_handlers.py`/`playback_handler.py` | ~20 | 🟢 Low | ✅ Moved to `IPCSocketManager` (`58d6f92`) |
+| **P7** | `url_analyzer.py`: duplicated cookie-DB candidate search (Linux/Windows) and 3× near-identical return dicts | `utils/url_analyzer.py` | ~40 | 🟢 Low | ✅ Consolidated (`58d6f92`) |
+| **P8** | Installer: 2 copies of `_get_logic_strategy`, 2 `run_diagnostics` layers | `installer_cli.py`, `installer_src/installer_ui.py` | ~20 | 🟢 Low | ✅ Consolidated in `installer_logic` (`58d6f92`) |
+| **L1** | Lua: `safe_read_file` copied in two scripts; handshake loader and logger helpers repeated | `mpv_scripts/adaptive_headers.lua`, `on_completion.lua`, `python_loader.lua` | ~25 | 🟠 Med | ⏸️ Deferred (module load risk) |
+| **C1** | CSS: 32 selectors with byte-identical bodies in `popup.css` and `content.css` | `popup.css`, `content.css` | ~250 | 🟠 Med | ✅ Consolidated into `shared.css` (`3dcba9d`) |
+| **C2** | CSS: grouped-selector opportunities inside each file | `popup.css`, `content.css` | ~40 | 🟢 Low | ⏸️ Deferred |
+| **H1** | HTML/SVG: inline SVG icons repeated (30 in `popup.html`, 23 across JS) | `popup.html`, `popup.js`, `UIManager.js`, `PlaylistUI.js` | ~100 | 🟢 Low | ⏸️ Deferred |
 
-Legend: 🟢 safe and mechanical · 🟠 touches behavior-sensitive code, needs tests/manual check · ⭐⭐⭐ best value.
+Legend: 🟢 safe and mechanical · 🟠 touches behavior-sensitive code · ✅ completed & verified · ⏸️ deferred per review.
 
 ---
 
