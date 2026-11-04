@@ -2,7 +2,7 @@ import {
 	addNativeListener,
 } from "../../utils/nativeConnection.module.js";
 import { nativeLink, buildPlaybackSettingsPayload } from "../../utils/nativeLink.js";
-import { normalizeYouTubeUrl } from "../../utils/commUtils.module.js";
+import { normalizeYouTubeUrl, getActiveTab } from "../../utils/commUtils.module.js";
 import { debouncedSyncToNativeHostFile } from "../core_services.js";
 import { broadcastLog, broadcastToTabs } from "../messaging.js";
 import { storage } from "../storage_instance.js";
@@ -35,6 +35,70 @@ async function filterActiveItem(folderId, ids, ignoreItemId = null) {
 	if (lastPlayedId === ignoreItemId) return ids;
 	
 	return ids.filter(id => id !== lastPlayedId);
+}
+
+/**
+ * Maps item IDs to user-friendly titles from playlist.
+ */
+function resolveItemTitles(playlist, ids) {
+	const idMap = new Map(playlist.map(i => [i.id, i.title || i.url]));
+	return ids.map(id => idMap.get(id) || id);
+}
+
+/**
+ * Directional clear helper: finds target finished IDs and preceding watched items.
+ */
+function getDirectionalFinishedIds(playlist, finishedIds, sessionWatchedIds = null) {
+	const finishedIdSet = new Set(Array.isArray(finishedIds) ? finishedIds : [finishedIds]);
+	let maxFinishedIndex = -1;
+	playlist.forEach((item, idx) => {
+		if (finishedIdSet.has(item.id)) maxFinishedIndex = idx;
+	});
+
+	return playlist
+		.filter((item, idx) => {
+			const isFinished = finishedIdSet.has(item.id);
+			const isPreviousWatched = idx < maxFinishedIndex && (
+				item.watched || item.markedAsWatched || (sessionWatchedIds && sessionWatchedIds.has(item.id))
+			);
+			return isFinished || isPreviousWatched;
+		})
+		.map(i => i.id);
+}
+
+/**
+ * Sends clear confirmation prompt to the active browser tab and stores pendingClear in session.
+ */
+async function promptClearConfirmation(folderId, targetIds, folder, clearScope, isQuitting = false) {
+	const activeTab = await getActiveTab();
+	if (!activeTab?.id) return;
+
+	if (targetIds.length === 0) {
+		console.debug(`[Background]: No items from scope '${clearScope}' remain in playlist for '${folderId}'. Skipping prompt.`);
+		return;
+	}
+
+	const titles = resolveItemTitles(folder.playlist, targetIds);
+	const session = playbackManager.getSession(folderId);
+	const pendingClear = {
+		folderId,
+		playedIds: targetIds,
+		sessionIds: targetIds,
+		scope: clearScope,
+		titles: titles,
+		...(isQuitting ? { isQuitting: true } : {})
+	};
+	if (session) {
+		session.pendingClear = pendingClear;
+	}
+
+	chrome.tabs
+		.sendMessage(activeTab.id, {
+			action: "show_clear_confirmation",
+			...pendingClear,
+			count: targetIds.length,
+		})
+		.catch(() => {});
 }
 
 // Register listeners for unsolicited native host events
@@ -114,18 +178,7 @@ export async function handleItemNaturalCompletion(data) {
 				folderId: folderId
 			});
 			
-			// DIRECTIONAL CLEAR: Clear this item + any PREVIOUS items that are marked as watched.
-			// This prevents 'ahead of me' bugs by only looking backwards in the list.
-			const finishedItemIndex = folder.playlist.findIndex(i => i.id === itemId);
-			const allToClearRaw = folder.playlist
-				.filter((i, idx) => {
-					const isTarget = i.id === itemId;
-					const isPreviousWatched = idx < finishedItemIndex && (i.watched || i.markedAsWatched);
-					const isSessionWatched = idx < finishedItemIndex && session.watchedItemIds.has(i.id);
-					return isTarget || isPreviousWatched || isSessionWatched;
-				})
-				.map(i => i.id);
-
+			const allToClearRaw = getDirectionalFinishedIds(folder.playlist, itemId, session.watchedItemIds);
 			const allToClear = await filterActiveItem(folderId, allToClearRaw, itemId);
 
 			await clearFolderPlaylist(folderId, {
@@ -148,57 +201,10 @@ export async function handleItemNaturalCompletion(data) {
 			await broadcastPlaylistState(folderId);
 
 			// 2. Trigger/update the stacked confirmation
-			const [activeTab] = await chrome.tabs.query({
-				active: true,
-				currentWindow: true,
-			});
-			
-			if (activeTab) {
-				const finishedItemIndex = folder.playlist.findIndex(i => i.id === itemId);
-				const existingIds = new Set(folder.playlist.map(i => i.id));
-				
-				// DIRECTIONAL LIST: completed items + any PREVIOUS items marked as watched
-				const targetIdsRaw = folder.playlist
-					.filter((i, idx) => {
-						const isCompleted = session.completedItemIds.has(i.id) || i.id === itemId;
-						const isPreviousWatched = idx < finishedItemIndex && (i.watched || i.markedAsWatched || session.watchedItemIds.has(i.id));
-						return isCompleted || isPreviousWatched;
-					})
-					.map(i => i.id);
+			const targetIdsRaw = getDirectionalFinishedIds(folder.playlist, Array.from(session.completedItemIds), session.watchedItemIds);
+			const targetList = await filterActiveItem(folderId, targetIdsRaw, itemId);
 
-				const targetList = await filterActiveItem(folderId, targetIdsRaw, itemId);
-
-				if (targetList.length === 0) {
-					console.debug(`[Background]: No items in completion stack remain in playlist for '${folderId}'. Skipping prompt.`);
-					return;
-				}
-
-				const titles = targetList.map(id => {
-					const item = folder.playlist.find(i => i.id === id);
-					return item ? (item.title || item.url) : id;
-				});
-
-				// PERSISTENCE: Save to session so it can be re-triggered if tab navigates
-				session.pendingClear = {
-					folderId,
-					playedIds: targetList,
-					sessionIds: targetList,
-					scope: "played",
-					titles: titles
-				};
-
-				chrome.tabs
-					.sendMessage(activeTab.id, {
-						action: "show_clear_confirmation",
-						folderId: folderId,
-						playedIds: targetList,
-						sessionIds: targetList,
-						scope: "played",
-						count: targetList.length,
-						titles: titles
-					})
-					.catch(() => {});
-			}
+			await promptClearConfirmation(folderId, targetList, folder, "played", false);
 		}
 	}
 }
@@ -244,22 +250,9 @@ export async function handleMpvQuitting(data) {
 			});
 			playbackManager.earlyClearsInProgress.add(folderId);
 
+			const finishedIds = getDirectionalFinishedIds(folder.playlist, playedIds || []);
+
 			if (clearMode === "yes") {
-				// DIRECTIONAL: Only clear what finished + its predecessors
-				const finishedIdSet = new Set(playedIds || []);
-				let maxFinishedIndex = -1;
-				folder.playlist.forEach((item, idx) => {
-					if (finishedIdSet.has(item.id)) maxFinishedIndex = idx;
-				});
-
-				const finishedIds = folder.playlist
-					.filter((i, idx) => {
-						const isFinished = finishedIdSet.has(i.id);
-						const isPreviousWatched = idx < maxFinishedIndex && (i.watched || i.markedAsWatched);
-						return isFinished || isPreviousWatched;
-					})
-					.map(i => i.id);
-
 				const mergedPlayedIds = await filterActiveItem(folderId, finishedIds);
 
 				await clearFolderPlaylist(folderId, {
@@ -268,71 +261,14 @@ export async function handleMpvQuitting(data) {
 					scope: clearScope,
 				});
 			} else if (clearMode === "confirm") {
-				const [activeTab] = await chrome.tabs.query({
-					active: true,
-					currentWindow: true,
-				});
-				if (activeTab) {
-					// Identify target IDs based on scope, but only if they still exist in the playlist
-					const existingIds = new Set(folder.playlist.map(i => i.id));
-					
-					// DIRECTIONAL: Find the max index that reached EOF
-					const finishedIdSet = new Set(playedIds || []);
-					let maxFinishedIndex = -1;
-					folder.playlist.forEach((item, idx) => {
-						if (finishedIdSet.has(item.id)) maxFinishedIndex = idx;
-					});
+				const existingIds = new Set(folder.playlist.map(i => i.id));
+				const targetIdsRaw = (clearScope === "all" ? Array.from(existingIds) : finishedIds)
+					.filter(id => existingIds.has(id));
+				
+				const ignoreId = finishedIds.length > 0 ? finishedIds[finishedIds.length - 1] : null;
+				const targetIds = await filterActiveItem(folderId, targetIdsRaw, ignoreId);
 
-					const finishedIds = folder.playlist
-						.filter((i, idx) => {
-							const isFinished = finishedIdSet.has(i.id);
-							const isPreviousWatched = idx < maxFinishedIndex && (i.watched || i.markedAsWatched);
-							return isFinished || isPreviousWatched;
-						})
-						.map(i => i.id);
-
-					const targetIdsRaw = (clearScope === "all" ? Array.from(existingIds) : finishedIds)
-						.filter(id => existingIds.has(id));
-					
-					const ignoreId = finishedIds.length > 0 ? finishedIds[finishedIds.length - 1] : null;
-					const targetIds = await filterActiveItem(folderId, targetIdsRaw, ignoreId);
-
-					if (targetIds.length === 0) {
-						console.debug(`[Background]: No items from scope '${clearScope}' remain in playlist for '${folderId}'. Skipping prompt.`);
-						return;
-					}
-
-				const titles = targetIds.map(id => {
-					const item = folder.playlist.find(i => i.id === id);
-					return item ? (item.title || item.url) : id;
-				});
-
-				// PERSISTENCE: Save to session
-				const session = playbackManager.getSession(folderId);
-				session.pendingClear = {
-					folderId,
-					playedIds: targetIds,
-					sessionIds: targetIds,
-					scope: clearScope,
-					titles: titles,
-					isQuitting: true
-				};
-
-				if (activeTab) {
-					chrome.tabs
-						.sendMessage(activeTab.id, {
-							action: "show_clear_confirmation",
-							folderId: folderId,
-							playedIds: targetIds, // Pass filtered list
-							sessionIds: targetIds, // Pass filtered list
-							scope: clearScope,
-							count: targetIds.length,
-							titles: titles,
-							isQuitting: true
-						})
-						.catch(() => {});
-				}
-				}
+				await promptClearConfirmation(folderId, targetIds, folder, clearScope, true);
 			}
 		}
 	}
@@ -426,62 +362,20 @@ export async function handleMpvExited(data) {
 					text: `[Background]: Requesting confirmation to clear items for '${folderId}'.`,
 					type: "info",
 				});
-				const [activeTab] = await chrome.tabs.query({
-					active: true,
-					currentWindow: true,
-				});
-				if (activeTab) {
-					// Identify target IDs based on scope, but only if they still exist in the playlist
-					const existingIds = new Set(folder.playlist.map(i => i.id));
 
-					// Merge storage-watched items into the session-watched list for the "played" scope
-					const watchedInStorage = folder.playlist.filter(i => i.watched || i.markedAsWatched).map(i => i.id);
-					const mergedPlayedIds = Array.from(new Set([...(playedIds || []), ...watchedInStorage]));
+				const existingIds = new Set(folder.playlist.map(i => i.id));
+				const watchedInStorage = folder.playlist.filter(i => i.watched || i.markedAsWatched).map(i => i.id);
+				const mergedPlayedIds = Array.from(new Set([...(playedIds || []), ...watchedInStorage]));
 
-					const rawTargetIds = clearScope === "all" 
-						? folder.playlist.map(i => i.id) 
-						: (clearScope === "session" ? sessionIds : mergedPlayedIds);
-					
-					const filteredTargetIds = (rawTargetIds || []).filter(id => existingIds.has(id));
-					const targetIds = await filterActiveItem(folderId, filteredTargetIds);
+				const rawTargetIds = clearScope === "all" 
+					? folder.playlist.map(i => i.id) 
+					: (clearScope === "session" ? sessionIds : mergedPlayedIds);
+				
+				const filteredTargetIds = (rawTargetIds || []).filter(id => existingIds.has(id));
+				const targetIds = await filterActiveItem(folderId, filteredTargetIds);
 
-					if (targetIds.length === 0) {
-						console.debug(`[Background]: No items from scope '${clearScope}' remain in playlist for '${folderId}'. Skipping prompt.`);
-						return;
-					}
-
-					const titles = targetIds.map(id => {
-						const item = folder.playlist.find(i => i.id === id);
-						return item ? (item.title || item.url) : id;
-					});
-
-					// PERSISTENCE: Save to session
-					if (session) {
-						session.pendingClear = {
-							folderId,
-							playedIds: targetIds,
-							sessionIds: targetIds,
-							scope: clearScope,
-							titles: titles,
-							isQuitting: true
-						};
-					}
-
-					if (activeTab) {
-						chrome.tabs
-							.sendMessage(activeTab.id, {
-								action: "show_clear_confirmation",
-								folderId: folderId,
-								playedIds: targetIds, // Pass filtered list
-								sessionIds: targetIds, // Pass filtered list
-								scope: clearScope,
-								count: targetIds.length,
-								titles: titles,
-								isQuitting: true
-							})
-							.catch(() => {});
-					}
-				}
+				await promptClearConfirmation(folderId, targetIds, folder, clearScope, true);
+			}
 			}
 		} else if (isNaturalCompletion === false && (storageData?.settings?.uiPreferences?.global?.clearOnCompletion || "no") !== "no") {
 			broadcastLog({
