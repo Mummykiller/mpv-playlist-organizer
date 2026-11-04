@@ -1291,21 +1291,22 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				);
 
 			const playBtns = [playBtn, compactPlayBtn, minimizedPlayBtn];
+			const visual = MPV.domUtils?.getPlayButtonVisual ? MPV.domUtils.getPlayButtonVisual({
+				isActive,
+				needsAppend: effectiveNeedsAppend
+			}) : {
+				isPlaying: !!isActive || (!!isActive && !!effectiveNeedsAppend),
+				title: (isActive && effectiveNeedsAppend) ? "Queue to Playlist" : (isActive ? "Play/Pause Playlist" : "Play Playlist"),
+				stateKey: (isActive && effectiveNeedsAppend) ? "queue" : (isActive ? "pause" : "play")
+			};
 
 			playBtns.forEach((btn) => {
 				if (btn) {
-					const showingNeedsAppend = isActive && effectiveNeedsAppend;
-					btn.classList.toggle("btn-playing", isActive || showingNeedsAppend);
-					if (isActive || showingNeedsAppend) {
+					btn.classList.toggle("btn-playing", visual.isPlaying);
+					if (visual.isPlaying) {
 						this.setPlaybackLoading(false);
 					}
-					if (showingNeedsAppend) {
-						btn.title = "Queue to Playlist";
-					} else if (isActive) {
-						btn.title = "Play/Pause Playlist";
-					} else {
-						btn.title = "Play Playlist";
-					}
+					btn.title = visual.title;
 				}
 			});
 
@@ -1313,21 +1314,19 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Only if NOT currently in the closing state
 			if (!this.state.state.isClosing) {
 				if (playBtn) {
-					const showingNeedsAppend = isActive && effectiveNeedsAppend;
-					if (showingNeedsAppend) {
+					if (visual.stateKey === "queue") {
 						playBtn.innerHTML = '<span class="emoji">➕</span> Queue';
 					} else {
-						playBtn.innerHTML = isActive
+						playBtn.innerHTML = visual.stateKey === "pause"
 							? '<span class="emoji">⏸️</span> Play/Pause'
 							: '<span class="emoji">▶️</span> Play';
 					}
 				}
 				if (compactPlayBtn) {
-					const showingNeedsAppend = isActive && effectiveNeedsAppend;
-					if (showingNeedsAppend) {
+					if (visual.stateKey === "queue") {
 						compactPlayBtn.innerHTML = '<span class="emoji">➕</span>';
 					} else {
-						compactPlayBtn.innerHTML = isActive
+						compactPlayBtn.innerHTML = visual.stateKey === "pause"
 							? '<span class="emoji">⏸️</span>'
 							: '<span class="emoji">▶️</span>';
 					}

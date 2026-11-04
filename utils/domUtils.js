@@ -8,12 +8,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	 * Supports both standard DOM and Shadow DOM contexts.
 	 */
 
-	window.MPV_INTERNAL = window.MPV_INTERNAL || {};
-
-	(() => {
-	    const MPV = window.MPV_INTERNAL;
-
-	    const domUtils = {
+	const domUtils = MPV.domUtils = {
 	        /**
 	         * Smoothly scrolls a container to a target vertical position.
 	         * @param {HTMLElement} container - The element to scroll.
@@ -281,14 +276,35 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	                document.body.appendChild(modalHost);
 	                shadowRoot.getElementById("confirm-btn").focus();
 	            });
+	        },
+
+	        /**
+	         * Resolves the visual state (playing class, title, and state key) for play buttons.
+	         * @param {Object} options
+	         * @param {boolean} options.isActive
+	         * @param {boolean} options.needsAppend
+	         * @returns {{ isPlaying: boolean, title: string, stateKey: string }}
+	         */
+	        getPlayButtonVisual({ isActive, needsAppend }) {
+	            const isEffectiveActive = !!isActive;
+	            const showingNeedsAppend = isEffectiveActive && !!needsAppend;
+	            let title = "Play Playlist";
+	            let stateKey = "play";
+
+	            if (showingNeedsAppend) {
+	                title = "Queue to Playlist";
+	                stateKey = "queue";
+	            } else if (isEffectiveActive) {
+	                title = "Play/Pause Playlist";
+	                stateKey = "pause";
+	            }
+
+	            return {
+	                isPlaying: isEffectiveActive || showingNeedsAppend,
+	                title,
+	                stateKey
+	            };
 	        }
-	    };
-
-	    MPV.domUtils = domUtils;
-	})();
-
-	// Export for module environments
-	const root = typeof globalThis !== "undefined" ? globalThis : (typeof self !== "undefined" ? self : window);
-	const domUtils = MPV.domUtils = root.MPV_INTERNAL.domUtils;
+	};
 
 })();
