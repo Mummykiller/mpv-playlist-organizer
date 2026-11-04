@@ -376,7 +376,6 @@ export async function handleMpvExited(data) {
 
 				await promptClearConfirmation(folderId, targetIds, folder, clearScope, true);
 			}
-			}
 		} else if (isNaturalCompletion === false && (storageData?.settings?.uiPreferences?.global?.clearOnCompletion || "no") !== "no") {
 			broadcastLog({
 				text: `[Background]: MPV exited with code ${returnCode}. Playlist will not be cleared (requires natural completion).`,
