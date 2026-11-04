@@ -31,6 +31,8 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
     'set_ui_preferences': DataSyncRequest,
     'get_unified_diagnostics': DataSyncRequest,
     'get_smart_reorder': DataSyncRequest,
+    'get_metadata_cache': DataSyncRequest,
+    'cancel_task': DataSyncRequest,
     
     # Services
     'get_anilist_releases': ServiceRequest,
@@ -120,7 +122,9 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             filename=norm_message.get('filename'),
             subfolder=norm_message.get('subfolder'),
             custom_names=norm_message.get('custom_names'),
-            preferences=norm_message.get('preferences')
+            preferences=norm_message.get('preferences'),
+            shard=norm_message.get('shard'),
+            task_id=norm_message.get('task_id')
         )
         
     elif req_class == ServiceRequest:

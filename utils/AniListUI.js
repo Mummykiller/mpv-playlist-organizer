@@ -211,7 +211,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				if (this.controller.checkContext())
 					MPV.AniListRenderer.render(container, releases, daysOffset);
 			} catch (error) {
-				container.innerHTML = `<li class="anilist-error">Error: ${error.message}</li>`;
+				container.innerHTML = "";
+				const errLi = document.createElement("li");
+				errLi.className = "anilist-error";
+				errLi.textContent = `Error: ${error.message}`;
+				container.appendChild(errLi);
 			}
 		}
 

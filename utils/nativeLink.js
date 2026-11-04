@@ -242,6 +242,7 @@ class NativeLink {
 			startPaused: overrides.startPaused ?? false,
 			// Networking & Performance Sync
 			disableNetworkOverrides: globalPrefs.disableNetworkOverrides ?? false,
+			targetedDefaults: globalPrefs.targetedDefaults || "all-none-yt",
 			enableCache: globalPrefs.enableCache ?? true,
 			httpPersistence: globalPrefs.httpPersistence || "auto",
 			demuxerMaxBytes: globalPrefs.demuxerMaxBytes || "1G",

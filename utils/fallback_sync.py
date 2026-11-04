@@ -22,6 +22,8 @@ def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
     """Uses yt-dlp to mark a YouTube video as watched."""
     if not url or not cookies_info:
         return False, "Missing URL or cookies info"
+    if not str(url).lower().startswith(('http://', 'https://')):
+        return False, "Invalid URL protocol for mark-watched"
 
     settings = file_io.get_settings()
     ytdlp_path = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
@@ -42,7 +44,7 @@ def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
     if user_agent:
         cmd.extend(["--user-agent", user_agent])
     
-    cmd.append(url)
+    cmd.extend(["--", url])
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)

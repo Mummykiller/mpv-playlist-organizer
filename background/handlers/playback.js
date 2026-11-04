@@ -1139,7 +1139,11 @@ export const handleUpdateItemMarkedAsWatched = createHandler(async ({ request, f
 });
 
 export async function handleUpdateItemMarkedAsWatchedInternal(data, options = {}) {
-	const { folderId, itemId, markedAsWatched, watched, lastModified } = data;
+	const folderId = data.folderId ?? data.folder_id;
+	const itemId = data.itemId ?? data.item_id;
+	const markedAsWatched = data.markedAsWatched ?? data.marked_as_watched;
+	const watched = data.watched;
+	const lastModified = data.lastModified ?? data.last_modified;
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
 	const storageData = await storage.get();
@@ -1205,6 +1209,7 @@ export const handlePlayNewInstance = createHandler(async ({ request, folderId })
 		startPaused: request.startPaused ?? false,
 		// Networking & Performance Sync
 		disableNetworkOverrides: globalPrefs.disableNetworkOverrides ?? false,
+		targetedDefaults: globalPrefs.targetedDefaults || "all-none-yt",
 		enableCache: globalPrefs.enableCache ?? true,
 		httpPersistence: globalPrefs.httpPersistence || "auto",
 		demuxerMaxBytes: globalPrefs.demuxerMaxBytes || "1G",
@@ -1280,10 +1285,6 @@ export const handleCloseMpv = createHandler(async ({ folderId }) => {
 	await broadcastPlaylistState(folderId, null, "render_playlist");
 	return nativeLink.closeMpv(folderId);
 });
-
-export function getMpvPlaylistCompletedExitCode() {
-	return MPV_PLAYLIST_COMPLETED_EXIT_CODE;
-}
 
 export function handleSessionRestored(request) {
 	const result = request.wasStale !== undefined ? request : request.result;

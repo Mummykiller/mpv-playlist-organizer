@@ -19,8 +19,8 @@ class HandlerManager:
     Uses composition to delegate to specialized handlers.
     """
     def __init__(self, **kwargs):
-        self.metadata_cache = MetadataCache(kwargs.get('data_dir', ''), kwargs.get('file_io'))
-        self.task_manager = TaskManager(kwargs.get('send_message'))
+        self.metadata_cache = kwargs.get('metadata_cache') or MetadataCache(kwargs.get('data_dir', ''), kwargs.get('file_io'))
+        self.task_manager = kwargs.get('task_manager') or TaskManager(kwargs.get('send_message'))
         self.ctx = BackendContext(
             mpv=kwargs.get('mpv_session'),
             io=kwargs.get('file_io'),

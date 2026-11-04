@@ -32,6 +32,23 @@ export async function updateContextMenus(storage) {
 	}
 
 	const lastUsedFolderId = data.settings.lastUsedFolderId;
+	const oneClickAdd =
+		data.settings.uiPreferences?.global?.oneClickAdd ?? false;
+
+	// If One-Click Add is enabled, create top-level shortcut items for the last used folder.
+	if (oneClickAdd && lastUsedFolderId && folderIds.includes(lastUsedFolderId)) {
+		chrome.contextMenus.create({
+			id: "add-to-last-used",
+			title: `Add to MPV (${lastUsedFolderId})`,
+			contexts: CONTEXTS,
+		});
+		chrome.contextMenus.create({
+			id: "add-playlist-to-last-used",
+			title: `Add Playlist to MPV (${lastUsedFolderId})`,
+			contexts: ["link"],
+			targetUrlPatterns: ["*://*.youtube.com/playlist?list=*"],
+		});
+	}
 
 	// Create the main parent menu item.
 	chrome.contextMenus.create({

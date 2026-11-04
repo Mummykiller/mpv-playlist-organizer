@@ -237,7 +237,8 @@ class MpvCommandBuilder:
             if ref: args.append(f'--referrer={security.sanitize_string(str(ref))}')
 
         decoder = self.settings.get('mpv_decoder', 'auto')
-        if decoder: args.append(f"--hwdec={decoder}")
+        if decoder and re.match(r'^[a-zA-Z0-9_-]+$', str(decoder)):
+            args.append(f"--hwdec={decoder}")
         
         profile = self.settings.get('performance_profile', 'default')
         if profile == 'low': args.append("--profile=fast")
@@ -261,7 +262,8 @@ class MpvCommandBuilder:
             interp = self.settings.get('ultra_interpolation', 'oversample')
             if interp not in ('off', False):
                 args.append("--interpolation=yes")
-                args.append(f"--tscale={interp if isinstance(interp, str) else 'oversample'}")
+                safe_interp = interp if (isinstance(interp, str) and re.match(r'^[a-zA-Z0-9_-]+$', interp)) else 'oversample'
+                args.append(f"--tscale={safe_interp}")
 
         fps = self.settings.get('override_display_fps')
         if fps:

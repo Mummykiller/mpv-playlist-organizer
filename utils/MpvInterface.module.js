@@ -19,7 +19,10 @@ export class MpvInterface {
 		
 		// Determine if this is a simple toggle or a fresh launch
 		const pbState = MPV.playbackStateManager.state;
-		const isRunning = pbState.isRunning;
+		const isSameFolder =
+			!pbState.folderId ||
+			pbState.folderId.toLowerCase() === folderId.toLowerCase();
+		const isRunning = pbState.isRunning && isSameFolder;
 		const isLaunching = pbState.isLaunching;
 		const needsAppend = pbState.needsAppend;
 		
@@ -52,6 +55,7 @@ export class MpvInterface {
 					isPaused: response.isPaused,
 					needsAppend: response.needsAppend,
 					lastPlayedId: response.lastPlayedId,
+					sessionIds: response.sessionIds,
 					isLaunching: false, // Clear optimistic launch flag on response
 					isAppending: false  // Clear optimistic append flag on response
 				});

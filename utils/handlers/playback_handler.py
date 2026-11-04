@@ -501,8 +501,9 @@ class PlaybackHandler(BaseHandler):
             threading.Thread(target=delayed_cleanup, args=(handshake_path, process), daemon=True).start()
             
             # Use the new non-blocking stream observer
-            observer = self.ctx.log_stream(tag="MPV-UNMANAGED", send_message_func=self.ctx.sender)
-            threading.Thread(target=observer, args=(process.stderr,), daemon=True).start()
+            if process.stdout:
+                observer = self.ctx.log_stream(tag="MPV-UNMANAGED", send_message_func=self.ctx.sender)
+                threading.Thread(target=observer, args=(process.stdout,), daemon=True).start()
             
             return native_link.success(message="Unmanaged session launched.")
         except Exception as e:

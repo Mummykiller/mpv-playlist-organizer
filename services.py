@@ -5,41 +5,24 @@ Collection of utilities for URL processing, dependency management, and MPV comma
 NOTE ON LATE IMPORTS (E402): 
 Imports are intentionally deferred to minimize initial startup time for the Native Host.
 """
-import json
 import logging
 import os
 import platform
 import shutil
 import subprocess
 import sys
-from datetime import datetime
 
 # Prevent __pycache__ generation
 sys.dont_write_bytecode = True
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
-import time
-import shlex
-import re
-from utils import url_analyzer
+from utils import url_analyzer, security
 from utils import dependency_manager, anilist_service, mpv_command_builder
 import file_io
 
-# A set of mpv flags that are considered safe to be passed from the extension.
-ALLOWED_PROTOCOLS = ('http://', 'https://', 'file://', 'udp://', 'rtmp://', 'rtsp://', 'mms://')
-
-SAFE_MPV_FLAGS_ALLOWLIST = {
-    '--start', '--end', '--speed', '--loop', '--loop-playlist', '--loop-file', '--pause',
-    '--save-position-on-quit', '--fullscreen', '--ontop', '--border', '--title',
-    '--geometry', '--autofit', '--autofit-larger', '--autofit-smaller', '--keep-open',
-    '--aspect', '--correct-pts', '--fps', '--deinterlace', '--hwdec', '--scale',
-    '--cscale', '--dscale', '--dither-depth', '--deband', '--deband-iterations',
-    '--deband-threshold', '--deband-range', '--fbo-format', '--profile', '--video-sync',
-    '--interpolation', '--tscale', '--volume', '--mute', '--audio-device',
-    '--audio-channels', '--sub-visibility', '--sub-pos', '--sub-scale', '--sub-font',
-    '--sub-font-size', '--no-audio', '--no-video', '--force-window', '--cursor-autohide',
-    '--terminal', '--input-terminal', '--resume-playback', '--script-opts',
-}
+# Re-export security constants for backward compatibility
+ALLOWED_PROTOCOLS = security.ALLOWED_PROTOCOLS
+SAFE_MPV_FLAGS_ALLOWLIST = security.SAFE_MPV_FLAGS_ALLOWLIST
 
 def sanitize_url(url):
     """Sanitizes a URL by removing potentially dangerous characters."""

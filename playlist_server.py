@@ -24,12 +24,13 @@ class PlaylistHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         # --- Token Security Check ---
+        import hmac
         from urllib.parse import urlparse, parse_qs
         query = parse_qs(urlparse(self.path).query)
         provided_token = query.get('token', [None])[0]
         secret_token = os.environ.get('MPV_PLAYLIST_TOKEN')
 
-        if secret_token and provided_token != secret_token:
+        if secret_token and (not provided_token or not hmac.compare_digest(str(provided_token), str(secret_token))):
             self.send_error(403, "Access denied: Invalid or missing token.")
             logging.warning(f"[PY][SEC] Blocked unauthorized request from {self.client_address[0]}")
             return
@@ -57,10 +58,9 @@ class PlaylistHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(404, f"M3U playlist not found: {m3u_file_path}")
                 logging.warning(f"M3U playlist file not found at {m3u_file_path}")
         else:
-            # For any other path, fallback to SimpleHTTPRequestHandler's default behavior
-            # (which usually serves files from the current directory)
-            # You might want to restrict this or serve other assets as needed.
-            return http.server.SimpleHTTPRequestHandler.do_GET(self)
+            # Reject any other path to avoid exposing arbitrary files from the working directory
+            self.send_error(404, "Not Found")
+            return
 
 def start_playlist_server(start_port=8000, max_port_attempts=5, m3u_file_to_serve='test_playlist.m3u'):
     """

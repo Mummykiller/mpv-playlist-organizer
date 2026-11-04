@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any
 @dataclass
 class SettingsOverrides:
     disable_network_overrides: Optional[bool] = None
+    targeted_defaults: Optional[str] = None
     enable_cache: Optional[bool] = None
     http_persistence: Optional[bool] = None
     demuxer_max_bytes: Optional[int] = None
@@ -33,7 +34,7 @@ class SettingsOverrides:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SettingsOverrides':
         fields = {
-            'disable_network_overrides', 'enable_cache', 'http_persistence',
+            'disable_network_overrides', 'targeted_defaults', 'enable_cache', 'http_persistence',
             'demuxer_max_bytes', 'demuxer_max_back_bytes', 'cache_secs',
             'demuxer_readahead_secs', 'stream_buffer_size', 'ytdlp_concurrent_fragments',
             'enable_reconnect', 'reconnect_delay', 'mpv_decoder', 'ytdl_quality',
@@ -93,6 +94,8 @@ class DataSyncRequest(BaseRequest):
     subfolder: Optional[str] = None
     custom_names: Optional[Dict[str, str]] = None
     preferences: Optional[Dict[str, Any]] = None
+    shard: Optional[str] = None
+    task_id: Optional[str] = None
 
 @dataclass
 class ServiceRequest(BaseRequest):

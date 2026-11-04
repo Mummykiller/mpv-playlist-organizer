@@ -42,7 +42,13 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 		}
 
 		if (!finalStatus)
-			return { isActive: false, isPaused: false, needsAppend: false };
+			return {
+				isActive: false,
+				isRunning: false,
+				isPaused: false,
+				needsAppend: false,
+				sessionIds: [],
+			};
 
 		// Rely on automated normalization
 		const isProcessRunning = !!finalStatus.isRunning;
@@ -60,10 +66,24 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 			needsAppend = playlist.some((item) => !sessionIdsSet.has(item.id));
 		}
 
-		return { isActive, isPaused, needsAppend, lastPlayedId };
+		return {
+			folderId: finalStatus.folderId || folderId,
+			isActive,
+			isRunning: isActive,
+			isPaused,
+			needsAppend,
+			lastPlayedId,
+			sessionIds: isActive ? rawSessionIds || [] : [],
+		};
 	} catch (e) {
 		console.error("[UIBroadcaster] Error getting playback state:", e);
-		return { isActive: false, isPaused: false, needsAppend: false };
+		return {
+			isActive: false,
+			isRunning: false,
+			isPaused: false,
+			needsAppend: false,
+			sessionIds: [],
+		};
 	}
 }
 
@@ -75,7 +95,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 	const data = await storage.get();
 	const targetPlaylist = playlist || data.folders[folderId]?.playlist || [];
 	
-	const { isActive, isPaused, needsAppend, lastPlayedId } = 
+	const { isActive, isPaused, needsAppend, lastPlayedId, sessionIds } = 
 		await getVisualPlaybackState(folderId, targetPlaylist);
 
 	// Get completed items for visual filtering
@@ -97,6 +117,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 		needsAppend: needsAppend,
 		health: mpv_playback_cache?.health || "ok",
 		lastPlayedId: lastPlayedId || mpv_playback_cache?.last_played_id || data.folders[folderId]?.lastPlayedId,
+		sessionIds: isActive ? (sessionIds?.length ? sessionIds : mpv_playback_cache?.sessionIds || []) : [],
 		completedIds: completedIds
 	};
 
@@ -112,6 +133,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 		isFolderActive: isActive,
 		isPaused: isPaused,
 		needsAppend: needsAppend,
+		sessionIds: pbState.sessionIds,
 		completedIds: completedIds,
 	});
 
@@ -131,9 +153,10 @@ export async function broadcastPlaybackState(folderId, statusOverride = {}) {
 
 	const isActive = isFolderActive(targetFolderId);
 	const cacheIsActive = !!(mpv_playback_cache && mpv_playback_cache.isRunning !== false && mpv_playback_cache.folderId === targetFolderId);
+	const isRunning = isActive || cacheIsActive;
 	
 	let needsAppend = false;
-	if (isActive || cacheIsActive) {
+	if (isRunning) {
 		const storageData = await storage.get();
 		const folder = storageData.folders[targetFolderId];
 		const rawSessionIds = mpv_playback_cache?.sessionIds;
@@ -146,13 +169,14 @@ export async function broadcastPlaybackState(folderId, statusOverride = {}) {
 
 	const state = {
 		folderId: targetFolderId,
-		isRunning: isActive || cacheIsActive,
+		isRunning: isRunning,
 		isLaunching: !!mpv_playback_cache?.isLaunching,
 		isAppending: false, // Always clear optimistic UI flags when background speaks
 		isPaused: mpv_playback_cache?.isPaused || false,
 		isIdle: mpv_playback_cache?.isIdle || false,
 		lastPlayedId: mpv_playback_cache?.last_played_id || mpv_playback_cache?.lastPlayedId,
 		needsAppend: needsAppend,
+		sessionIds: isRunning ? mpv_playback_cache?.sessionIds || [] : [],
 		health: mpv_playback_cache?.health || "ok",
 		...statusOverride
 	};

@@ -354,7 +354,7 @@ class IPCSocketManager:
                     self._sock.close()
                 else:
                     try:
-                        self._sock.shutdown(socket.AF_UNIX)
+                        self._sock.shutdown(socket.SHUT_RDWR)
                     except Exception:
                         pass
                     self._sock.close()

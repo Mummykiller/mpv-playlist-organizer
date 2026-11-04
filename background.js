@@ -201,8 +201,12 @@ const actionHandlers = {
 	// MPV and Playlist Actions
 	is_mpv_running: playback_handlers.handleIsMpvRunning,
 	get_playback_status: async (request) => {
-		const folderId = request.folderId;
 		const data = await storage.get();
+		const { mpv_playback_cache } = await chrome.storage.local.get("mpv_playback_cache");
+		const folderId =
+			request.folderId ||
+			mpv_playback_cache?.folderId ||
+			data.settings.lastUsedFolderId;
 		const playlist = folderId ? data.folders[folderId]?.playlist : null;
 		return getVisualPlaybackState(folderId, playlist);
 	},
@@ -226,6 +230,10 @@ const actionHandlers = {
 		return nativeLink.reorderLive(request.folderId, newOrder);
 	},
 	get_smart_reorder: playlistManager.handleGetSmartReorder,
+	cancel_task: async (request) => {
+		const taskId = request.taskId || request.task_id;
+		return nativeLink.cancelTask(taskId);
+	},
 	// Import/Export
 	export_all_playlists_separately:
 		import_export_handlers.handleExportAllPlaylistsSeparately,
@@ -239,13 +247,11 @@ const actionHandlers = {
 	user_confirmed_ytdlp_update:
 		dependency_anilist_handlers.handleUserConfirmedYtdlpUpdate,
 	manual_ytdlp_update: dependency_anilist_handlers.handleManualYtdlpUpdate,
-	get_js_diagnostics: async () => ({
-		success: true,
-		errors: logger.getDiagnostics().errors,
-	}),
 	get_unified_diagnostics: async () => {
 		const jsDiagnostics = logger.getDiagnostics();
-		const response = await nativeLink.call("get_unified_diagnostics", jsDiagnostics);
+		const response = await nativeLink.call("get_unified_diagnostics", {
+			data: jsDiagnostics,
+		});
 		return response;
 	},
 };
@@ -267,9 +273,13 @@ addNativeListener("log", (data) => {
 
 const activeTasks = new Map();
 
+addNativeListener("update_item_title", (data) => {
+	playlistManager.handleUpdateItemTitle(data);
+});
+
 addNativeListener("task_update", async (data) => {
-	const { task, removed, task_id } = data;
-	const id = task_id || task?.id;
+	const { task, removed, taskId, task_id } = data;
+	const id = taskId || task_id || task?.id;
 	if (!id) return;
 
 	if (removed) {
@@ -340,6 +350,7 @@ function startNativeHostHeartbeat() {
 startNativeHostHeartbeat();
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+	if (sender.id && sender.id !== chrome.runtime.id) return false;
 	if (request.log && !request.action) return;
 	const handler = actionHandlers[request.action];
 	if (handler) {
@@ -403,7 +414,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 	const folderId = await getFolderId();
 	if (folderId) {
-		if (menuItemId.startsWith("add-playlist-to-folder-")) {
+		if (
+			menuItemId.startsWith("add-playlist-to-folder-") ||
+			menuItemId === "add-playlist-to-last-used"
+		) {
 			playlistManager.handleAddFromContextMenu(
 				folderId,
 				urlToAdd,

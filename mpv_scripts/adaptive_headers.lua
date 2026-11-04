@@ -4,6 +4,7 @@ local id_options = {}
 local indexed_options = {}
 local session_timestamps = {} -- Internal memory for the current session
 local unmanaged_fallback_opts = nil -- Global fallback for disconnected launches
+local primed_resume_time = nil
 local has_started = false
 local handshake_processed = false -- Flag to ensure handshake is only processed once
 
@@ -363,8 +364,6 @@ local function apply_adaptive_settings()
         else
             if opts.demuxer_max_bytes then set_property_if_diff("demuxer-max-bytes", opts.demuxer_max_bytes) end
             if opts.demuxer_max_back_bytes then set_property_if_diff("demuxer-max-back-bytes", opts.demuxer_max_back_bytes) end
-            if opts.cache_secs then set_property_if_diff("cache-secs", tostring(opts.cache_secs)) end
-            if opts.demuxer_readahead_secs then set_property_if_diff("demuxer-readahead-secs", tostring(opts.demuxer_readahead_secs)) end
             if opts.cache_secs then set_property_if_diff("cache-secs", tostring(opts.cache_secs)) end
             if opts.demuxer_readahead_secs then set_property_if_diff("demuxer-readahead-secs", tostring(opts.demuxer_readahead_secs)) end
             if opts.stream_buffer_size then set_property_if_diff("stream-buffer-size", opts.stream_buffer_size) end

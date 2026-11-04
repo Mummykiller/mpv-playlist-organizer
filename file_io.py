@@ -196,10 +196,9 @@ def get_user_data_dir():
             return os.path.join(xdg_data_home, app_name)
         return os.path.join(os.path.expanduser('~/.local/share'), app_name)
 
-# Get the directory where the current file (file_io.py) is located (usually <root>/utils/)
+# Get the directory where the current file (file_io.py) is located (project root)
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-# The project root is one level up
-PROJECT_ROOT = os.path.dirname(_CURRENT_DIR)
+PROJECT_ROOT = _CURRENT_DIR
 
 # SCRIPT_DIR remains based on the entry point for backward compatibility in some paths,
 # but we prefer PROJECT_ROOT for internal resource finding.
@@ -518,20 +517,6 @@ def is_youtube_url(url):
         return False
     return "youtube.com/" in url or "youtu.be/" in url
 
-def get_youtube_id(url):
-    """Extracts the video or playlist ID from a YouTube URL."""
-    if not url:
-        return None
-    # Video ID
-    video_match = re.search(r"(?:v=|\/v\/|embed\/|youtu\.be\/|\/shorts\/)([a-zA-Z0-9_-]{11})", url)
-    if video_match:
-        return video_match.group(1)
-    # Playlist ID
-    list_match = re.search(r"list=([a-zA-Z0-9_-]+)", url)
-    if list_match:
-        return list_match.group(1)
-    return None
-
 def sanitize_ytdlp_options(options_str):
     """
     Sanitizes a comma-separated string of yt-dlp options (key=value).
@@ -566,67 +551,6 @@ def merge_ytdlp_options(*args):
     
     merged_str = ",".join(final_parts)
     return sanitize_ytdlp_options(merged_str)
-
-def _migrate_legacy_data(raw_folders):
-    """
-    Normalizes folder data structures, converting legacy formats if necessary.
-    Returns a tuple (normalized_folders, was_modified).
-    """
-    converted_folders = {}
-    needs_resave = False
-    
-    for folder_id, folder_content in raw_folders.items():
-        # Sanitize the folder ID itself if it's new/changed
-        clean_folder_id = sanitize_folder_name(folder_id)
-        if clean_folder_id != folder_id:
-            needs_resave = True
-
-        # Standard format: {"playlist": [{"url": "...", "title": "..."}, ...]}
-        if isinstance(folder_content, dict) and "playlist" in folder_content:
-            playlist = folder_content.get("playlist", [])
-            sanitized_playlist = []
-            
-            for item in playlist:
-                if isinstance(item, str):
-                    # Legacy list-of-strings inside "playlist"
-                    needs_resave = True
-                    sanitized_playlist.append({"url": sanitize_string(item), "title": sanitize_string(item)})
-                elif isinstance(item, dict) and "url" in item:
-                    # Standard dict format
-                    original_url = item["url"]
-                    original_title = item.get("title", "")
-                    
-                    sanitized_url = sanitize_string(original_url)
-                    sanitized_title = sanitize_string(original_title)
-                    
-                    if sanitized_url != original_url or sanitized_title != original_title:
-                        item["url"] = sanitized_url
-                        item["title"] = sanitized_title
-                        needs_resave = True
-                    sanitized_playlist.append(item)
-                else:
-                    sanitized_playlist.append(item)
-            
-            # Preserve all existing keys (like last_played_id) and update playlist
-            converted_folders[clean_folder_id] = folder_content
-            converted_folders[clean_folder_id]["playlist"] = sanitized_playlist
-            
-        # Legacy format: List of strings directly
-        elif isinstance(folder_content, list):
-            logging.info(f"Converting old format (list) for folder '{folder_id}' to new format.")
-            converted_folders[clean_folder_id] = {"playlist": [{"url": sanitize_string(url), "title": sanitize_string(url)} for url in folder_content]}
-            needs_resave = True
-            
-        # Legacy format: Dict with "urls" key
-        elif isinstance(folder_content, dict) and "urls" in folder_content:
-            logging.info(f"Converting old format (dict with 'urls') for folder '{folder_id}' to new format.")
-            converted_folders[clean_folder_id] = {"playlist": [{"url": sanitize_string(url), "title": sanitize_string(url)} for url in folder_content.get("urls", [])]}
-            needs_resave = True
-            
-        else:
-            logging.warning(f"Skipping malformed folder data for '{folder_id}' during load: {folder_content}")
-            
-    return converted_folders, needs_resave
 
 def get_all_folders_from_file():
     """
@@ -696,9 +620,17 @@ def write_folders_file(data):
 def write_export_file(filename, data, subfolder=None):
     """Helper to write data to a file in the export directory, optionally in a subfolder."""
     try:
-        target_dir = EXPORT_DIR
+        export_root = os.path.realpath(EXPORT_DIR)
+        target_dir = export_root
+        clean_subfolder = None
         if subfolder:
-            target_dir = os.path.join(EXPORT_DIR, subfolder)
+            parts = [sanitize_folder_name(p) for p in re.split(r'[\\/]+', str(subfolder)) if p and p not in ('.', '..')]
+            if parts:
+                clean_subfolder = os.path.join(*parts)
+                candidate_dir = os.path.realpath(os.path.join(export_root, clean_subfolder))
+                if os.path.commonpath([export_root, candidate_dir]) != export_root:
+                    return {"success": False, "error": "Access denied: Subfolder outside export directory."}
+                target_dir = candidate_dir
             
         os.makedirs(target_dir, exist_ok=True)
         
@@ -723,7 +655,7 @@ def write_export_file(filename, data, subfolder=None):
 
         if _atomic_json_dump(data, filepath):
             logging.info(f"[PY][IO] Data exported to {filepath}")
-            display_name = os.path.join(subfolder, final_filename) if subfolder else final_filename
+            display_name = os.path.join(clean_subfolder, final_filename) if clean_subfolder else final_filename
             return {"success": True, "message": f"Data exported to '{display_name}' in the 'exported' folder."}
         else:
             return {"success": False, "error": "Atomic write failed during export."}
@@ -785,6 +717,8 @@ def get_settings():
         "performance_profile": "default",
         "ultra_scalers": True,
         "ultra_video_sync": True,
+        "enable_display_sync": True,
+        "override_display_fps": "",
         "ultra_interpolation": "oversample",
         "ultra_deband": True,
         "ultra_fbo": True,
