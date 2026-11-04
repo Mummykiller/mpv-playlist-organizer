@@ -107,13 +107,15 @@ async function addUrlToFolder(
 			type: "info",
 		});
 
-		// Check for live append
+		// Check for live append or broadcast playlist change
 		const isActive = isFolderActive(actualFolderId);
 		if (isActive && data.settings.uiPreferences.global.autoAppendOnAdd) {
 			nativeLink
 				.append(newItem, actualFolderId)
 				.then(() => broadcastPlaylistState(actualFolderId))
 				.catch((e) => console.warn("[PlaylistManager] Live append failed:", e));
+		} else {
+			await broadcastPlaylistState(actualFolderId);
 		}
 
 		return { success: true, item: newItem };
@@ -302,6 +304,7 @@ export const handleClear = createHandler(async ({ folderId, data }) => {
 		return { success: false, error: "Folder not found." };
 
 	data.folders[actualFolderId].playlist = [];
+	data.folders[actualFolderId].lastPlayedId = null;
 
 	if (data.settings.uiPreferences.global.liveRemoval !== false) {
 		nativeLink.clearLive(actualFolderId).catch(() => {});
@@ -331,6 +334,10 @@ export const handleRemoveItem = createHandler(async ({ request, folderId, data }
 		if (finalIndex >= 0 && finalIndex < playlist.length) {
 			const itemToRemove = playlist[finalIndex];
 			playlist.splice(finalIndex, 1);
+
+			if (data.folders[actualFolderId].lastPlayedId === itemToRemove.id) {
+				data.folders[actualFolderId].lastPlayedId = null;
+			}
 
 			if (data.settings.uiPreferences.global.liveRemoval !== false) {
 				nativeLink.call("remove_item_live", {
@@ -396,12 +403,15 @@ export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
 export async function handleGetPlaylist(request) {
 	// Optimization: Use getFolder to avoid loading the entire library
 	const { folder, settings } = await storage.getFolder(request.folderId);
+	if (!folder) {
+		return { success: false, error: `Folder '${request.folderId}' not found.` };
+	}
 
 	const { mpv_playback_cache } = await chrome.storage.local.get("mpv_playback_cache");
 	
 	// Fast Path: Check if cache already has status for THIS folder
 	let finalStatus = null;
-	if (mpv_playback_cache && mpv_playback_cache.folderId === request.folderId) {
+	if (mpv_playback_cache && mpv_playback_cache.folderId?.toLowerCase() === request.folderId?.toLowerCase()) {
 		finalStatus = {
 			isRunning: mpv_playback_cache.isRunning !== false,
 			isPaused: mpv_playback_cache.isPaused,
@@ -418,17 +428,29 @@ export async function handleGetPlaylist(request) {
 		
 		if (statusResponse?.success) {
 			finalStatus = statusResponse;
+			if (finalStatus.isRunning && finalStatus.folderId) {
+				const freshCache = {
+					folderId: finalStatus.folderId,
+					isRunning: true,
+					isPaused: finalStatus.isPaused || false,
+					isIdle: finalStatus.isIdle || false,
+					sessionIds: finalStatus.sessionIds || [],
+					lastPlayedId: finalStatus.lastPlayedId,
+					timestamp: Date.now()
+				};
+				chrome.storage.local.set({ mpv_playback_cache: freshCache });
+			}
 		}
 	}
 
-	let isActive = !!(
-		finalStatus?.isRunning && finalStatus.folderId === request.folderId
-	);
+	const isProcessRunning = !!finalStatus?.isRunning;
+	const isManagerActive = isFolderActive(request.folderId);
+	let isActive = (isProcessRunning || isManagerActive) && (finalStatus?.folderId?.toLowerCase() === request.folderId?.toLowerCase() || !finalStatus?.folderId);
 	let needsAppend = false;
 	const lastPlayedId = finalStatus?.lastPlayedId || folder.lastPlayedId;
 
 	// Calculate if we need append based on session IDs in cache vs current playlist
-	if (isActive && finalStatus.sessionIds) {
+	if (isActive && finalStatus?.sessionIds) {
 		const sessionIds = new Set(finalStatus.sessionIds);
 		needsAppend = folder.playlist.some((item) => !sessionIds.has(item.id));
 	}

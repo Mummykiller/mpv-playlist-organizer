@@ -3,7 +3,7 @@
 > **🤖 AGENT INSTRUCTIONS:**
 > *   **Context Awareness:** Use sections relevant to your task (e.g., ignore "Native Protocol" if working on UI/CSS).
 > *   **Automated Key Matching:** The system **automatically** handles case conversion (`camelCase` ↔ `snake_case`). Write idiomatic cases (`snake_case` in Python, `camelCase` in JavaScript).
-> *   **Golden Build Rule:** Always edit `*.module.js` source files in `utils/`. **NEVER** edit generated `utils/*.js` files directly. Run `python3 verify_changes.py` to rebuild and run the full test suite.
+> *   **Golden Build Rule:** Always edit `*.module.js` source files in `utils/`. **NEVER** edit generated `utils/*.js` files directly. Run `python3 verify_changes.py` ONLY when meaningful code changes were made to rebuild and verify tests. Do NOT run it for non-code tasks (such as removing obsolete files, documentation edits, or inspections) where verification is unnecessary.
 > *   **Pycache Watchdog:** Once you start working, verify that the bytecode watchdog script is running by executing `python3 testing_tools/pycache_watchdog.py`. Once started, it runs continuously in the background until system reboot or until manually terminated (`python3 testing_tools/pycache_watchdog.py kill`).
 > *   **Scope:** Strict security and architecture rules apply to the *Core App*. Standalone scripts or tools may use simpler patterns where appropriate.
 
@@ -212,7 +212,7 @@ utils/*.js        (Auto-generated Global / Namespaced for Content Scripts)
 | `utils/MpvInterface.module.js` | `utils/MpvInterface.js` | `window.MPV_INTERNAL.MpvInterface` |
 | `utils/domUtils.module.js` | `utils/domUtils.js` | `window.MPV_INTERNAL.domUtils` |
 
-> ⚠️ **Rule:** Always edit the `*.module.js` file. Running `python3 verify_changes.py` automatically updates the corresponding `.js` files.
+> ⚠️ **Rule:** Always edit the `*.module.js` file. Running `python3 verify_changes.py` (or `python3 testing_tools/generate_js.py` for build only) updates the corresponding `.js` files when module code is modified.
 
 ---
 
@@ -245,10 +245,13 @@ The system maintains centralized translation layers between `snake_case` (Python
 ## 12. Development, Verification & Testing
 
 ### Verification Workflow
-Before committing any changes, run the unified verification script from the repository root:
+Run the unified verification script from the repository root when code modifications have been made:
 ```bash
 python3 verify_changes.py
 ```
+
+> [!NOTE]
+> Only run `verify_changes.py` when functional code changes (Python backend, JS frontend, or `*.module.js` files) require rebuilding and testing. Do NOT run it for non-code tasks such as deleting obsolete documentation/reports, minor markdown edits, or simple queries where testing is unnecessary.
 This script sequentially:
 1. Rebuilds all generated `utils/*.js` files from `utils/*.module.js`.
 2. Runs **Batch 1: Backend Logic & Robustness** (Python unit tests, handshake generation, settings drift guard, crash repro, and security claim regressions).

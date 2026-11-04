@@ -37,26 +37,31 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		async _loadInitialState() {
+			if (!chrome?.storage?.local?.get) return;
 			const data = await chrome.storage.local.get("active_playback_state");
-			if (data.active_playback_state) {
+			if (data?.active_playback_state) {
 				this.update(data.active_playback_state);
 			}
 		}
 
 		_initStorageListener() {
 			// PROACTIVE: Listen to storage changes instead of broadcast messages
-			chrome.storage.onChanged.addListener((changes, area) => {
-				if (area === "local" && changes.active_playback_state) {
-					this.update(changes.active_playback_state.newValue);
-				}
-			});
+			if (chrome?.storage?.onChanged?.addListener) {
+				chrome.storage.onChanged.addListener((changes, area) => {
+					if (area === "local" && changes.active_playback_state) {
+						this.update(changes.active_playback_state.newValue);
+					}
+				});
+			}
 
 			// FALLBACK: Still keep message listener for legacy/direct triggers
-			chrome.runtime.onMessage.addListener((msg) => {
-				if (msg.action === "playback_state_changed") {
-					this.update(msg.state);
-				}
-			});
+			if (chrome?.runtime?.onMessage?.addListener) {
+				chrome.runtime.onMessage.addListener((msg) => {
+					if (msg.action === "playback_state_changed") {
+						this.update(msg.state);
+					}
+				});
+			}
 		}
 
 		/**

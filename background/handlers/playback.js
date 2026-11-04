@@ -1145,9 +1145,13 @@ export const handleIsMpvRunning = createHandler(async () => {
 	return nativeLink.isMpvRunning();
 });
 
-export const handleCloseMpv = createHandler(async ({ folderId }) => {
-	await broadcastPlaylistState(folderId, null, "render_playlist");
-	return nativeLink.closeMpv(folderId);
+export const handleCloseMpv = createHandler(async ({ folderId, request }) => {
+	const { mpv_playback_cache } = await chrome.storage.local.get("mpv_playback_cache");
+	const targetFolderId = folderId || request?.folderId || mpv_playback_cache?.folderId;
+	if (targetFolderId) {
+		await broadcastPlaylistState(targetFolderId, null, "render_playlist");
+	}
+	return nativeLink.closeMpv(targetFolderId);
 });
 
 export function handleSessionRestored(request) {

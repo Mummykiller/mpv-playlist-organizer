@@ -55,16 +55,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// Unified Playback State Subscription (Must happen AFTER UI initialization)
 			this.playbackUnsubscribe = MPV.playbackStateManager.subscribe((pbState) => {
+				const currentFolderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
+				const isCurrentFolder = pbState.folderId && currentFolderId && pbState.folderId.toLowerCase() === currentFolderId.toLowerCase();
+
 				// Map the playback status to internal ContentState
 				this.state.update({
-					isFolderActive: pbState.status !== "stopped" || pbState.needsAppend,
-					lastPlayedId: pbState.lastPlayedId,
-					isClosing: pbState.isClosing
+					isFolderActive: isCurrentFolder && (pbState.status !== "stopped" || pbState.needsAppend),
+					lastPlayedId: isCurrentFolder ? pbState.lastPlayedId : this.state.state.lastPlayedId,
+					isClosing: isCurrentFolder ? pbState.isClosing : false
 				}, true);
 
 				// Only update UI if we are looking at the relevant folder
-				const currentFolderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
-				if (pbState.folderId && pbState.folderId === currentFolderId) {
+				if (isCurrentFolder) {
 					this.setPlaybackActive(
 						pbState.status !== "stopped", 
 						pbState.needsAppend, 
@@ -76,6 +78,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					if (pbState.lastPlayedId) {
 						this.playlistUI?.syncActiveHighlight(pbState.lastPlayedId, pbState.status !== "stopped");
 					}
+				} else {
+					this.setPlaybackActive(false, false, false);
+					this.setPlaybackLoading(false);
+					this.setPlaybackClosing(false);
+					this.playlistUI?.syncActiveHighlight(null, false);
 				}
 			});
 
@@ -88,20 +95,24 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const currentFolderId =
 						this.ui.shadowRoot?.getElementById("folder-select")?.value;
 
-					// 1. Update Playback Status (Normalization handled by manager)
-					MPV.playbackStateManager.update({
-						folderId: req.folderId,
-						isRunning: req.isFolderActive,
-						isPaused: req.isPaused,
-						isIdle: req.isIdle,
-						isClosing: req.isClosing,
-						lastPlayedId: req.lastPlayedId,
-						needsAppend: req.needsAppend,
-						sessionIds: req.sessionIds,
-					});
+					const activePbFolder = MPV.playbackStateManager.state.folderId;
+					const isMatchingActiveFolder = activePbFolder && req.folderId && activePbFolder.toLowerCase() === req.folderId.toLowerCase();
+					if (req.isFolderActive || isMatchingActiveFolder || !activePbFolder) {
+						// 1. Update Playback Status (Normalization handled by manager)
+						MPV.playbackStateManager.update({
+							folderId: req.folderId,
+							isRunning: req.isFolderActive,
+							isPaused: req.isPaused,
+							isIdle: req.isIdle,
+							isClosing: req.isClosing,
+							lastPlayedId: req.lastPlayedId,
+							needsAppend: req.needsAppend,
+							sessionIds: req.sessionIds,
+						});
+					}
 
 					// 2. Folder Guard for rendering
-					if (req.folderId && req.folderId !== currentFolderId) return;
+					if (req.folderId && currentFolderId && req.folderId.toLowerCase() !== currentFolderId.toLowerCase()) return;
 
 					// 3. Visibility Guard: Mark as dirty and defer if tab is hidden
 					if (document.visibilityState !== "visible") {
@@ -163,7 +174,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				last_folder_changed: (req) => this._syncFolderChange(req),
 				update_playlist_item: (req) => {
 					const currentFolderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
-					if (req.folderId === currentFolderId) {
+					if (currentFolderId && req.folderId && currentFolderId.toLowerCase() === req.folderId.toLowerCase()) {
 						this.playlistUI?.updateItemDelta(req.itemId, req.delta);
 					}
 				},
@@ -1150,16 +1161,37 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const folderData = result[folderKey] || { playlist: [], lastPlayedId: null };
 					const pbState = result.active_playback_state || {};
 					const list = folderData.playlist || [];
+					const isFolderMatch = pbState.folderId && folderId && pbState.folderId.toLowerCase() === folderId.toLowerCase();
+					let computedNeedsAppend = targetNeedsAppend !== undefined 
+						? targetNeedsAppend 
+						: (isFolderMatch ? pbState.needsAppend : false);
+
+					if (targetNeedsAppend === undefined && isFolderMatch && pbState.isRunning && Array.isArray(pbState.sessionIds)) {
+						const sessionIdsSet = new Set(pbState.sessionIds);
+						computedNeedsAppend = list.some(item => !sessionIdsSet.has(item.id));
+					}
 					
-					// 1. Update Unified Manager State
-					MPV.playbackStateManager.update({
-						folderId: folderId,
-						lastPlayedId: targetLastPlayed || folderData.lastPlayedId || (pbState.folderId === folderId ? pbState.lastPlayedId : null),
-						isRunning: targetIsActive !== undefined ? targetIsActive : (pbState.folderId === folderId ? pbState.isRunning : false),
-						isPaused: targetIsPaused !== undefined ? targetIsPaused : (pbState.folderId === folderId ? pbState.isPaused : false),
-						needsAppend: targetNeedsAppend !== undefined ? targetNeedsAppend : (pbState.folderId === folderId ? pbState.needsAppend : false),
-						sessionIds: pbState.folderId === folderId ? pbState.sessionIds : [],
-					});
+					const isThisFolderActive = isFolderMatch && (targetIsActive !== undefined ? targetIsActive : pbState.isRunning);
+					const isThisFolderPaused = isFolderMatch && (targetIsPaused !== undefined ? targetIsPaused : pbState.isPaused);
+					
+					// 1. Update Unified Manager State (only if target is active or folder matches active session)
+					if (isFolderMatch || targetIsActive !== undefined) {
+						MPV.playbackStateManager.update({
+							folderId: folderId,
+							lastPlayedId: targetLastPlayed || folderData.lastPlayedId || (isFolderMatch ? pbState.lastPlayedId : null),
+							isRunning: targetIsActive !== undefined ? targetIsActive : (isFolderMatch ? pbState.isRunning : false),
+							isPaused: targetIsPaused !== undefined ? targetIsPaused : (isFolderMatch ? pbState.isPaused : false),
+							needsAppend: computedNeedsAppend,
+							sessionIds: isFolderMatch ? pbState.sessionIds : [],
+						});
+					}
+
+					// Update local controller state and play button visual directly for this folder
+					this.state.update({
+						isFolderActive: !!isThisFolderActive,
+						lastPlayedId: targetLastPlayed || folderData.lastPlayedId || null,
+					}, true);
+					this.setPlaybackActive(!!isThisFolderActive, isThisFolderActive ? computedNeedsAppend : false, !!isThisFolderPaused);
 
 					// 2. Structural Check: Only re-render if fingerprint changed or completed items need to be hidden
 					const newFingerprint = this._getPlaylistFingerprint(list);
@@ -1391,7 +1423,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Mapping of actions to MpvInterface methods
 			const interfaceMap = {
 				play: () => MPV.MpvInterface.play(folderId, data),
-				close_mpv: () => MPV.MpvInterface.closeMpv(),
+				close_mpv: () => MPV.MpvInterface.closeMpv(folderId),
 				add: () => MPV.MpvInterface.add(folderId, data.data || data),
 				clear: () => MPV.MpvInterface.clear(folderId),
 				remove_item: () => MPV.MpvInterface.removeItem(folderId, data.data || data),
@@ -1553,7 +1585,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			root.getElementById("btn-add")?.addEventListener("click", async () => {
 				const fid = getFolderId();
 				if (fid && this.state.state.detectedUrl) {
-					const result = await this.bridge.send("add", fid, {
+					const result = await this.sendCommandToBackground("add", fid, {
 						data: this.pageScraper.scrapePageDetails(
 							this.state.state.detectedUrl,
 						),
@@ -1584,7 +1616,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				?.addEventListener("click", async () => {
 					const fid = root.getElementById("compact-folder-select")?.value;
 					if (fid && this.state.state.detectedUrl) {
-						const result = await this.bridge.send("add", fid, {
+						const result = await this.sendCommandToBackground("add", fid, {
 							data: this.pageScraper.scrapePageDetails(
 								this.state.state.detectedUrl,
 							),
