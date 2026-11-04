@@ -4,6 +4,7 @@
 > *   **Context Awareness:** Use sections relevant to your task (e.g., ignore "Native Protocol" if working on UI/CSS).
 > *   **Automated Key Matching:** The system **automatically** handles case conversion (`camelCase` ↔ `snake_case`). Write idiomatic cases (`snake_case` in Python, `camelCase` in JavaScript).
 > *   **Golden Build Rule:** Always edit `*.module.js` source files in `utils/`. **NEVER** edit generated `utils/*.js` files directly. Run `python3 verify_changes.py` to rebuild and run the full test suite.
+> *   **Pycache Watchdog:** Once you start working, verify that the bytecode watchdog script is running by executing `python3 testing_tools/pycache_watchdog.py`. Once started, it runs continuously in the background until system reboot or until manually terminated (`python3 testing_tools/pycache_watchdog.py kill`).
 > *   **Scope:** Strict security and architecture rules apply to the *Core App*. Standalone scripts or tools may use simpler patterns where appropriate.
 
 ---
@@ -259,6 +260,16 @@ This script sequentially:
 - **Python Tests:** Inherit from `BaseTestCase` in `testing_tools/base_test.py`. Use `self.test_dir` for isolated file operations and `self.mock_send` to verify bridge messages.
 - **Settings Drift Guard:** `test_settings_synchronization` in `test_robustness.py` asserts that all settings keys in `file_io.py:get_settings()` and `storageManager.js:_getDefaultData()` remain strictly synchronized.
 - **Syntax Checks:** `run_suite.py` automatically runs `node --check` across all generated `utils/*.js` files, `background.js`, and all `background/handlers/*.js`.
+
+### Bytecode Watchdog Daemon
+To ensure Python bytecode artifacts (`__pycache__`, `*.pyc`) never pollute the repository, verify that the persistent background watchdog is running:
+```bash
+python3 testing_tools/pycache_watchdog.py        # Starts if not running, or reports active PID
+python3 testing_tools/pycache_watchdog.py status # Check status
+python3 testing_tools/pycache_watchdog.py clean  # One-shot immediate sweep
+python3 testing_tools/pycache_watchdog.py kill   # Stop daemon
+```
+The watchdog runs detached in the background until system reboot or until manually killed.
 
 ---
 
