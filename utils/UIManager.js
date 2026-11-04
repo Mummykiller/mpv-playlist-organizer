@@ -45,8 +45,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			const uiWrapper = document.createElement("div");
 			uiWrapper.id = "m3u8-controller";
+			const sharedCssUrl = chrome.runtime.getURL("shared.css");
 			const cssUrl = chrome.runtime.getURL("content.css");
 			uiWrapper.innerHTML = `
+                <link rel="stylesheet" type="text/css" href="${sharedCssUrl}">
                 <link rel="stylesheet" type="text/css" href="${cssUrl}">
                 <div id="status-banner"><span id="stream-status">No stream detected</span></div>
                 <div id="progress-dashboard" style="display: none;">
@@ -91,6 +93,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				mode: "open",
 			});
 			minimizedShadowRoot.innerHTML = `
+                <link rel="stylesheet" type="text/css" href="${sharedCssUrl}">
                 <link rel="stylesheet" type="text/css" href="${cssUrl}">
                 <div id="m3u8-minimized-wrapper"><button id="m3u8-minimized-stub" title="Show MPV Controller"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 7v10" /><path d="M11 7v10" /><path d="M15 9l5 3-5 3V9z" fill="currentColor" stroke-width="0" /></svg></button><button id="m3u8-minimized-play-btn" title="Play Playlist" class="play-button"><span id="m3u8-minimized-item-count" class="play-button-count" style="display: none;">0</span><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></button></div>
             `;
@@ -109,6 +112,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const anilistPanelWrapper = document.createElement("div");
 			anilistPanelWrapper.id = "anilist-panel-wrapper";
 			anilistPanelWrapper.innerHTML = `
+                <link rel="stylesheet" type="text/css" href="${sharedCssUrl}">
                 <link rel="stylesheet" type="text/css" href="${cssUrl}">
                 <div class="anilist-panel-header"><button id="btn-refresh-anilist" class="anilist-refresh-btn" title="Refresh Releases"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"/></svg></button><p class="anilist-release-delay-info">Note: There may be a 30 minute to 3 hour delay on release times.</p><button id="btn-pin-anilist-panel" title="Pin Panel Position"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg></button><button id="btn-close-anilist-panel" title="Close Panel">&times;</button></div>
                 

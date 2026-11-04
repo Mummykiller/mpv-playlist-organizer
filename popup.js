@@ -658,28 +658,25 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 			// 2. Update the play button based on current playback state
 			if (miniPlayBtn) {
-				const effectiveIsActive = !!effectiveIsFolderActive;
-				const showingNeedsAppend = effectiveIsActive && !!effectiveNeedsAppend;
+				const visual = domUtils.getPlayButtonVisual({
+					isActive: effectiveIsFolderActive,
+					needsAppend: effectiveNeedsAppend
+				});
 
-				miniPlayBtn.classList.toggle(
-					"btn-playing",
-					effectiveIsActive || showingNeedsAppend,
-				);
+				miniPlayBtn.classList.toggle("btn-playing", visual.isPlaying);
+				miniPlayBtn.title = visual.title;
 				
 				// Clear loading state if we have a definitive render, 
 				// unless we are currently awaiting a 'play' command response.
-				if (!isPlaybackLoading || effectiveIsActive || showingNeedsAppend) {
+				if (!isPlaybackLoading || visual.isPlaying) {
 					setPlaybackLoading(false);
 				}
 
-				if (showingNeedsAppend) {
-					miniPlayBtn.title = "Queue to Playlist";
+				if (visual.stateKey === "queue") {
 					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
-				} else if (effectiveIsActive) {
-					miniPlayBtn.title = "Play/Pause Playlist";
+				} else if (visual.stateKey === "pause") {
 					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
 				} else {
-					miniPlayBtn.title = "Play Playlist";
 					miniPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
 				}
 			}

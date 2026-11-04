@@ -1,0 +1,178 @@
+/**
+ * MPV Playlist Organizer - Shared Styles
+ * Common rules shared between popup.html and content script Shadow DOM.
+ */
+
+/* --- Playlist Interactive Mode States --- */
+.quick-actions-bar .quick-action-btn.active.selection-mode-active {
+	background-color: var(--accent-primary);
+	color: white;
+	border-color: white;
+	box-shadow: 0 0 10px var(--accent-primary);
+	animation: sparkle 1.5s infinite;
+}
+
+.quick-actions-bar .quick-action-btn.active.pick-start-mode-active {
+	background-color: #00bcd4;
+	color: white;
+	border-color: white;
+	box-shadow: 0 0 10px #00bcd4;
+	animation: sparkle 1.5s infinite;
+}
+
+#playlist-container.selection-mode-active .list-item {
+	border-color: var(--accent-inactive);
+	cursor: alias;
+}
+
+#playlist-container.pick-start-mode-active .list-item {
+	border-color: #00bcd4;
+	cursor: pointer;
+}
+
+#playlist-container.selection-mode-active .list-item:hover {
+	border-color: var(--accent-primary);
+	background-color: rgba(88, 101, 242, 0.1);
+	box-shadow: 0 0 8px var(--accent-primary);
+}
+
+#playlist-container.pick-start-mode-active .list-item:hover {
+	border-color: #00bcd4;
+	background-color: rgba(0, 188, 212, 0.1);
+	box-shadow: 0 0 8px #00bcd4;
+}
+
+.quick-actions-bar .quick-action-btn.active.live-reorder-active {
+	background-color: #9c27b0;
+	color: white;
+	border-color: white;
+	box-shadow: 0 0 10px #9c27b0;
+	animation: sparkle 1.5s infinite;
+}
+
+#playlist-container.live-reorder-active .list-item {
+	border-color: #9c27b0;
+	cursor: grabbing;
+}
+
+#playlist-container.live-reorder-active .list-item:hover {
+	background-color: rgba(156, 39, 176, 0.1);
+	box-shadow: 0 0 8px #9c27b0;
+}
+
+/* --- Status Animations & Indicators --- */
+@keyframes sparkle {
+	0% { opacity: 1; }
+	50% { opacity: 0.7; }
+	100% { opacity: 1; }
+}
+
+@keyframes smart-glow {
+	0% { box-shadow: 0 0 5px var(--accent-primary); }
+	50% { box-shadow: 0 0 15px var(--accent-primary); border-color: var(--accent-primary); }
+	100% { box-shadow: 0 0 5px var(--accent-primary); }
+}
+
+.smart-sync-pending {
+	animation: smart-glow 1.5s infinite ease-in-out !important;
+}
+
+.auto-add-active {
+	box-shadow: 0 0 8px rgba(78, 205, 196, 0.4);
+	border-color: #4ecdc4 !important;
+}
+
+/* --- Shared Item Elements --- */
+.watched-checkmark {
+	color: var(--accent-success);
+	font-weight: normal;
+	font-size: 13px;
+	flex-shrink: 0;
+}
+
+.index-checkmark {
+	margin-right: 6px;
+}
+
+.checkbox-checkmark {
+	margin-right: 4px;
+	margin-left: -4px;
+}
+
+.item-watched-checkbox {
+	margin: 0;
+	cursor: pointer;
+	flex-shrink: 0;
+	accent-color: var(--accent-primary);
+}
+
+.list-item.removing {
+	opacity: 0;
+	transform: translateX(20px);
+	pointer-events: none;
+	transition: all 0.3s ease;
+}
+
+/* --- Shared AniList Component Styles --- */
+.anilist-releases-list {
+	list-style: none;
+	padding: 0 0 8px 0;
+	margin: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.release-title {
+	font-size: var(--anilist-title-font-size);
+	font-weight: 500;
+	color: var(--text-primary);
+	white-space: normal;
+	overflow-wrap: break-word;
+	line-height: 1.3;
+}
+
+.release-bottom-info {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+}
+
+.release-episode-info {
+	font-size: var(--anilist-info-font-size);
+	color: var(--text-secondary);
+}
+
+.release-airing-time {
+	font-size: var(--anilist-info-font-size);
+	font-weight: 600;
+	color: var(--accent-success);
+}
+
+.anilist-nav-btn {
+	background-color: var(--bg-secondary);
+	border: 1px solid var(--border-primary);
+	color: var(--text-secondary);
+	padding: 4px 8px;
+	border-radius: 4px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all 0.2s ease;
+	min-width: 32px;
+	height: 28px;
+	box-shadow: none;
+}
+
+.anilist-nav-btn:hover:not(:disabled) {
+	background-color: var(--bg-tertiary);
+	color: var(--text-primary);
+	border-color: var(--accent-primary);
+}
+
+.anilist-nav-btn:disabled {
+	opacity: 0.3;
+	cursor: not-allowed;
+}
