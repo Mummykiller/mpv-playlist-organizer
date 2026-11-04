@@ -302,3 +302,8 @@ export const domUtils = {
             };
         }
 };
+
+if (typeof window !== "undefined") {
+    window.MPV_INTERNAL = window.MPV_INTERNAL || {};
+    window.MPV_INTERNAL.domUtils = domUtils;
+}

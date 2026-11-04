@@ -307,4 +307,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	        }
 	};
 
+	if (typeof window !== "undefined") {
+	    window.MPV_INTERNAL = window.MPV_INTERNAL || {};
+	    window.MPV_INTERNAL.domUtils = domUtils;
+	}
+
 })();
