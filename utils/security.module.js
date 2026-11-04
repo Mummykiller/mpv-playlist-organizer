@@ -3,10 +3,10 @@
  * Centralized validation and sanitization for the Chrome Extension.
  */
 export const SECURITY_LIMITS = {
-	MAX_TITLE_LENGTH: 255,
-	MAX_URL_LENGTH: 2048,
-	MAX_PLAYLIST_ITEMS: 5000,
-	MAX_FOLDER_NAME_LENGTH: 100,
+	MAX_TITLE_LENGTH: 512,
+	MAX_URL_LENGTH: 4096,
+	MAX_PLAYLIST_ITEMS: 10000,
+	MAX_FOLDER_NAME_LENGTH: 128,
 };
 
 export const ALLOWED_PROTOCOLS = [
