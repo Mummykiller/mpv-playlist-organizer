@@ -8,7 +8,7 @@
 
 **A powerful browser extension for capturing video streams and managing playlists with MPV**
 
-[Quick Start](#-quick-start) • [Features](#-core-features) • [Installation](#-installation) • [Usage](#-usage-guide) • [CLI](#-command-line-interface)
+[Quick Start](#-quick-start) • [Features](#-core-features) • [Usage Guide](#-usage-guide) • [Installation](#-installation) • [CLI](#-command-line-interface)
 
 </div>
 
@@ -42,11 +42,11 @@ Experience seamless video management with a draggable on-page UI, **real-time se
 
 Get up and running in 5 simple steps:
 
-1. **📥 Download** — Get the latest release and unzip to a **permanent location**.
-2. **🔧 Install** — Run `installer.py` and follow the GUI prompts.
-3. **🧩 Load Extension** — Add the unpacked extension in your browser (`chrome://extensions`).
-4. **🔗 Connect** — Click **"Detect"** in the installer to automatically find your ID (or paste it manually) and click **"Install"**.
-5. **♻️ Restart** — **Completely restart your browser** to register the native host.
+1. **📥 Download** — Clone or download the repository to a **permanent location**.
+2. **🔧 Install** — Run `installer.py` (GUI) or `installer_cli.py` (Terminal) and follow the prompts.
+3. **🧩 Load Extension** — Open `chrome://extensions`, enable **Developer mode**, and click **Load unpacked**. Select the repository folder.
+4. **🔗 Connect** — Click **"Detect"** in the installer to automatically discover your Extension ID (or paste it manually) and click **"Install"**.
+5. **♻️ Restart** — **Completely restart your browser** to register the native messaging host.
 
 📚 [Detailed installation instructions](#-installation)
 
@@ -57,13 +57,16 @@ Get up and running in 5 simple steps:
 ### 🎯 Advanced Playback & Queue
 - **Precise Resume Tracking** — Tracks your position down to the second. Uses the `--start` flag to bypass inconsistent network stream resumes.
 - **Smart Order Restoration** — Launch any episode in a playlist; the extension automatically "reconstructs" the surrounding context in the player queue.
+- **Dynamic Queue & Append** — Adding items to a running playlist automatically updates the play button to **`➕` Queue**, appending new streams live without interrupting playback.
 - **Sequential Playback Queue** — Stack multiple videos to play consecutively in the same MPV instance.
 - **Session Restoration** — Reconnect to your active MPV instance even after closing your browser.
+- **Adaptive Headers & Anti-Hotlinking** — Injects dynamic `Referer` and `User-Agent` headers via Lua scripts (`adaptive_headers.lua`) to prevent 403 errors on protected streaming sources.
 - **Native M3U Enrichment** — Generates metadata-rich M3U playlists to guarantee title preservation and playback stability.
 
 ### 🎨 Intelligent User Interface
 - **Draggable Controller** — A floating on-page UI that snaps to corners and can be minimized to a discreet button.
 - **AniList Dashboard** — A dedicated, draggable panel showing today's airing anime with integrated search and playback.
+- **Quick Action Bar (A, B, C, ⚡)** — Instant access to beginning-play, detached windows, live drag-and-drop reordering, and smart sync.
 - **Popup Playlist Manager** — Quick access to your folders, settings, and full queue from the browser toolbar.
 - **SPA Compatibility** — Native support for modern Single-Page Applications (YouTube, etc.) via MutationObservers.
 
@@ -74,10 +77,48 @@ Get up and running in 5 simple steps:
 
 ### 🔧 Power User Features
 - **One-Click ID Detection** — The installer can automatically detect your Extension ID by scanning your browser profiles.
+- **Headless Terminal Setup** — Includes `installer_cli.py` for terminal-only, Wayland, or SSH installations without Tkinter.
 - **Browser Cookie Sync** — Uses your browser's cookies (Chrome/Brave/Edge/Vivaldi) for YouTube playback to support watch history, subscriptions, and private videos.
 - **yt-dlp Auto-Update** — Detects when `yt-dlp` is outdated (fixing 410 Gone errors) and offers a one-click automatic update.
 - **The Janitor** — Built-in automated cleanup that wipes temporary M3U files and stale IPC sockets on startup.
-- **Customizable Keybindings** — Set global browser shortcuts for Adding, Playing, or Toggling the UI.
+- **Customizable Keybindings (⌨️)** — Set global browser shortcuts (<kbd>Shift+A</kbd>, <kbd>Shift+P</kbd>, <kbd>Shift+S</kbd>, <kbd>Shift+Tab</kbd>, <kbd>Alt+P</kbd>) for Adding, Playing, Switching playlists, or Toggling the UI.
+
+---
+
+## 📖 Usage Guide
+
+### ➕ Adding Videos & Streams
+* **On-Page Controller:** On any video page (YouTube, supported streaming sites), click the floating **`+` (Add)** button to save the current media into your selected folder.
+* **Context Menu:** Right-click any link, video player, or video thumbnail and select **"Add to MPV Playlist"**.
+* **Auto-Add Mode:** Right-click the Add button to toggle **Auto-Add**; video links will be detected and saved automatically as you browse.
+
+### ▶️ Playback & Queuing
+* **Play / Pause:** Click **Play** to start playback. When MPV is already running the selected playlist, clicking it toggles pause.
+* **Queueing New Items:** If you add new items while MPV is playing, the play button automatically turns into **`➕` Queue**. Clicking it appends the new items to the live player without restarting.
+* **Playing Specific Items:** Click any item in the playlist view to immediately switch playback to that episode or video.
+
+### ⌨️ Default Keyboard Shortcuts
+
+| Shortcut | Action | Description |
+|:---:|---|---|
+| <kbd>Shift</kbd> + <kbd>A</kbd> | 📥 **Add Active Stream** | Instantly captures and adds the active video stream on the page to the selected playlist |
+| <kbd>Shift</kbd> + <kbd>P</kbd> | ▶️ **Play Selected Playlist** | Launches MPV or toggles playback pause for the current folder |
+| <kbd>Shift</kbd> + <kbd>S</kbd> | 🎛️ **Toggle On-Page Controller** | Shows or hides the floating on-page overlay controller |
+| <kbd>Shift</kbd> + <kbd>Tab</kbd> | 📁 **Switch Playlist** | Cycles through your available playlist folders |
+| <kbd>Alt</kbd> + <kbd>P</kbd> | 📌 **Open Browser Popup** | Opens the extension popup window from any tab |
+
+> 💡 All keyboard shortcuts can be customized or disabled in **Settings ➔ ⌨️ Keyboard Shortcuts**.
+
+### 🎛️ Quick Actions Bar
+The quick actions bar on the controller and popup provides fast-access playback modes:
+* **⏮️ `A` (Start From Beginning):**
+  * *Left-Click:* Starts playback from the very first item in the playlist.
+  * *Right-Click:* Activates **Pick Start Mode**—click any item in the list to begin playback from that specific item.
+* **⭐ `B` (Quick Action Slot):** Secondary quick-action slot for user-defined or upcoming workflows.
+* **🔀 `C` (Live Reorder & Smart Sort):**
+  * *Left-Click:* Enables interactive drag-and-drop playlist reordering that synchronizes live with the running MPV player instance.
+  * *Right-Click:* Triggers **Smart Reorder** (natural episode numbering sort).
+* **⚡ `D` (Disconnected / Independent Launch):** Toggles selection mode to launch any chosen video in a separate, detached MPV player instance without affecting your main session.
 
 ---
 
@@ -106,8 +147,8 @@ The extension includes a powerful CLI wrapper for managing your media without op
 |-------------|-------------|
 | **Browser** | Chromium-based (Chrome, Edge, Brave, Vivaldi) — *Firefox not supported* |
 | **MPV Player** | [Download here](https://mpv.io/installation/) — Must be in PATH or selected in installer |
-| **yt-dlp** | [Install guide](https://github.com/yt-dlp/yt-dlp) — Required for YouTube & Bypass |
-| **Python** | Python 3.7+ (ensure `tkinter` is installed on Linux) |
+| **yt-dlp** | [Install guide](https://github.com/yt-dlp/yt-dlp) — Required for YouTube & streaming extraction |
+| **Python** | Python 3.8+ (GUI requires `tkinter`; terminal CLI installer `installer_cli.py` works out-of-the-box without GUI dependencies) |
 
 ---
 
@@ -152,10 +193,18 @@ If you encounter issues, open `installer.py` and click **Run Diagnostics**. This
 </details>
 
 <details>
-<summary><strong>🐧 Linux Specifics</strong></summary>
+<summary><strong>🐧 Linux Specifics & Headless Installation</strong></summary>
 
-If the installer GUI doesn't open, ensure you have the `python3-tk` package installed:
-`sudo apt install python3-tk` (Ubuntu/Debian) or `sudo pacman -S tk` (Arch).
+- **Terminal Installer:** If you prefer running without a GUI, or if Tkinter is not installed, use the terminal installer:
+  ```bash
+  python3 installer_cli.py
+  ```
+- **GUI Installer:** To launch the graphical `installer.py`, ensure Python Tkinter is installed on your distribution:
+  ```bash
+  sudo apt install python3-tk      # Ubuntu / Debian / Mint
+  sudo pacman -S tk                # Arch Linux / Manjaro
+  sudo dnf install python3-tkinter # Fedora / RHEL
+  ```
 
 </details>
 

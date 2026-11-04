@@ -234,7 +234,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Reset classes to ensure mutual exclusivity
 			bar.className = "quick-actions-bar";
 
-			const labels = ["A", "B", "C", "⚡"];
+			const labels = ["A", "⭐", "C", "⚡"];
 			labels.forEach((label, index) => {
 				const btn = document.createElement("button");
 				btn.className = "quick-action-btn";
@@ -319,7 +319,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					};
 				} else {
 					btn.textContent = label;
-					btn.title = "Placeholder " + label;
+					btn.title = label === "⭐" ? "Quick Action B" : "Placeholder " + label;
 					btn.onclick = (e) => {
 						e.stopPropagation();
 						console.log(`Quick Action ${label} clicked`);
