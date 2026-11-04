@@ -90,7 +90,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				"anilist-resize-handle",
 			);
 			if (this.panelHost && dragHandle) {
-				new window.MPV_INTERNAL.Draggable(this.panelHost, dragHandle, {
+				this.draggable = new window.MPV_INTERNAL.Draggable(this.panelHost, dragHandle, {
 					dragButton: 0,
 					onDragStart: () => !this.isLocked && !this.forceAttached,
 					onDragEnd: (e, pos) => {
@@ -101,7 +101,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				});
 			}
 			if (this.panelHost && resizeHandle) {
-				new window.MPV_INTERNAL.Resizable(this.panelHost, resizeHandle, {
+				this.resizable = new window.MPV_INTERNAL.Resizable(this.panelHost, resizeHandle, {
 					minWidth: 250,
 					minHeight: 200,
 					onResizeEnd: (size) =>
@@ -238,6 +238,17 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					this.panelHost.style.top = `${newTop}px`;
 				}
 			}, 20);
+		}
+
+		destroy() {
+			if (this.draggable) {
+				this.draggable.destroy();
+				this.draggable = null;
+			}
+			if (this.resizable) {
+				this.resizable.destroy();
+				this.resizable = null;
+			}
 		}
 	};
 })();

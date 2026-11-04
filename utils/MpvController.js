@@ -484,6 +484,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			window.removeEventListener("keydown", this.handleGlobalKeydown, true);
 			window.removeEventListener("mousedown", this.handleMouseDown, true);
 			this.ui.teardown();
+			if (this.anilistUI?.destroy) this.anilistUI.destroy();
+			if (this.draggableController) this.draggableController.destroy();
+			if (this.draggableMinimized) this.draggableMinimized.destroy();
 			window.mpvControllerInitialized = false;
 			if (this.messageListener)
 				chrome.runtime.onMessage.removeListener(this.messageListener);
@@ -1743,7 +1746,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// --- Draggable Init ---
 			const banner = root.getElementById("status-banner");
 			if (banner) {
-				new MPV.Draggable(this.ui.controllerHost, banner, {
+				this.draggableController = new MPV.Draggable(this.ui.controllerHost, banner, {
 					dragButton: 0,
 					onDragStart: () => !this.state.state.pinned,
 					onDragMove: () => this.updateAdaptiveElements(),
@@ -1764,7 +1767,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					minHandle.title =
 						"Left-click: Open Controller\nRight-click: Drag to move";
 
-				new MPV.Draggable(this.ui.minimizedHost, minStub, {
+				this.draggableMinimized = new MPV.Draggable(this.ui.minimizedHost, minStub, {
 					dragButton: 2,
 					onDragEnd: (e, pos) => {
 						this.ui.minimizedHost.classList.remove("top-left", "top-right");

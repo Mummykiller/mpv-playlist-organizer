@@ -6,6 +6,27 @@
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+    <!-- SVG Sprite Definitions for Repeated Icons -->
+    <svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+        <defs>
+            <symbol id="icon-reload-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+            </symbol>
+            <symbol id="icon-record-keybind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3" fill="currentColor"></circle>
+            </symbol>
+            <symbol id="icon-reset-flags" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"></path><path d="M3 3v9h9"></path>
+            </symbol>
+            <symbol id="icon-chevron-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m15 18-6-6 6-6"></path>
+            </symbol>
+            <symbol id="icon-chevron-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m9 18 6-6-6-6"></path>
+            </symbol>
+        </defs>
+    </svg>
+
     <div id="main-app-container">
         <div id="scrollable-content">
             <!-- Confirmation Modal for Popup -->
@@ -241,11 +262,11 @@
                 <div id="anilist-releases-content">
                     <div class="anilist-nav-controls" style="display: none;">
                         <button id="btn-anilist-prev" class="anilist-nav-btn" title="Previous Day">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                            <svg width="16" height="16"><use href="#icon-chevron-left"></use></svg>
                         </button>
                         <button id="btn-anilist-today" class="anilist-nav-btn today-btn">Today</button>
                         <button id="btn-anilist-next" class="anilist-nav-btn" title="Next Day">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                            <svg width="16" height="16"><use href="#icon-chevron-right"></use></svg>
                         </button>
                     </div>
                     <div class="loading-spinner"></div>
@@ -265,7 +286,7 @@
                     <span>Interface & Display</span>
                     <div class="header-actions">
                         <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+                            <svg width="14" height="14"><use href="#icon-reload-sync"></use></svg>
                         </button>
                     </div>
                 </summary>
@@ -333,7 +354,7 @@
                     <span>Player & Playback</span>
                     <div class="header-actions">
                         <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+                            <svg width="14" height="14"><use href="#icon-reload-sync"></use></svg>
                         </button>
                     </div>
                 </summary>
@@ -466,7 +487,7 @@
                         <label for="mpv-flag-input" class="settings-label">Custom MPV Flags <span class="help-icon" title="Enter a command-line flag for MPV and press Enter. These are appended to every MPV launch command.">?</span>:</label>
                         <div class="input-group">
                             <input type="text" id="mpv-flag-input" class="settings-input" placeholder="e.g. --vo=gpu" list="allowed-mpv-flags">
-                            <button id="btn-reset-mpv-flags" class="icon-button" title="Clear all custom flags and reset to empty."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"/><path d="M3 3v9h9"/></svg></button>
+                            <button id="btn-reset-mpv-flags" class="icon-button" title="Clear all custom flags and reset to empty."><svg width="14" height="14"><use href="#icon-reset-flags"></use></svg></button>
                         </div>
                         <datalist id="allowed-mpv-flags">
                             <option value="--vo=gpu"></option>
@@ -491,7 +512,7 @@
                     <div class="control-group stacked-control setting-item" data-setting-name="automatic mpv flags internal">
                         <label for="automatic-mpv-flag-input" class="settings-label">Auto-managed Stability Flags <span class="help-icon" title="These are managed by the extension for stability. Toggle only if you know what you're doing.">?</span>:</label>
                         <div class="input-group">
-                            <button id="btn-reset-automatic-mpv-flags" class="icon-button" title="Restore default internal flags."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"/><path d="M3 3v9h9"/></svg></button>
+                            <button id="btn-reset-automatic-mpv-flags" class="icon-button" title="Restore default internal flags."><svg width="14" height="14"><use href="#icon-reset-flags"></use></svg></button>
                         </div>
                         <div id="automatic-mpv-flags-list-container" class="filter-list-container"></div>
                     </div>
@@ -504,7 +525,7 @@
                     <span>External Services</span>
                     <div class="header-actions">
                         <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+                            <svg width="14" height="14"><use href="#icon-reload-sync"></use></svg>
                         </button>
                     </div>
                 </summary>
@@ -606,7 +627,7 @@
                     <span>Performance & Streaming</span>
                     <div class="header-actions">
                         <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+                            <svg width="14" height="14"><use href="#icon-reload-sync"></use></svg>
                         </button>
                     </div>
                 </summary>
@@ -748,7 +769,7 @@
                     <span>Keyboard Shortcuts</span>
                     <div class="header-actions">
                         <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+                            <svg width="14" height="14"><use href="#icon-reload-sync"></use></svg>
                         </button>
                     </div>
                 </summary>
@@ -757,7 +778,7 @@
                         <label for="kb-add-playlist-input" class="settings-label">Add Active Stream <span class="help-icon" title="Shortcut to add the currently detected stream on the page.">?</span>:</label>
                         <div class="input-group">
                             <input type="text" id="kb-add-playlist-input" class="settings-input" placeholder="e.g. Shift+A" readonly>
-                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg width="14" height="14"><use href="#icon-record-keybind"></use></svg></button>
                         </div>
                     </div>
                     <hr class="settings-compact-separator">
@@ -765,7 +786,7 @@
                         <label for="kb-play-playlist-input" class="settings-label">Play Selected Playlist <span class="help-icon" title="Shortcut to launch MPV with the currently active folder.">?</span>:</label>
                         <div class="input-group">
                             <input type="text" id="kb-play-playlist-input" class="settings-input" placeholder="e.g. Shift+P" readonly>
-                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg width="14" height="14"><use href="#icon-record-keybind"></use></svg></button>
                         </div>
                     </div>
                     <hr class="settings-compact-separator">
@@ -773,7 +794,7 @@
                         <label for="kb-toggle-ui-input" class="settings-label">Toggle On-Page Controller <span class="help-icon" title="Shortcut to hide/show the on-page floating UI.">?</span>:</label>
                         <div class="input-group">
                             <input type="text" id="kb-toggle-ui-input" class="settings-input" placeholder="e.g. Shift+S" readonly>
-                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg width="14" height="14"><use href="#icon-record-keybind"></use></svg></button>
                         </div>
                     </div>
                     <hr class="settings-compact-separator">
@@ -781,7 +802,7 @@
                         <label for="kb-switch-playlist-input" class="settings-label">Switch Playlist <span class="help-icon" title="Shortcut to cycle through your available playlist folders.">?</span>:</label>
                         <div class="input-group">
                             <input type="text" id="kb-switch-playlist-input" class="settings-input" placeholder="e.g. Shift+Tab" readonly>
-                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg width="14" height="14"><use href="#icon-record-keybind"></use></svg></button>
                         </div>
                     </div>
                     <hr class="settings-compact-separator">
@@ -789,7 +810,7 @@
                         <label for="kb-open-popup-input" class="settings-label">Open Browser Popup <span class="help-icon" title="Shortcut to open this extension popup directly.">?</span>:</label>
                         <div class="input-group">
                             <input type="text" id="kb-open-popup-input" class="settings-input" placeholder="e.g. Alt+P" readonly>
-                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg></button>
+                            <button class="icon-button btn-record-keybind" title="Click to record a new key combination."><svg width="14" height="14"><use href="#icon-record-keybind"></use></svg></button>
                         </div>
                     </div>
                 </div>
@@ -801,7 +822,7 @@
                     <span>Privacy & Safety</span>
                     <div class="header-actions">
                         <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+                            <svg width="14" height="14"><use href="#icon-reload-sync"></use></svg>
                         </button>
                     </div>
                 </summary>
@@ -869,7 +890,7 @@
                     <span>System & Maintenance</span>
                     <div class="header-actions">
                         <button class="section-reload-btn" title="Sync & Refresh Settings Across All Tabs">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+                            <svg width="14" height="14"><use href="#icon-reload-sync"></use></svg>
                         </button>
                     </div>
                 </summary>

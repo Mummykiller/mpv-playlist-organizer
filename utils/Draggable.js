@@ -102,5 +102,19 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.handle.addEventListener("mousedown", this.onMouseDown);
 			this.handle.addEventListener("contextmenu", this.onContextMenu);
 		}
+
+		destroy() {
+			if (this.handle) {
+				this.handle.removeEventListener("mousedown", this.onMouseDown);
+				this.handle.removeEventListener("contextmenu", this.onContextMenu);
+			}
+			if (this.isDragging) {
+				this.isDragging = false;
+				document.body.classList.remove("mpv-controller-dragging");
+				this.element.style.transition = "";
+			}
+			document.removeEventListener("mousemove", this.onMouseMove);
+			document.removeEventListener("mouseup", this.onMouseUp);
+		}
 	};
 })();
