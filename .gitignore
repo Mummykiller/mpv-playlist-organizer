@@ -7,7 +7,6 @@ run_native_host.sh
 run_native_host.bat
 *.log
 *.log.*
-GEMINI.md
 plan.md
 CLEANUP.md
 Verification Report.md
