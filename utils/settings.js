@@ -13,6 +13,12 @@ export class OptionsManager {
 		this.showStatus = dependencies.showStatus;
 		this.fetchAniListReleases = dependencies.fetchAniListReleases;
 
+		this.elements = {
+			get geometrySelect() {
+				return document.getElementById("geometry-select");
+			},
+		};
+
 		try {
 			this.currentMode = localStorage.getItem("mpv_settings_view_mode") || "simple";
 			this.currentCategory = localStorage.getItem("mpv_settings_category") || "all";
@@ -1498,10 +1504,11 @@ export class OptionsManager {
 
 				items.forEach((item) => {
 					if (item.id === "custom-geometry-container") {
-						const geomGroup = this.elements.geometrySelect?.closest(".control-group");
+						const geometrySelect = document.getElementById("geometry-select");
+						const geomGroup = geometrySelect?.closest(".control-group");
 						const isGeomFav = geomGroup && this.favoriteSettings.has(this._getSettingIdentifier(geomGroup));
 						item.style.display =
-							isGeomFav && this.elements.geometrySelect?.value === "custom"
+							isGeomFav && geometrySelect?.value === "custom"
 								? "flex"
 								: "none";
 						item.classList.toggle("fav-visible-override", Boolean(isGeomFav));
@@ -1545,8 +1552,9 @@ export class OptionsManager {
 				const items = section.querySelectorAll(".control-group, .setting-item");
 				items.forEach((item) => {
 					if (item.id === "custom-geometry-container") {
+						const geometrySelect = document.getElementById("geometry-select");
 						item.style.display =
-							this.elements.geometrySelect?.value === "custom" ? "flex" : "none";
+							geometrySelect?.value === "custom" ? "flex" : "none";
 						item.style.backgroundColor = "transparent";
 						item.classList.remove("fav-visible-override");
 						return;
@@ -1724,10 +1732,11 @@ export class OptionsManager {
 
 			items.forEach((item) => {
 				if (item.id === "custom-geometry-container") {
-					const geomGroup = this.elements.geometrySelect?.closest(".control-group");
+					const geometrySelect = document.getElementById("geometry-select");
+					const geomGroup = geometrySelect?.closest(".control-group");
 					const geomVisible = geomGroup && geomGroup.style.display !== "none";
 					item.style.display =
-						geomVisible && this.elements.geometrySelect?.value === "custom"
+						geomVisible && geometrySelect?.value === "custom"
 							? "flex"
 							: "none";
 					return;

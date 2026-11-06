@@ -1,6 +1,5 @@
 import re
 import difflib
-import logging
 
 class SmartReorder:
     """

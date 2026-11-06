@@ -1,7 +1,6 @@
 // background/handlers/folder_management.js
 
 import { sanitizeString } from "../../utils/commUtils.module.js";
-import { storage } from "../storage_instance.js";
 import { createHandler } from "../handler_factory.js";
 import { broadcastPlaylistState } from "../ui_broadcaster.js";
 

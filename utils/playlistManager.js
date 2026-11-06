@@ -7,57 +7,13 @@ import { findM3u8InUrl } from "../background/handlers/m3u8_scanner.js";
 import { createHandler } from "../background/handler_factory.js";
 import { broadcastPlaylistState, broadcastItemUpdate, isFolderActive } from "../background/ui_broadcaster.js";
 import { broadcastLog } from "../background/messaging.js";
-import { normalizeYouTubeUrl, getActiveTab } from "./commUtils.module.js";
+import { normalizeYouTubeUrl, getActiveTab, promptUserConfirmation } from "./commUtils.module.js";
 import { nativeLink } from "./nativeLink.js";
 import { storage } from "../background/storage_instance.js";
 import { processPlaylistItem } from "./item_processor.js";
 
 // Keep track of URLs currently being processed to avoid concurrent duplicates
 const scrapingInProgress = new Set();
-
-/**
- * Prompts the user for confirmation via the open popup or the active tab's on-page controller.
- */
-async function promptUserConfirmation(message, preferredTabId = null) {
-	// 1. Try open popup first
-	const popupResponse = await new Promise((resolve) => {
-		chrome.runtime.sendMessage(
-			{ action: "show_popup_confirmation", message },
-			(res) => {
-				if (chrome.runtime.lastError) resolve(null);
-				else resolve(res);
-			},
-		);
-	});
-	if (popupResponse && typeof popupResponse.confirmed === "boolean") {
-		return popupResponse.confirmed;
-	}
-
-	// 2. Fall back to preferred tab or active tab
-	let targetTabId = preferredTabId;
-	if (!targetTabId) {
-		const activeTab = await getActiveTab();
-		targetTabId = activeTab?.id || null;
-	}
-
-	if (targetTabId) {
-		const tabResponse = await new Promise((resolve) => {
-			chrome.tabs.sendMessage(
-				targetTabId,
-				{ action: "show_confirmation", message },
-				(res) => {
-					if (chrome.runtime.lastError) resolve(null);
-					else resolve(res);
-				},
-			);
-		});
-		if (tabResponse && typeof tabResponse.confirmed === "boolean") {
-			return tabResponse.confirmed;
-		}
-	}
-
-	return false;
-}
 
 export async function handleUpdateItemTitle(req) {
 	const { folderId, itemId, newTitle } = req;

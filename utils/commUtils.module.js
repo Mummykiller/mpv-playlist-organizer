@@ -152,3 +152,54 @@ export function normalizeKeys(data) {
 	}
 	return normalized;
 }
+
+/**
+ * Prompts the user for confirmation via the open popup or the active tab's on-page controller.
+ * @param {string} message - The confirmation question/message to display.
+ * @param {number|null} preferredTabId - Optional tab ID to prompt if popup is closed.
+ * @param {boolean} defaultOnUnreachable - Value to return if neither popup nor tab can be reached.
+ * @returns {Promise<boolean>}
+ */
+export async function promptUserConfirmation(message, preferredTabId = null, defaultOnUnreachable = false) {
+	// 1. Try sending to open popup first
+	const popupResponse = await new Promise((resolve) => {
+		if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
+			return resolve(null);
+		}
+		chrome.runtime.sendMessage(
+			{ action: "show_popup_confirmation", message },
+			(res) => {
+				if (chrome.runtime.lastError) resolve(null);
+				else resolve(res);
+			},
+		);
+	});
+	if (popupResponse && typeof popupResponse.confirmed === "boolean") {
+		return popupResponse.confirmed;
+	}
+
+	// 2. Fall back to preferred tab or active tab
+	let targetTabId = preferredTabId;
+	if (!targetTabId) {
+		const activeTab = await getActiveTab();
+		targetTabId = activeTab?.id || null;
+	}
+
+	if (targetTabId && typeof chrome !== "undefined" && chrome.tabs?.sendMessage) {
+		const tabResponse = await new Promise((resolve) => {
+			chrome.tabs.sendMessage(
+				targetTabId,
+				{ action: "show_confirmation", message },
+				(res) => {
+					if (chrome.runtime.lastError) resolve(null);
+					else resolve(res);
+				},
+			);
+		});
+		if (tabResponse && typeof tabResponse.confirmed === "boolean") {
+			return tabResponse.confirmed;
+		}
+	}
+
+	return defaultOnUnreachable;
+}

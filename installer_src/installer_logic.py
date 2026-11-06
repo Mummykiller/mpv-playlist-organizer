@@ -1,6 +1,5 @@
 import os
 import json
-import logging
 import platform
 import shutil
 import subprocess

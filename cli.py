@@ -61,7 +61,25 @@ def _cli_play_folder(args):
     
     # Retrieve settings to pass to start()
     settings = file_io.get_settings()
-    result = mpv_session.start(playlist_items, folder_id, settings, file_io, clear_on_completion=True)
+    settings["clear_on_completion"] = "yes"
+    launch_payload = playlist_items if len(playlist_items) > 1 else playlist_items[0]
+    result = mpv_session.start(launch_payload, folder_id, settings, file_io)
+
+    if result.get("success") and not result.get("handled_directly"):
+        enriched_items = result.get("enriched_url_items") or []
+        first_item = enriched_items[0] if enriched_items else {}
+        result = mpv_session.start(
+            enriched_items,
+            folder_id,
+            settings,
+            file_io,
+            enriched_items_list=enriched_items,
+            headers=first_item.get("headers"),
+            ytdl_raw_options=first_item.get("ytdl_raw_options"),
+            use_ytdl_mpv=any(item.get("use_ytdl_mpv", False) for item in enriched_items),
+            is_youtube=any(item.get("is_youtube", False) for item in enriched_items),
+            disable_http_persistent=first_item.get("disable_http_persistent", False),
+        )
 
     if not result.get("success"):
         print(f"Error starting mpv: {result.get('error')}", file=sys.stderr)

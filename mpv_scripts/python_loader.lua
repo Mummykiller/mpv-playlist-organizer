@@ -102,10 +102,6 @@ mp.register_event("start-file", function()
     fallback_attempted = false
     fallback_skip_notified = false
     
-    -- Sync IDs immediately so tracker is ready
-    local fid = clean_value(mp.get_property("user-data/folder-id"))
-    local iid = clean_value(mp.get_property("user-data/id"))
-    
     mp.add_timeout(0.2, function()
         run_fallback_sync({last_played = true})
     end)

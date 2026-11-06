@@ -9,7 +9,7 @@ import json
 import file_io
 import services
 from .installer_logic import (
-    HOST_NAME, INSTALL_DIR, get_logic_for_platform
+    HOST_NAME, get_logic_for_platform
 )
 
 MODERN_FONT = "Segoe UI"

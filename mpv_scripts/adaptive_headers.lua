@@ -191,7 +191,6 @@ local function apply_adaptive_settings()
 
     -- 4. Resolve Options
     local item_id = mp.get_property("user-data/id")
-    local pos = mp.get_property_number("playlist-pos")
     local stripped_path = path:gsub("[#&]mpv_organizer_id=[^#&]+", "")
     
     -- Strictly use ID or URL. Fallback to unmanaged_fallback_opts for unmanaged instances.

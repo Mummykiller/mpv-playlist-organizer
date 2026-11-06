@@ -7,9 +7,6 @@ import platform
 import logging
 import file_io
 import uuid
-import socket
-import ipaddress
-from urllib.parse import urlparse
 from . import security
 
 # Constants for file patterns
@@ -174,21 +171,26 @@ class VolatileCookieManager:
             logging.debug(f"Shadow Copy: Could not locate database for {browser} at {db_rel_path}")
             return False
 
-        # Create shadow copy in volatile storage
-        shadow_path = f"{target_path}.shadow"
+        # Create shadow copy profile directory in volatile storage so yt-dlp reads the unlocked copy
+        shadow_root = f"{target_path}_shadow_profile"
         try:
-            logging.info(f"Shadow Copy: Duplicating locked database to {shadow_path}")
-            shutil.copy2(db_rel_path, shadow_path)
+            parent_name = os.path.basename(os.path.dirname(db_rel_path))
+            if parent_name.lower() == "network":
+                shadow_cookies_dir = os.path.join(shadow_root, "Default", "Network")
+            else:
+                shadow_cookies_dir = os.path.join(shadow_root, "Default")
+            os.makedirs(shadow_cookies_dir, mode=0o700, exist_ok=True)
+            shadow_db_path = os.path.join(shadow_cookies_dir, "Cookies")
+
+            logging.info(f"Shadow Copy: Duplicating locked database to {shadow_db_path}")
+            shutil.copy2(db_rel_path, shadow_db_path)
             
-            # Use yt-dlp to read from the shadow copy
-            # Note: yt-dlp doesn't have a direct "read from this file" for browser DBs,
-            # but we can use the --cookies-from-browser BROWSER:PATH syntax.
             settings = file_io.get_settings()
             ytdlp_path = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
             
             cmd = [
                 ytdlp_path,
-                '--cookies-from-browser', f"{browser}:{os.path.dirname(os.path.dirname(db_rel_path)) if system == 'Windows' else os.path.dirname(db_rel_path)}",
+                '--cookies-from-browser', f"{browser}:{shadow_root}",
                 '--cookies', target_path,
                 '--skip-download', '--quiet', '--no-warnings', '--', url
             ]
@@ -202,9 +204,9 @@ class VolatileCookieManager:
             logging.warning(f"Shadow Copy failed: {e}")
             return False
         finally:
-            if os.path.exists(shadow_path):
+            if os.path.exists(shadow_root):
                 try:
-                    os.remove(shadow_path)
+                    shutil.rmtree(shadow_root, ignore_errors=True)
                 except Exception:
                     pass
 

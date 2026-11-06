@@ -504,7 +504,7 @@ class PlaybackHandler(BaseHandler):
                 use_ytdl_mpv=use_ytdl_mpv,
                 script_dir=self.ctx.script_dir,
                 # metadata_item and temp_dir are now legacy, handshake handles it
-                flag_dir=handshake_data["flag_dir"]
+                flag_dir=flag_dir
             )
             
             import subprocess
@@ -520,7 +520,8 @@ class PlaybackHandler(BaseHandler):
                 try:
                     if os.path.exists(path):
                         os.remove(path)
-                except: pass
+                except Exception:
+                    pass
             
             threading.Thread(target=delayed_cleanup, args=(handshake_path, process), daemon=True).start()
             
