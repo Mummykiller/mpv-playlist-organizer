@@ -12,6 +12,31 @@ import { OptionsManager } from "./utils/settings.js";
 import { MpvInterface } from "./utils/MpvInterface.module.js";
 import { PlaylistRenderer } from "./utils/PlaylistRenderer.js";
 
+// Global Popup Error Handlers (Forward uncaught exceptions to browser_errors.log)
+window.addEventListener("error", (event) => {
+	const err = event.error;
+	const msg = err ? (err.message || String(err)) : (event.message || "Unknown error");
+	const stack = err?.stack || "";
+	sendMessageAsync({
+		action: "log_browser_error",
+		context: "Popup",
+		message: msg,
+		stack
+	}).catch(() => {});
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+	const reason = event.reason;
+	const msg = reason ? (reason.message || String(reason)) : String(reason);
+	const stack = reason?.stack || "";
+	sendMessageAsync({
+		action: "log_browser_error",
+		context: "Popup",
+		message: msg,
+		stack
+	}).catch(() => {});
+});
+
 document.addEventListener("DOMContentLoaded", async () => {
 	// Status message element and showStatus defined before try block so they are available in catch handlers
 	const statusMessageElement = document.getElementById("status-message");
@@ -2480,5 +2505,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 	} catch (e) {
 		console.error("Error in DOMContentLoaded handler:", e);
 		showStatus(`Critical error: ${e.message}`, true);
+		sendMessageAsync({
+			action: "log_browser_error",
+			context: "Popup",
+			message: `Critical DOMContentLoaded error: ${e.message}`,
+			stack: e.stack || ""
+		}).catch(() => {});
 	}
 });

@@ -1,4 +1,5 @@
 import { storage } from "./storage_instance.js";
+import { logger } from "../utils/SystemLogger.module.js";
 
 /**
  * Broadcasts a message only to active tabs and the extension's internal contexts (like the popup).
@@ -61,5 +62,8 @@ export async function broadcastLog(logObject) {
 	}
 
 	const message = { action: "log", log: finalLog };
+	if (finalLog.type === "error") {
+		logger.error(finalLog.text, { persist: true });
+	}
 	broadcastToTabs(message);
 }

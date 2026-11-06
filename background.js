@@ -135,8 +135,30 @@ chrome.runtime.onConnect.addListener((port) => {
 	}
 });
 
+// --- Global Service Worker Error Capturing ---
+self.addEventListener("error", (event) => {
+	const err = event.error;
+	const msg = err ? (err.message || String(err)) : (event.message || "Unknown error");
+	const stack = err?.stack || "";
+	logger.error(`[Background] ${msg}`, { persist: true, stack });
+});
+
+self.addEventListener("unhandledrejection", (event) => {
+	const reason = event.reason;
+	const msg = reason ? (reason.message || String(reason)) : String(reason);
+	const stack = reason?.stack || "";
+	logger.error(`[Background] Unhandled rejection: ${msg}`, { persist: true, stack });
+});
+
 // --- Main Message Listener ---
 const actionHandlers = {
+	log_browser_error: async (request) => {
+		const context = request.context || "Browser";
+		const message = request.message || request.error || "Unknown error";
+		const stack = request.stack || "";
+		logger.error(`[${context}] ${message}`, { persist: true, stack });
+		return { success: true };
+	},
 	// UI State
 	content_script_init: ui_state_handlers.handleContentScriptInit,
 	get_ui_state_for_tab: ui_state_handlers.handleGetUiStateForTab,
