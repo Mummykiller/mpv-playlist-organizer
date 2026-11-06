@@ -452,6 +452,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						this.fullContainer?.classList.remove("selection-mode-active");
 						this.uiManager.shadowRoot?.querySelectorAll(".quick-action-btn.selection-mode-active").forEach(el => el.classList.remove("selection-mode-active"));
 						this.uiManager.shadowRoot?.getElementById("quick-actions-bar")?.classList.remove("selection-mode-active");
+						this._refreshQuickActionsBar();
 					}
 					return;
 				}
@@ -530,7 +531,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.fullContainer.addEventListener("dragstart", (e) => {
 				if (e.target.classList.contains("list-item")) {
 					this.draggedItem = e.target;
-					setTimeout(() => this.draggedItem.classList.add("dragging"), 0);
+					setTimeout(() => this.draggedItem?.classList.add("dragging"), 0);
 					const url = e.target.dataset.url;
 					if (url) {
 						e.dataTransfer.setData("text/plain", url);

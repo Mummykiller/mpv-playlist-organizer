@@ -47,10 +47,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				},
 			});
 
-			// 2. Initialize UI Managers
+			// 2. Initialize UI Managers (PlaylistUI and AniListUI are instantiated in init() after Shadow DOM creation)
 			this.ui = new MPV.UIManager();
-			this.playlistUI = new MPV.PlaylistUI(this, this.ui);
-			this.anilistUI = new MPV.AniListUI(this, this.ui);
+			this.playlistUI = null;
+			this.anilistUI = null;
 			this.pageScraper = new MPV.PageScraper();
 
 			// Unified Playback State Subscription (Must happen AFTER UI initialization)
@@ -481,6 +481,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		teardown() {
 			this.isTearingDown = true;
+			if (this.playbackUnsubscribe) {
+				this.playbackUnsubscribe();
+				this.playbackUnsubscribe = null;
+			}
 			this.bridge.destroy();
 			this.state.destroy();
 			this.nav.destroy();
@@ -637,6 +641,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 				this.anilistUI.isEnabled = state.settings.enableAnilistIntegration;
 				this.anilistUI.isLocked = state.settings.lockAnilistPanel;
+				this.anilistUI.forceAttached = state.settings.forcePanelAttached;
+				this.anilistUI.attachOnOpen = state.settings.anilistAttachOnOpen ?? true;
 				this.anilistUI.updateDynamicStyles();
 			}
 
@@ -762,6 +768,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 					this.anilistUI.isLocked = prefs.lockAnilistPanel ?? false;
 					this.anilistUI.forceAttached = prefs.forcePanelAttached ?? false;
+					this.anilistUI.attachOnOpen = prefs.anilistAttachOnOpen ?? true;
 					this.anilistUI.isEnabled = prefs.enableAnilistIntegration ?? true;
 					this.anilistUI.toggleVisibility(
 						this.state.state.anilistVisible,

@@ -18,12 +18,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		_injectStyles(shadowRoot) {
 			if (!shadowRoot) return;
-			const styleEl = document.createElement("style");
-			styleEl.className = "mpv-injected-styles";
-			shadowRoot.prepend(styleEl);
+			let styleEl = shadowRoot.querySelector("style.mpv-injected-styles");
+			if (!styleEl) {
+				styleEl = document.createElement("style");
+				styleEl.className = "mpv-injected-styles";
+				shadowRoot.prepend(styleEl);
+			}
 
 			this._loadStyles().then((cssText) => {
 				if (cssText) {
+					if (styleEl.parentNode !== shadowRoot) {
+						shadowRoot.prepend(styleEl);
+					}
 					styleEl.textContent = cssText;
 				}
 			});
@@ -130,9 +136,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				mode: "open",
 			});
 			this._injectStyles(minimizedShadowRoot);
-			minimizedShadowRoot.innerHTML = `
-                <div id="m3u8-minimized-wrapper"><button id="m3u8-minimized-stub" title="Show MPV Controller"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 7v10" /><path d="M11 7v10" /><path d="M15 9l5 3-5 3V9z" fill="currentColor" stroke-width="0" /></svg></button><button id="m3u8-minimized-play-btn" title="Play Playlist" class="play-button"><span id="m3u8-minimized-item-count" class="play-button-count" style="display: none;">0</span><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></button></div>
+			const minimizedWrapper = document.createElement("div");
+			minimizedWrapper.id = "m3u8-minimized-wrapper";
+			minimizedWrapper.innerHTML = `
+                <button id="m3u8-minimized-stub" title="Show MPV Controller"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 7v10" /><path d="M11 7v10" /><path d="M15 9l5 3-5 3V9z" fill="currentColor" stroke-width="0" /></svg></button><button id="m3u8-minimized-play-btn" title="Play Playlist" class="play-button"><span id="m3u8-minimized-item-count" class="play-button-count" style="display: none;">0</span><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></button>
             `;
+			minimizedShadowRoot.appendChild(minimizedWrapper);
 			document.body.appendChild(this.minimizedHost);
 
 			this.anilistPanelHost = document.createElement("div");
