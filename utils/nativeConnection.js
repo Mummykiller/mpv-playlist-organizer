@@ -132,15 +132,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 			});
 
-			connectionStatus = ConnectionStatus.CONNECTED;
 			broadcastLog({
-				text: `[Background]: Successfully connected to native host.`,
+				text: `[Background]: Native port opened, awaiting session handshake...`,
 				type: "info",
 			});
 
 			const restoreRequestId = `internal_restore_${Date.now()}`;
 			requestPromises[restoreRequestId] = {
 				resolve: (responseData) => {
+					connectionStatus = ConnectionStatus.CONNECTED;
 					broadcastLog({
 						text: `[Background]: Session restoration handshake completed.`,
 						type: "info",
@@ -162,7 +162,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						text: `[Background]: Session restoration failed: ${err.message}`,
 						type: "error",
 					});
-					if (connectionStatus === ConnectionStatus.CONNECTING) reject(err);
+					reject(err);
 				},
 			};
 

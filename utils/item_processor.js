@@ -62,8 +62,8 @@ export function processPlaylistItem(rawItem, options = {}) {
 		id: id || generateItemId(),
 		settings: settings,
 		lastModified: lastModified,
-		currentlyPlaying: rawItem.currentlyPlaying || false,
-		watched: rawItem.watched || false,
+		currentlyPlaying: currentlyPlaying,
+		watched: watched,
 		resumeTime: resumeTime !== undefined ? resumeTime : 0,
         markedAsWatched: markedAsWatched !== undefined ? markedAsWatched : false
 	};

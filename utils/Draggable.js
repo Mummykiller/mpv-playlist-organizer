@@ -5,7 +5,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 (() => {
 	const MPV = window.MPV_INTERNAL;
-	window.MPV_INTERNAL.Draggable = class Draggable {
+	MPV.Draggable = class Draggable {
 		constructor(element, handle, options = {}) {
 			this.element = element;
 			this.handle = handle;

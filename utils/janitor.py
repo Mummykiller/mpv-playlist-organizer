@@ -34,8 +34,8 @@ class Janitor:
         three_days_ago = now - (72 * 3600)
         one_day_ago = now - (24 * 3600)
 
-        # mpv_cookies_PID_uuid.txt
-        cookie_re = re.compile(re.escape(url_analyzer.COOKIE_PREFIX) + r'(?P<pid>\d+)_')
+        # mpv_cookies_PID_uuid.txt or mpv_cookies_browser_hex.txt
+        cookie_re = re.compile(re.escape(url_analyzer.COOKIE_PREFIX) + r'(?:(?P<pid>\d+)_|[a-zA-Z0-9_-]+)')
         
         # delta_PID_uuid.m3u
         delta_re = re.compile(re.escape(mpv_session.DELTA_PREFIX) + r'(?P<pid>\d+)_')
@@ -49,49 +49,63 @@ class Janitor:
             (server_re, m3u_server.SERVER_EXT, three_days_ago)
         ]
 
+        scan_dirs = [self.temp_dir]
+        try:
+            volatile_dir = url_analyzer.VolatileCookieManager.get_volatile_dir()
+            if volatile_dir and os.path.exists(volatile_dir) and volatile_dir not in scan_dirs:
+                scan_dirs.append(volatile_dir)
+        except Exception:
+            pass
+
         # Use topdown=False to allow cleaning empty directories after their content
-        for root, dirs, files in os.walk(self.temp_dir, topdown=False):
-            for filename in files:
-                file_path = os.path.join(root, filename)
-                matched = False
-                
-                for pattern, ext, threshold in PATTERNS:
-                    if not filename.lower().endswith(ext):
-                        continue
+        for scan_dir in scan_dirs:
+            for root, dirs, files in os.walk(scan_dir, topdown=False):
+                for filename in files:
+                    file_path = os.path.join(root, filename)
+                    matched = False
                     
-                    match = pattern.match(filename)
-                    if match:
-                        matched = True
+                    for pattern, ext, threshold in PATTERNS:
+                        if not filename.lower().endswith(ext):
+                            continue
+                        
+                        match = pattern.match(filename)
+                        if match:
+                            matched = True
+                            try:
+                                file_mtime = os.path.getmtime(file_path)
+                                # ONLY consider files older than the threshold
+                                if file_mtime < threshold:
+                                    pid_str = match.groupdict().get('pid')
+                                    if pid_str:
+                                        pid = int(pid_str)
+                                        is_running = is_pid_running(pid)
+                                    else:
+                                        pid = None
+                                        is_running = False
+
+                                    # Only delete if the associated process is also dead
+                                    if not is_running:
+                                        logging.info(f"Janitor: Removing stale {ext} file: {filename}")
+                                        os.remove(file_path)
+                                    else:
+                                        logging.debug(f"Janitor: Preserving old {ext} file because PID {pid} is still alive: {filename}")
+
+                            except FileNotFoundError:
+                                pass
+                            except (ValueError, OSError) as e:
+                                logging.warning(f"Janitor: Error removing stale file {filename}: {e}")
+                            break
+                    
+                    # Fallback: delete known temp extensions older than 72 hours if they didn't match a PID pattern
+                    if not matched and any(filename.lower().endswith(e) for e in ['.m3u', '.json', '.txt', '.flag']):
                         try:
-                            file_mtime = os.path.getmtime(file_path)
-                            # ONLY consider files older than the threshold
-                            if file_mtime < threshold:
-                                pid = int(match.group('pid'))
-                                is_running = is_pid_running(pid)
-
-                                # Only delete if the associated process is also dead
-                                if not is_running:
-                                    logging.info(f"Janitor: Removing stale {ext} file for dead PID {pid}: {filename}")
-                                    os.remove(file_path)
-                                else:
-                                    logging.debug(f"Janitor: Preserving old {ext} file because PID {pid} is still alive: {filename}")
-
+                            if os.path.getmtime(file_path) < three_days_ago:
+                                logging.info(f"Janitor: Removing old temporary file (no PID match/older than 72h): {filename}")
+                                os.remove(file_path)
                         except FileNotFoundError:
                             pass
-                        except (ValueError, OSError) as e:
-                            logging.warning(f"Janitor: Error removing stale file {filename}: {e}")
-                        break
-                
-                # Fallback: delete known temp extensions older than 72 hours if they didn't match a PID pattern
-                if not matched and any(filename.lower().endswith(e) for e in ['.m3u', '.json', '.txt', '.flag']):
-                    try:
-                        if os.path.getmtime(file_path) < three_days_ago:
-                            logging.info(f"Janitor: Removing old temporary file (no PID match/older than 72h): {filename}")
-                            os.remove(file_path)
-                    except FileNotFoundError:
-                        pass
-                    except OSError as e:
-                        logging.warning(f"Janitor: Error removing old file {filename}: {e}")
+                        except OSError as e:
+                            logging.warning(f"Janitor: Error removing old file {filename}: {e}")
 
     def cleanup_stale_ipc(self):
         """

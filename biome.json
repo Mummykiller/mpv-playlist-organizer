@@ -1,0 +1,38 @@
+{
+	"$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+	"files": {
+		"ignore": [
+			"utils/SystemLogger.js",
+			"utils/anilist_renderer.js",
+			"utils/commUtils.js",
+			"utils/security.js",
+			"utils/nativeConnection.js",
+			"utils/MpvInterface.js",
+			"utils/domUtils.js",
+			"utils/protocol_contract.json",
+			"node_modules/**"
+		]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"indentWidth": 2
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"semicolons": "always"
+		},
+		"globals": ["chrome", "MPV_INTERNAL", "MPV_SECURITY"]
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"correctness": {
+				"noUnusedVariables": "warn",
+				"noUnusedImports": "error"
+			}
+		}
+	}
+}

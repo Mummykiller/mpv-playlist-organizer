@@ -1,0 +1,9 @@
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+# E402 is ignored intentionally because entry points (cli.py, native_host.py, installer.py)
+# set sys.dont_write_bytecode = True and PYTHONDONTWRITEBYTECODE before importing modules.
+ignore = ["E402", "E501"]

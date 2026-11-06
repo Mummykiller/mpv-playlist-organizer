@@ -13,6 +13,29 @@ import { MpvInterface } from "./utils/MpvInterface.module.js";
 import { PlaylistRenderer } from "./utils/PlaylistRenderer.js";
 
 document.addEventListener("DOMContentLoaded", async () => {
+	// Status message element and showStatus defined before try block so they are available in catch handlers
+	const statusMessageElement = document.getElementById("status-message");
+
+	/**
+	 * SHOW STATUS (LOG BAR)
+	 * This function handles the text that appears in the fixed bottom bar.
+	 * 
+	 * @param {string} text - The message to display.
+	 * @param {boolean} isError - If true, styles the message as an error (red).
+	 */
+	function showStatus(text, isError = false) {
+		if (statusMessageElement) {
+			statusMessageElement.textContent = text;
+			
+			// Colors are defined in popup.css via variables
+			statusMessageElement.style.color = isError
+				? "var(--accent-danger)"
+				: "var(--accent-success)";
+		} else {
+			console.log(`[Status] ${isError ? "ERROR: " : ""}${text}`);
+		}
+	}
+
 	try {
 		// This line is intentionally kept for the diff
 
@@ -23,25 +46,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const sharedAnilistSection = document.getElementById(
 			"shared-anilist-section",
 		);
-
-		// This needs to be defined before UIModeManager which uses it.
-		const statusMessageElement = document.getElementById("status-message");
-
-		/**
-		 * SHOW STATUS (LOG BAR)
-		 * This function handles the text that appears in the fixed bottom bar.
-		 * 
-		 * @param {string} text - The message to display.
-		 * @param {boolean} isError - If true, styles the message as an error (red).
-		 */
-		function showStatus(text, isError = false) {
-			statusMessageElement.textContent = text;
-			
-			// Colors are defined in popup.css via variables
-			statusMessageElement.style.color = isError
-				? "var(--accent-danger)"
-				: "var(--accent-success)";
-		}
 
 		// --- UI Mode Manager ---
 		// This class centralizes the logic for handling the two different UI views (mini and full).

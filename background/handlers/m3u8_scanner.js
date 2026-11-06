@@ -321,14 +321,25 @@ export async function findM3u8InUrl(url, originalTab) {
 
 		scannerTab = await _createScannerWindow(url);
 
-		await new Promise((resolve) => {
-			const listener = (tabId, changeInfo) => {
+		await new Promise((resolve, reject) => {
+			const cleanup = () => {
+				chrome.tabs.onUpdated.removeListener(onUpdated);
+				chrome.tabs.onRemoved.removeListener(onRemoved);
+			};
+			const onUpdated = (tabId, changeInfo) => {
 				if (tabId === scannerTab.id && changeInfo.status === "complete") {
-					chrome.tabs.onUpdated.removeListener(listener);
+					cleanup();
 					resolve();
 				}
 			};
-			chrome.tabs.onUpdated.addListener(listener);
+			const onRemoved = (tabId) => {
+				if (tabId === scannerTab.id) {
+					cleanup();
+					reject(new Error("Scanner window was closed before loading completed."));
+				}
+			};
+			chrome.tabs.onUpdated.addListener(onUpdated);
+			chrome.tabs.onRemoved.addListener(onRemoved);
 		});
 
 		const streamPromise = _waitForM3u8Detection(

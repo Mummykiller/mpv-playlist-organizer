@@ -2,7 +2,7 @@ import {
 	addNativeListener,
 } from "../../utils/nativeConnection.module.js";
 import { nativeLink, buildPlaybackSettingsPayload } from "../../utils/nativeLink.js";
-import { normalizeYouTubeUrl, getActiveTab } from "../../utils/commUtils.module.js";
+import { normalizeYouTubeUrl, getActiveTab, promptUserConfirmation } from "../../utils/commUtils.module.js";
 import { debouncedSyncToNativeHostFile } from "../core_services.js";
 import { broadcastLog, broadcastToTabs } from "../messaging.js";
 import { storage } from "../storage_instance.js";
@@ -626,50 +626,10 @@ async function checkAndConfirmFolderSwitch(targetFolderId) {
 					type: "info",
 				});
 
-				const confirmationPayload = {
-					action: "show_popup_confirmation",
-					message: `MPV is currently playing folder "${currentFolderId}". Switch to "${targetFolderId}"?`,
-				};
+				const message = `MPV is currently playing folder "${currentFolderId}". Switch to "${targetFolderId}"?`;
+				// If on a restricted page where no tab can be prompted, proceed with playback rather than hanging
+				const confirmed = await promptUserConfirmation(message, null, true);
 
-				// 1. Try sending to popup first
-				let response = await _sendMessageAsync(confirmationPayload);
-
-				// 2. Fallback to active tab if popup didn't respond
-				if (response === null) {
-					broadcastLog({
-						text: `[Background]: Popup not available for confirmation. Falling back to active tab.`,
-						type: "info",
-					});
-					const tabs = await new Promise((resolve) =>
-						chrome.tabs.query({ active: true, currentWindow: true }, resolve),
-					);
-					const activeTab = tabs && tabs.length > 0 ? tabs[0] : null;
-
-					if (activeTab?.id) {
-						// Change action name for content script
-						confirmationPayload.action = "show_confirmation";
-						response = await new Promise((resolve) => {
-							chrome.tabs.sendMessage(
-								activeTab.id,
-								confirmationPayload,
-								(res) => {
-									if (chrome.runtime.lastError) resolve(null);
-									else resolve(res);
-								},
-							);
-						});
-					} else {
-						// If we can't find an active tab to prompt, but we are on a restricted page,
-						// it's better to proceed than to be stuck.
-						broadcastLog({
-							text: `[Background]: Could not prompt for folder switch (restricted page). Proceeding with playback.`,
-							type: "warning",
-						});
-						return true;
-					}
-				}
-
-				const confirmed = !!response?.confirmed;
 				if (!confirmed) {
 					broadcastLog({
 						text: `[Background]: Folder switch to "${targetFolderId}" cancelled by user or prompt failed.`,

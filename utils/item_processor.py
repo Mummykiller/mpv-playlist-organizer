@@ -1,6 +1,5 @@
 import uuid
 import logging
-from . import native_link
 
 class ItemProcessor:
     def __init__(self, services, send_message, file_io, metadata_cache=None, task_manager=None):

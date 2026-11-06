@@ -7,14 +7,8 @@ import uuid
 import platform
 import subprocess
 import signal
-from urllib.parse import urlparse
-from urllib.request import urlopen, Request
 from utils import ipc_utils
-from utils.m3u_parser import parse_m3u
-from services import apply_bypass_script
-from utils.url_analyzer import is_safe_url
 import services
-import file_io
 from .item_processor import ItemProcessor
 
 class EnrichmentService(ItemProcessor):

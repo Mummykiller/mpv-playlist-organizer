@@ -1,6 +1,6 @@
 // background/handlers/import_export.js
 
-import { sanitizeString } from "../../utils/commUtils.module.js";
+import { sanitizeString, promptUserConfirmation } from "../../utils/commUtils.module.js";
 import { nativeLink } from "../../utils/nativeLink.js";
 import { createHandler } from "../handler_factory.js";
 import { processPlaylist } from "../../utils/item_processor.js";
@@ -42,23 +42,9 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 
 	// --- Settings Restoration Check ---
 	if (importedData && importedData.type === "mpv_playlist_organizer_settings") {
-		const confirmResponse = await new Promise((resolve) => {
-			chrome.runtime.sendMessage(
-				{
-					action: "show_popup_confirmation",
-					message: `The file '${filename}' appears to be a settings backup. Restore your preferences?`,
-				},
-				(res) => {
-					if (chrome.runtime.lastError) {
-						resolve(true); 
-					} else {
-						resolve(res && res.confirmed);
-					}
-				},
-			);
-		});
-
-		if (!confirmResponse) return { success: true, message: "Settings restore cancelled." };
+		const message = `The file '${filename}' appears to be a settings backup. Restore your preferences?`;
+		const confirmed = await promptUserConfirmation(message);
+		if (!confirmed) return { success: true, message: "Settings restore cancelled." };
 		return await _importSettingsLogic(importedData, data);
 	}
 

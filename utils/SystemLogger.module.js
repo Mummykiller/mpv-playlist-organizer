@@ -95,7 +95,6 @@ class SystemLogger {
 	_log(level, message, meta = {}) {
 		if (level < this.level) return;
 
-		const timestamp = new Date().toISOString();
 		const levelName = LEVEL_NAMES[level];
 		const contextId = meta.requestId || this.activeContext;
 		const prefix = contextId ? `[${contextId}] ` : "";
