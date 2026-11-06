@@ -7,6 +7,7 @@
 
 ## Modular Skills Index
 Before undertaking work in specific architectural domains, read the corresponding skill:
+- **Lead Architect & Orchestrator**: [.gemini/skills/lead-architect/SKILL.md](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/lead-architect/SKILL.md)
 - **JS Build & Verification**: [.gemini/skills/js-build-and-verification/SKILL.md](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/js-build-and-verification/SKILL.md)
 - **Native Bridge & Protocol**: [.gemini/skills/bridge-and-protocol/SKILL.md](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/bridge-and-protocol/SKILL.md)
 - **UI, Shadow DOM & Settings**: [.gemini/skills/ui-shadow-dom-and-settings/SKILL.md](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/ui-shadow-dom-and-settings/SKILL.md)
