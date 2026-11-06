@@ -61,7 +61,11 @@ export function isExtensionReloadError(errOrMsg) {
  */
 export async function getActiveTab() {
 	if (typeof chrome === "undefined" || !chrome.tabs?.query) return null;
-	const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+	const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch((err) => {
+		const logger = (typeof window !== "undefined" && window.MPV_INTERNAL?.logger) || (typeof globalThis !== "undefined" && globalThis.MPV_INTERNAL?.logger);
+		logger?.debug?.("[commUtils] chrome.tabs.query failed:", { data: err });
+		return [];
+	});
 	return tabs[0] || null;
 }
 
@@ -119,7 +123,10 @@ export function normalizeYouTubeUrl(ytUrl) {
 			});
 			return urlObj.toString();
 		}
-	} catch (e) {}
+	} catch (e) {
+		const logger = (typeof window !== "undefined" && window.MPV_INTERNAL?.logger) || (typeof globalThis !== "undefined" && globalThis.MPV_INTERNAL?.logger);
+		logger?.debug?.("[commUtils] Error normalizing YouTube URL:", { data: e });
+	}
 	return ytUrl;
 }
 
@@ -202,4 +209,88 @@ export async function promptUserConfirmation(message, preferredTabId = null, def
 	}
 
 	return defaultOnUnreachable;
+}
+
+/**
+ * Dispatches a status banner update to the open popup or the active tab.
+ * @param {string} message - Message text.
+ * @param {boolean|Object} [options] - Boolean isError or options object { isError, isSuccess, tabId }.
+ * @returns {Promise<boolean>} Whether at least one receiver acknowledged the notification.
+ */
+export async function notifyStatusBanner(message, options = {}) {
+	const isError = typeof options === "boolean" ? options : !!options.isError;
+	const isSuccess = typeof options === "object" ? !!options.isSuccess : !isError;
+	const targetTabId = typeof options === "object" ? options.tabId : null;
+	const payload = { action: "show_status_banner", message, isError, isSuccess };
+
+	let delivered = false;
+
+	// 1. Try sending to open popup
+	if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+		try {
+			const res = await new Promise((resolve) => {
+				chrome.runtime.sendMessage(payload, (resp) => {
+					if (chrome.runtime.lastError) resolve(null);
+					else resolve(resp);
+				});
+			});
+			if (res?.success) delivered = true;
+		} catch (e) {
+			const logger = (typeof window !== "undefined" && window.MPV_INTERNAL?.logger) || (typeof globalThis !== "undefined" && globalThis.MPV_INTERNAL?.logger);
+			logger?.debug?.("[commUtils] notifyStatusBanner runtime send failed:", { data: e });
+		}
+	}
+
+	// 2. Try sending to tab
+	let tabId = targetTabId;
+	if (!tabId) {
+		const activeTab = await getActiveTab();
+		tabId = activeTab?.id || null;
+	}
+
+	if (tabId && typeof chrome !== "undefined" && chrome.tabs?.sendMessage) {
+		try {
+			const res = await new Promise((resolve) => {
+				chrome.tabs.sendMessage(tabId, payload, (resp) => {
+					if (chrome.runtime.lastError) resolve(null);
+					else resolve(resp);
+				});
+			});
+			if (res?.success) delivered = true;
+		} catch (e) {
+			const logger = (typeof window !== "undefined" && window.MPV_INTERNAL?.logger) || (typeof globalThis !== "undefined" && globalThis.MPV_INTERNAL?.logger);
+			logger?.debug?.("[commUtils] notifyStatusBanner tab send failed:", { data: e });
+		}
+	}
+
+	return delivered;
+}
+
+/**
+ * Reports a browser error to the background script and SystemLogger.
+ * @param {string} context - Source context (e.g., 'Popup', 'ContentScript', 'MpvController').
+ * @param {Error|string} errorOrMessage - Error object or error message string.
+ * @param {Object} [extra] - Additional metadata or options.
+ */
+export async function reportBrowserError(context, errorOrMessage, extra = {}) {
+	const message = errorOrMessage instanceof Error ? errorOrMessage.message : String(errorOrMessage);
+	const stack = (errorOrMessage instanceof Error ? errorOrMessage.stack : extra.stack) || "";
+
+	const logger = (typeof window !== "undefined" && window.MPV_INTERNAL?.logger) || (typeof globalThis !== "undefined" && globalThis.MPV_INTERNAL?.logger);
+	if (logger?.error) {
+		logger.error(`[${context}] ${message}`, { persist: true, stack, data: extra.data });
+	}
+
+	if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+		try {
+			await sendMessageAsync({
+				action: "log_browser_error",
+				context,
+				message,
+				stack,
+			});
+		} catch (e) {
+			logger?.debug?.(`[${context}] Failed to send error to background logger: ${e.message}`);
+		}
+	}
 }

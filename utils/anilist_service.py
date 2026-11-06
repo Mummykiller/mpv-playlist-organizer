@@ -83,8 +83,8 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
         if os.path.exists(cache_file):
             try:
                 os.remove(cache_file)
-            except Exception:
-                pass
+            except OSError as e:
+                logging.debug(f"[AniList] Failed to remove cache file {cache_file}: {e}")
         full_cache = {}
         today_ts = 0
 
@@ -145,6 +145,6 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
     if res['success'] and isinstance(res['output'], str):
         try:
             res['output'] = json.loads(res['output'])
-        except Exception:
-            pass
+        except (json.JSONDecodeError, ValueError) as e:
+            logging.debug(f"[AniList] Output is not valid JSON: {e}")
     return res

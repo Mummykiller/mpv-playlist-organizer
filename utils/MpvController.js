@@ -470,12 +470,23 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const handler = this.actionMap[action];
 
 			if (handler) {
-				const result = handler(request, sendResponse);
-				// If the handler returns a Promise (indicating async work), return true to keep the channel open.
-				if (result instanceof Promise) {
-					return true;
+				try {
+					const result = handler(request, sendResponse);
+					// If the handler returns a Promise (indicating async work), return true to keep the channel open.
+					if (result instanceof Promise) {
+						result.catch((err) => {
+							MPV.logger?.error(`[Controller] Async error in action '${action}': ${err.message}`, { persist: true, stack: err.stack });
+							this.updateStatusBanner?.(`Error in ${action}`, false);
+							if (sendResponse) sendResponse({ success: false, error: err.message });
+						});
+						return true;
+					}
+					return result; // For sync handlers, return their result (though usually void)
+				} catch (err) {
+					MPV.logger?.error(`[Controller] Sync error in action '${action}': ${err.message}`, { persist: true, stack: err.stack });
+					this.updateStatusBanner?.(`Error in ${action}`, false);
+					if (sendResponse) sendResponse({ success: false, error: err.message });
 				}
-				return result; // For sync handlers, return their result (though usually void)
 			}
 		}
 
@@ -792,6 +803,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this._syncUiToState(this.state.state);
 			} catch (e) {
 				console.error("[UI][Controller] Error applying initial state:", e);
+				MPV.logger?.error?.(`[Controller] Error applying initial state: ${e.message}`, { persist: true, stack: e.stack });
+				this.updateStatusBanner?.("Error applying initial state", false);
 			}
 		}
 
@@ -871,11 +884,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		async _handleYtdlpUpdateConfirm() {
-			const confirmed = await this.showPageLevelConfirmation(
-				"YouTube playback failed. This is often caused by an outdated yt-dlp. Would you like to attempt to automatically update it now?",
-			);
-			if (confirmed) {
-				chrome.runtime.sendMessage({ action: "user_confirmed_ytdlp_update" });
+			try {
+				const confirmed = await this.showPageLevelConfirmation(
+					"YouTube playback failed. This is often caused by an outdated yt-dlp. Would you like to attempt to automatically update it now?",
+				);
+				if (confirmed) {
+					chrome.runtime.sendMessage({ action: "user_confirmed_ytdlp_update" });
+				}
+			} catch (e) {
+				MPV.logger?.warn?.("[Controller] Ytdlp update confirm error:", { data: e });
 			}
 		}
 
@@ -1069,54 +1086,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		showStackedClearConfirmation(folderId, message, requestData) {
-			const existingHost = document.getElementById("mpv-page-level-modal-host");
-			
-			if (existingHost && existingHost.dataset.folderId === folderId) {
-				const shadow = existingHost.shadowRoot;
-				const messageEl = shadow.getElementById("message");
-				const contentEl = shadow.querySelector(".modal-content");
-				
-				if (messageEl) {
-					messageEl.textContent = message;
-					// Subtle visual feedback that the stack grew
-					if (contentEl) {
-						contentEl.style.transition = "transform 0.1s ease";
-						contentEl.style.transform = "scale(1.02)";
-						setTimeout(() => contentEl.style.transform = "scale(1)", 100);
-					}
-				}
-				
-				// Update the data on the host
-				existingHost.dataset.latestRequest = JSON.stringify(requestData);
-				return Promise.resolve(null);
+			if (MPV.domUtils?.confirmStacked) {
+				return MPV.domUtils.confirmStacked(folderId, message, requestData);
 			}
-
-			return new Promise((resolve) => {
-				let modalHostRef = null;
-
-				this.showPageLevelConfirmation(message).then((confirmed) => {
-					// Use the reference we captured during creation
-					let dataToReturn = requestData;
-					
-					if (modalHostRef && modalHostRef.dataset.latestRequest) {
-						try {
-							dataToReturn = JSON.parse(modalHostRef.dataset.latestRequest);
-						} catch (e) {
-							console.error("[Controller] Failed to parse latestRequest data:", e);
-						}
-					}
-					
-					// Return the latest data if confirmed, otherwise false
-					resolve(confirmed ? dataToReturn : false);
-				});
-				
-				// Capture and tag the host immediately after creation
-				modalHostRef = document.getElementById("mpv-page-level-modal-host");
-				if (modalHostRef) {
-					modalHostRef.dataset.folderId = folderId;
-					modalHostRef.dataset.latestRequest = JSON.stringify(requestData);
-				}
-			});
+			return this.showPageLevelConfirmation(message);
 		}
 
 		showPageLevelConfirmation(message) {
@@ -1451,6 +1424,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					return response;
 				}).catch(err => {
 					console.error(`[Controller] MpvInterface error for '${action}':`, err);
+					MPV.logger?.error?.(`[Controller] MpvInterface error for '${action}': ${err?.message || err}`, { persist: true, stack: err?.stack });
+					this.updateStatusBanner?.(`Error in ${action}`, false);
 				});
 			}
 
@@ -1483,14 +1458,22 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const result = fn.apply(this, args);
 					if (result instanceof Promise) {
 						return result.catch((e) => {
-							if (this.isReloadError(e)) this.teardown();
-							else throw e;
+							if (this.isReloadError(e)) {
+								this.teardown();
+							} else {
+								MPV.logger?.warn?.(`[Controller] _safeWrap promise error: ${e.message}`, { data: e });
+								throw e;
+							}
 						});
 					}
 					return result;
 				} catch (e) {
-					if (this.isReloadError(e)) this.teardown();
-					else throw e;
+					if (this.isReloadError(e)) {
+						this.teardown();
+					} else {
+						MPV.logger?.warn?.(`[Controller] _safeWrap sync error: ${e.message}`, { data: e });
+						throw e;
+					}
 				}
 			};
 		}
@@ -1819,6 +1802,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		updateStatusBanner(text, isSuccess = false) {
+			if (MPV.domUtils?.updateStatusBanner && this.ui?.shadowRoot) {
+				return MPV.domUtils.updateStatusBanner(this.ui.shadowRoot, text, { isSuccess });
+			}
 			const statusBanner = this.ui.shadowRoot?.getElementById("status-banner");
 			const streamStatus = this.ui.shadowRoot?.getElementById("stream-status");
 			if (!statusBanner || !streamStatus) return;

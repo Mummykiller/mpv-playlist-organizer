@@ -55,8 +55,8 @@ class VolatileCookieManager:
         if platform.system() != "Windows":
             try:
                 os.chmod(cookie_dir, 0o700)
-            except OSError:
-                pass
+            except OSError as e:
+                logging.debug(f"Could not chmod volatile cookie directory {cookie_dir}: {e}")
         return cookie_dir
 
     @staticmethod
@@ -172,7 +172,16 @@ class VolatileCookieManager:
             return False
 
         # Create shadow copy profile directory in volatile storage so yt-dlp reads the unlocked copy
-        shadow_root = f"{target_path}_shadow_profile"
+        import tempfile
+        import atexit
+
+        volatile_dir = VolatileCookieManager.get_volatile_dir()
+        temp_dir_obj = tempfile.TemporaryDirectory(dir=volatile_dir, prefix="shadow_profile_")
+        shadow_root = temp_dir_obj.name
+
+        cleanup_shadow = lambda: shutil.rmtree(shadow_root, ignore_errors=True) if os.path.exists(shadow_root) else None
+        atexit.register(cleanup_shadow)
+
         try:
             parent_name = os.path.basename(os.path.dirname(db_rel_path))
             if parent_name.lower() == "network":
@@ -197,18 +206,33 @@ class VolatileCookieManager:
             if ignore_config:
                 cmd.insert(1, '--ignore-config')
             
-            subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=20)
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=20,
+                env=security.get_scrubbed_env()
+            )
             
             return os.path.exists(target_path) and os.path.getsize(target_path) > 0
         except Exception as e:
             logging.warning(f"Shadow Copy failed: {e}")
             return False
         finally:
+            try:
+                atexit.unregister(cleanup_shadow)
+            except Exception as e:
+                logging.debug(f"Failed to unregister shadow cleanup handler: {e}")
+            try:
+                temp_dir_obj.cleanup()
+            except Exception as e:
+                logging.debug(f"TemporaryDirectory cleanup error: {e}")
             if os.path.exists(shadow_root):
                 try:
                     shutil.rmtree(shadow_root, ignore_errors=True)
-                except Exception:
-                    pass
+                except OSError as e:
+                    logging.debug(f"Failed to remove shadow profile {shadow_root}: {e}")
 
 def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
     """
@@ -256,7 +280,7 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
             cookie_cmd.insert(1, '--ignore-config')
         
         logging.info(f"Extracting cookies to RAM ({temp_path}) for {browser}...")
-        subprocess.run(cookie_cmd, capture_output=True, text=True, check=False, timeout=30)
+        subprocess.run(cookie_cmd, capture_output=True, text=True, check=False, timeout=30, env=security.get_scrubbed_env())
         
         # --- Check for success or trigger Shadow Copy Fallback ---
         success = os.path.exists(temp_path) and os.path.getsize(temp_path) > 0
@@ -268,8 +292,8 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
         if success:
             try:
                 os.chmod(temp_path, 0o600) # Read/Write for owner only
-            except Exception:
-                pass
+            except OSError as e:
+                logging.debug(f"Failed to chmod temp cookies {temp_path}: {e}")
 
             _COOKIES_CACHE["path"] = temp_path
             _COOKIES_CACHE["browser"] = browser
@@ -416,7 +440,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
 
                 cmd.extend(['--', url])
 
-                result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30, env=security.get_scrubbed_env())
                 lines = result.stdout.strip().split('\n')
                 
                 entries = []
@@ -522,7 +546,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         cmd.extend(['--', url])
         
         logging.info(f"Resolving non-YouTube URL externally: {url} with format {ytdl_format}")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30, env=security.get_scrubbed_env())
         resolved_url = result.stdout.strip()
 
         if not resolved_url:
@@ -564,7 +588,8 @@ def normalize_url(url):
         
         new_query = urlencode(sorted(query.items()))
         return urlunparse((u.scheme, u.netloc, u.path, u.params, new_query, ""))
-    except Exception:
+    except Exception as e:
+        logging.debug(f"Failed to normalize URL {url}: {e}")
         return url
 
 if __name__ == "__main__":

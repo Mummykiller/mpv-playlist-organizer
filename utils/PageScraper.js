@@ -64,7 +64,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			try {
 				const hostname = window.location.hostname.replace(/^www\./, "");
 				if (cleanTitle.toLowerCase() === hostname.toLowerCase()) return true;
-			} catch (e) {}
+			} catch (e) {
+				console.debug("[PageScraper] Failed to check hostname for provisional title:", e);
+			}
 
 			// 4. Title is too short and looks like a site name (weak heuristic)
 			if (cleanTitle.length < 5 && !/\d/.test(cleanTitle)) return true;

@@ -67,8 +67,8 @@ class MpvCommandBuilder:
         if start_time is not None:
             try:
                 self.start_time = int(float(start_time))
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                logging.debug(f"[MPV_CMD] Invalid start_time '{start_time}': {e}")
         return self
 
     def with_ipc_path(self, ipc_path):
@@ -193,7 +193,8 @@ class MpvCommandBuilder:
                             parsed_custom.extend(shlex.split(f, posix=not is_windows))
                 elif isinstance(self.custom_flags, str): 
                     parsed_custom.extend(shlex.split(self.custom_flags, posix=not is_windows))
-            except Exception: pass
+            except (ValueError, TypeError) as e:
+                logging.debug(f"[MPV_CMD] Failed to parse custom flags: {e}")
 
         # Merge script-opts from custom flags into our internal list
         final_script_opts = list(self.script_opts)
@@ -272,8 +273,8 @@ class MpvCommandBuilder:
                 fps_val = float(fps)
                 if fps_val > 0:
                     args.append(f"--override-display-fps={fps_val}")
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                logging.debug(f"[MPV_CMD] Invalid override_display_fps '{fps}': {e}")
 
         if self.geometry:
             geom, w, h = self.geometry
@@ -398,7 +399,8 @@ class MpvCommandBuilder:
             p = os.path.join(file_io.DATA_DIR, "last_mpv_command.txt")
             with open(p, 'w', encoding='utf-8') as f:
                 f.write(f"Launch Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" + "="*60 + "\nQUOTED COMMAND:\n" + " ".join(_smart_quote(a) for a in full_command))
-        except Exception: pass
+        except OSError as e:
+            logging.debug(f"[MPV_CMD] Could not save last MPV command to file: {e}")
         return full_command, self.has_terminal_flag
 
 def construct_mpv_command(mpv_exe, ipc_path=None, url=None, is_youtube=False, ytdl_raw_options=None, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, headers=None, disable_http_persistent=False, start_paused=False, script_dir=None, load_on_completion_script=False, title=None, use_ytdl_mpv=False, is_youtube_override=False, idle=False, force_terminal=False, input_terminal=None, settings=None, flag_dir=None, playlist_start_index=None, cookies_browser=None, force_bypass=False, cookies_file=None, start_time=None):

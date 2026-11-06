@@ -139,7 +139,9 @@ export class PlaybackManager {
 					session.isPlaying = true;
 				}
 			}
-		} catch (e) {}
+		} catch (e) {
+			console.debug("[PlaybackManager] Failed to init from cache:", e);
+		}
 	}
 
 	getSession(folderId) {

@@ -1,0 +1,351 @@
+import os
+import unittest
+import json
+import sys
+import tempfile
+import shutil
+from unittest.mock import patch
+
+# Add project root to path
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from testing_tools.base_test import BaseTestCase
+from utils import security, url_analyzer
+import file_io
+import mpv_session
+
+class TestSecurityClaims(BaseTestCase):
+    """
+    Comprehensive security regression suite for MPV Playlist Organizer.
+    Verifies security claims using safe, isolated environment checks.
+    """
+
+    def test_ssrf_protection(self):
+        """Claim 2.2: Blocks private, loopback, link-local, and IPv6 SSRF targets."""
+        # IPv4 Loopback
+        self.assertFalse(security.is_safe_url("http://127.0.0.1/admin"))
+        self.assertFalse(security.is_safe_url("http://127.0.0.2:8000/api"))
+        self.assertFalse(security.is_safe_url("http://127.127.127.127/status"))
+        self.assertFalse(security.is_safe_url("http://localhost:8080"))
+        
+        # Private Class A/B/C
+        self.assertFalse(security.is_safe_url("http://192.168.1.1/config"))
+        self.assertFalse(security.is_safe_url("http://10.0.0.5/meta-data"))
+        self.assertFalse(security.is_safe_url("https://172.16.0.100/internal"))
+        self.assertFalse(security.is_safe_url("http://172.31.255.255/secrets"))
+        
+        # Link-local / Cloud metadata endpoint
+        self.assertFalse(security.is_safe_url("http://169.254.169.254/latest/meta-data"))
+        
+        # IPv6 Loopback, Link-Local, and Unique-Local
+        self.assertFalse(security.is_safe_url("http://[::1]/debug"))
+        self.assertFalse(security.is_safe_url("http://[::]/admin"))
+        self.assertFalse(security.is_safe_url("http://[fe80::1]/private"))
+        self.assertFalse(security.is_safe_url("http://[fc00::1]/internal"))
+        self.assertFalse(security.is_safe_url("http://[fd12:3456:789a::1]/data"))
+
+        # Public / Safe URLs
+        self.assertTrue(security.is_safe_url("https://www.google.com"))
+        self.assertTrue(security.is_safe_url("https://youtube.com/watch?v=dQw4w9WgXcQ"))
+        self.assertTrue(security.is_safe_url("http://93.184.216.34/index.html")) # example.com IP
+
+    def test_protocol_bypasses(self):
+        """Verifies strict protocol allowlisting and rejection of unsafe/malformed schemes."""
+        # Allowed protocols
+        self.assertTrue(security.is_safe_url("https://example.com/stream.m3u8"))
+        self.assertTrue(security.is_safe_url("http://example.com/video.mp4"))
+        self.assertTrue(security.is_safe_url("udp://239.255.0.1:1234"))
+        self.assertTrue(security.is_safe_url("rtmp://example.com/live/stream"))
+        self.assertTrue(security.is_safe_url("rtsp://example.com/media.mp4"))
+        self.assertTrue(security.is_safe_url("mms://example.com/broadcast"))
+
+        # Case-insensitivity for allowed schemes
+        self.assertTrue(security.is_safe_url("HTTPS://example.com/video.mp4"))
+        self.assertTrue(security.is_safe_url("Http://example.com/stream"))
+        self.assertTrue(security.is_safe_url("FILE:///tmp/test.mp4"))
+
+        # Disallowed / dangerous protocols
+        dangerous_protocols = [
+            "javascript:alert(1)",
+            "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+            "ftp://example.com/pub/file.mp4",
+            "gopher://evil.com/1",
+            "ssh://root@example.com",
+            "ws://evil.com/socket",
+            "wss://evil.com/socket",
+            "dict://dict.org",
+            "ldap://example.com/o=test",
+            "chrome-extension://invalid/path",
+            "moz-extension://invalid/path",
+            "vbscript:msgbox(1)",
+        ]
+        for url in dangerous_protocols:
+            self.assertFalse(security.is_safe_url(url), f"Should reject dangerous protocol: {url}")
+
+        # Malformed scheme representations (missing slashes or obfuscation)
+        self.assertFalse(security.is_safe_url("http:example.com"))
+        self.assertFalse(security.is_safe_url("file:video.mp4"))
+        self.assertFalse(security.is_safe_url("javascript://example.com"))
+        self.assertFalse(security.is_safe_url("jav\tascript:alert(1)"))
+
+        # Invalid types and edge cases
+        self.assertFalse(security.is_safe_url(None))
+        self.assertFalse(security.is_safe_url(""))
+        self.assertFalse(security.is_safe_url("   "))
+        self.assertFalse(security.is_safe_url(12345))
+        self.assertFalse(security.is_safe_url(["https://example.com"]))
+        self.assertFalse(security.is_safe_url({"url": "https://example.com"}))
+
+        # Length limit enforcement (MAX_URL_LENGTH = 4096)
+        max_len = security.SECURITY_LIMITS['MAX_URL_LENGTH']
+        oversized_url = "https://example.com/" + ("a" * max_len)
+        self.assertFalse(security.is_safe_url(oversized_url), "Should reject URLs exceeding MAX_URL_LENGTH")
+
+    def test_file_scheme_handling(self):
+        """Verifies file:// scheme behavior: allows local paths, blocks SSRF hostnames."""
+        # Standard local file path (parsed.hostname is None or empty)
+        self.assertTrue(security.is_safe_url("file:///home/user/Videos/movie.mkv"))
+        self.assertTrue(security.is_safe_url("file:///C:/Users/User/Videos/movie.mkv"))
+
+        # file:// URLs specifying hostnames targeting internal SSRF
+        self.assertFalse(security.is_safe_url("file://localhost/etc/passwd"))
+        self.assertFalse(security.is_safe_url("file://127.0.0.1/etc/shadow"))
+        self.assertFalse(security.is_safe_url("file://169.254.169.254/latest/meta-data"))
+
+    def test_string_sanitation_restricted_chars(self):
+        """Claim 3.1: Strips restricted characters ($, `, ", etc.) from OSD/Metadata."""
+        malicious = 'Test $(echo safe) `cat /dev/null` "quoted" \n \r \t'
+        sanitized = security.sanitize_string(malicious, is_filename=False)
+        
+        self.assertNotIn('$', sanitized)
+        self.assertNotIn('`', sanitized)
+        self.assertNotIn('"', sanitized)
+        self.assertNotIn('\n', sanitized)
+        self.assertNotIn('\r', sanitized)
+        self.assertNotIn('\t', sanitized)
+        
+        self.assertIn('Test', sanitized)
+        self.assertIn('echo safe', sanitized)
+        self.assertIn('cat /dev/null', sanitized)
+
+        # URL fragments and parameters (#, &) should be preserved in OSD/title mode
+        url_with_fragment = "https://example.com/watch?v=123&t=45#details"
+        sanitized_url = security.sanitize_string(url_with_fragment, is_filename=False)
+        self.assertIn('&', sanitized_url)
+        self.assertIn('#', sanitized_url)
+
+        # Title length truncation enforcement (MAX_TITLE_LENGTH = 512)
+        max_title = security.SECURITY_LIMITS['MAX_TITLE_LENGTH']
+        long_title = "A" * (max_title + 100)
+        sanitized_long = security.sanitize_string(long_title, is_filename=False)
+        self.assertEqual(len(sanitized_long), max_title)
+
+        # Non-string passthrough
+        self.assertIsNone(security.sanitize_string(None))
+        self.assertEqual(security.sanitize_string(42), 42)
+
+    def test_filename_sanitation_edge_cases(self):
+        """Verifies strict filesystem sanitization for folder names and exports."""
+        # Directory traversal and filesystem restricted characters
+        dangerous_filename = '../../etc/passwd:stream*name?"quoted"<tag>|pipe$var;cmd&bg`sub`\n\r\t'
+        sanitized = security.sanitize_string(dangerous_filename, is_filename=True)
+
+        for restricted_char in ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '$', ';', '&', '`', '\n', '\r', '\t']:
+            self.assertNotIn(restricted_char, sanitized, f"Character '{restricted_char}' must be stripped from filename")
+
+        self.assertIn('passwdstreamnamequotedtagpipevarcmdbgsub', sanitized)
+
+        # Folder name length truncation (MAX_FOLDER_NAME_LENGTH = 128)
+        max_folder = security.SECURITY_LIMITS['MAX_FOLDER_NAME_LENGTH']
+        long_folder = "Folder_" + ("X" * (max_folder + 50))
+        sanitized_folder = security.sanitize_string(long_folder, is_filename=True)
+        self.assertEqual(len(sanitized_folder), max_folder)
+
+    def test_ytdlp_options_allowlist_and_sanitization(self):
+        """Verifies allowlist enforcement and injection stripping for yt-dlp options."""
+        # Safe options should be preserved
+        valid_opts = "format=bestvideo+bestaudio,limit-rate=1M,user-agent=MyCustomUA,concurrent-fragments=4"
+        sanitized = security.sanitize_ytdlp_options(valid_opts)
+        self.assertIn("format=bestvideo+bestaudio", sanitized)
+        self.assertIn("limit-rate=1M", sanitized)
+        self.assertIn("user-agent=MyCustomUA", sanitized)
+        self.assertIn("concurrent-fragments=4", sanitized)
+
+        # Dangerous flags outside the allowlist must be stripped
+        dangerous_opts = "format=best,exec=rm -rf /,external-downloader=curl,output=/etc/shadow,write-info-json=/tmp/exploit"
+        sanitized_danger = security.sanitize_ytdlp_options(dangerous_opts)
+        self.assertEqual(sanitized_danger, "format=best")
+        self.assertNotIn("exec", sanitized_danger)
+        self.assertNotIn("external-downloader", sanitized_danger)
+        self.assertNotIn("output", sanitized_danger)
+
+        # Injection attempts inside allowed flag values must be neutralized
+        injected_opts = 'user-agent=Mozilla; rm -rf / | evil & `calc`,limit-rate=500K\n\r"quoted"'
+        sanitized_injected = security.sanitize_ytdlp_options(injected_opts)
+        self.assertNotIn(';', sanitized_injected)
+        self.assertNotIn('|', sanitized_injected)
+        self.assertNotIn('&', sanitized_injected)
+        self.assertNotIn('`', sanitized_injected)
+        self.assertNotIn('\n', sanitized_injected)
+        self.assertNotIn('\r', sanitized_injected)
+        self.assertNotIn('"', sanitized_injected)
+
+        # Invalid formats and non-string inputs
+        self.assertEqual(security.sanitize_ytdlp_options(""), "")
+        self.assertEqual(security.sanitize_ytdlp_options(None), "")
+        self.assertEqual(security.sanitize_ytdlp_options("no-equals-sign,just-flags"), "")
+
+    def test_m3u_injection_hardening(self):
+        """Claim 3.2: Item titles in M3U files are sanitized against shell metacharacters."""
+        malicious_items = [
+            {
+                "id": "item-1",
+                "url": "https://example.com/video1",
+                "title": 'Title $(date) `true` "quoted"'
+            }
+        ]
+        
+        dependencies = {
+            'get_all_folders_from_file': lambda: {},
+            'get_mpv_executable': lambda: "mpv",
+            'log_stream': lambda: None,
+            'send_message': self.mock_send,
+            'SCRIPT_DIR': PROJECT_ROOT,
+            'TEMP_PLAYLISTS_DIR': os.path.join(self.test_dir, "temp_playlists"),
+            'metadata_cache': None,
+            'task_manager': None
+        }
+        
+        session = mpv_session.MpvSessionManager(os.path.join(self.test_dir, "session.json"), dependencies)
+        m3u_content = session._generate_m3u_content(malicious_items)
+        
+        self.assertIn("#EXTM3U", m3u_content)
+        self.assertNotIn('$', m3u_content)
+        self.assertNotIn('`', m3u_content)
+        self.assertNotIn('"', m3u_content)
+        self.assertIn("Title (date) true quoted", m3u_content)
+
+    def test_path_validation_sandbox(self):
+        """Claim 4.1: Restricts file operations to sandboxed directories."""
+        data_dir = os.path.join(self.test_dir, "data")
+        script_dir = os.path.join(self.test_dir, "app")
+        temp_dir = os.path.join(self.test_dir, "temp")
+        
+        os.makedirs(data_dir, exist_ok=True)
+        os.makedirs(script_dir, exist_ok=True)
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        # Valid files within sandbox
+        safe_file = os.path.join(data_dir, "config.json")
+        self.assertIsNotNone(security.validate_safe_path(safe_file, data_dir, script_dir, temp_dir))
+        
+        # Subdirectories within sandbox
+        sub_file = os.path.join(temp_dir, "playlists", "session_1.m3u")
+        self.assertIsNotNone(security.validate_safe_path(sub_file, data_dir, script_dir, temp_dir))
+
+        # Dangerous paths (Directory Traversal)
+        self.assertIsNone(security.validate_safe_path(os.path.join(data_dir, "../../secret.txt"), data_dir, script_dir, temp_dir))
+        self.assertIsNone(security.validate_safe_path("/etc/passwd", data_dir, script_dir, temp_dir))
+
+        # allow_user_content toggle
+        user_file = os.path.join(self.test_dir, "user_media", "clip.mp4")
+        self.assertIsNone(security.validate_safe_path(user_file, data_dir, script_dir, temp_dir, allow_user_content=False))
+        self.assertIsNotNone(security.validate_safe_path(user_file, data_dir, script_dir, temp_dir, allow_user_content=True))
+
+        # Null and empty inputs
+        self.assertIsNone(security.validate_safe_path(None, data_dir, script_dir, temp_dir))
+        self.assertIsNone(security.validate_safe_path("", data_dir, script_dir, temp_dir))
+
+    def test_ipc_payload_validation(self):
+        """Verifies structure and size validation of incoming IPC payloads."""
+        # Non-dict payload
+        valid, err = security.validate_payload(["not", "a", "dict"])
+        self.assertFalse(valid)
+        self.assertIn("Invalid payload type", err)
+
+        # Missing action
+        valid, err = security.validate_payload({"folder_id": "test"})
+        self.assertFalse(valid)
+        self.assertIn("Missing action", err)
+
+        # Valid payload
+        valid, err = security.validate_payload({"action": "ping", "request_id": "123"})
+        self.assertTrue(valid)
+        self.assertIsNone(err)
+
+        # String length exceeding limit (MAX_STRING_LENGTH = 100KB)
+        oversized_str = "x" * (security.SECURITY_LIMITS['MAX_STRING_LENGTH'] + 10)
+        valid, err = security.validate_payload({"action": "log_event", "message": oversized_str})
+        self.assertFalse(valid)
+        self.assertIn("exceeds security limits", err)
+
+        # Item count exceeding limit (MAX_PLAYLIST_ITEMS = 10000)
+        oversized_list = [{"id": f"item_{i}"} for i in range(security.SECURITY_LIMITS['MAX_PLAYLIST_ITEMS'] + 5)]
+        valid, err = security.validate_payload({"action": "play_batch", "playlist": oversized_list})
+        self.assertFalse(valid)
+        self.assertIn("exceeds security limits", err)
+
+    def test_atomic_write_integrity(self):
+        """Claim 4.2: Atomic writes use temp files and provide .bak fallback."""
+        test_file = os.path.join(self.test_dir, "atomic_test.json")
+        v1 = {"v": 1}
+        v2 = {"v": 2}
+        v3 = {"v": 3}
+        
+        file_io._atomic_json_dump(v1, test_file)
+        file_io._atomic_json_dump(v2, test_file)
+        self.assertTrue(os.path.exists(test_file + ".bak"))
+        
+        file_io._atomic_json_dump(v3, test_file)
+        bak_data = file_io._safe_json_load(test_file + ".bak")
+        self.assertEqual(bak_data["v"], 2)
+        
+        # Simulate Corruption of Primary (V3)
+        with open(test_file, 'w') as f:
+            f.write("{ corrupt json")
+            
+        # Recovery should load Backup (V2)
+        recovered = file_io._safe_json_load(test_file)
+        self.assertEqual(recovered["v"], 2)
+
+    def test_log_path_masking(self):
+        """Claim 6.1: Masks sensitive system paths in logs with priority ordering."""
+        home_dir = "/home/safe_user"
+        data_dir = "/home/safe_user/.config/mpv_app"
+        script_dir = "/home/safe_user/repo/mpv-playlist-organizer"
+        
+        sensitive_text = f"Opening {data_dir}/config.json via {script_dir}/native_host.py for user at {home_dir}/Videos"
+        masked = security.mask_path(sensitive_text, data_dir, script_dir, home_dir)
+        
+        self.assertNotIn(data_dir, masked)
+        self.assertNotIn(script_dir, masked)
+        self.assertNotIn(home_dir, masked)
+        
+        self.assertIn("<DATA_DIR>/config.json", masked)
+        self.assertIn("<APP_DIR>/native_host.py", masked)
+        self.assertIn("<HOME>/Videos", masked)
+
+        # Empty / non-string handling
+        self.assertIsNone(security.mask_path(None, data_dir, script_dir))
+        self.assertEqual(security.mask_path(123, data_dir, script_dir), 123)
+
+    def test_url_normalization_tracking_strip(self):
+        """Verifies tracking parameter and fragment stripping for reliable playlist item matching."""
+        raw_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s&index=3&si=tracking123&feature=share#t=42"
+        normalized = url_analyzer.normalize_url(raw_url)
+        
+        self.assertIn("v=dQw4w9WgXcQ", normalized)
+        self.assertNotIn("t=42s", normalized)
+        self.assertNotIn("index=3", normalized)
+        self.assertNotIn("si=tracking123", normalized)
+        self.assertNotIn("feature=share", normalized)
+        self.assertNotIn("#t=42", normalized)
+
+        # Non-string / empty passthrough
+        self.assertIsNone(url_analyzer.normalize_url(None))
+        self.assertEqual(url_analyzer.normalize_url(""), "")
+
+if __name__ == '__main__':
+    unittest.main()

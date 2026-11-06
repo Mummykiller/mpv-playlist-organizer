@@ -218,7 +218,9 @@ export async function handleAdd(request, sender) {
 	if (!tab && tabId) {
 		try {
 			tab = await chrome.tabs.get(tabId);
-		} catch (e) {}
+		} catch (e) {
+			console.debug("[PlaylistManager] Failed to get tab for tabId:", tabId, e);
+		}
 	}
 	if (!tab) {
 		const [activeTab] = await chrome.tabs.query({

@@ -505,7 +505,9 @@ export class OptionsManager {
 			} else {
 				newDomain = newDomain.split("/")[0];
 			}
-		} catch (e) {}
+		} catch (e) {
+			console.debug("[Settings] Invalid domain format:", e);
+		}
 
 		if (!/^[a-z0-9]+([-.]{1}[a-z0-9]+)*\.[a-z]{2,13}$/.test(newDomain)) {
 			this.showStatus('Invalid format. Use "domain.com"', true);
@@ -1332,7 +1334,9 @@ export class OptionsManager {
 		this.currentMode = mode === "advanced" ? "advanced" : "simple";
 		try {
 			localStorage.setItem("mpv_settings_view_mode", this.currentMode);
-		} catch (e) {}
+		} catch (e) {
+			console.debug("[Settings] Failed to save settings view mode:", e);
+		}
 
 		const container = document.getElementById("shared-settings-container");
 		if (container) {
@@ -1423,7 +1427,9 @@ export class OptionsManager {
 				"mpv_favorite_settings",
 				JSON.stringify([...this.favoriteSettings]),
 			);
-		} catch (e) {}
+		} catch (e) {
+			console.debug("[Settings] Failed to save favorite settings:", e);
+		}
 
 		this._updateFavoriteUI();
 
@@ -1462,7 +1468,9 @@ export class OptionsManager {
 		this.currentCategory = cat;
 		try {
 			localStorage.setItem("mpv_settings_category", this.currentCategory);
-		} catch (e) {}
+		} catch (e) {
+			console.debug("[Settings] Failed to save settings category:", e);
+		}
 
 		const catTabs = document.querySelectorAll(".cat-tab-btn");
 		catTabs.forEach((tab) => {

@@ -160,7 +160,9 @@ async function _importSettingsLogic(importedData, localData) {
 		if (Object.keys(syncPrefs).length > 0) {
 			await nativeLink.setUiPreferences(syncPrefs);
 		}
-	} catch (err) {}
+	} catch (err) {
+		console.debug("[ImportExport] Failed to sync UI prefs to native host:", err);
+	}
 
 	return { 
 		success: true, 

@@ -105,7 +105,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 									item.title = cached.title || item.title;
 									// Optionally pull headers/covers if we add them to UI later
 								}
-							} catch(e) {}
+							} catch(e) {
+								console.debug("[PlaylistUI] Failed to parse URL for cache lookup:", e);
+							}
 						}
 
 						const itemDiv = document.createElement("div");
