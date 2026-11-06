@@ -209,6 +209,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const playlistContainer = document.getElementById(
 			"playlist-container",
 		);
+		let playlistRenderer = null;
+		let playbackUnsubscribe = null;
 
 		// Export/Import Elements
 		const exportDataBtn = document.getElementById("btn-export-data");
@@ -262,47 +264,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 			needsAppend: false,
 			currentPlaylist: [],
 		};
-
-		// Unified Playback State Subscription
-		const MPV = window.MPV_INTERNAL;
-		const playbackUnsubscribe = MPV.playbackStateManager.subscribe((pbState) => {
-			const currentFolderId = miniFolderSelect?.value;
-			const isCurrentFolder = pbState.folderId && currentFolderId && pbState.folderId.toLowerCase() === currentFolderId.toLowerCase();
-
-			if (isCurrentFolder) {
-				// Update local persistent state
-				popupState.isFolderActive = pbState.status !== "stopped";
-				popupState.lastPlayedId = pbState.lastPlayedId;
-				popupState.isPaused = pbState.status === "paused";
-				popupState.needsAppend = pbState.needsAppend;
-
-				setPlaybackLoading(pbState.status === "loading");
-				setPlaybackClosing(pbState.isClosing);
-				
-				// Ensure the play button and list highlights are correct
-				renderPlaylist(
-					null, // Use cached playlist
-					pbState.lastPlayedId,
-					pbState.status !== "stopped",
-					pbState.status === "paused",
-					pbState.needsAppend
-				);
-			} else {
-				// Inactive folder view: reset local playback visual state
-				popupState.isFolderActive = false;
-				popupState.isPaused = false;
-				popupState.needsAppend = false;
-				setPlaybackLoading(false);
-				setPlaybackClosing(false);
-				renderPlaylist(
-					null,
-					popupState.lastPlayedId,
-					false,
-					false,
-					false
-				);
-			}
-		});
 
 		// Selection Mode State
 		let isSelectionModeActive = false;
@@ -670,6 +631,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			if (isPlaybackClosing) return;
 
 			// 1. Let the shared renderer handle the list
+			if (!playlistRenderer) return;
 			playlistRenderer.updatePrefs(cachedPrefs || {});
 			playlistRenderer.render({
 				playlist: effectivePlaylist,
@@ -708,6 +670,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		}
 
 		function updateItemDelta(itemId, delta) {
+			if (!playlistRenderer) return;
 			playlistRenderer.updateItemDelta(itemId, delta);
 		}
 						// Quick Action Bar Listeners
@@ -800,6 +763,32 @@ document.addEventListener("DOMContentLoaded", async () => {
 				uiManager.sharedElements.settings.style.display = "block";
 			}
 		});
+
+		const btnFullToggleSettings = document.getElementById("btn-full-toggle-settings");
+		const fullSettingsControls = document.getElementById("full-settings-controls");
+		if (btnFullToggleSettings && fullSettingsControls) {
+			let isInitiallyOpen = false;
+			try {
+				isInitiallyOpen = localStorage.getItem("mpv_full_settings_open") === "true";
+			} catch (e) {}
+
+			fullSettingsControls.style.display = isInitiallyOpen ? "block" : "none";
+			btnFullToggleSettings.classList.toggle("active", isInitiallyOpen);
+
+			btnFullToggleSettings.addEventListener("click", () => {
+				const isCurrentlyOpen = fullSettingsControls.style.display !== "none";
+				const willBeOpen = !isCurrentlyOpen;
+				fullSettingsControls.style.display = willBeOpen ? "block" : "none";
+				btnFullToggleSettings.classList.toggle("active", willBeOpen);
+				try {
+					localStorage.setItem("mpv_full_settings_open", willBeOpen ? "true" : "false");
+				} catch (e) {}
+
+				if (willBeOpen) {
+					uiManager.sharedElements.settings.style.display = "block";
+				}
+			});
+		}
 		if (btnMiniToggleStub) {
 			btnMiniToggleStub.addEventListener("click", async () => {
 				const currentVal = cachedPrefs?.showMinimizedStub ?? true;
@@ -1242,7 +1231,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			fetchAniListReleases,
 		});
 
-		const playlistRenderer = new PlaylistRenderer(playlistContainer, {
+		playlistRenderer = new PlaylistRenderer(playlistContainer, {
 			callbacks: {
 				onRemove: (index, id) => {
 					MpvInterface.removeItem(miniFolderSelect.value, { index, id }).catch(err => {
@@ -1264,6 +1253,47 @@ document.addEventListener("DOMContentLoaded", async () => {
 				onLog: (log) => showStatus(log.text, log.type === "error")
 			},
 			prefs: cachedPrefs || {}
+		});
+
+		// Unified Playback State Subscription (Runs AFTER playlistRenderer initialization)
+		const MPV = window.MPV_INTERNAL;
+		playbackUnsubscribe = MPV.playbackStateManager.subscribe((pbState) => {
+			const currentFolderId = miniFolderSelect?.value;
+			const isCurrentFolder = pbState.folderId && currentFolderId && pbState.folderId.toLowerCase() === currentFolderId.toLowerCase();
+
+			if (isCurrentFolder) {
+				// Update local persistent state
+				popupState.isFolderActive = pbState.status !== "stopped";
+				popupState.lastPlayedId = pbState.lastPlayedId;
+				popupState.isPaused = pbState.status === "paused";
+				popupState.needsAppend = pbState.needsAppend;
+
+				setPlaybackLoading(pbState.status === "loading");
+				setPlaybackClosing(pbState.isClosing);
+				
+				// Ensure the play button and list highlights are correct
+				renderPlaylist(
+					null, // Use cached playlist
+					pbState.lastPlayedId,
+					pbState.status !== "stopped",
+					pbState.status === "paused",
+					pbState.needsAppend
+				);
+			} else {
+				// Inactive folder view: reset local playback visual state
+				popupState.isFolderActive = false;
+				popupState.isPaused = false;
+				popupState.needsAppend = false;
+				setPlaybackLoading(false);
+				setPlaybackClosing(false);
+				renderPlaylist(
+					null,
+					popupState.lastPlayedId,
+					false,
+					false,
+					false
+				);
+			}
 		});
 
 		importConfirmBtn.addEventListener("click", () => {
@@ -1596,6 +1626,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					playlistContainer.classList.remove("selection-mode-active");
 					document.querySelectorAll(".quick-action-btn.selection-mode-active").forEach(el => el.classList.remove("selection-mode-active"));
 					document.getElementById("quick-actions-bar")?.classList.remove("selection-mode-active");
+					refreshQuickActionsBar();
 				}
 				return;
 			}

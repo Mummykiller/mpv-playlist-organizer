@@ -13,6 +13,17 @@ export class OptionsManager {
 		this.showStatus = dependencies.showStatus;
 		this.fetchAniListReleases = dependencies.fetchAniListReleases;
 
+		try {
+			this.currentMode = localStorage.getItem("mpv_settings_view_mode") || "simple";
+			this.currentCategory = localStorage.getItem("mpv_settings_category") || "all";
+			const savedFavs = localStorage.getItem("mpv_favorite_settings");
+			this.favoriteSettings = new Set(savedFavs ? JSON.parse(savedFavs) : []);
+		} catch (e) {
+			this.currentMode = "simple";
+			this.currentCategory = "all";
+			this.favoriteSettings = new Set();
+		}
+
 		this.preferenceMappings = [
 			{ key: "launchGeometry", elementId: "geometry-select", type: "select" },
 			{
@@ -453,6 +464,11 @@ export class OptionsManager {
 		this._renderRestrictedDomainsList(prefs.restrictedDomains || []);
 		this._renderBuiltInFilterList();
 		this._renderDependencyStatus(prefs.dependencyStatus);
+
+		const bufferingPresetSelect = document.getElementById("buffering-preset-select");
+		if (bufferingPresetSelect) {
+			bufferingPresetSelect.value = this._detectBufferingPreset(prefs);
+		}
 	}
 
 	_renderRestrictedDomainsList(domains = []) {
@@ -1118,6 +1134,60 @@ export class OptionsManager {
 			);
 		}
 
+		const clearSearchBtn = document.getElementById("btn-clear-settings-search");
+		if (clearSearchBtn) {
+			clearSearchBtn.addEventListener("click", () => {
+				if (searchInput) {
+					searchInput.value = "";
+					this._handleSettingsSearch("");
+					searchInput.focus();
+				}
+			});
+		}
+
+		const btnModeSimple = document.getElementById("btn-mode-simple");
+		const btnModeAdvanced = document.getElementById("btn-mode-advanced");
+		if (btnModeSimple) {
+			btnModeSimple.addEventListener("click", () => this.setSettingsMode("simple"));
+		}
+		if (btnModeAdvanced) {
+			btnModeAdvanced.addEventListener("click", () => this.setSettingsMode("advanced"));
+		}
+
+		const catTabs = document.querySelectorAll(".cat-tab-btn");
+		catTabs.forEach((tab) => {
+			tab.addEventListener("click", () => {
+				const cat = tab.dataset.category || tab.dataset.cat || "all";
+				this.applyCategoryFilter(cat);
+			});
+		});
+
+		const bufferingPresetSelect = document.getElementById("buffering-preset-select");
+		if (bufferingPresetSelect) {
+			bufferingPresetSelect.addEventListener("change", () => {
+				this._applyBufferingPreset(bufferingPresetSelect.value);
+			});
+		}
+
+		const bufferInputs = [
+			"enable-cache-checkbox",
+			"demuxer-max-bytes-input",
+			"demuxer-max-back-bytes-input",
+			"cache-secs-input",
+			"demuxer-readahead-secs-input",
+			"stream-buffer-size-input",
+			"ytdlp-concurrent-fragments-input",
+			"enable-reconnect-checkbox",
+			"reconnect-delay-input",
+		];
+		bufferInputs.forEach((id) => {
+			const el = document.getElementById(id);
+			if (el) {
+				const evt = el.type === "checkbox" ? "change" : "input";
+				el.addEventListener(evt, () => this._syncBufferingPresetState());
+			}
+		});
+
 		const recordBtns = document.querySelectorAll(".btn-record-keybind");
 		recordBtns.forEach((btn) => {
 			const input = btn.parentElement.querySelector("input");
@@ -1174,6 +1244,13 @@ export class OptionsManager {
 				}
 			});
 		}
+
+		// Initialize Favorite Settings Buttons
+		this._initializeFavoriteButtons();
+
+		// Apply initial view mode and category tab
+		this.setSettingsMode(this.currentMode);
+		this.applyCategoryFilter(this.currentCategory);
 	}
 
 	async _handleForceRefreshDependencies(btn) {
@@ -1245,56 +1322,480 @@ export class OptionsManager {
 		this.debouncedSaveAllPreferences();
 	}
 
+	setSettingsMode(mode) {
+		this.currentMode = mode === "advanced" ? "advanced" : "simple";
+		try {
+			localStorage.setItem("mpv_settings_view_mode", this.currentMode);
+		} catch (e) {}
+
+		const container = document.getElementById("shared-settings-container");
+		if (container) {
+			if (this.currentMode === "simple") {
+				container.classList.add("mode-simple");
+				container.classList.remove("mode-advanced");
+			} else {
+				container.classList.add("mode-advanced");
+				container.classList.remove("mode-simple");
+			}
+		}
+
+		const btnSimple = document.getElementById("btn-mode-simple");
+		const btnAdvanced = document.getElementById("btn-mode-advanced");
+		if (btnSimple && btnAdvanced) {
+			btnSimple.classList.toggle("active", this.currentMode === "simple");
+			btnAdvanced.classList.toggle("active", this.currentMode === "advanced");
+		}
+
+		const searchInput = document.getElementById("settings-search-input");
+		if (searchInput && searchInput.value.trim()) {
+			this._handleSettingsSearch(searchInput.value);
+		}
+	}
+
+	_getSettingIdentifier(group) {
+		if (!group) return null;
+		if (group.dataset.settingId) return group.dataset.settingId;
+		const input = group.querySelector("input, select, textarea, button");
+		if (input && input.id) return input.id;
+		if (group.id) return group.id;
+		if (group.dataset.settingName)
+			return group.dataset.settingName.trim().replace(/\s+/g, "-");
+		return null;
+	}
+
+	_initializeFavoriteButtons() {
+		const wrapper = document.getElementById("settings-sections-wrapper");
+		if (!wrapper) return;
+
+		const groups = wrapper.querySelectorAll(".control-group, .setting-item");
+		groups.forEach((group) => {
+			if (group.id === "custom-geometry-container") return;
+			const id = this._getSettingIdentifier(group);
+			if (!id) return;
+			if (group.querySelector(".btn-fav-setting")) return;
+
+			const starBtn = document.createElement("button");
+			starBtn.type = "button";
+			starBtn.className = "btn-fav-setting";
+			starBtn.dataset.settingId = id;
+			starBtn.title = this.favoriteSettings.has(id)
+				? "Remove from Favorites"
+				: "Pin to Favorites";
+			starBtn.innerHTML =
+				'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+
+			const label = group.querySelector(".settings-label, label");
+			if (label) {
+				label.insertAdjacentElement("beforebegin", starBtn);
+			} else {
+				group.insertAdjacentElement("afterbegin", starBtn);
+			}
+
+			starBtn.addEventListener("click", (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				this._toggleFavorite(id);
+			});
+		});
+
+		this._updateFavoriteUI();
+	}
+
+	_toggleFavorite(id) {
+		if (this.favoriteSettings.has(id)) {
+			this.favoriteSettings.delete(id);
+		} else {
+			this.favoriteSettings.add(id);
+		}
+
+		try {
+			localStorage.setItem(
+				"mpv_favorite_settings",
+				JSON.stringify([...this.favoriteSettings]),
+			);
+		} catch (e) {}
+
+		this._updateFavoriteUI();
+
+		if (this.currentCategory === "favorites") {
+			this.applyCategoryFilter("favorites");
+		}
+	}
+
+	_updateFavoriteUI() {
+		const starBtns = document.querySelectorAll(".btn-fav-setting");
+		starBtns.forEach((btn) => {
+			const isFav = this.favoriteSettings.has(btn.dataset.settingId);
+			btn.classList.toggle("is-favorite", isFav);
+			btn.title = isFav ? "Remove from Favorites" : "Pin to Favorites";
+			const group = btn.closest(".control-group, .setting-item");
+			if (group) {
+				group.classList.toggle("is-favorite-setting", isFav);
+			}
+		});
+
+		const favTab = document.querySelector(
+			'.cat-tab-btn[data-category="favorites"], .cat-tab-btn[data-cat="favorites"]',
+		);
+		if (favTab) {
+			const label = favTab.querySelector(".fav-tab-label");
+			const count = this.favoriteSettings.size;
+			if (label) {
+				label.textContent = count > 0 ? `Favorites (${count})` : "Favorites";
+			} else {
+				favTab.textContent = count > 0 ? `Favorites (${count})` : "Favorites";
+			}
+		}
+	}
+
+	applyCategoryFilter(cat = "all") {
+		this.currentCategory = cat;
+		try {
+			localStorage.setItem("mpv_settings_category", this.currentCategory);
+		} catch (e) {}
+
+		const catTabs = document.querySelectorAll(".cat-tab-btn");
+		catTabs.forEach((tab) => {
+			const tabCat = tab.dataset.category || tab.dataset.cat;
+			tab.classList.toggle("active", tabCat === this.currentCategory);
+		});
+
+		const searchInput = document.getElementById("settings-search-input");
+		if (searchInput && searchInput.value) {
+			searchInput.value = "";
+			const clearBtn = document.getElementById("btn-clear-settings-search");
+			if (clearBtn) clearBtn.style.display = "none";
+			const statusEl = document.getElementById("settings-search-status");
+			if (statusEl) {
+				statusEl.textContent = "";
+				statusEl.style.display = "none";
+			}
+		}
+
+		const wrapper = document.getElementById("settings-sections-wrapper");
+		if (!wrapper) return;
+		const sections = wrapper.querySelectorAll(".settings-section");
+		const emptyNotice = document.getElementById("favorites-empty-notice");
+
+		if (this.currentCategory === "favorites") {
+			const hasFavorites = this.favoriteSettings.size > 0;
+			if (emptyNotice) {
+				emptyNotice.style.display = hasFavorites ? "none" : "flex";
+			}
+
+			sections.forEach((section) => {
+				section.style.borderColor = "var(--border-primary)";
+				section.style.boxShadow = "none";
+
+				section
+					.querySelectorAll(".settings-compact-separator, .settings-group-header")
+					.forEach((el) => {
+						el.style.display = "none";
+					});
+
+				const items = section.querySelectorAll(".control-group, .setting-item");
+				let sectionFavCount = 0;
+
+				items.forEach((item) => {
+					if (item.id === "custom-geometry-container") {
+						const geomGroup = this.elements.geometrySelect?.closest(".control-group");
+						const isGeomFav = geomGroup && this.favoriteSettings.has(this._getSettingIdentifier(geomGroup));
+						item.style.display =
+							isGeomFav && this.elements.geometrySelect?.value === "custom"
+								? "flex"
+								: "none";
+						item.classList.toggle("fav-visible-override", Boolean(isGeomFav));
+						return;
+					}
+
+					item.style.backgroundColor = "transparent";
+					const id = this._getSettingIdentifier(item);
+					const isFav = this.favoriteSettings.has(id);
+
+					if (isFav) {
+						item.style.display = "";
+						item.classList.add("fav-visible-override");
+						sectionFavCount++;
+					} else {
+						item.style.display = "none";
+						item.classList.remove("fav-visible-override");
+					}
+				});
+
+				if (sectionFavCount > 0) {
+					section.style.display = "block";
+					section.open = true;
+				} else {
+					section.style.display = "none";
+				}
+			});
+		} else {
+			if (emptyNotice) emptyNotice.style.display = "none";
+
+			sections.forEach((section) => {
+				section.style.borderColor = "var(--border-primary)";
+				section.style.boxShadow = "none";
+
+				section
+					.querySelectorAll(".settings-compact-separator, .settings-group-header")
+					.forEach((el) => {
+						el.style.display = "";
+					});
+
+				const items = section.querySelectorAll(".control-group, .setting-item");
+				items.forEach((item) => {
+					if (item.id === "custom-geometry-container") {
+						item.style.display =
+							this.elements.geometrySelect?.value === "custom" ? "flex" : "none";
+						item.style.backgroundColor = "transparent";
+						item.classList.remove("fav-visible-override");
+						return;
+					}
+					item.style.display = "";
+					item.style.backgroundColor = "transparent";
+					item.classList.remove("fav-visible-override");
+				});
+
+				const secCat = section.dataset.category || section.dataset.cat;
+				if (this.currentCategory === "all") {
+					section.style.display = "block";
+				} else if (secCat === this.currentCategory) {
+					section.style.display = "block";
+					section.open = true;
+				} else {
+					section.style.display = "none";
+				}
+			});
+		}
+	}
+
+	_getBufferingPresets() {
+		return {
+			default: {
+				enableCache: true,
+				demuxerMaxBytes: "1G",
+				demuxerMaxBackBytes: "500M",
+				cacheSecs: 500,
+				demuxerReadaheadSecs: 500,
+				streamBufferSize: "10M",
+				ytdlpConcurrentFragments: 4,
+				enableReconnect: true,
+				reconnectDelay: 4,
+			},
+			smooth: {
+				enableCache: true,
+				demuxerMaxBytes: "2G",
+				demuxerMaxBackBytes: "1G",
+				cacheSecs: 1200,
+				demuxerReadaheadSecs: 1200,
+				streamBufferSize: "32M",
+				ytdlpConcurrentFragments: 8,
+				enableReconnect: true,
+				reconnectDelay: 2,
+			},
+			"low-ram": {
+				enableCache: true,
+				demuxerMaxBytes: "250M",
+				demuxerMaxBackBytes: "50M",
+				cacheSecs: 60,
+				demuxerReadaheadSecs: 60,
+				streamBufferSize: "2M",
+				ytdlpConcurrentFragments: 2,
+				enableReconnect: true,
+				reconnectDelay: 4,
+			},
+		};
+	}
+
+	_applyBufferingPreset(presetKey) {
+		if (presetKey === "custom") return;
+		const presets = this._getBufferingPresets();
+		const preset = presets[presetKey];
+		if (!preset) return;
+
+		const cacheEl = document.getElementById("enable-cache-checkbox");
+		const maxBytesEl = document.getElementById("demuxer-max-bytes-input");
+		const maxBackBytesEl = document.getElementById("demuxer-max-back-bytes-input");
+		const cacheSecsEl = document.getElementById("cache-secs-input");
+		const readaheadSecsEl = document.getElementById("demuxer-readahead-secs-input");
+		const bufferSizeEl = document.getElementById("stream-buffer-size-input");
+		const fragmentsEl = document.getElementById("ytdlp-concurrent-fragments-input");
+		const reconnectEl = document.getElementById("enable-reconnect-checkbox");
+		const reconnectDelayEl = document.getElementById("reconnect-delay-input");
+
+		if (cacheEl) cacheEl.checked = preset.enableCache;
+		if (maxBytesEl) maxBytesEl.value = preset.demuxerMaxBytes;
+		if (maxBackBytesEl) maxBackBytesEl.value = preset.demuxerMaxBackBytes;
+		if (cacheSecsEl) cacheSecsEl.value = preset.cacheSecs;
+		if (readaheadSecsEl) readaheadSecsEl.value = preset.demuxerReadaheadSecs;
+		if (bufferSizeEl) bufferSizeEl.value = preset.streamBufferSize;
+		if (fragmentsEl) fragmentsEl.value = preset.ytdlpConcurrentFragments;
+		if (reconnectEl) reconnectEl.checked = preset.enableReconnect;
+		if (reconnectDelayEl) reconnectDelayEl.value = preset.reconnectDelay;
+
+		this.debouncedSaveAllPreferences();
+	}
+
+	_detectBufferingPreset(prefs) {
+		if (!prefs) return "custom";
+		const presets = this._getBufferingPresets();
+		for (const [key, preset] of Object.entries(presets)) {
+			const matches =
+				(prefs.enableCache ?? true) === preset.enableCache &&
+				String(prefs.demuxerMaxBytes ?? "1G").toUpperCase() === preset.demuxerMaxBytes.toUpperCase() &&
+				String(prefs.demuxerMaxBackBytes ?? "500M").toUpperCase() === preset.demuxerMaxBackBytes.toUpperCase() &&
+				Number(prefs.cacheSecs ?? 500) === preset.cacheSecs &&
+				Number(prefs.demuxerReadaheadSecs ?? 500) === preset.demuxerReadaheadSecs &&
+				String(prefs.streamBufferSize ?? "10M").toUpperCase() === preset.streamBufferSize.toUpperCase() &&
+				Number(prefs.ytdlpConcurrentFragments ?? 4) === preset.ytdlpConcurrentFragments &&
+				(prefs.enableReconnect ?? true) === preset.enableReconnect &&
+				Number(prefs.reconnectDelay ?? 4) === preset.reconnectDelay;
+
+			if (matches) return key;
+		}
+		return "custom";
+	}
+
+	_syncBufferingPresetState() {
+		const currentValues = {
+			enableCache: document.getElementById("enable-cache-checkbox")?.checked,
+			demuxerMaxBytes: document.getElementById("demuxer-max-bytes-input")?.value,
+			demuxerMaxBackBytes: document.getElementById("demuxer-max-back-bytes-input")?.value,
+			cacheSecs: document.getElementById("cache-secs-input")?.value,
+			demuxerReadaheadSecs: document.getElementById("demuxer-readahead-secs-input")?.value,
+			streamBufferSize: document.getElementById("stream-buffer-size-input")?.value,
+			ytdlpConcurrentFragments: document.getElementById("ytdlp-concurrent-fragments-input")?.value,
+			enableReconnect: document.getElementById("enable-reconnect-checkbox")?.checked,
+			reconnectDelay: document.getElementById("reconnect-delay-input")?.value,
+		};
+		const matched = this._detectBufferingPreset(currentValues);
+		const select = document.getElementById("buffering-preset-select");
+		if (select) {
+			select.value = matched;
+		}
+	}
+
 	_handleSettingsSearch(query) {
 		const wrapper = document.getElementById("settings-sections-wrapper");
+		if (!wrapper) return;
+
 		const sections = Array.from(wrapper.querySelectorAll(".settings-section"));
-		const normalizedQuery = query.toLowerCase().trim();
+		const normalizedQuery = (query || "").toLowerCase().trim();
+		const clearBtn = document.getElementById("btn-clear-settings-search");
+		const statusEl = document.getElementById("settings-search-status");
+
+		if (clearBtn) {
+			clearBtn.style.display = normalizedQuery ? "inline-flex" : "none";
+		}
 
 		if (!normalizedQuery) {
-			sections.sort((a, b) => 0);
-			sections.forEach((s) => {
-				s.style.display = "block";
-				s.style.boxShadow = "none";
-				s.style.borderColor = "var(--border-primary)";
-			});
+			if (statusEl) {
+				statusEl.textContent = "";
+				statusEl.style.display = "none";
+			}
+			this.applyCategoryFilter(this.currentCategory);
 			return;
 		}
 
-		const scoredSections = sections.map((section) => {
-			const sectionName = section.dataset.sectionName || "";
-			const settings = Array.from(
-				section.querySelectorAll(".control-group, .setting-item"),
-			);
+		if (statusEl) {
+			statusEl.style.display = "flex";
+		}
 
-			let bestScore = 0;
-			if (sectionName.includes(normalizedQuery)) bestScore = 10;
+		const emptyNotice = document.getElementById("favorites-empty-notice");
+		if (emptyNotice) emptyNotice.style.display = "none";
 
-			settings.forEach((setting) => {
-				const settingName = setting.dataset.settingName || "";
-				if (settingName.includes(normalizedQuery)) {
-					bestScore = Math.max(bestScore, 5);
-					setting.style.backgroundColor = "rgba(88, 101, 242, 0.1)";
+		let totalMatches = 0;
+		const isSimpleMode = this.currentMode === "simple";
+		const isFavoritesTab = this.currentCategory === "favorites";
+
+		sections.forEach((section) => {
+			const sectionName = (section.dataset.sectionName || "").toLowerCase();
+			const sectionTitle = (section.querySelector("summary span")?.textContent || "").toLowerCase();
+			const sectionMatches = sectionName.includes(normalizedQuery) || sectionTitle.includes(normalizedQuery);
+
+			section
+				.querySelectorAll(".settings-compact-separator, .settings-group-header")
+				.forEach((el) => {
+					el.style.display = "none";
+				});
+
+			const items = Array.from(section.querySelectorAll(".control-group, .setting-item"));
+			let sectionMatchCount = 0;
+
+			items.forEach((item) => {
+				if (item.id === "custom-geometry-container") {
+					const geomGroup = this.elements.geometrySelect?.closest(".control-group");
+					const geomVisible = geomGroup && geomGroup.style.display !== "none";
+					item.style.display =
+						geomVisible && this.elements.geometrySelect?.value === "custom"
+							? "flex"
+							: "none";
+					return;
+				}
+
+				const isAdvancedItem =
+					item.classList.contains("setting-advanced") ||
+					item.closest(".group-advanced") !== null;
+
+				if (isFavoritesTab) {
+					const id = this._getSettingIdentifier(item);
+					if (!this.favoriteSettings.has(id)) {
+						item.style.display = "none";
+						item.style.backgroundColor = "transparent";
+						return;
+					}
+				} else if (isSimpleMode && isAdvancedItem) {
+					item.style.display = "none";
+					item.style.backgroundColor = "transparent";
+					return;
+				}
+
+				const settingName = (item.dataset.settingName || "").toLowerCase();
+				const textContent = (item.textContent || "").toLowerCase();
+				const helpTitle = (item.querySelector(".help-icon")?.getAttribute("title") || "").toLowerCase();
+
+				const matches =
+					sectionMatches ||
+					settingName.includes(normalizedQuery) ||
+					textContent.includes(normalizedQuery) ||
+					helpTitle.includes(normalizedQuery);
+
+				if (matches) {
+					item.style.display = "";
+					item.style.backgroundColor = "rgba(88, 101, 242, 0.12)";
+					if (isFavoritesTab) item.classList.add("fav-visible-override");
+					sectionMatchCount++;
+					totalMatches++;
 				} else {
-					setting.style.backgroundColor = "transparent";
+					item.style.display = "none";
+					item.style.backgroundColor = "transparent";
 				}
 			});
 
-			return { element: section, score: bestScore };
-		});
-
-		scoredSections.sort((a, b) => b.score - a.score);
-
-		scoredSections.forEach((item) => {
-			wrapper.appendChild(item.element);
-			if (item.score > 0) {
-				item.element.open = true;
-				item.element.style.borderColor = "var(--accent-primary)";
-				item.element.style.boxShadow = "0 0 10px rgba(88, 101, 242, 0.2)";
+			if (sectionMatchCount > 0 || (sectionMatches && !isFavoritesTab)) {
+				section.style.display = "block";
+				section.open = true;
+				section.style.borderColor = "var(--accent-primary)";
+				section.style.boxShadow = "0 0 10px rgba(88, 101, 242, 0.2)";
 			} else {
-				item.element.style.borderColor = "var(--border-primary)";
-				item.element.style.boxShadow = "none";
+				section.style.display = "none";
+				section.style.borderColor = "var(--border-primary)";
+				section.style.boxShadow = "none";
 			}
 		});
+
+		if (statusEl) {
+			if (totalMatches > 0) {
+				const suffix = isFavoritesTab
+					? " in Favorites"
+					: isSimpleMode
+						? " (Simple mode — switch to Advanced for more)"
+						: "";
+				statusEl.textContent = `Found ${totalMatches} matching setting${totalMatches === 1 ? "" : "s"}${suffix}`;
+			} else {
+				statusEl.textContent = `No settings found matching "${query}"`;
+			}
+		}
 	}
 
 	_startRecording(btn, input) {
