@@ -141,7 +141,19 @@ python3 testing_tools/pycache_watchdog.py kill   # Terminate daemon
 
 ---
 
-## 5. Developer Troubleshooting
+## 5. Developer Troubleshooting & Reloading Matrix
+
+### Component Reloading Matrix
+
+| Component | How to Reload | Notes |
+| :--- | :--- | :--- |
+| **Extension UI / Popup** | Close and reopen the popup | Popup reloads on every open. |
+| **Content Scripts** | Refresh the web page (`F5`) | Content scripts reload on page navigation. |
+| **Service Worker (`background.js`)** | Go to `chrome://extensions` and click 🔄 **Reload** | Needed when modifying `background/`, `manifest.json`, or root scripts. |
+| **Python Native Host** | **Restart the browser** or terminate the `python3 native_host.py` process | Chrome holds the native host process open for the duration of the browser session. |
+| **MPV Scripts** | Restart MPV or re-trigger playback | Active MPV processes hold loaded Lua scripts in memory. |
+
+### Common Troubleshooting Checklist
 
 - **Service worker registration failed (Status code: 15):** Top-level JavaScript syntax error or unresolved import in `background.js` or one of its imported handlers. Run `node --check background/handlers/<file>.js` or `python3 testing_tools/run_suite.py` to pinpoint the offending file and line number.
 - **Transpile Mismatch / Missing Globals:** If a newly exported function in a `*.module.js` file is `undefined` at runtime, verify that:
