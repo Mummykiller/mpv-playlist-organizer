@@ -7,14 +7,52 @@ import uuid
 import platform
 import subprocess
 import signal
-from utils import ipc_utils
+from concurrent.futures import ThreadPoolExecutor
+from utils import ipc_utils, security
 import services
 from .item_processor import ItemProcessor
 
 class EnrichmentService(ItemProcessor):
-    def __init__(self, services, send_message_func, file_io_module, metadata_cache=None, task_manager=None):
+    def __init__(self, services, send_message_func, file_io_module, metadata_cache=None, task_manager=None, max_workers=5):
         super().__init__(services, send_message_func, file_io_module, metadata_cache=metadata_cache, task_manager=task_manager)
         self._sync_in_progress = False
+        self._lock = threading.Lock()
+        self._max_workers = max_workers
+        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="enrichment_worker")
+        self._is_shutdown = False
+
+    @property
+    def executor(self):
+        """Returns the active bounded ThreadPoolExecutor, recreating it if previously shut down."""
+        with self._lock:
+            if self._executor is None or self._is_shutdown:
+                self._executor = ThreadPoolExecutor(max_workers=self._max_workers, thread_name_prefix="enrichment_worker")
+                self._is_shutdown = False
+            return self._executor
+
+    def submit(self, fn, *args, **kwargs):
+        """Submits a task to the shared bounded ThreadPoolExecutor."""
+        return self.executor.submit(fn, *args, **kwargs)
+
+    def map(self, func, *iterables, timeout=None, chunksize=1):
+        """Maps a function over iterables using the bounded ThreadPoolExecutor."""
+        return self.executor.map(func, *iterables, timeout=timeout, chunksize=chunksize)
+
+    def shutdown(self, wait=False, cancel_futures=True):
+        """Cleanly shuts down the thread pool executor to prevent thread leaks."""
+        with self._lock:
+            if self._executor and not self._is_shutdown:
+                try:
+                    import sys
+                    if sys.version_info >= (3, 9):
+                        self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+                    else:
+                        self._executor.shutdown(wait=wait)
+                except Exception as e:
+                    logging.debug(f"[EnrichmentService] Error shutting down executor: {e}")
+                finally:
+                    self._is_shutdown = True
+                    self._executor = None
 
     def handle_standard_flow_launch(self, session, url_items, start_index, folder_id, settings, file_io):
         """Handles the background restoration of playlist order and sequential metadata enrichment."""
@@ -113,7 +151,7 @@ class EnrichmentService(ItemProcessor):
             finally:
                 self._sync_in_progress = False
 
-        threading.Thread(target=task, daemon=True).start()
+        self.submit(task)
 
 class LauncherService:
     def __init__(self, mpv_session):
@@ -146,14 +184,15 @@ class LauncherService:
                                     try:
                                         with open(flag_file, 'r', encoding='utf-8') as f:
                                             exit_reason = f.read().strip()
-                                    except Exception:
+                                    except (OSError, UnicodeDecodeError) as e:
+                                        logging.debug(f"Failed to read natural completion flag {flag_file}: {e}")
                                         exit_reason = "completed"
                                     logging.info(f"Restored Watcher: Natural completion flag FOUND (Reason: {exit_reason}). Overriding return code to 99.")
                                     return_code = 99
                                 try:
                                     os.remove(flag_file)
-                                except Exception:
-                                    pass
+                                except OSError as e:
+                                    logging.debug(f"Failed to remove completion flag {flag_file}: {e}")
                                 break
 
                     self.session.send_message({
@@ -172,50 +211,8 @@ class LauncherService:
         threading.Thread(target=watcher, daemon=True).start()
 
     def _prepare_launch_env(self, has_terminal_flag):
-        """Scrubs environment variables based on a whitelist/blacklist for security and stability."""
-        base_env = os.environ.copy()
-        
-        # --- Python Isolation ---
-        # Prevent our own Python environment from leaking into yt-dlp (which is often a frozen Python exe)
-        # This fixes the "Failed to start embedded python interpreter" error on Windows.
-        python_vars = ['PYTHONPATH', 'PYTHONHOME', 'PYTHONIOENCODING', 'PYTHONDONTWRITEBYTECODE', 'PYTHONUNBUFFERED']
-        for var in python_vars:
-            if var in base_env:
-                del base_env[var]
-
-        # On Windows, we prefer a BLACKLIST approach for stability because yt-dlp/mpv
-        # require many obscure system variables (like RNG/entropy vars) to initialize.
-        if platform.system() == "Windows":
-            # We keep the full env but ensure Python vars are gone. 
-            # If we are in a terminal pass-through, we don't scrub further.
-            if has_terminal_flag:
-                return base_env
-            
-            # Additional security scrubbing for non-terminal Windows launches
-            sensitive = {'AWS_', 'GIT_', 'SSH_', 'SECRET', 'TOKEN', 'PASSWORD', 'API_KEY'}
-            env = {}
-            for key, val in base_env.items():
-                if not any(s in key.upper() for s in sensitive):
-                    env[key] = val
-            return env
-
-        # Linux/macOS: Stick to strict WHITELIST for security
-        if has_terminal_flag:
-            return base_env
-            
-        env = {}
-        allowed = {
-            'HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'PWD', 'SHELL', 'TERM', 'USER',
-            'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
-            'XDG_CACHE_HOME', 'DBUS_SESSION_BUS_ADDRESS',
-            'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP',
-            'MPV_HOME', 'PULSE_SERVER', 'PIPEWIRE_RUNTIME_DIR'
-        }
-        
-        for key, val in base_env.items():
-            if key.upper() in allowed or key.startswith("LC_") or key.startswith("XDG_"):
-                env[key] = val
-        return env
+        """Scrubs environment variables based on centralized security policy."""
+        return security.get_scrubbed_env(keep_terminal=has_terminal_flag)
 
     def _sync_initial_state(self, url_item, folder_id, settings, playlist_start_index, launch_lua_options, launch_url):
         """Sets up IPC properties, lua options, and triggers the initial file load."""
@@ -250,8 +247,8 @@ class LauncherService:
                 if start_time > 0:
                     mgr.send({"command": ["set_property", "user-data/primed-resume-time", str(start_time)]})
                     logging.info(f"[PY][Session] Primed initial resume time: {start_time}s")
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                logging.debug(f"[PY][Session] Resume time could not be parsed: {e}")
 
         # NOTE: We do NOT send 'loadfile' here because the file is already on the command line.
         # Sending it again via IPC causes a "Double Load" race condition.
@@ -403,11 +400,16 @@ class LauncherService:
                     if os.path.exists(flag_file):
                         if not getattr(self.session, 'manual_quit', False):
                             try:
-                                with open(flag_file, 'r', encoding='utf-8') as f: exit_reason = f.read().strip()
-                            except Exception: exit_reason = "completed"
+                                with open(flag_file, 'r', encoding='utf-8') as f:
+                                    exit_reason = f.read().strip()
+                            except (OSError, UnicodeDecodeError) as e:
+                                logging.debug(f"Failed to read natural completion flag {flag_file}: {e}")
+                                exit_reason = "completed"
                             return_code = 99
-                        try: os.remove(flag_file)
-                        except Exception: pass
+                        try:
+                            os.remove(flag_file)
+                        except OSError as e:
+                            logging.debug(f"Failed to remove completion flag {flag_file}: {e}")
                         break
                 if exit_reason: break
 
@@ -498,8 +500,16 @@ class LauncherService:
                 # Check if it actually died (final verification)
                 if not was_killed and not ipc_utils.is_pid_running(pid):
                     was_killed = True
-            except OSError:
+            except OSError as e:
+                logging.debug(f"Process {pid} already dead or could not signal: {e}")
                 was_killed = True # Process already gone
+
+        # Clean up enrichment thread pool executor on session termination
+        if hasattr(self.session, 'enricher') and self.session.enricher:
+            try:
+                self.session.enricher.shutdown(wait=False)
+            except Exception as e:
+                logging.debug(f"Error shutting down enricher executor: {e}")
 
         if was_killed:
             self.session.clear()

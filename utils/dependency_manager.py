@@ -6,6 +6,11 @@ import time
 import logging
 import file_io
 
+try:
+    from . import security
+except ImportError:
+    from utils import security
+
 # Prevent __pycache__ generation
 import sys
 sys.dont_write_bytecode = True
@@ -30,10 +35,11 @@ def _get_ytdlp_version(path_to_exe, send_message_func):
         result = subprocess.run(
             [path_to_exe, '--version'],
             capture_output=True, text=True, check=True, timeout=10,
-            encoding='utf-8', errors='ignore'
+            encoding='utf-8', errors='ignore',
+            env=security.get_scrubbed_env()
         )
         return result.stdout.strip()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         error_msg = f"Could not get yt-dlp version: {e}"
         logging.error(error_msg)
         send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
@@ -45,11 +51,12 @@ def _get_ffmpeg_version(path_to_exe, send_message_func):
         result = subprocess.run(
             [path_to_exe, '-version'],
             capture_output=True, text=True, check=True, timeout=10,
-            encoding='utf-8', errors='ignore'
+            encoding='utf-8', errors='ignore',
+            env=security.get_scrubbed_env()
         )
         first_line = result.stdout.splitlines()[0] if result.stdout else "Unknown version"
         return first_line
-    except Exception as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         logging.error(f"Could not get FFmpeg version: {e}")
         return None
 
@@ -59,10 +66,11 @@ def _get_node_version(path_to_exe):
         result = subprocess.run(
             [path_to_exe, '-v'],
             capture_output=True, text=True, check=True, timeout=10,
-            encoding='utf-8', errors='ignore'
+            encoding='utf-8', errors='ignore',
+            env=security.get_scrubbed_env()
         )
         return result.stdout.strip()
-    except Exception as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         logging.error(f"Could not get Node.js version: {e}")
         return None
 
@@ -80,7 +88,7 @@ def _get_linux_sudo_command_prefix(ytdlp_path, send_message_func):
 def _run_update_command(command, send_message_func):
     """Runs the yt-dlp update command and streams output to the sender."""
     system = platform.system()
-    popen_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.STDOUT, 'universal_newlines': True, 'encoding': 'utf-8', 'errors': 'ignore'}
+    popen_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.STDOUT, 'universal_newlines': True, 'encoding': 'utf-8', 'errors': 'ignore', 'env': security.get_scrubbed_env()}
     if system == "Windows":
         popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
@@ -133,6 +141,7 @@ def update_ytdlp(send_message_func):
 
     except Exception as e:
         error_msg = f"An unexpected error occurred during yt-dlp update: {e}"
+        logging.error(error_msg, exc_info=True)
         send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
         return {"success": False, "error": error_msg}
 

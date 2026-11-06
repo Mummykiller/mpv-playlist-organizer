@@ -275,6 +275,208 @@ export const domUtils = {
         },
 
         /**
+         * Displays a stacked confirmation modal on the page, reusing an existing host if already open.
+         * @param {string} folderId - ID of the target folder.
+         * @param {string} message - Confirmation message.
+         * @param {Object} requestData - Associated request payload.
+         * @returns {Promise<Object|boolean|null>} Resolves to updated request data, false, or null if stacked.
+         */
+        confirmStacked(folderId, message, requestData) {
+            const existingHost = document.getElementById("mpv-page-level-modal-host");
+            if (existingHost && existingHost.dataset.folderId === folderId) {
+                const shadow = existingHost.shadowRoot;
+                const messageEl = shadow ? shadow.getElementById("message") : null;
+                const contentEl = shadow ? shadow.querySelector(".modal-content") : null;
+                if (messageEl) {
+                    messageEl.textContent = message;
+                    if (contentEl) {
+                        contentEl.style.transition = "transform 0.1s ease";
+                        contentEl.style.transform = "scale(1.02)";
+                        setTimeout(() => (contentEl.style.transform = "scale(1)"), 100);
+                    }
+                }
+                existingHost.dataset.latestRequest = JSON.stringify(requestData);
+                return Promise.resolve(null);
+            }
+
+            return new Promise((resolve) => {
+                let modalHostRef = null;
+                this.confirm(message).then((confirmed) => {
+                    let dataToReturn = requestData;
+                    if (modalHostRef && modalHostRef.dataset.latestRequest) {
+                        try {
+                            dataToReturn = JSON.parse(modalHostRef.dataset.latestRequest);
+                        } catch (e) {
+                            const logger = (typeof window !== "undefined" && window.MPV_INTERNAL?.logger) || null;
+                            if (logger) logger.warn("[domUtils] Failed to parse latestRequest data:", { data: e });
+                        }
+                    }
+                    resolve(confirmed ? dataToReturn : false);
+                });
+
+                modalHostRef = document.getElementById("mpv-page-level-modal-host");
+                if (modalHostRef) {
+                    modalHostRef.dataset.folderId = folderId;
+                    modalHostRef.dataset.latestRequest = JSON.stringify(requestData);
+                }
+            });
+        },
+
+        /**
+         * Updates a status banner or status message in the given DOM context (popup or on-page controller).
+         * @param {HTMLElement|ShadowRoot|null} targetOrRoot - Container, ShadowRoot, or status element.
+         * @param {string} text - Message text.
+         * @param {boolean|Object} [options] - Boolean isSuccess/isError or options object { isSuccess, isError, timeout }.
+         * @returns {boolean} Whether an element was found and updated.
+         */
+        updateStatusBanner(targetOrRoot, text, options = {}) {
+            const isError = typeof options === "boolean" ? !options : !!options.isError;
+            const isSuccess = typeof options === "boolean" ? options : (options.isSuccess !== undefined ? !!options.isSuccess : !isError);
+
+            if (!targetOrRoot) {
+                this.showNotificationBanner(text, { isError, duration: options.timeout });
+                return true;
+            }
+
+            // Controller UI: has #status-banner and/or #stream-status
+            const statusBanner = targetOrRoot.id === "status-banner"
+                ? targetOrRoot
+                : (targetOrRoot.getElementById ? targetOrRoot.getElementById("status-banner") : targetOrRoot.querySelector?.("#status-banner"));
+            const streamStatus = targetOrRoot.id === "stream-status"
+                ? targetOrRoot
+                : (targetOrRoot.getElementById ? targetOrRoot.getElementById("stream-status") : targetOrRoot.querySelector?.("#stream-status"));
+
+            if (statusBanner || streamStatus) {
+                if (streamStatus) streamStatus.textContent = text;
+                if (statusBanner) statusBanner.classList.toggle("detected", isSuccess);
+                return true;
+            }
+
+            // Popup UI: has #status-message
+            const statusMessage = targetOrRoot.id === "status-message"
+                ? targetOrRoot
+                : (targetOrRoot.getElementById ? targetOrRoot.getElementById("status-message") : targetOrRoot.querySelector?.("#status-message"));
+
+            if (statusMessage) {
+                statusMessage.textContent = text;
+                statusMessage.style.color = isError ? "var(--accent-danger)" : "var(--accent-success)";
+                return true;
+            }
+
+            // Fallback: floating notification banner
+            this.showNotificationBanner(text, { isError, duration: options.timeout });
+            return true;
+        },
+
+        /**
+         * Displays a non-intrusive floating status notification banner in the viewport.
+         * Compliant with Shadow DOM styles rule (<style> textContent only, no external link, no innerHTML wipe).
+         * @param {string} message - Message to display.
+         * @param {Object} [options] - Options { isError, isSuccess, duration }.
+         */
+        showNotificationBanner(message, options = {}) {
+            if (typeof document === "undefined" || !document.body) return;
+            const isError = !!options.isError;
+            const duration = options.duration || 4000;
+
+            let host = document.getElementById("mpv-notification-banner-host");
+            let shadowRoot;
+
+            if (!host) {
+                host = document.createElement("div");
+                host.id = "mpv-notification-banner-host";
+                Object.assign(host.style, {
+                    position: "fixed",
+                    top: "16px",
+                    right: "16px",
+                    zIndex: "2147483647",
+                    pointerEvents: "none",
+                    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                });
+
+                shadowRoot = host.attachShadow({ mode: "open" });
+                const style = document.createElement("style");
+                style.textContent = `
+                    .banner-container {
+                        display: flex;
+                        flex-direction: column;
+                        gap: 8px;
+                        align-items: flex-end;
+                        pointer-events: none;
+                    }
+                    .banner-item {
+                        pointer-events: auto;
+                        background: #1e1f22;
+                        color: #e1e1e1;
+                        border: 1px solid #33363b;
+                        border-left: 4px solid var(--banner-accent, #5865f2);
+                        border-radius: 6px;
+                        padding: 10px 16px;
+                        box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+                        font-size: 13px;
+                        line-height: 1.4;
+                        max-width: 380px;
+                        word-break: break-word;
+                        opacity: 0;
+                        transform: translateY(-8px);
+                        transition: opacity 0.2s ease, transform 0.2s ease;
+                        cursor: pointer;
+                        user-select: none;
+                    }
+                    .banner-item.visible {
+                        opacity: 1;
+                        transform: translateY(0);
+                    }
+                    .banner-item.error {
+                        --banner-accent: #ed4245;
+                    }
+                    .banner-item.success {
+                        --banner-accent: #57f287;
+                    }
+                    .banner-item.info {
+                        --banner-accent: #5865f2;
+                    }
+                `;
+
+                const container = document.createElement("div");
+                container.className = "banner-container";
+                shadowRoot.append(style, container);
+
+                const mountTarget = document.body || document.documentElement;
+                if (mountTarget) mountTarget.appendChild(host);
+            } else {
+                shadowRoot = host.shadowRoot;
+            }
+
+            if (!shadowRoot) return;
+            const container = shadowRoot.querySelector(".banner-container");
+            if (!container) return;
+
+            const banner = document.createElement("div");
+            banner.className = `banner-item ${isError ? "error" : (options.isSuccess ? "success" : "info")}`;
+            banner.textContent = message;
+
+            const dismiss = () => {
+                banner.classList.remove("visible");
+                setTimeout(() => {
+                    banner.remove();
+                    if (container.children.length === 0 && host) {
+                        host.remove();
+                    }
+                }, 200);
+            };
+
+            banner.onclick = dismiss;
+            container.appendChild(banner);
+
+            requestAnimationFrame(() => banner.classList.add("visible"));
+
+            if (duration > 0) {
+                setTimeout(dismiss, duration);
+            }
+        },
+
+        /**
          * Resolves the visual state (playing class, title, and state key) for play buttons.
          * @param {Object} options
          * @param {boolean} options.isActive

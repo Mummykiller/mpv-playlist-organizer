@@ -83,7 +83,8 @@ class MpvSessionManager:
                     else:
                         consecutive_failures += 1
                         current_health = "stale" if consecutive_failures < 3 else "dead"
-                except Exception:
+                except Exception as e:
+                    logging.debug(f"[PY][Health] IPC ping error: {e}")
                     consecutive_failures += 1
                     current_health = "stale" if consecutive_failures < 3 else "dead"
 
@@ -239,8 +240,8 @@ class MpvSessionManager:
             if platform.system() != "Windows":
                 try:
                     os.chmod(self.session_file, 0o600)
-                except OSError:
-                    pass
+                except OSError as e:
+                    logging.debug(f"[PY][Session] Could not set permissions on {self.session_file}: {e}")
             logging.info(f"[PY][Session] Saved session data to {self.session_file}")
         except Exception as e:
             logging.warning(f"[PY][Session] Failed to write session file: {e}")
@@ -495,8 +496,8 @@ class MpvSessionManager:
                     if os.path.exists(self.session_file):
                         try:
                             os.remove(self.session_file)
-                        except OSError:
-                            pass
+                        except OSError as e:
+                            logging.debug(f"[PY][Session] Could not remove stale session file {self.session_file}: {e}")
                     return {"was_stale": True, "folder_id": owner_folder_id, "return_code": -1}
 
             except Exception as e:
@@ -504,8 +505,8 @@ class MpvSessionManager:
                 if os.path.exists(self.session_file):
                     try:
                         os.remove(self.session_file)
-                    except OSError:
-                        pass
+                    except OSError as e:
+                        logging.debug(f"[PY][Session] Could not remove invalid session file {self.session_file}: {e}")
                 return None
 
     def _remote_log(self, message):
@@ -672,8 +673,8 @@ class MpvSessionManager:
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
-                except Exception:
-                    pass
+                except OSError as e:
+                    logging.debug(f"[PY][Session] Could not remove temp playlist {temp_path}: {e}")
 
 
     def remove(self, item_id, folder_id):
@@ -1027,8 +1028,8 @@ class MpvSessionManager:
                             try:
                                 start_time = int(float(lua_options.get('resume_time') or 0))
                                 self.ipc_manager.send({"command": ["set_property", "user-data/primed-resume-time", str(start_time)]})
-                            except (ValueError, TypeError):
-                                pass
+                            except (ValueError, TypeError) as e:
+                                logging.debug(f"[PY][Session] Failed to parse primed resume time: {e}")
 
                         if target_index != -1:
                             logging.info(f"Hot Swap: Item exists at index {target_index}. Jumping.")
@@ -1086,8 +1087,8 @@ class MpvSessionManager:
                     if self.ipc_path and os.path.exists(self.ipc_path) and platform.system() != "Windows":
                         try:
                             os.chmod(self.ipc_path, 0o600)
-                        except Exception:
-                            pass
+                        except OSError as e:
+                            logging.debug(f"[PY][Session] Could not set permissions on IPC socket {self.ipc_path}: {e}")
                     
                     self.register_ipc_callbacks()
                     self._start_health_watcher()

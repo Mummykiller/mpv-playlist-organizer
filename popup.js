@@ -7,7 +7,10 @@ import {
 	isYouTubeUrl,
 	normalizeYouTubeUrl,
 	sendMessageAsync,
+	notifyStatusBanner,
+	reportBrowserError,
 } from "./utils/commUtils.module.js";
+import { logger } from "./utils/SystemLogger.module.js";
 import { OptionsManager } from "./utils/settings.js";
 import { MpvInterface } from "./utils/MpvInterface.module.js";
 import { PlaylistRenderer } from "./utils/PlaylistRenderer.js";
@@ -17,24 +20,22 @@ window.addEventListener("error", (event) => {
 	const err = event.error;
 	const msg = err ? (err.message || String(err)) : (event.message || "Unknown error");
 	const stack = err?.stack || "";
-	sendMessageAsync({
-		action: "log_browser_error",
-		context: "Popup",
-		message: msg,
-		stack
-	}).catch(() => {});
+	reportBrowserError("Popup", msg, { stack, data: err }).catch((e) => {
+		logger?.warn?.("[Popup] Failed to report error to logger:", { data: e });
+	});
+	const statusEl = document.getElementById("status-message");
+	domUtils.updateStatusBanner(statusEl, `Error: ${msg}`, { isError: true });
 });
 
 window.addEventListener("unhandledrejection", (event) => {
 	const reason = event.reason;
 	const msg = reason ? (reason.message || String(reason)) : String(reason);
 	const stack = reason?.stack || "";
-	sendMessageAsync({
-		action: "log_browser_error",
-		context: "Popup",
-		message: msg,
-		stack
-	}).catch(() => {});
+	reportBrowserError("Popup", msg, { stack, data: reason }).catch((e) => {
+		logger?.warn?.("[Popup] Failed to report rejection to logger:", { data: e });
+	});
+	const statusEl = document.getElementById("status-message");
+	domUtils.updateStatusBanner(statusEl, `Error: ${msg}`, { isError: true });
 });
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -49,16 +50,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 	 * @param {boolean} isError - If true, styles the message as an error (red).
 	 */
 	function showStatus(text, isError = false) {
-		if (statusMessageElement) {
-			statusMessageElement.textContent = text;
-			
-			// Colors are defined in popup.css via variables
-			statusMessageElement.style.color = isError
-				? "var(--accent-danger)"
-				: "var(--accent-success)";
-		} else {
-			console.log(`[Status] ${isError ? "ERROR: " : ""}${text}`);
-		}
+		domUtils.updateStatusBanner(statusMessageElement, text, { isError });
 	}
 
 	try {
@@ -799,7 +791,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			let isInitiallyOpen = false;
 			try {
 				isInitiallyOpen = localStorage.getItem("mpv_full_settings_open") === "true";
-			} catch (e) {}
+			} catch (e) {
+				logger?.debug?.("[Popup] Failed to read full_settings_open from localStorage:", { data: e });
+			}
 
 			fullSettingsControls.style.display = isInitiallyOpen ? "block" : "none";
 			btnFullToggleSettings.classList.toggle("active", isInitiallyOpen);
@@ -811,7 +805,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 				btnFullToggleSettings.classList.toggle("active", willBeOpen);
 				try {
 					localStorage.setItem("mpv_full_settings_open", willBeOpen ? "true" : "false");
-				} catch (e) {}
+				} catch (e) {
+					logger?.debug?.("[Popup] Failed to write full_settings_open to localStorage:", { data: e });
+				}
 
 				if (willBeOpen) {
 					uiManager.sharedElements.settings.style.display = "block";
@@ -2054,7 +2050,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 									if (tabState.isClosing) setPlaybackClosing(true);
 									console.log("[Popup] Synced state from active tab controller.");
 								}
-							} catch (e) {}
+							} catch (e) {
+								logger?.debug?.("[Popup] Failed to sync state from active tab controller:", { data: e });
+							}
 						}
 
 						// Sync Mode: Correct initial mode if tab-specific state differs
@@ -2301,6 +2299,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 					);
 			}
 
+			if (request.action === "show_status_banner") {
+				showStatus(request.message, !!request.isError);
+				if (sendResponse) sendResponse({ success: true });
+				return true;
+			}
+
 			// New: Handle confirmation requests from the background script
 			if (request.action === "show_popup_confirmation") {
 				// This is an async action, so we must return true.
@@ -2309,6 +2313,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 						const confirmed = await showPopupConfirmation(request.message);
 						sendResponse({ confirmed });
 					} catch (e) {
+						logger?.warn?.("[Popup] show_popup_confirmation failed:", { data: e });
 						sendResponse({ confirmed: false });
 					}
 				})();
@@ -2505,11 +2510,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 	} catch (e) {
 		console.error("Error in DOMContentLoaded handler:", e);
 		showStatus(`Critical error: ${e.message}`, true);
-		sendMessageAsync({
-			action: "log_browser_error",
-			context: "Popup",
-			message: `Critical DOMContentLoaded error: ${e.message}`,
-			stack: e.stack || ""
-		}).catch(() => {});
+		reportBrowserError("Popup", `Critical DOMContentLoaded error: ${e.message}`, { stack: e.stack || "", data: e }).catch((logErr) => {
+			logger?.warn?.(`[Popup] Failed to send critical error to logger: ${logErr.message}`);
+		});
 	}
 });

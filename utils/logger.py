@@ -78,8 +78,8 @@ def initialize(data_dir: str, script_dir: str = None, level=logging.DEBUG):
         try:
             with open(browser_log_file, "a", encoding="utf-8") as f:
                 pass
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"[LOGGER] Could not touch browser log file: {e}", file=sys.stderr)
     
     # 1. Main Handler (Rotating File)
     main_handler = logging.handlers.RotatingFileHandler(
@@ -198,8 +198,8 @@ def _send_ui_notification(text, log_type):
     if send_func:
         try:
             send_func({"log": {"text": text, "type": log_type}})
-        except Exception:
-            pass
+        except (OSError, ValueError, TypeError) as e:
+            print(f"[LOGGER] Failed to send UI notification: {e}", file=sys.stderr)
 
 def set_ui_sender(send_func):
     """Injects the bridge's send_message function for UI notifications."""

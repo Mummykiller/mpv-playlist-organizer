@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import platform
 import shutil
 import subprocess
@@ -148,8 +149,8 @@ class InstallerLogic:
                                 if os.path.exists(path) and os.path.samefile(path, INSTALL_DIR):
                                     self.log(f"✅ Found ID '{ext_id}' in browser profile: '{profile}' (SameFile match)")
                                     return ext_id
-                            except Exception:
-                                pass
+                            except OSError as e:
+                                logging.debug(f"[INSTALLER] samefile check failed for '{path}': {e}")
 
                             # 2. Fallback to normalized string comparison
                             norm_path = os.path.realpath(path)
@@ -159,7 +160,8 @@ class InstallerLogic:
                             if norm_path == norm_install:
                                 self.log(f"✅ Found ID '{ext_id}' in browser profile: '{profile}' (Path match)")
                                 return ext_id
-                except Exception:
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+                    logging.debug(f"[INSTALLER] Error reading profile {pref_path}: {e}")
                     continue
 
         self.log(f"❌ Could not find an unpacked extension pointing to {INSTALL_DIR}")
@@ -276,8 +278,8 @@ class WindowsLogic(InstallerLogic):
                 if existing_mpv and os.path.exists(existing_mpv):
                     mpv_path = existing_mpv
                     self.log(f"mpv.exe found in existing config: {mpv_path}")
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError, KeyError) as e:
+                logging.debug(f"[INSTALLER] Could not get mpv executable from config: {e}")
 
         if not mpv_path and self.ask_file:
             self.log("mpv.exe not found. Prompting user to select it...")
@@ -367,8 +369,8 @@ class WindowsLogic(InstallerLogic):
                 key_path = os.path.join(reg_path, HOST_NAME)
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
                 self.log(f"Successfully unregistered from {browser}.")
-            except (FileNotFoundError, OSError):
-                pass
+            except (FileNotFoundError, OSError) as e:
+                logging.debug(f"[INSTALLER] Key {key_path} not found or could not be deleted: {e}")
 
         files_to_remove = [
             os.path.join(INSTALL_DIR, "run_native_host.bat"),
@@ -469,8 +471,8 @@ class UnixLogic(InstallerLogic):
             if os.path.lexists(symlink_path):
                 try:
                     os.remove(symlink_path)
-                except OSError:
-                    pass
+                except OSError as e:
+                    logging.debug(f"[INSTALLER] Could not remove symlink {symlink_path}: {e}")
         for f in [
             os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json"),
             os.path.join(DATA_DIR, f"{HOST_NAME}.json"),

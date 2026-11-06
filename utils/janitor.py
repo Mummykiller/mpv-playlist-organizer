@@ -54,8 +54,8 @@ class Janitor:
             volatile_dir = url_analyzer.VolatileCookieManager.get_volatile_dir()
             if volatile_dir and os.path.exists(volatile_dir) and volatile_dir not in scan_dirs:
                 scan_dirs.append(volatile_dir)
-        except Exception:
-            pass
+        except (AttributeError, OSError) as e:
+            logging.debug(f"Janitor: Could not get volatile dir: {e}")
 
         # Use topdown=False to allow cleaning empty directories after their content
         for scan_dir in scan_dirs:
@@ -90,8 +90,8 @@ class Janitor:
                                     else:
                                         logging.debug(f"Janitor: Preserving old {ext} file because PID {pid} is still alive: {filename}")
 
-                            except FileNotFoundError:
-                                pass
+                            except FileNotFoundError as e:
+                                logging.debug(f"Janitor: Stale file already removed {file_path}: {e}")
                             except (ValueError, OSError) as e:
                                 logging.warning(f"Janitor: Error removing stale file {filename}: {e}")
                             break
@@ -102,8 +102,8 @@ class Janitor:
                             if os.path.getmtime(file_path) < three_days_ago:
                                 logging.info(f"Janitor: Removing old temporary file (no PID match/older than 72h): {filename}")
                                 os.remove(file_path)
-                        except FileNotFoundError:
-                            pass
+                        except FileNotFoundError as e:
+                            logging.debug(f"Janitor: Temp file already removed {file_path}: {e}")
                         except OSError as e:
                             logging.warning(f"Janitor: Error removing old file {filename}: {e}")
 
@@ -150,14 +150,14 @@ class Janitor:
                                         manager.close()
                                         if mpv_pid and is_pid_running(mpv_pid):
                                             is_socket_responsive = True
-                                except Exception:
-                                    pass
+                                except (OSError, ValueError, TimeoutError) as e:
+                                    logging.debug(f"Janitor: Socket unresponsive or check failed for {item_path}: {e}")
 
                                 if not is_socket_responsive:
                                     logging.info(f"Janitor: Removing stale socket older than 72h: {item}")
                                     os.remove(item_path)
-                        except FileNotFoundError:
-                            pass
+                        except FileNotFoundError as e:
+                            logging.debug(f"Janitor: Socket already removed {item_path}: {e}")
                         except OSError as e:
                             logging.warning(f"Janitor: Error removing stale socket {item}: {e}")
                         continue
@@ -171,8 +171,8 @@ class Janitor:
                                 if not is_pid_running(pid):
                                     logging.info(f"Janitor: Removing stale flag older than 72h: {item}")
                                     os.remove(item_path)
-                        except FileNotFoundError:
-                            pass
+                        except FileNotFoundError as e:
+                            logging.debug(f"Janitor: Temp file already removed {file_path}: {e}")
                         except OSError as e:
                             logging.warning(f"Janitor: Error removing stale flag {item}: {e}")
                         continue
@@ -208,8 +208,8 @@ class Janitor:
                             if not is_pid_running(pid):
                                 logging.info(f"Janitor: Removing stale flag file older than 72h: {item}")
                                 os.remove(item_path)
-                    except FileNotFoundError:
-                        pass
+                    except FileNotFoundError as e:
+                        logging.debug(f"Janitor: Flag already removed {item_path}: {e}")
                     except OSError as e:
                         logging.warning(f"Janitor: Error removing stale flag {item}: {e}")
         except Exception as e:
@@ -236,5 +236,5 @@ class Janitor:
             if os.path.exists(lock_file):
                 try:
                     os.remove(lock_file)
-                except Exception:
-                    pass
+                except OSError as e:
+                    logging.debug(f"Janitor: Could not remove lock file {lock_file}: {e}")

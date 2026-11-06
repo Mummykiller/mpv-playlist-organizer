@@ -22,6 +22,67 @@ SECURITY_LIMITS = {
     'MAX_IPC_MESSAGE_SIZE': 5 * 1024 * 1024,  # 5MB
 }
 
+# --- Subprocess Environment Scrubbing ---
+PYTHON_ENV_VARS_TO_SCRUB = {
+    'PYTHONPATH',
+    'PYTHONHOME',
+    'PYTHONIOENCODING',
+    'PYTHONDONTWRITEBYTECODE',
+    'PYTHONUNBUFFERED',
+}
+
+POSIX_ALLOWED_ENV_VARS = {
+    'HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'PWD', 'SHELL', 'TERM', 'USER',
+    'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+    'XDG_CACHE_HOME', 'DBUS_SESSION_BUS_ADDRESS',
+    'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP',
+    'MPV_HOME', 'PULSE_SERVER', 'PIPEWIRE_RUNTIME_DIR',
+    'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+    'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+    'SSL_CERT_FILE', 'SSL_CERT_DIR'
+}
+
+WINDOWS_SENSITIVE_ENV_PREFIXES = {
+    'AWS_', 'GIT_', 'SSH_', 'SECRET', 'TOKEN', 'PASSWORD', 'API_KEY'
+}
+
+def get_scrubbed_env(base_env=None, keep_terminal=False) -> dict:
+    """
+    Scrubs environment variables for secure and isolated subprocess execution.
+    - Strips Python runtime contamination variables (PYTHONPATH, PYTHONHOME, etc.).
+    - On Windows, retains safe system variables while stripping sensitive credential keys.
+    - On POSIX, restricts to a vetted allowlist unless keep_terminal is True.
+    Returns a clean dictionary.
+    """
+    if base_env is None:
+        source_env = os.environ.copy()
+    else:
+        source_env = dict(base_env)
+
+    # 1. Strip Python contamination variables
+    for var in PYTHON_ENV_VARS_TO_SCRUB:
+        source_env.pop(var, None)
+
+    if keep_terminal:
+        return source_env
+
+    # 2. Platform-specific security filtering
+    if platform.system() == "Windows":
+        # Windows: Retain full environment minus sensitive credentials
+        clean_env = {}
+        for key, val in source_env.items():
+            key_upper = key.upper()
+            if not any(s in key_upper for s in WINDOWS_SENSITIVE_ENV_PREFIXES):
+                clean_env[key] = val
+        return clean_env
+    else:
+        # Linux / macOS: Strict whitelist approach
+        clean_env = {}
+        for key, val in source_env.items():
+            if key.upper() in POSIX_ALLOWED_ENV_VARS or key.startswith("LC_") or key.startswith("XDG_"):
+                clean_env[key] = val
+        return clean_env
+
 # --- Protocol Allowlist ---
 ALLOWED_PROTOCOLS = ('http://', 'https://', 'file://', 'udp://', 'rtmp://', 'rtsp://', 'mms://')
 
@@ -91,14 +152,15 @@ def is_safe_url(url):
             if ip.is_private or ip.is_loopback or ip.is_link_local:
                 logging.warning(f"Security: Direct IP SSRF Block for {hostname}")
                 return False
-        except ValueError:
+        except ValueError as e:
             # Not a direct IP, continue to resolution
-            pass
+            logging.debug(f"SSRF Check: Hostname '{hostname}' is not a direct IP literal: {e}")
 
         # 2. Resolution Check
         try:
             ip_str = socket.gethostbyname(hostname)
-        except socket.gaierror:
+        except socket.gaierror as e:
+            logging.debug(f"SSRF Check: DNS resolution failed for '{hostname}': {e}")
             return False
 
         ip = ipaddress.ip_address(ip_str)

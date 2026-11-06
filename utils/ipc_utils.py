@@ -342,8 +342,8 @@ class IPCSocketManager:
             resp = self.send({"command": ["get_property", name]}, timeout=timeout, expect_response=True)
             if resp and resp.get("error") == "success":
                 return resp.get("data", default)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"Failed to get property '{name}': {e}")
         return default
 
     def log_to_mpv(self, message):
@@ -351,35 +351,91 @@ class IPCSocketManager:
         if self.is_connected():
             try:
                 self.send({"command": ["script-message", "python_log", message]}, expect_response=False)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.debug(f"Failed to send log to mpv: {e}")
 
-    def close(self):
-        """Closes the IPC socket handle and marks it as disconnected."""
+    @staticmethod
+    def _is_socket_stale(path):
+        """Returns True if the Unix socket file at path is stale/dead (cannot connect)."""
+        if platform.system() == "Windows" or not path or not os.path.exists(path):
+            return False
+        try:
+            test_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            test_sock.settimeout(0.1)
+            try:
+                test_sock.connect(path)
+                test_sock.close()
+                return False  # Actively listening
+            except (ConnectionRefusedError, FileNotFoundError, OSError):
+                return True   # Refused or dead socket
+            finally:
+                try:
+                    test_sock.close()
+                except Exception as e:
+                    logging.debug(f"Error closing probe socket: {e}")
+        except Exception as e:
+            logging.debug(f"Probe socket error for {path}: {e}")
+            return True
+
+    @classmethod
+    def cleanup_stale_sockets(cls):
+        """
+        Audits and unlinks stale socket files in /tmp/mpv_sockets, /dev/shm, IPC_DIR_LINUX, and /tmp.
+        """
+        if platform.system() == "Windows":
+            return
+        
+        import stat
+        candidate_dirs = ["/tmp/mpv_sockets", "/dev/shm", IPC_DIR_LINUX, "/tmp"]
+        for cdir in candidate_dirs:
+            if not cdir or not os.path.isdir(cdir) or not os.access(cdir, os.R_OK | os.W_OK):
+                continue
+            try:
+                for entry in os.listdir(cdir):
+                    if entry.startswith("mpv-socket-") or entry.startswith("mpv_socket_") or entry.startswith("mpv_socket"):
+                        full_path = os.path.join(cdir, entry)
+                        try:
+                            st = os.stat(full_path)
+                            if stat.S_ISSOCK(st.st_mode) and cls._is_socket_stale(full_path):
+                                os.unlink(full_path)
+                                logging.info(f"Unlinked stale IPC socket: {full_path}")
+                        except OSError as err:
+                            logging.debug(f"Failed to inspect/unlink socket {full_path}: {err}")
+            except Exception as e:
+                logging.debug(f"Error scanning directory {cdir} for stale sockets: {e}")
+
+    def close(self, unlink_socket=None):
+        """
+        Closes the IPC socket handle, shuts down the reader thread, and ensures no
+        socket descriptor or stale socket file leaks in /tmp/mpv_sockets, /dev/shm, etc.
+        """
         # 1. Stop the reader thread first if it's running
         with self._buffer_lock:
             if self._event_reader_running:
                 self._event_reader_running = False
                 self._buffer_lock.notify_all()
 
+        ipc_path = self._ipc_path
+
         # 2. Close handles to break any blocking readline() calls
+        if self._sock_file:
+            try:
+                self._sock_file.close()
+            except (OSError, ValueError) as e:
+                logging.debug(f"Error closing sock_file: {e}")
+            self._sock_file = None
+
         if self._sock:
-            if self._sock_file:
-                try:
-                    self._sock_file.close()
-                except Exception:
-                    pass
-                self._sock_file = None
             try:
                 if self._system == "Windows":
                     self._sock.close()
                 else:
                     try:
                         self._sock.shutdown(socket.SHUT_RDWR)
-                    except Exception:
-                        pass
+                    except (OSError, socket.error) as e:
+                        logging.debug(f"Socket shutdown note (expected if already closed): {e}")
                     self._sock.close()
-                logging.info(f"Closed MPV IPC connection to {self._ipc_path}")
+                logging.info(f"Closed MPV IPC connection to {ipc_path}")
             except Exception as e:
                 logging.debug(f"Error closing IPC socket: {e}")
             finally:
@@ -388,7 +444,7 @@ class IPCSocketManager:
 
         if self._event_reader_thread and self._event_reader_thread.is_alive():
             # Join with timeout to avoid hanging if readline is still blocking
-            self._event_reader_thread.join(timeout=1.0) 
+            self._event_reader_thread.join(timeout=1.0)
             if self._event_reader_thread.is_alive():
                 logging.debug("IPC event reader thread did not terminate gracefully (likely blocked on I/O).")
         self._event_reader_thread = None
@@ -396,6 +452,24 @@ class IPCSocketManager:
         # Clear any buffered events that were not processed
         with self._buffer_lock:
             self._event_buffer.clear()
+
+        # 3. Socket file cleanup on Unix
+        if self._system != "Windows" and ipc_path:
+            should_unlink = False
+            if unlink_socket is True:
+                should_unlink = True
+            elif unlink_socket is None and os.path.exists(ipc_path):
+                should_unlink = self._is_socket_stale(ipc_path)
+
+            if should_unlink and os.path.exists(ipc_path):
+                try:
+                    os.unlink(ipc_path)
+                    logging.info(f"Cleaned up stale IPC socket file: {ipc_path}")
+                except OSError as e:
+                    logging.debug(f"Failed to unlink IPC socket file {ipc_path}: {e}")
+
+        # 4. Audit and clean any orphaned/stale sockets in /tmp/mpv_sockets, /dev/shm, etc.
+        self.cleanup_stale_sockets()
 
 def is_process_alive(pid, ipc_path):
     """
@@ -453,6 +527,6 @@ def get_ipc_path():
         os.makedirs(IPC_DIR_LINUX, exist_ok=True)
         try:
             os.chmod(IPC_DIR_LINUX, 0o700)
-        except OSError:
-            pass
+        except OSError as e:
+            logging.debug(f"Could not chmod IPC dir {IPC_DIR_LINUX}: {e}")
         return os.path.join(IPC_DIR_LINUX, f"mpv-socket-{pid}")

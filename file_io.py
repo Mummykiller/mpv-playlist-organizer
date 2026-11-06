@@ -5,6 +5,7 @@ import platform
 import shutil
 import sys
 import re
+from dataclasses import dataclass
 from utils import security
 
 # Prevent __pycache__ generation
@@ -146,8 +147,8 @@ class FileLock:
                                     if self._remove_lock_file():
                                         time.sleep(self.delay)
                                         continue
-                            except OSError:
-                                pass
+                            except OSError as e:
+                                logging.debug(f"[PY][IO] Could not check mtime for empty lock file {self.lockfile}: {e}")
                 except Exception as e:
                     logging.debug(f"[PY][IO] Error checking lock staleness: {e}")
                 
@@ -160,8 +161,8 @@ class FileLock:
         try:
              with open(self.lockfile, 'r') as f:
                 holder_pid = f.read().strip()
-        except Exception:
-            pass
+        except (OSError, UnicodeDecodeError) as e:
+            logging.debug(f"[PY][IO] Could not read lock holder PID from {self.lockfile}: {e}")
         raise RuntimeError(f"Could not acquire lock for {self.filepath} after {self.timeout}s. Held by PID: {holder_pid}")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -196,6 +197,38 @@ def get_user_data_dir():
             return os.path.join(xdg_data_home, app_name)
         return os.path.join(os.path.expanduser('~/.local/share'), app_name)
 
+# --- Path Definitions & Configuration ---
+
+@dataclass
+class PathConfig:
+    project_root: str
+    script_dir: str
+    data_dir: str
+    temp_dir: str
+    folders_file: str
+    index_file: str
+    playlists_dir: str
+    config_file: str
+    export_dir: str
+
+    @classmethod
+    def create(cls, data_dir=None, project_root=None, script_dir=None, temp_dir=None):
+        p_root = project_root or _CURRENT_DIR
+        s_dir = script_dir or os.path.dirname(os.path.abspath(sys.argv[0]))
+        d_dir = data_dir or get_user_data_dir()
+        t_dir = temp_dir or os.path.join(tempfile.gettempdir(), "mpv_playlist_organizer")
+        return cls(
+            project_root=p_root,
+            script_dir=s_dir,
+            data_dir=d_dir,
+            temp_dir=t_dir,
+            folders_file=os.path.join(d_dir, "folders.json"),
+            index_file=os.path.join(d_dir, "index.json"),
+            playlists_dir=os.path.join(d_dir, "playlists"),
+            config_file=os.path.join(d_dir, "config.json"),
+            export_dir=os.path.join(d_dir, "exported")
+        )
+
 # Get the directory where the current file (file_io.py) is located (project root)
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = _CURRENT_DIR
@@ -208,22 +241,46 @@ import tempfile
 TEMP_DIR = os.path.join(tempfile.gettempdir(), "mpv_playlist_organizer")
 try:
     os.makedirs(TEMP_DIR, exist_ok=True)
-except Exception:
-    pass
+except OSError as e:
+    logging.warning(f"[PY][IO] Failed to create temp directory at {TEMP_DIR}: {e}")
 
-def initialize_paths():
-    """Updates all global paths based on the current DATA_DIR. Useful for testing."""
-    global FOLDERS_FILE, INDEX_FILE, PLAYLISTS_DIR, CONFIG_FILE, EXPORT_DIR
-    FOLDERS_FILE = os.path.join(DATA_DIR, "folders.json")
-    INDEX_FILE = os.path.join(DATA_DIR, "index.json")
-    PLAYLISTS_DIR = os.path.join(DATA_DIR, "playlists")
-    CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
-    EXPORT_DIR = os.path.join(DATA_DIR, "exported")
+paths: PathConfig = None
+path_config: PathConfig = None
+
+def get_paths() -> PathConfig:
+    """Returns the current structured PathConfig container."""
+    global paths
+    if paths is None:
+        initialize_paths()
+    return paths
+
+def initialize_paths(new_data_dir=None):
+    """Updates all global paths based on DATA_DIR. Useful for testing."""
+    global DATA_DIR, FOLDERS_FILE, INDEX_FILE, PLAYLISTS_DIR, CONFIG_FILE, EXPORT_DIR, TEMP_DIR, paths, path_config
+    if new_data_dir is not None:
+        DATA_DIR = new_data_dir
+
+    paths = PathConfig.create(
+        data_dir=DATA_DIR,
+        project_root=PROJECT_ROOT,
+        script_dir=SCRIPT_DIR,
+        temp_dir=TEMP_DIR
+    )
+    path_config = paths
+
+    # Maintain backward compatibility for direct module global access
+    FOLDERS_FILE = paths.folders_file
+    INDEX_FILE = paths.index_file
+    PLAYLISTS_DIR = paths.playlists_dir
+    CONFIG_FILE = paths.config_file
+    EXPORT_DIR = paths.export_dir
 
     try:
         os.makedirs(PLAYLISTS_DIR, exist_ok=True)
-    except Exception:
-        pass
+    except OSError as e:
+        logging.warning(f"[PY][IO] Failed to create playlists directory at {PLAYLISTS_DIR}: {e}")
+
+    return paths
 
 # Initialize paths once on module load
 initialize_paths()
@@ -250,7 +307,11 @@ def migrate_to_shards():
             return
 
         index_data = {}
-        os.makedirs(PLAYLISTS_DIR, exist_ok=True)
+        try:
+            os.makedirs(PLAYLISTS_DIR, exist_ok=True)
+        except OSError as e:
+            logging.error(f"[PY][IO] Migration failed: Could not create playlists directory at {PLAYLISTS_DIR}: {e}")
+            return
 
         for folder_id, folder_data in raw_folders.items():
             playlist = folder_data.pop("playlist", [])
@@ -272,8 +333,8 @@ def migrate_to_shards():
             # We keep the old folders.json for a short period or rename it
             try:
                 os.rename(FOLDERS_FILE, f"{FOLDERS_FILE}.migrated")
-            except Exception:
-                pass
+            except OSError as e:
+                logging.warning(f"[PY][IO] Failed to rename migrated folders file {FOLDERS_FILE}: {e}")
 
 def get_index():
     """Loads the folder index (metadata only)."""
@@ -425,8 +486,8 @@ def _atomic_json_dump(data, filepath):
         if os.path.exists(tmp_file):
             try:
                 os.remove(tmp_file)
-            except Exception:
-                pass
+            except OSError as rm_err:
+                logging.debug(f"[PY][IO] Could not remove temp file {tmp_file}: {rm_err}")
         return False
 
 def _safe_json_load(filepath, default_factory=dict):

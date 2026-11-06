@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
 import threading
 import queue
+import logging
 import re
 import platform
 import os
@@ -174,8 +175,8 @@ class HostManagerApp:
                 if allowed_origins:
                     ext_id = allowed_origins[0].replace("chrome-extension://", "").replace("/", "")
                     self.extension_id_var.set(ext_id)
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError, KeyError, IndexError) as e:
+                logging.debug(f"[UI] Failed to read existing manifest: {e}")
 
         current_config = file_io.get_settings()
         self.create_bypass_var.set(current_config.get("enable_url_analysis", False))
@@ -206,15 +207,15 @@ class HostManagerApp:
         self.log_area.configure(state='disabled')
 
     def _process_log_queue(self):
-        try:
-            while True:
+        while True:
+            try:
                 msg = self.log_queue.get_nowait()
-                self.log_area.configure(state='normal')
-                self.log_area.insert(tk.END, msg + "\n")
-                self.log_area.configure(state='disabled')
-                self.log_area.see(tk.END)
-        except queue.Empty:
-            pass
+            except queue.Empty:
+                break
+            self.log_area.configure(state='normal')
+            self.log_area.insert(tk.END, msg + "\n")
+            self.log_area.configure(state='disabled')
+            self.log_area.see(tk.END)
         self.root.after(100, self._process_log_queue)
 
     def log(self, message):

@@ -6,6 +6,7 @@ import subprocess
 import threading
 import logging
 from urllib.request import urlopen
+from urllib.error import URLError
 
 SERVER_PREFIX = "server_"
 SERVER_EXT = ".m3u"
@@ -75,10 +76,10 @@ class M3UServer:
                                 if data.get("status") == "running" and data.get("port"):
                                     self.port = int(data.get("port"))
                                     break
-                            except json.JSONDecodeError:
-                                pass
-                    except (IOError, ValueError):
-                        pass
+                            except json.JSONDecodeError as json_err:
+                                logging.debug(f"[M3U_SERVER] Line is not json: {json_err}")
+                    except (IOError, ValueError) as io_err:
+                        logging.debug(f"[M3U_SERVER] Error reading stdout line: {io_err}")
                     
                     # Reset to blocking for future reads if needed, or just sleep
                     time.sleep(0.1)
@@ -87,8 +88,8 @@ class M3UServer:
                 if fcntl is not None:
                     try:
                         fcntl.fcntl(fd, fcntl.F_SETFL, fl)
-                    except Exception:
-                        pass
+                    except OSError as fcntl_err:
+                        logging.debug(f"[M3U_SERVER] Error resetting fcntl flags: {fcntl_err}")
                 
                 def consume_stderr(proc):
                     for line in iter(proc.stderr.readline, ''):
@@ -107,8 +108,8 @@ class M3UServer:
                         with urlopen(fetch_url, timeout=0.2) as r:
                             if r.getcode() == 200:
                                 return fetch_url
-                    except Exception:
-                        pass
+                    except (URLError, OSError, TimeoutError) as poll_err:
+                        logging.debug(f"[M3U_SERVER] Server not ready yet: {poll_err}")
                     time.sleep(0.2)
                 
                 raise RuntimeError("Server timeout.")
@@ -124,11 +125,12 @@ class M3UServer:
                 try:
                     self.process.terminate()
                     self.process.wait(timeout=2)
-                except Exception:
+                except (subprocess.SubprocessError, OSError) as term_err:
+                    logging.debug(f"[M3U_SERVER] Error terminating server process: {term_err}")
                     try:
                         self.process.kill()
-                    except Exception:
-                        pass
+                    except (subprocess.SubprocessError, OSError) as kill_err:
+                        logging.debug(f"[M3U_SERVER] Error killing server process: {kill_err}")
                 self.process = None
                 self.port = None
                 time.sleep(0.2)
@@ -136,6 +138,6 @@ class M3UServer:
             if self.temp_file and os.path.exists(self.temp_file):
                 try:
                     os.remove(self.temp_file)
-                except Exception:
-                    pass
+                except OSError as rm_err:
+                    logging.debug(f"[M3U_SERVER] Error removing temp file: {rm_err}")
                 self.temp_file = None

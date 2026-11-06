@@ -68,8 +68,8 @@ class CommandLineApp:
                 with open(manifest_path, 'r') as f:
                     data = json.load(f)
                     current_id = data.get("allowed_origins", [""])[0].replace("chrome-extension://", "").replace("/", "")
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError, KeyError, IndexError) as e:
+                print(f"[DEBUG] Failed to parse manifest {manifest_path}: {e}", file=sys.stderr)
 
         if current_id:
             print(f"Current Extension ID: {current_id}")

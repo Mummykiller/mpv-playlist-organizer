@@ -1,5 +1,6 @@
 import re
 import difflib
+import logging
 
 class SmartReorder:
     """
@@ -47,8 +48,8 @@ class SmartReorder:
             val = e_match.group(1) or e_match.group(2) or e_match.group(3)
             try:
                 episode = float(val)
-            except ValueError:
-                pass
+            except (ValueError, TypeError) as e:
+                logging.debug(f"[SMART_REORDER] Could not convert episode '{val}' to float: {e}")
                 
         return season, episode
 

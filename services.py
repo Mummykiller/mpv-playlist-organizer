@@ -85,8 +85,8 @@ def get_gpu_vendor():
             return "intel"
         elif "amd" in output or "radeon" in output:
             return "amd"
-    except Exception:
-        pass
+    except (subprocess.SubprocessError, OSError, FileNotFoundError) as e:
+        logging.debug(f"[PY][Services] GPU detection failed: {e}")
     return "unknown"
 
 def get_mark_watched(item, settings):
@@ -141,7 +141,8 @@ def construct_lua_options(item, settings, script_dir, index=None):
     raw_resume = item.get('resume_time') if item.get('resume_time') is not None else item.get('resumeTime')
     try:
         resume_time = int(float(raw_resume)) if raw_resume is not None else 0
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logging.debug(f"[PY][Services] Could not parse resume_time '{raw_resume}': {e}")
         resume_time = 0
         
     logging.info(f"[PY][Services] construct_lua_options: item='{item.get('title')}', resume_time={resume_time}")

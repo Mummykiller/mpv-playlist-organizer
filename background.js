@@ -31,14 +31,18 @@ let autoAddTimer = null;
 
 // HAIL MARY RECOVERY: Check if we just restarted due to an injection failure
 chrome.storage.local.get("hail_mary_pending", (data) => {
-	if (data.hail_mary_pending) {
-		setTimeout(() => {
-			broadcastLog({ 
-				text: "[System]: Extension was automatically restarted to recover from a blocked or unresponsive on-page controller.", 
-				type: "info"
-			});
-			chrome.storage.local.remove("hail_mary_pending");
-		}, 1000); // Small delay to ensure UIs are ready to receive the log
+	try {
+		if (data?.hail_mary_pending) {
+			setTimeout(() => {
+				broadcastLog({ 
+					text: "[System]: Extension was automatically restarted to recover from a blocked or unresponsive on-page controller.", 
+					type: "info"
+				});
+				chrome.storage.local.remove("hail_mary_pending");
+			}, 1000); // Small delay to ensure UIs are ready to receive the log
+		}
+	} catch (e) {
+		logger.debug(`[Background] hail_mary_pending check failed: ${e.message}`);
 	}
 });
 
@@ -120,7 +124,7 @@ const handleAutoAdd = async (url, tab) => {
 					}
 				}
 			} catch (e) {
-				console.warn("[Auto-Add] Failed to watch for better title:", e);
+				logger.warn(`[Auto-Add] Failed to watch for better title: ${e.message}`, { data: e });
 			}
 		})();
 	}
@@ -191,7 +195,7 @@ const actionHandlers = {
 					}
 				}
 			} catch (e) {
-				console.warn("[Auto-Add] Retroactive check failed:", e);
+				logger.warn(`[Auto-Add] Retroactive check failed: ${e.message}`, { data: e });
 			}
 		} else {
 			if (autoAddTimer) clearTimeout(autoAddTimer);
@@ -297,23 +301,31 @@ addNativeListener("log", (data) => {
 const activeTasks = new Map();
 
 addNativeListener("update_item_title", (data) => {
-	playlistManager.handleUpdateItemTitle(data);
+	try {
+		playlistManager.handleUpdateItemTitle(data);
+	} catch (e) {
+		logger.warn(`[Background] update_item_title listener failed: ${e.message}`);
+	}
 });
 
 addNativeListener("task_update", async (data) => {
-	const { task, removed, taskId, task_id } = data;
-	const id = taskId || task_id || task?.id;
-	if (!id) return;
+	try {
+		const { task, removed, taskId, task_id } = data;
+		const id = taskId || task_id || task?.id;
+		if (!id) return;
 
-	if (removed) {
-		activeTasks.delete(id);
-	} else {
-		activeTasks.set(id, task);
+		if (removed) {
+			activeTasks.delete(id);
+		} else {
+			activeTasks.set(id, task);
+		}
+
+		// Sync to storage for UI observation
+		const taskList = Array.from(activeTasks.values());
+		await chrome.storage.local.set({ mpv_active_tasks: taskList });
+	} catch (e) {
+		logger.warn(`[Background] task_update listener failed: ${e.message}`);
 	}
-
-	// Sync to storage for UI observation
-	const taskList = Array.from(activeTasks.values());
-	await chrome.storage.local.set({ mpv_active_tasks: taskList });
 });
 
 m3u8_scanner_handlers.setDetectionCallback(async (url, tabId) => {
@@ -321,7 +333,9 @@ m3u8_scanner_handlers.setDetectionCallback(async (url, tabId) => {
 		try {
 			const tab = await chrome.tabs.get(tabId);
 			handleAutoAdd(url, tab);
-		} catch (e) {}
+		} catch (e) {
+			logger.debug(`[Background] Failed to get tab for auto-add: ${e.message}`);
+		}
 	}
 });
 
@@ -343,6 +357,7 @@ async function performNativeHostHeartbeat() {
 	} catch (e) {
 		nativeHostStatus.status = "offline";
 		nativeHostStatus.lastCheck = Date.now();
+		logger.debug(`[Background] Native host heartbeat failed: ${e.message}`);
 	}
 }
 
@@ -401,60 +416,72 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
-	await storage.initialize();
-	await updateContextMenus(storage);
-	chrome.alarms.create("periodic-storage-janitor", { periodInMinutes: 10080 });
-	logger.info("[BG] MPV Handler extension installed and initialized.");
+	try {
+		await storage.initialize();
+		await updateContextMenus(storage);
+		chrome.alarms.create("periodic-storage-janitor", { periodInMinutes: 10080 });
+		logger.info("[BG] MPV Handler extension installed and initialized.");
+	} catch (e) {
+		logger.error(`[Background] onInstalled failed: ${e.message}`, { persist: true, stack: e.stack });
+	}
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-	if (alarm.name === "periodic-storage-janitor") {
-		storage
-			.runJanitorTasks()
-			.catch((e) => logger.error("Janitor alarm failed:", e));
-	} else if (alarm.name === "native-host-heartbeat") {
-		performNativeHostHeartbeat();
-	} else if (alarm.name === "metadata-cache-sync") {
-		syncMetadataCache();
-	} else if (alarm.name === "sync-to-native-host") {
-		_syncToNativeHostFile();
+	try {
+		if (alarm.name === "periodic-storage-janitor") {
+			storage
+				.runJanitorTasks()
+				.catch((e) => logger.error("Janitor alarm failed:", e));
+		} else if (alarm.name === "native-host-heartbeat") {
+			performNativeHostHeartbeat().catch((e) => logger.debug(`[Background] Alarm heartbeat failed: ${e.message}`));
+		} else if (alarm.name === "metadata-cache-sync") {
+			syncMetadataCache().catch((e) => logger.debug(`[Background] Alarm metadata sync failed: ${e.message}`));
+		} else if (alarm.name === "sync-to-native-host") {
+			_syncToNativeHostFile();
+		}
+	} catch (e) {
+		logger.error(`[Background] onAlarm failed: ${e.message}`, { persist: true, stack: e.stack });
 	}
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-	const { menuItemId, linkUrl, srcUrl, pageUrl } = info;
-	const urlToAdd = linkUrl || srcUrl || pageUrl;
-	if (!urlToAdd) return;
+	try {
+		const { menuItemId, linkUrl, srcUrl, pageUrl } = info;
+		const urlToAdd = linkUrl || srcUrl || pageUrl;
+		if (!urlToAdd) return;
 
-	const getFolderId = async () => {
-		if (menuItemId.startsWith("add-to-folder-"))
-			return menuItemId.substring("add-to-folder-".length);
-		if (menuItemId.startsWith("add-playlist-to-folder-"))
-			return menuItemId.substring("add-playlist-to-folder-".length);
-		const data = await storage.get();
-		return data.settings.lastUsedFolderId;
-	};
+		const getFolderId = async () => {
+			if (menuItemId.startsWith("add-to-folder-"))
+				return menuItemId.substring("add-to-folder-".length);
+			if (menuItemId.startsWith("add-playlist-to-folder-"))
+				return menuItemId.substring("add-playlist-to-folder-".length);
+			const data = await storage.get();
+			return data.settings.lastUsedFolderId;
+		};
 
-	const folderId = await getFolderId();
-	if (folderId) {
-		if (
-			menuItemId.startsWith("add-playlist-to-folder-") ||
-			menuItemId === "add-playlist-to-last-used"
-		) {
-			playlistManager.handleAddFromContextMenu(
-				folderId,
-				urlToAdd,
-				"YouTube Playlist",
-				tab,
-			);
-		} else {
-			playlistManager.handleAddFromContextMenu(
-				folderId,
-				urlToAdd,
-				tab.title || urlToAdd,
-				tab,
-			);
+		const folderId = await getFolderId();
+		if (folderId) {
+			if (
+				menuItemId.startsWith("add-playlist-to-folder-") ||
+				menuItemId === "add-playlist-to-last-used"
+			) {
+				playlistManager.handleAddFromContextMenu(
+					folderId,
+					urlToAdd,
+					"YouTube Playlist",
+					tab,
+				);
+			} else {
+				playlistManager.handleAddFromContextMenu(
+					folderId,
+					urlToAdd,
+					tab.title || urlToAdd,
+					tab,
+				);
+			}
 		}
+	} catch (e) {
+		logger.error(`[Background] contextMenu click failed: ${e.message}`, { persist: true, stack: e.stack });
 	}
 });
 
@@ -468,7 +495,10 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 	logger.info(`[Background] injectIntoTab ENTRY: Tab ${tabId} (Attempt ${attempt})`, { persist: true });
 
 	// 1. Fetch fresh tab data
-	const tab = await chrome.tabs.get(tabId).catch(() => null);
+	const tab = await chrome.tabs.get(tabId).catch((err) => {
+		logger.debug(`[Background] Failed to get tab ${tabId}: ${err?.message}`);
+		return null;
+	});
 	if (!tab) {
 		logger.info(`[Background] injectIntoTab: Tab ${tabId} no longer exists. Skipping.`, { persist: true });
 		return;
@@ -515,14 +545,19 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 			const isAlive = await chrome.tabs
 				.sendMessage(tab.id, { action: "ping" })
 				.then((res) => res?.success)
-				.catch(() => false);
+				.catch((err) => {
+					logger.debug(`[Background] Early exit ping failed: ${err?.message}`);
+					return false;
+				});
 
 			if (isAlive) {
 				logger.info(`[Background] Tab ${tab.id} already has a responsive script. Syncing...`, { persist: true });
 				let origin = null;
 				try {
 					origin = new URL(tab.url).origin;
-				} catch (e) {}
+				} catch (e) {
+					logger.debug(`[Background] URL origin parse failed: ${e.message}`);
+				}
 				await ui_state_handlers.handleContentScriptInit(
 					{},
 					{ tab: tab, origin: origin },
@@ -550,7 +585,9 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 					window.mpvControllerInitialized = false;
 				},
 			})
-			.catch(() => {});
+			.catch((err) => {
+				logger.debug(`[Background] Script pre-cleanup error: ${err?.message}`);
+			});
 
 		await chrome.scripting.executeScript({
 			target: { tabId: tab.id },
@@ -562,7 +599,10 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 		const confirmedAlive = await chrome.tabs
 			.sendMessage(tab.id, { action: "ping" })
 			.then((res) => res?.success)
-			.catch(() => false);
+			.catch((err) => {
+				logger.debug(`[Background] Verification ping failed: ${err?.message}`);
+				return false;
+			});
 
 		if (!confirmedAlive && attempt < MAX_ATTEMPTS) {
 			logger.warn(`[Background] Injection Verification FAILED for tab ${tab.id}. Retrying in ${RETRY_DELAY/1000}s...`, { persist: true });
@@ -592,7 +632,9 @@ async function reinjectContentScripts() {
 		for (const tab of tabs) {
 			await injectIntoTab(tab);
 		}
-	} catch (err) {}
+	} catch (err) {
+		logger.warn(`[Background] reinjectContentScripts failed: ${err.message}`);
+	}
 }
 
 // Lazy injection: inject when a user actually switches to a tab
@@ -604,12 +646,17 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 		// Proactive broadcast: Even if the script is already there,
 		// tell it to refresh its view of the global playback state.
 		const data = await storage.get();
-		const currentStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ isRunning: false }));
+		const currentStatus = await playback_handlers.handleIsMpvRunning().catch((err) => {
+			logger.debug(`[Background] handleIsMpvRunning failed: ${err?.message}`);
+			return { isRunning: false };
+		});
 		
 		if (currentStatus?.isRunning) {
 			await broadcastPlaylistState(currentStatus.folderId);
 		}
-	} catch (e) {}
+	} catch (e) {
+		logger.warn(`[Background] tabs.onActivated handler failed: ${e.message}`);
+	}
 });
 
 reinjectContentScripts();

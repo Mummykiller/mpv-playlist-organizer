@@ -47,7 +47,8 @@ def _get_emergency_log_path():
     try:
         os.makedirs(path, exist_ok=True)
         return os.path.join(path, "native_host_crash.log")
-    except Exception:
+    except OSError as e:
+        sys.stderr.write(f"Could not create emergency log directory {path}: {e}\n")
         return "native_host_crash.log" # Current directory fallback
 
 # --- Failsafe Crash Handler ---
@@ -64,8 +65,8 @@ def set_process_name():
         elif sys.platform == 'win32':
             # Windows: Sets the title shown in the Processes tab
             ctypes.windll.kernel32.SetConsoleTitleW("mpv playlist organizer")
-    except Exception:
-        pass # Fails silently if restricted or libc missing
+    except (OSError, AttributeError) as e:
+        logging.debug(f"[PY][MAIN] Could not set process name: {e}")
 
 try:
     # --- Configuration & Environment Setup ---
@@ -410,7 +411,7 @@ try:
             if not cli.handle_cli():
                 main()
         except SystemExit:
-            pass
+            raise
         except Exception as cli_error:
             logging.error(f"An unexpected CLI error occurred: {cli_error}", exc_info=True)
             print(f"Error: {cli_error}", file=sys.stderr)
@@ -425,6 +426,7 @@ except Exception as e:
             f.write(f"Error: {str(e)}\n\n")
             f.write(traceback.format_exc())
             f.write("\n---------------------------\n\n")
-    except Exception:
-        pass
+    except Exception as log_err:
+        sys.stderr.write(f"Failed to write to crash log ({log_path_to_use}): {log_err}\n")
+        sys.stderr.flush()
     raise

@@ -522,8 +522,8 @@ class PlaybackHandler(BaseHandler):
                 try:
                     if os.path.exists(path):
                         os.remove(path)
-                except Exception:
-                    pass
+                except OSError as e:
+                    logging.debug(f"[PY][PlaybackHandler] Failed to remove unmanaged handshake file {path}: {e}")
             
             threading.Thread(target=delayed_cleanup, args=(handshake_path, process), daemon=True).start()
             

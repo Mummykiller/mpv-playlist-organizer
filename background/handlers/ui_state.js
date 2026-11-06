@@ -40,7 +40,9 @@ export async function handleContentScriptInit(request, sender) {
 		if (origin && (origin.startsWith("http:") || origin.startsWith("https:"))) {
 			try {
 				domain = new URL(origin).hostname;
-			} catch (e) {}
+			} catch (e) {
+				console.debug("[UiState] Invalid origin URL:", origin, e);
+			}
 		}
 
 		// Defensive check for domains object
@@ -119,7 +121,9 @@ export const handleGetUiStateForTab = createHandler(async ({ request }) => {
 	if (tab.url && (tab.url.startsWith("http:") || tab.url.startsWith("https:"))) {
 		try {
 			domain = new URL(tab.url).hostname;
-		} catch (e) {}
+		} catch (e) {
+			console.debug("[UiState] Invalid tab URL:", tab.url, e);
+		}
 	}
 
 	const domains = data.settings.uiPreferences.domains || {};
@@ -276,14 +280,18 @@ export const handleGetUiPreferences = createHandler(async ({ request, data, send
 	if (sender.origin && (sender.origin.startsWith("http:") || sender.origin.startsWith("https:"))) {
 		try {
 			domain = new URL(sender.origin).hostname;
-		} catch (e) {}
+		} catch (e) {
+			console.debug("[UiState] Invalid sender origin URL:", sender.origin, e);
+		}
 	}
 
 	if (!domain && request.tabId) {
 		try {
 			const tab = await chrome.tabs.get(request.tabId);
 			if (tab?.url) domain = new URL(tab.url).hostname;
-		} catch (e) {}
+		} catch (e) {
+			console.debug("[UiState] Failed to get tab URL for tabId:", request.tabId, e);
+		}
 	}
 
 	if (domain) {
@@ -310,7 +318,9 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 	if (sender.origin && (sender.origin.startsWith("http:") || sender.origin.startsWith("https:"))) {
 		try {
 			domain = new URL(sender.origin).hostname;
-		} catch (e) {}
+		} catch (e) {
+			console.debug("[UiState] Invalid sender origin URL in setUiPreferences:", sender.origin, e);
+		}
 	}
 
 	const domainPrefs = {};
@@ -454,7 +464,11 @@ export const handleForceRefreshDependencies = createHandler(async ({ data }) => 
 
 export async function handleOpenPopup(request, sender) {
 	if (popupPort) {
-		try { popupPort.postMessage({ action: "close_popup" }); } catch (e) {}
+		try { 
+			popupPort.postMessage({ action: "close_popup" }); 
+		} catch (e) {
+			console.debug("[UiState] Failed to post close_popup message:", e);
+		}
 		return { success: true };
 	}
 
