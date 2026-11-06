@@ -110,3 +110,10 @@ class LogRequest(BaseRequest):
     level: str = "INFO"
     message: str = ""
     context: str = "JS"
+    stack: str = ""
+
+@dataclass
+class LogBrowserErrorRequest(BaseRequest):
+    message: str = ""
+    context: str = "Browser"
+    stack: str = ""

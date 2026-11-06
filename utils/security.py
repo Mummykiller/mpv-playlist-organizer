@@ -237,9 +237,11 @@ def mask_path(text, data_dir, script_dir, home_dir=None):
         home_dir = os.path.expanduser("~")
     
     replacements = [
-        (data_dir, "<DATA_DIR>"),
-        (script_dir, "<APP_DIR>"),
-        (home_dir, "<HOME>")
+        (path, tag) for path, tag in [
+            (data_dir, "<DATA_DIR>"),
+            (script_dir, "<APP_DIR>"),
+            (home_dir, "<HOME>")
+        ] if path
     ]
     # Replace longest paths first to avoid partial masking
     for original, placeholder in sorted(replacements, key=lambda x: len(x[0]), reverse=True):

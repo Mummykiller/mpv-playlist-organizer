@@ -22,8 +22,25 @@ class DataHandler(BaseHandler):
         else:
             level = getattr(logging, level_name, logging.INFO)
         
+        # If it's an error from the frontend/browser, route it to the dedicated browser_errors log
+        if level in (logging.ERROR, logging.CRITICAL):
+            browser_logger = logging.getLogger("browser_errors")
+            formatted = f"[{request.context}] {request.message}"
+            if getattr(request, 'stack', None):
+                formatted += f"\n  Stack: {request.stack}"
+            browser_logger.error(formatted)
+
         # Log it using the standard logger
         logging.log(level, f"[JS-{request.context}] {request.message}")
+        return native_link.success()
+
+    @command('log_browser_error')
+    def handle_log_browser_error(self, request: native_link.LogBrowserErrorRequest):
+        browser_logger = logging.getLogger("browser_errors")
+        formatted = f"[{request.context}] {request.message}"
+        if getattr(request, 'stack', None):
+            formatted += f"\n  Stack: {request.stack}"
+        browser_logger.error(formatted)
         return native_link.success()
 
     @command('get_unified_diagnostics')
@@ -52,6 +69,7 @@ class DataHandler(BaseHandler):
 
         native_log = read_tail("native_host.log")
         ipc_log = read_tail("ipc_events.log")
+        browser_log = read_tail("browser_errors.log")
         
         import sys
         system_info = {
@@ -68,6 +86,7 @@ class DataHandler(BaseHandler):
             "native_diagnostics": native_errors,
             "native_log": native_log,
             "ipc_log": ipc_log,
+            "browser_log": browser_log,
             "system_info": system_info
         })
 

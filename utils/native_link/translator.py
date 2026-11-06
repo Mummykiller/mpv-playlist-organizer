@@ -1,7 +1,8 @@
 from typing import Dict, Any, Type, Optional
 from .models import (
     BaseRequest, PlaybackRequest, LiveUpdateRequest, 
-    DataSyncRequest, ServiceRequest, SettingsOverrides, LogRequest
+    DataSyncRequest, ServiceRequest, SettingsOverrides, LogRequest,
+    LogBrowserErrorRequest
 )
 
 # Action to Dataclass mapping
@@ -40,6 +41,7 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
     
     # Logging
     'log_event': LogRequest,
+    'log_browser_error': LogBrowserErrorRequest,
 }
 
 import re
@@ -144,7 +146,17 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             request_id=request_id,
             level=norm_message.get('level', 'INFO'),
             message=norm_message.get('message', ''),
-            context=norm_message.get('context', 'JS')
+            context=norm_message.get('context', 'JS'),
+            stack=norm_message.get('stack', '')
+        )
+    
+    elif req_class == LogBrowserErrorRequest:
+        return LogBrowserErrorRequest(
+            action=action,
+            request_id=request_id,
+            message=norm_message.get('message', norm_message.get('error', '')),
+            context=norm_message.get('context', 'Browser'),
+            stack=norm_message.get('stack', '')
         )
     
     return BaseRequest(action=action, request_id=request_id)

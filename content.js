@@ -8,33 +8,51 @@
 	if (window.mpvControllerInitialized) return;
 	window.mpvControllerInitialized = true;
 
-	const MPV = window.MPV_INTERNAL;
+	try {
+		const MPV = window.MPV_INTERNAL;
 
-	if (!MPV || !MPV.MpvController) {
-		console.error("[MPV] Critical Error: MpvController class not found.");
-		return;
-	}
-
-	const isScannerWindow =
-		new URL(window.location.href).searchParams.get("mpv_playlist_scanner") ===
-		"true";
-
-	// 1. Initialize site-specific automations (Runs in ALL frames)
-	if (MPV.Janitor) {
-		new MPV.Janitor();
-	}
-
-	// 2. Initialize Main Controller (Top frame only, or scanner)
-	if (window.top === window.self) {
-		const controller = new MPV.MpvController();
-		window.mpvControllerInstance = controller;
-
-		if (!isScannerWindow) {
-			controller.init();
-		} else {
-			chrome.runtime.onMessage.addListener((req, sender, send) =>
-				controller.handleMessage(req, sender, send),
-			);
+		if (!MPV || !MPV.MpvController) {
+			console.error("[MPV] Critical Error: MpvController class not found.");
+			chrome.runtime?.sendMessage?.({
+				action: "log_browser_error",
+				context: "ContentScript",
+				message: "Critical Error: MpvController class not found on page.",
+				stack: ""
+			}).catch?.(() => {});
+			return;
 		}
+
+		const isScannerWindow =
+			new URL(window.location.href).searchParams.get("mpv_playlist_scanner") ===
+			"true";
+
+		// 1. Initialize site-specific automations (Runs in ALL frames)
+		if (MPV.Janitor) {
+			new MPV.Janitor();
+		}
+
+		// 2. Initialize Main Controller (Top frame only, or scanner)
+		if (window.top === window.self) {
+			const controller = new MPV.MpvController();
+			window.mpvControllerInstance = controller;
+
+			if (!isScannerWindow) {
+				controller.init();
+			} else {
+				chrome.runtime.onMessage.addListener((req, sender, send) =>
+					controller.handleMessage(req, sender, send),
+				);
+			}
+		}
+	} catch (e) {
+		console.error("[MPV Content Script] Init failed:", e);
+		try {
+			chrome.runtime?.sendMessage?.({
+				action: "log_browser_error",
+				context: "ContentScript",
+				message: `Init failed: ${e.message}`,
+				stack: e.stack || ""
+			});
+		} catch (err) {}
 	}
 })();

@@ -71,6 +71,15 @@ def initialize(data_dir: str, script_dir: str = None, level=logging.DEBUG):
     
     main_log_file = os.path.join(data_dir, "native_host.log")
     ipc_log_file = os.path.join(data_dir, "ipc_events.log")
+    browser_log_file = os.path.join(data_dir, "browser_errors.log")
+
+    # Ensure browser_errors.log exists immediately for easy inspection / tailing
+    if not os.path.exists(browser_log_file):
+        try:
+            with open(browser_log_file, "a", encoding="utf-8") as f:
+                pass
+        except OSError:
+            pass
     
     # 1. Main Handler (Rotating File)
     main_handler = logging.handlers.RotatingFileHandler(
@@ -81,28 +90,39 @@ def initialize(data_dir: str, script_dir: str = None, level=logging.DEBUG):
     ipc_handler = logging.handlers.RotatingFileHandler(
         ipc_log_file, maxBytes=1024 * 1024 * 5, backupCount=1, encoding='utf-8'
     )
+
+    # 3. Dedicated Browser Error Handler (Rotating File)
+    browser_handler = logging.handlers.RotatingFileHandler(
+        browser_log_file, maxBytes=1024 * 1024 * 2, backupCount=2, encoding='utf-8'
+    )
     
-    # 3. Security Formatter
+    # 4. Security Formatter
     formatter = SecurityFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     formatter.data_dir = data_dir
     formatter.script_dir = script_dir
     
     main_handler.setFormatter(formatter)
     ipc_handler.setFormatter(formatter)
+    browser_handler.setFormatter(formatter)
     
-    # 4. Filter for IPC Logger
+    # 5. Routing Filters
     class IPCFilter(logging.Filter):
         def filter(self, record):
             return record.name == "ipc_events"
+
+    class BrowserFilter(logging.Filter):
+        def filter(self, record):
+            return record.name == "browser_errors"
             
     class MainFilter(logging.Filter):
         def filter(self, record):
-            return record.name != "ipc_events"
+            return record.name not in ("ipc_events", "browser_errors")
             
     ipc_handler.addFilter(IPCFilter())
+    browser_handler.addFilter(BrowserFilter())
     main_handler.addFilter(MainFilter())
     
-    # 5. Queue Handler (The Non-blocking Part)
+    # 6. Queue Handler (The Non-blocking Part)
     # Use our custom handler to preserve context
     queue_handler = ContextQueueHandler(_log_queue)
     
@@ -115,10 +135,10 @@ def initialize(data_dir: str, script_dir: str = None, level=logging.DEBUG):
     root.addHandler(queue_handler)
     root.setLevel(level)
     
-    # 6. Start the Listener Thread
+    # 7. Start the Listener Thread
     # It consumes from the queue and writes to the real handlers
     _listener = logging.handlers.QueueListener(
-        _log_queue, main_handler, ipc_handler, respect_handler_level=True
+        _log_queue, main_handler, ipc_handler, browser_handler, respect_handler_level=True
     )
     _listener.start()
     

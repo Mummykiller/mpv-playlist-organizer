@@ -119,7 +119,8 @@ class SystemLogger {
 
 		// 3. Persistence (Remote Logging)
 		if (meta.persist || level >= LogLevel.ERROR) {
-			this._persist(levelName, formattedMsg, contextId);
+			const stack = meta.stack || meta.data?.stack || "";
+			this._persist(levelName, formattedMsg, contextId, stack);
 		}
 	}
 
@@ -135,7 +136,7 @@ class SystemLogger {
 		}
 	}
 
-	_persist(levelName, message, contextId) {
+	_persist(levelName, message, contextId, stack = "") {
 		// 1. Re-entrancy / Infinite Loop Guard
 		if (this.isPersisting) return;
 
@@ -146,7 +147,8 @@ class SystemLogger {
 			action: "log_event",
 			level: levelName,
 			message: message,
-			context: contextId || "JS_CORE"
+			context: contextId || "JS_CORE",
+			stack: stack || ""
 		};
 
 		if (this.nativeSender) {
