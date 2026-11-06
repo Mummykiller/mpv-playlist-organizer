@@ -433,7 +433,9 @@ class PlaybackHandler(BaseHandler):
             settings = self.file_io.get_settings()
         
         # 0.5 Log batch preparation
-        if len(playlist) > 1:
+        if not playlist:
+            return native_link.failure("Could not resolve any items for unmanaged launch.")
+        elif len(playlist) > 1:
             self.ctx.sender({"action": "log_from_native_host", "log": {"text": f"Preparing unmanaged/detached playlist ({len(playlist)} items)...", "type": "info"}})
         else:
             item_title = (playlist[0] if isinstance(playlist[0], dict) else {}).get('title') or "Selected Item"
