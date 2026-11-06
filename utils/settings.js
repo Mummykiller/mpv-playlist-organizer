@@ -1361,7 +1361,11 @@ export class OptionsManager {
 	_getSettingIdentifier(group) {
 		if (!group) return null;
 		if (group.dataset.settingId) return group.dataset.settingId;
-		const input = group.querySelector("input, select, textarea, button");
+		const favBtn = group.querySelector(".btn-fav-setting");
+		if (favBtn?.dataset?.settingId) return favBtn.dataset.settingId;
+		const input = group.querySelector(
+			"input, select, textarea, button:not(.btn-fav-setting)",
+		);
 		if (input && input.id) return input.id;
 		if (group.id) return group.id;
 		if (group.dataset.settingName)

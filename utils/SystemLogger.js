@@ -102,7 +102,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const levelName = LEVEL_NAMES[level];
 			const contextId = meta.requestId || this.activeContext;
 			const prefix = contextId ? `[${contextId}] ` : "";
-			const formattedMsg = `${prefix}${message}`;
+			const msgText = message instanceof Error ? (message.message || String(message)) : message;
+			const formattedMsg = `${prefix}${msgText}`;
 
 			// 1. Console Output
 			const consoleArgs = [`[${levelName}] ${formattedMsg}`];
@@ -118,12 +119,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// 2. Diagnostics Collection (Errors only)
 			if (level >= LogLevel.WARN) {
-				this._addDiagnostic(levelName, message, contextId);
+				this._addDiagnostic(levelName, msgText, contextId);
 			}
 
 			// 3. Persistence (Remote Logging)
 			if (meta.persist || level >= LogLevel.ERROR) {
-				const stack = meta.stack || meta.data?.stack || "";
+				const stack = meta.stack || meta.data?.stack || (message instanceof Error ? message.stack : "") || "";
 				this._persist(levelName, formattedMsg, contextId, stack);
 			}
 		}
