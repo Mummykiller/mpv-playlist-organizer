@@ -11,6 +11,9 @@ description: >-
 
 This skill defines the MPV launch modes, cookie management, command-line construction, bidirectional JSON-IPC pipe communication, temporary handshake files, and custom Lua script hooks.
 
+> [!NOTE]
+> For playback progress tracking, watch duration mathematics, health monitoring, and detached fallback synchronization, see the companion skill: [.gemini/skills/playback-tracking-and-fallback-sync/SKILL.md](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/playback-tracking-and-fallback-sync/SKILL.md).
+
 ---
 
 ## 1. Playback Launch Modes
@@ -25,6 +28,9 @@ The application orchestrates MPV playback in two primary operational modes:
   - To bypass database locking without permissions collisions, `VolatileCookieManager` dumps temporary cookies directly into RAM-backed storage (`/dev/shm` on Linux, temporary directory on Windows/macOS).
   - The extracted cookie file path is passed to MPV via `--cookies-file`.
   - Stale cookie files are cleaned up upon session termination (`atexit`) and startup sweeps.
+- **Python Environment Isolation (`utils/session_services.py:get_scrubbed_env`):**
+  - Strips `PYTHONPATH`, `PYTHONHOME`, `PYTHONIOENCODING`, `PYTHONDONTWRITEBYTECODE`, and `PYTHONUNBUFFERED` from the subprocess environment.
+  - Prevents the native host's Python runtime from contaminating standalone/frozen `yt-dlp` executables, eliminating "Failed to start embedded python interpreter" crashes on Windows.
 
 ### Mode B: Direct Stream (AnimePahe, HLS/m3u8, Direct Media URLs)
 
