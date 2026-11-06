@@ -1,0 +1,144 @@
+---
+name: storage-and-state-sync
+description: >-
+  Governs state persistence, granular bucket storage, file concurrency locking, sharding,
+  and settings synchronization drift guards. Load this skill whenever modifying
+  `utils/storageManager.js`, `file_io.py` (FileLock, atomic writes, playlist sharding),
+  adding or editing settings in either JS or Python, or working on watched item state.
+---
+
+# Storage, Persistence & State Synchronization
+
+This skill defines the data storage architecture, multi-process file locking, playlist sharding, settings drift prevention, and the watched state separation rules.
+
+---
+
+## 1. Storage Architecture Overview
+
+The system maintains two distinct persistence layers tailored to their respective runtime environments:
+
+```
+┌──────────────────────────────────────────────┐     Sync      ┌──────────────────────────────────────────────┐
+│ JavaScript Storage (Browser)                 │ ────────────> │ Python File I/O (Native Disk)                │
+│ utils/storageManager.js                      │ <──────────── │ file_io.py                                   │
+├──────────────────────────────────────────────┤               ├──────────────────────────────────────────────┤
+│ • Source of truth for Browser UI.            │               │ • Local disk backup and IPC synchronization. │
+│ • Backed by chrome.storage.local.            │               │ • Atomic JSON writes (.tmp -> replace).      │
+│ • Granular bucket partitioning.              │               │ • Cross-process FileLock with retry loop.    │
+│ • Write serialization queue.                 │               │ • Sharded playlists in data/playlists/.      │
+└──────────────────────────────────────────────┘               └──────────────────────────────────────────────┘
+```
+
+---
+
+## 2. JavaScript Granular Bucket Storage (`StorageManager`)
+
+To prevent performance degradation with large playlists, data is split into isolated storage buckets in `chrome.storage.local`:
+
+| Bucket Key | Type | Description |
+| :--- | :--- | :--- |
+| `mpv_storage_version` | `number` | Schema version (currently v2). |
+| `mpv_folder_index` | `string[]` | Ordered array of folder IDs (e.g. `["Default", "Anime"]`). |
+| `mpv_folder_data_<folderId>` | `object` | Shard containing `{ playlist: Item[], lastPlayedId: string }` for a single folder. |
+| `mpv_settings` | `object` | Global settings, UI preferences, keybindings, and domain overrides. |
+| `mpv_meta_cache_<domain>` | `object` | Cached titles and headers for web domains to accelerate UI loading. |
+
+### Storage Write Queue & Cache
+
+- **Serialized Writes:** All save calls chain onto `this.writeQueue = this.writeQueue.then(...)` to prevent read-modify-write race conditions in asynchronous event loops.
+- **Self-Healing Casing Purge:** During startup (`_migrateToCamelCaseSettings`), `StorageManager` inspects `uiPreferences.global` and purges any stray `snake_case` keys to prevent pollution from legacy or backend sync drift.
+
+---
+
+## 3. Python Backend File I/O (`file_io.py`)
+
+### Directory Layout
+
+- `data/config.json`: Backend settings, tool paths (`mpv`, `ffmpeg`, `yt-dlp`, `node`), decoder options.
+- `data/session.json`: Active playback session and process metadata.
+- `data/index.json`: Master index of folder metadata and folder ordering.
+- `data/playlists/<folderId>.json`: Sharded playlist JSON for each folder.
+- `data/flags/`: Temporary handshake files and control flags.
+
+### Cross-Process Concurrency with `FileLock`
+
+`file_io.py:FileLock` provides atomic, cross-process and thread-safe locking:
+1. **Thread Synchronization:** Acquires a per-normalized-path `threading.RLock()` to prevent thread contention within the same Python process.
+2. **File Lock:** Creates `<filepath>.lock` containing `PID,timestamp`.
+3. **Stale Lock Detection:**
+   - If the lock file exists, reads PID.
+   - On Windows: Uses `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` and checks if `GetExitCodeProcess` is `STILL_ACTIVE (259)`.
+   - On Linux/macOS: Uses `os.kill(pid, 0)`.
+   - If PID is dead, stale lock is safely removed.
+4. **Retry Loop:** Retries up to `timeout` seconds with 100ms intervals to overcome temporary file handles held by anti-virus scanners.
+
+### Atomic Write Pattern
+
+All writes to disk (`file_io.save_json`) enforce the atomic write cycle:
+```
+1. Write payload to <file>.tmp
+2. Force write buffer to physical storage using os.fsync(fd)
+3. Close descriptor and execute atomic replace: os.replace(<file>.tmp, <file>)
+4. Maintain <file>.bak copy as automatic recovery fallback
+```
+
+### Playlist Sharding & Merge Logic
+
+- `_merge_playlists(existing_playlist, new_playlist)`:
+  - Performs **Last-Write-Wins** reconciliation based on `last_modified` millisecond timestamps.
+  - The browser is the authoritative source of truth for playlist membership and item deletions.
+
+---
+
+## 4. Settings Synchronization Drift Guard
+
+The test suite enforces strict synchronization between Python backend settings and JavaScript default settings.
+
+### The Drift Guard Test (`test_settings_synchronization`)
+
+Located in `testing_tools/scripts/test_robustness.py`:
+- Parses `file_io.py:get_settings()` and extracts all dictionary keys.
+- Parses `utils/storageManager.js:_getDefaultData()` and extracts all keys in `uiPreferences.global`.
+- Converts JS `camelCase` keys to `snake_case`.
+- Asserts that every setting key exists in **both** files (excluding explicit `ui_only_keys`: `minimized`, `mode`, `log_visible`, `pinned`, `position`, `top`, `left`, `right`, `bottom`, `anilist_panel_visible`, `lock_anilist_panel`, `force_panel_attached`, `anilist_attach_on_open`, `minimized_stub_position`, `dependency_status`, `mpv`, `ytdlp`, `ffmpeg`, `node`).
+
+> [!CAUTION]
+> **Rule When Adding a New Setting:**
+> Whenever you add a new configuration setting, you **MUST** declare it in **both**:
+> 1. `file_io.py:get_settings()` in the default dictionary.
+> 2. `utils/storageManager.js:_getDefaultData()` under `settings.uiPreferences.global`.
+> Failing to declare it in both places will immediately cause `test_robustness.py` and `verify_changes.py` to fail.
+
+---
+
+## 5. The "Watched" vs "Marked as Watched" Separation
+
+To guarantee local viewing history is never corrupted or cleared by remote network failures or third-party API issues, the system strictly separates local playback completion from remote account synchronization:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. watched (Local Playback History)                         │
+├─────────────────────────────────────────────────────────────┤
+│ • Automatically set to true after 30 seconds of playback or │
+│   upon natural video completion (detected via on_completion)│
+│ • Controls the UI green checkmark (✔) and dimmed list row.  │
+│ • Stored locally in playlist shards. NEVER cleared by sync. │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ 2. marked_as_watched (Remote Service Sync)                  │
+├─────────────────────────────────────────────────────────────┤
+│ • Set to true ONLY when yt-dlp successfully registers the   │
+│   item in remote account history (e.g., YouTube watch hist) │
+│ • Controls the manual checkbox input in the UI list.        │
+│ • Represents external confirmation status.                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 6. Storage Troubleshooting Checklist
+
+- **"File lock acquisition timeout":** A previous process crashed while holding a `.lock` file without recording a valid PID. Inspect `data/*.lock` files and verify process IDs.
+- **Missing Setting Value / Undefined in UI:** Check whether the setting is declared in `_getDefaultData()` in `utils/storageManager.js`. If missing, newly installed extensions or clean profiles will not have the key initialized.
+- **Test Failure in `test_settings_synchronization`:** You added a setting in JS or Python without mirroring it in the other environment. Compare `file_io.py:get_settings()` with `utils/storageManager.js:_getDefaultData()`.
