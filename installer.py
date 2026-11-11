@@ -8,7 +8,7 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
 
 # --- Windows Console Hiding Logic ---
-if sys.platform == "win32" and sys.executable.endswith("python.exe"):
+if sys.platform == "win32" and sys.executable.endswith("python.exe") and "--cli" not in sys.argv:
     import subprocess
     # Re-launch with pythonw.exe to hide the console
     subprocess.Popen([sys.executable.replace("python.exe", "pythonw.exe"), __file__] + sys.argv[1:])

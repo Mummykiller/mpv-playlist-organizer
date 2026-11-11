@@ -25,17 +25,26 @@ function clearDetectedUrl(tabId) {
 
 // We use an auto-init pattern since this module needs to register listeners immediately
 function setupListeners() {
+	if (!chrome?.webRequest?.onBeforeRequest) return;
 	chrome.webRequest.onBeforeRequest.addListener(
 		(details) => {
+			const urlLower = details.url.toLowerCase();
+			const isM3u8 = urlLower.includes(".m3u8");
+			const isMp4 = urlLower.includes(".mp4");
+
+			if (!isM3u8 && !isMp4) return;
+
 			const promiseInfo = m3u8DetectionPromises[details.tabId];
 			if (promiseInfo) {
 				// Respect user preference for timeout instead of hardcoded 15s
 				storage.get().then((data) => {
+					const activePromise = m3u8DetectionPromises[details.tabId];
+					if (!activePromise || activePromise !== promiseInfo) return;
 					const timeoutMs =
 						(data.settings.uiPreferences.global.streamScannerTimeout || 60) *
 						1000;
-					clearTimeout(promiseInfo.timeoutId);
-					promiseInfo.timeoutId = setTimeout(() => {
+					clearTimeout(activePromise.timeoutId);
+					activePromise.timeoutId = setTimeout(() => {
 						if (m3u8DetectionPromises[details.tabId]) {
 							m3u8DetectionPromises[details.tabId].reject(
 								new Error(
@@ -46,12 +55,6 @@ function setupListeners() {
 					}, timeoutMs);
 				});
 			}
-
-			const urlLower = details.url.toLowerCase();
-			const isM3u8 = urlLower.includes(".m3u8");
-			const isMp4 = urlLower.includes(".mp4");
-
-			if (!isM3u8 && !isMp4) return;
 
 			const detectedUrl = details.url;
 			const typeLabel = isM3u8 ? "M3U8" : "MP4";
@@ -184,19 +187,20 @@ async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
 		}, timeoutDuration);
 
 		// Store the promise's handlers so the webRequest listener can use them.
-		m3u8DetectionPromises[tabId] = {
+		const promiseEntry = {
 			resolve: (url) => {
-				clearTimeout(timeoutId);
+				clearTimeout(promiseEntry.timeoutId);
 				delete m3u8DetectionPromises[tabId];
 				resolve(url);
 			},
 			reject: (err) => {
-				clearTimeout(timeoutId);
+				clearTimeout(promiseEntry.timeoutId);
 				delete m3u8DetectionPromises[tabId];
 				reject(err);
 			},
 			timeoutId: timeoutId, // Store the initial timeout ID
 		};
+		m3u8DetectionPromises[tabId] = promiseEntry;
 	});
 }
 

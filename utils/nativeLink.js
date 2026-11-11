@@ -27,6 +27,14 @@ class NativeLink {
 		return callNativeHost({ action, ...data }, shouldThrow);
 	}
 
+	async send(action, data = {}, shouldThrow = false) {
+		return this.call(action, data, shouldThrow);
+	}
+
+	async cancelTask(taskId) {
+		return await this.send("cancel_task", { taskId });
+	}
+
 	// --- Heartbeat & Status ---
 	async ping() {
 		return this.call("ping");

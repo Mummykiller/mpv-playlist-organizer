@@ -3,6 +3,16 @@
  * Common rules shared between popup.html and content script Shadow DOM.
  */
 
+:root,
+:host {
+	--accent-positive: var(--accent-success);
+	--surface-color: var(--bg-secondary);
+	--surface-hover-color: var(--bg-tertiary);
+	--border-color: var(--border-primary);
+	--bg-color: var(--bg-primary);
+	--text-error: var(--accent-danger);
+}
+
 /* --- Playlist Interactive Mode States --- */
 .quick-actions-bar .quick-action-btn.active.selection-mode-active {
 	background-color: var(--accent-primary);

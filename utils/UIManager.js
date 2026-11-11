@@ -10,9 +10,20 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.controllerHost = null;
 			this.shadowRoot = null;
 			this.minimizedHost = null;
+			this.minimizedShadowRoot = null;
 			this.anilistPanelHost = null;
 			this.anilistShadowRoot = null;
 			this.progressDashboard = null;
+
+			// Strict Invariant: Never initialize or render UI inside sub-frames/iframes
+			let isTopFrame = false;
+			try {
+				isTopFrame = window.top === window.self;
+			} catch (e) {
+				isTopFrame = false;
+			}
+			if (!isTopFrame) return;
+
 			this._loadStyles();
 		}
 
@@ -37,23 +48,31 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		_loadStyles() {
 			if (!MPV._cachedStylesPromise) {
-				if (
-					typeof chrome !== "undefined" &&
-					chrome.runtime?.getURL &&
-					typeof fetch === "function"
-				) {
-					MPV._cachedStylesPromise = Promise.all([
-						fetch(chrome.runtime.getURL("shared.css"))
-							.then((r) => (r.ok ? r.text() : ""))
-							.catch(() => ""),
-						fetch(chrome.runtime.getURL("content.css"))
-							.then((r) => (r.ok ? r.text() : ""))
-							.catch(() => ""),
-					])
-						.then(([sharedCss, contentCss]) =>
-							`${sharedCss}\n${contentCss}`.trim(),
-						)
-						.catch(() => "");
+				let isTopFrame = false;
+				try {
+					isTopFrame = window.top === window.self;
+				} catch (e) {
+					isTopFrame = false;
+				}
+				if (!isTopFrame) {
+					MPV._cachedStylesPromise = Promise.resolve("");
+					return MPV._cachedStylesPromise;
+				}
+
+				// Always request styles from background service worker to prevent
+				// cross-origin security violations (e.g. "Unsafe attempt to load URL... Domains, protocols and ports must match")
+				if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+					MPV._cachedStylesPromise = new Promise((resolve) => {
+						chrome.runtime.sendMessage({ action: "get_extension_styles" }, (response) => {
+							if (chrome.runtime.lastError || !response?.success) {
+								const errMsg = chrome.runtime.lastError?.message || response?.error || "Unknown error";
+								MPV.logger?.error?.(`[UIManager] Failed to get extension styles: ${errMsg}`, { persist: true });
+								resolve("");
+							} else {
+								resolve(response.css || "");
+							}
+						});
+					});
 				} else {
 					MPV._cachedStylesPromise = Promise.resolve("");
 				}
@@ -71,6 +90,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		createAndInjectUi() {
+			let isTopFrame = false;
+			try {
+				isTopFrame = window.top === window.self;
+			} catch (e) {
+				isTopFrame = false;
+			}
+			if (!isTopFrame) return null;
+
 			if (
 				!chrome.runtime?.id ||
 				document.getElementById("m3u8-controller-host")
@@ -132,16 +159,16 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.minimizedHost.style.visibility = "hidden";
 				this.minimizedHost.style.pointerEvents = "none";
 			}
-			const minimizedShadowRoot = this.minimizedHost.attachShadow({
+			this.minimizedShadowRoot = this.minimizedHost.attachShadow({
 				mode: "open",
 			});
-			this._injectStyles(minimizedShadowRoot);
+			this._injectStyles(this.minimizedShadowRoot);
 			const minimizedWrapper = document.createElement("div");
 			minimizedWrapper.id = "m3u8-minimized-wrapper";
 			minimizedWrapper.innerHTML = `
                 <button id="m3u8-minimized-stub" title="Show MPV Controller"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 7v10" /><path d="M11 7v10" /><path d="M15 9l5 3-5 3V9z" fill="currentColor" stroke-width="0" /></svg></button><button id="m3u8-minimized-play-btn" title="Play Playlist" class="play-button"><span id="m3u8-minimized-item-count" class="play-button-count" style="display: none;">0</span><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></button>
             `;
-			minimizedShadowRoot.appendChild(minimizedWrapper);
+			this.minimizedShadowRoot.appendChild(minimizedWrapper);
 			document.body.appendChild(this.minimizedHost);
 
 			this.anilistPanelHost = document.createElement("div");
@@ -198,6 +225,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.controllerHost =
 				this.shadowRoot =
 				this.minimizedHost =
+				this.minimizedShadowRoot =
 				this.anilistPanelHost =
 				this.anilistShadowRoot =
 				this.hostStyle =

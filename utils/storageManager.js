@@ -7,30 +7,37 @@ import { normalizeKeys } from "./commUtils.module.js";
 export class StorageManager {
 	constructor(storageKey, broadcastLog) {
 		this.STORAGE_KEY = storageKey;
+		this._initPromise = null;
 		this.initPromise = null;
+		this._initComplete = false;
 		this.broadcastLog = broadcastLog;
 		this.writeQueue = Promise.resolve();
 		this._cache = null;
 	}
 
 	async initialize() {
-		if (this.initPromise) return this.initPromise;
-		this.initPromise = (async () => {
-			const versionData = await chrome.storage.local.get("mpv_storage_version");
-			const version = versionData.mpv_storage_version || 1;
-			if (version < 2) await this._migrateToGranularStorage();
-			await this._migrateToCamelCaseSettings();
-			await this._runDataMigrations();
-			await this.runJanitorTasks();
+		if (this._initPromise) return this._initPromise;
+		this._initPromise = (async () => {
+			try {
+				const versionData = await chrome.storage.local.get("mpv_storage_version");
+				const version = versionData?.mpv_storage_version || 1;
+				if (version < 2) await this._migrateToGranularStorage();
+				await this._migrateToCamelCaseSettings();
+				await this._runDataMigrations(true);
+				await this.runJanitorTasks(true);
+			} finally {
+				this._initComplete = true;
+			}
 		})();
-		return this.initPromise;
+		this.initPromise = this._initPromise;
+		return this._initPromise;
 	}
 
 	async _migrateToCamelCaseSettings() {
 		const keys = await chrome.storage.local.get(["mpv_settings", "mpv_camel_migrated"]);
 		if (!keys.mpv_settings) return;
 
-		// SELF-HEALING: Always ensure global preferences are purged of snake_case trash
+		// SELF-HEALING: Always ensure global preferences are purged of snake_case trash and domain keys
 		// This prevents sync conflicts with the native host
 		if (keys.mpv_settings.uiPreferences?.global) {
 			const globalPrefs = keys.mpv_settings.uiPreferences.global;
@@ -41,8 +48,12 @@ export class StorageManager {
 					polluted = true;
 				}
 			}
+			if (globalPrefs.minimized !== undefined) {
+				delete globalPrefs.minimized;
+				polluted = true;
+			}
 			if (polluted) {
-				console.log("[Storage] Purged polluted snake_case keys from preferences.");
+				console.log("[Storage] Purged polluted keys from global preferences.");
 				await chrome.storage.local.set({ mpv_settings: keys.mpv_settings });
 			}
 		}
@@ -79,7 +90,10 @@ export class StorageManager {
 		console.log("[Storage] Migration complete.");
 	}
 
-	async get(force = false) {
+	async get(force = false, fromInit = false) {
+		if (this._initPromise && !this._initComplete && !fromInit) {
+			await this._initPromise;
+		}
 		if (this._cache && !force) return this._cache;
 
 		try {
@@ -123,10 +137,24 @@ export class StorageManager {
 	 * Optimized method to get data for a single folder without loading the entire library.
 	 */
 	async getFolder(folderId) {
+		if (this._initPromise && !this._initComplete) {
+			await this._initPromise;
+		}
 		const folderKey = `mpv_folder_data_${folderId}`;
-		const result = await chrome.storage.local.get([folderKey, "mpv_settings"]);
+		const result = await chrome.storage.local.get([folderKey, "mpv_settings", "mpv_folder_index"]);
+		let folderData = result[folderKey];
+		if (!folderData && folderId && Array.isArray(result.mpv_folder_index)) {
+			const matchedId = result.mpv_folder_index.find(
+				(id) => id.toLowerCase() === folderId.toLowerCase(),
+			);
+			if (matchedId && matchedId !== folderId) {
+				const matchedKey = `mpv_folder_data_${matchedId}`;
+				const matchedRes = await chrome.storage.local.get(matchedKey);
+				folderData = matchedRes[matchedKey];
+			}
+		}
 		return {
-			folder: result[folderKey] || { playlist: [], lastPlayedId: null },
+			folder: folderData || { playlist: [], lastPlayedId: null },
 			settings: result.mpv_settings,
 		};
 	}
@@ -166,6 +194,7 @@ export class StorageManager {
 				} else {
 					// Full validation and save
 					this._validateData(data);
+					const prevIndex = existing.mpv_folder_index || [];
 					const update = {
 						mpv_storage_version: 2,
 						mpv_settings: data.settings,
@@ -175,6 +204,13 @@ export class StorageManager {
 						update[`mpv_folder_data_${fid}`] = fData;
 					}
 					await chrome.storage.local.set(update);
+
+					const orphanedKeys = prevIndex
+						.filter((fid) => !Object.prototype.hasOwnProperty.call(data.folders, fid))
+						.map((fid) => `mpv_folder_data_${fid}`);
+					if (orphanedKeys.length > 0 && chrome.storage?.local?.remove) {
+						await chrome.storage.local.remove(orphanedKeys);
+					}
 				}
 			} catch (e) {
 				console.error("Storage set failed:", e);
@@ -207,8 +243,8 @@ export class StorageManager {
 		}
 	}
 
-	async runJanitorTasks() {
-		const data = await this.get();
+	async runJanitorTasks(fromInit = false) {
+		const data = await this.get(false, fromInit);
 		let modified = false;
 		const folderIds = Object.keys(data.folders);
 		const orderedIds = data.folderOrder || [];
@@ -226,6 +262,24 @@ export class StorageManager {
 			}
 		});
 
+		if (chrome.storage?.local?.get && chrome.storage?.local?.remove) {
+			try {
+				const allStorage = await chrome.storage.local.get(null);
+				if (allStorage && typeof allStorage === "object") {
+					const orphanedKeys = Object.keys(allStorage).filter((key) => {
+						if (!key.startsWith("mpv_folder_data_")) return false;
+						const fid = key.substring("mpv_folder_data_".length);
+						return !Object.prototype.hasOwnProperty.call(data.folders, fid);
+					});
+					if (orphanedKeys.length > 0) {
+						await chrome.storage.local.remove(orphanedKeys);
+					}
+				}
+			} catch (e) {
+				console.debug("[Storage] Failed to clean orphaned folder shards:", e);
+			}
+		}
+
 		if (modified) await this.set(data);
 	}
 
@@ -237,7 +291,6 @@ export class StorageManager {
 				lastUsedFolderId: "Default",
 				uiPreferences: {
 					global: {
-						minimized: false,
 						mode: "full",
 						logVisible: true,
 						pinned: false,
@@ -374,8 +427,8 @@ export class StorageManager {
 		}
 	}
 
-	async _runDataMigrations() {
-		const data = await this.get();
+	async _runDataMigrations(fromInit = false) {
+		const data = await this.get(false, fromInit);
 		let needsUpdate = false;
 
 		// Ensure all items have unique IDs, settings, and camelCase keys

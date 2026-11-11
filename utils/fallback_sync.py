@@ -16,6 +16,7 @@ except ImportError:
 cli_base.setup_script_env()
 
 from utils.cli_base import BaseCLI
+from utils import security
 import file_io
 
 def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
@@ -47,7 +48,13 @@ def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
     cmd.extend(["--", url])
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=security.get_scrubbed_env()
+        )
         return (result.returncode == 0), ("Success" if result.returncode == 0 else result.stderr)
     except Exception as e:
         return False, str(e)
@@ -94,11 +101,12 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
             if item.get("id") == item_id:
                 # Update Watched Status
                 if mark_watched and watched_success:
-                    if not item.get("marked_as_watched"):
+                    if not item.get("marked_as_watched") or not item.get("watched"):
                         item["marked_as_watched"] = True
+                        item["watched"] = True
                         item["last_modified"] = int(time.time() * 1000)
                         needs_shard_save = True
-                        logging.info("Disk: Updated marked_as_watched.")
+                        logging.info("Disk: Updated marked_as_watched and watched.")
                 elif mark_watched and not settings.get('yt_mark_watched', True):
                     # Manual override/fallback case (marking locally only)
                     if not item.get("watched"):
@@ -123,6 +131,7 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
 
                     if abs(current_stored - time_val) > 2 or time_val == 0:
                         item["resume_time"] = time_val
+                        item["last_modified"] = int(time.time() * 1000)
                         needs_shard_save = True
                         logging.info(f"Disk: Updated resume time to {time_val}s.")
                 break

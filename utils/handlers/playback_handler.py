@@ -69,7 +69,7 @@ class PlaybackHandler(BaseHandler):
         items, is_expanded = self.item_processor.resolve_input_items(
             raw_input, None, (request.url_item or {}).get('headers')
         )
-        logging.info(f"[PY][Handler] Resolved {len(items)} items.")
+        logging.info(f"[PY][Handler] Resolved {len(items) if items else 0} items.")
         
         if not items:
             msg = "Could not resolve any playable items."
@@ -144,13 +144,13 @@ class PlaybackHandler(BaseHandler):
             )
             logging.info(f"[PY][Handler] First pass result: success={first_call_result.get('success')}, handled_directly={first_call_result.get('handled_directly')}")
             
-            if not first_call_result["success"] or first_call_result.get("handled_directly"):
-                return first_call_result
-
             # --- CANCELLATION CHECK ---
             if getattr(self.mpv_session, 'launch_cancelled', False):
                 logging.info(f"[PY][Handler] Launch cancelled by user during Pass 1. Aborting Pass 2.")
                 return native_link.failure("Launch cancelled")
+
+            if not first_call_result["success"] or first_call_result.get("handled_directly") or self.mpv_session.is_alive:
+                return first_call_result
 
             # Final Launch Orchestration
             enriched_url_items = first_call_result["enriched_url_items"]
@@ -305,6 +305,18 @@ class PlaybackHandler(BaseHandler):
         res = self.mpv_session.remove(request.item_id, canonical_id)
         logging.info(f"[PY][Handler] remove_item_live final result for {request.item_id}: {res}")
         return res
+
+    @command('remove_items_live')
+    def handle_remove_items_live(self, request: native_link.LiveUpdateRequest):
+        logging.info(f"[PY][Handler] Received remove_items_live: folder_id='{request.folder_id}', item_ids={request.item_ids}")
+        if not request.item_ids:
+            return native_link.failure("Missing item_ids.")
+        if hasattr(self.mpv_session, 'remove_items_live'):
+            return self.mpv_session.remove_items_live(request.item_ids)
+        canonical_id = self.file_io._get_canonical_folder_id(request.folder_id) if request.folder_id else self.mpv_session.owner_folder_id
+        for item_id in request.item_ids:
+            self.mpv_session.remove(item_id, canonical_id)
+        return native_link.success(message=f"Removed {len(request.item_ids)} items from live session.")
 
     @command('reorder_live')
     def handle_reorder_live(self, request: native_link.LiveUpdateRequest):
@@ -511,7 +523,9 @@ class PlaybackHandler(BaseHandler):
             
             import subprocess
             import threading
-            process = subprocess.Popen(full_command, **self.services.get_mpv_popen_kwargs(has_terminal_flag))
+            from .. import security
+            env = security.get_scrubbed_env(keep_terminal=has_terminal_flag)
+            process = subprocess.Popen(full_command, env=env, **self.services.get_mpv_popen_kwargs(has_terminal_flag))
             
             # Handshake cleanup for unmanaged instances needs a small delay or a thread
             def delayed_cleanup(path, proc):

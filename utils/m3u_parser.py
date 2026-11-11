@@ -73,17 +73,19 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
                 current_ytdl_options.append(f"{k}={v}")
         elif not line.startswith('#'):
             # This is a URL - sanitize it
-            sanitized_url = file_io.sanitize_string(line)
+            sanitized_url = file_io.sanitize_string(line, is_url=True)
             
             # --- Basic Validation ---
             # Prevent "Ghost" items from malformed files (must have a scheme or look like a path)
-            # We enforce that a URL must not contain spaces (unless it's a local path with quotes, 
-            # but M3U URLs are typically encoded or plain) and must look like a resource.
+            # We enforce that a URL must not contain spaces (unless it's a local path) and must look like a resource.
             is_valid_url = re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', sanitized_url)
-            is_valid_path = sanitized_url.startswith(('/', './', '../')) or (len(sanitized_url) > 2 and sanitized_url[1:3] == ':\\')
+            is_valid_path = sanitized_url.startswith(('/', './', '../')) or (len(sanitized_url) > 2 and (sanitized_url[1:3] == ':\\' or sanitized_url[1:3] == ':/'))
             
-            if not (is_valid_url or is_valid_path) or ' ' in sanitized_url:
+            if not (is_valid_url or is_valid_path) or (' ' in sanitized_url and not is_valid_path):
                 logging.debug(f"M3U Parser: Skipping invalid URL/Path: {sanitized_url}")
+                current_title = None
+                current_headers = {}
+                current_ytdl_options = []
                 continue
 
             # --- ID Extraction ---

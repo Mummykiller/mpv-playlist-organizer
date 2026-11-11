@@ -1,5 +1,6 @@
 // background/handlers/dependency_anilist.js
 
+import { getActiveTab } from "../../utils/commUtils.module.js";
 import { nativeLink } from "../../utils/nativeLink.js";
 import { broadcastLog } from "../messaging.js";
 import { createHandler } from "../handler_factory.js";
@@ -31,12 +32,17 @@ export const handleGetAnilistReleases = createHandler(async ({ request, data }) 
 	} finally {
 		_inFlightReleasesRequest = null;
 	}
+}, {
+	manualPersistence: true,
 });
 
 export const handleYtdlpUpdateCheck = createHandler(async ({ request, data, sender }) => {
-	if (request.log) broadcastLog(request.log);
+	const payload = request?.request || request || {};
+	const actualSender = sender?.tab ? sender : (request?.sender || sender || null);
+	if (payload.log) broadcastLog(payload.log);
 
-	const tabId = sender.tab?.id;
+	const activeTab = !actualSender?.tab?.id ? await getActiveTab() : null;
+	const tabId = actualSender?.tab?.id || activeTab?.id;
 	const updateBehavior = data.settings.uiPreferences.global.ytdlpUpdateBehavior || "manual";
 
 	if (updateBehavior === "manual") return { success: true, message: "Manual mode." };
@@ -48,14 +54,21 @@ export const handleYtdlpUpdateCheck = createHandler(async ({ request, data, send
 	}
 	
 	if (updateBehavior === "auto") return nativeLink.runYtdlpUpdate();
+	return { success: true };
+}, {
+	manualPersistence: true,
 });
 
 export const handleUserConfirmedYtdlpUpdate = createHandler(async () => {
 	broadcastLog({ text: `[Background]: Starting yt-dlp update...`, type: "info" });
 	return nativeLink.runYtdlpUpdate();
+}, {
+	manualPersistence: true,
 });
 
 export const handleManualYtdlpUpdate = createHandler(async () => {
 	broadcastLog({ text: `[Background]: Manual yt-dlp update triggered.`, type: "info" });
 	return nativeLink.runYtdlpUpdate();
+}, {
+	manualPersistence: true,
 });

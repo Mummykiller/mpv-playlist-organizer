@@ -146,42 +146,76 @@ def is_safe_url(url):
         if not hostname:
             return True # Local file or similar
 
+        scheme = parsed.scheme.lower()
+        clean_host = hostname.strip("[]")
+        if "%" in clean_host:
+            clean_host = clean_host.split("%", 1)[0]
+
+        def _is_unsafe_ip(ip_obj):
+            if (
+                ip_obj.is_private
+                or ip_obj.is_loopback
+                or ip_obj.is_link_local
+                or ip_obj.is_unspecified
+                or ip_obj.is_reserved
+                or (ip_obj.is_multicast and scheme != "udp")
+            ):
+                return True
+            return False
+
         # 1. Direct IP Check
         try:
-            ip = ipaddress.ip_address(hostname)
-            if ip.is_private or ip.is_loopback or ip.is_link_local:
+            ip = ipaddress.ip_address(clean_host)
+            if _is_unsafe_ip(ip):
                 logging.warning(f"Security: Direct IP SSRF Block for {hostname}")
                 return False
+            return True
         except ValueError as e:
             # Not a direct IP, continue to resolution
             logging.debug(f"SSRF Check: Hostname '{hostname}' is not a direct IP literal: {e}")
 
         # 2. Resolution Check
         try:
-            ip_str = socket.gethostbyname(hostname)
+            addr_info = socket.getaddrinfo(clean_host, None)
+            if addr_info:
+                for res in addr_info:
+                    sockaddr = res[4]
+                    if not sockaddr:
+                        continue
+                    ip_str = sockaddr[0]
+                    if "%" in ip_str:
+                        ip_str = ip_str.split("%", 1)[0]
+                    ip = ipaddress.ip_address(ip_str)
+                    # Block Private/Local IPs
+                    if _is_unsafe_ip(ip):
+                        logging.warning(f"Security: SSRF Block for {clean_host} ({ip_str})")
+                        return False
         except socket.gaierror as e:
-            logging.debug(f"SSRF Check: DNS resolution failed for '{hostname}': {e}")
-            return False
+            logging.debug(f"SSRF Check: DNS resolution failed for '{clean_host}': {e}")
 
-        ip = ipaddress.ip_address(ip_str)
-        
-        # Block Private/Local IPs
-        if ip.is_private or ip.is_loopback or ip.is_link_local:
-            logging.warning(f"Security: SSRF Block for {hostname} ({ip_str})")
-            return False
-            
         return True
     except Exception as e:
         logging.error(f"Security: SSRF Check Error: {e}")
         return False
 
-def sanitize_string(s, is_filename=False):
+def sanitize_string(s, is_filename=False, is_url=False):
     """Sanitizes strings for safe OSD or Filesystem usage."""
     if not isinstance(s, str):
         return s
-    
+
+    if not is_filename and not is_url:
+        s_lower = s.lstrip().lower()
+        if s_lower.startswith(('http://', 'https://', 'file://', 'rtmp://', 'rtsp://', 'mms://', 'udp://')):
+            is_url = True
+
     # Enforce Length Limits
-    max_len = SECURITY_LIMITS['MAX_FOLDER_NAME_LENGTH'] if is_filename else SECURITY_LIMITS['MAX_TITLE_LENGTH']
+    if is_filename:
+        max_len = SECURITY_LIMITS['MAX_FOLDER_NAME_LENGTH']
+    elif is_url:
+        max_len = SECURITY_LIMITS['MAX_URL_LENGTH']
+    else:
+        max_len = SECURITY_LIMITS['MAX_TITLE_LENGTH']
+
     if len(s) > max_len:
         s = s[:max_len]
 

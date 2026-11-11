@@ -132,12 +132,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				const findFirst = (selectors, attribute = "textContent") => {
 					for (const selector of selectors) {
 						const el = document.querySelector(selector);
-						if (el) return (el[attribute] || el.content || "").trim();
+						if (!el) continue;
+						const rawVal =
+							el.tagName === "META"
+								? el.content ?? el.getAttribute?.("content") ?? ""
+								: el[attribute] ?? el.textContent ?? el.content ?? "";
+						const val = String(rawVal).trim();
+						if (val) return val;
 					}
 					return null;
 				};
 
-				let videoTitle = findFirst(titleSelectors, "content") || document.title;
+				let videoTitle = findFirst(titleSelectors) || document.title;
 				const channelName = findFirst(channelSelectors);
 
 				// Only strip leading notification counts in parentheses, e.g., "(1) Video Title"
@@ -243,16 +249,21 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			for (const matchedString of matchedStrings) {
 				cleanTitle = cleanTitle.replace(
-					new RegExp(matchedString.replace(/[.*+?^${}()|[\\]/g, "\\$&"), "gi"),
+					new RegExp(matchedString.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"),
 					"",
 				);
 			}
 
-			const junkRegex = new RegExp(
-				`(^|\\s)(${this.filterWords.join("|")})(\\s|$)`,
-				"gi",
-			);
-			cleanTitle = cleanTitle.replace(junkRegex, " ");
+			const escapedFilterWords = this.filterWords
+				.map((w) => String(w).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+				.filter(Boolean);
+			if (escapedFilterWords.length > 0) {
+				const junkRegex = new RegExp(
+					`(^|\\s)(${escapedFilterWords.join("|")})(\\s|$)`,
+					"gi",
+				);
+				cleanTitle = cleanTitle.replace(junkRegex, " ");
+			}
 
 			cleanTitle = cleanTitle.replace(/\s\.\d+\s/g, " ");
 			cleanTitle = cleanTitle

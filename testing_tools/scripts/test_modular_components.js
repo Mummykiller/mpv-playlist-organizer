@@ -406,6 +406,91 @@ async function testMpvControllerInit() {
 	console.log("  [OK] MpvController (Full Lifecycle)");
 }
 
+async function testDraggableComponent() {
+	console.log("Testing Draggable Component (Movement threshold & click suppression)...");
+
+	const container = document.createElement("div");
+	const handle = document.createElement("button");
+	container.appendChild(handle);
+	document.body.appendChild(container);
+
+	let dragEndCalled = false;
+	let dragEndPos = null;
+	const draggable = new MPV.Draggable(container, handle, {
+		dragButton: 0,
+		onDragEnd: (e, pos) => {
+			dragEndCalled = true;
+			dragEndPos = pos;
+		}
+	});
+
+	// 1. Click without moving (< 3px): should NOT trigger dragEnd
+	handle.dispatchEvent(new window.MouseEvent("mousedown", { button: 0, clientX: 100, clientY: 100 }));
+	document.dispatchEvent(new window.MouseEvent("mousemove", { clientX: 101, clientY: 101 }));
+	document.dispatchEvent(new window.MouseEvent("mouseup", { clientX: 101, clientY: 101 }));
+	assert.strictEqual(dragEndCalled, false, "Clicking with < 3px movement should not trigger onDragEnd");
+
+	// Click event should fire normally without being suppressed
+	let clickFired = false;
+	const onClick = () => { clickFired = true; };
+	handle.addEventListener("click", onClick);
+	handle.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+	assert.strictEqual(clickFired, true, "Click event without drag should fire");
+	handle.removeEventListener("click", onClick);
+
+	// 2. Drag with movement (> 3px): should trigger dragEnd and suppress click
+	let suppressedClickFired = false;
+	const onSuppressedClick = () => { suppressedClickFired = true; };
+	handle.addEventListener("click", onSuppressedClick);
+
+	handle.dispatchEvent(new window.MouseEvent("mousedown", { button: 0, clientX: 100, clientY: 100 }));
+	document.dispatchEvent(new window.MouseEvent("mousemove", { clientX: 150, clientY: 150 }));
+	document.dispatchEvent(new window.MouseEvent("mouseup", { clientX: 150, clientY: 150 }));
+
+	assert.strictEqual(dragEndCalled, true, "Dragging > 3px should trigger onDragEnd");
+	assert.ok(dragEndPos, "onDragEnd should receive computed pos");
+
+	// Dispatch click immediately after mouseup (as browser does)
+	handle.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+	assert.strictEqual(suppressedClickFired, false, "Click event after drag should be suppressed");
+	handle.removeEventListener("click", onSuppressedClick);
+
+	draggable.destroy();
+	container.remove();
+
+	// 3. Right-click drag (dragButton: 2)
+	const minContainer = document.createElement("div");
+	const minHandle = document.createElement("button");
+	minContainer.appendChild(minHandle);
+	document.body.appendChild(minContainer);
+
+	let rightDragEndCalled = false;
+	const rightDraggable = new MPV.Draggable(minContainer, minHandle, {
+		dragButton: 2,
+		onDragEnd: () => { rightDragEndCalled = true; }
+	});
+
+	const cmEvent = new window.MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+	minHandle.dispatchEvent(cmEvent);
+	assert.strictEqual(cmEvent.defaultPrevented, true, "Context menu on right-click draggable should be prevented");
+
+	minHandle.dispatchEvent(new window.MouseEvent("mousedown", { button: 2, clientX: 50, clientY: 50 }));
+	document.dispatchEvent(new window.MouseEvent("mousemove", { clientX: 120, clientY: 80 }));
+	document.dispatchEvent(new window.MouseEvent("mouseup", { button: 2, clientX: 120, clientY: 80 }));
+
+	assert.strictEqual(rightDragEndCalled, true, "Right-click drag should trigger onDragEnd");
+
+	let rightClickSuppressed = false;
+	minHandle.addEventListener("click", () => { rightClickSuppressed = true; });
+	minHandle.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+	assert.strictEqual(rightClickSuppressed, false, "Click after right-drag should be suppressed");
+
+	rightDraggable.destroy();
+	minContainer.remove();
+
+	console.log("  [OK] Draggable (Threshold & Click Suppression)");
+}
+
 (async () => {
 	try {
 		testTranspilationIntegrity();
@@ -417,6 +502,7 @@ async function testMpvControllerInit() {
 		testPlaybackStateManager();
 		testPageScraperWithInjection();
 		await testMpvControllerInit();
+		await testDraggableComponent();
 		console.log("\nALL MODULAR COMPONENT TESTS PASSED (JSDOM)! 📦✨");
 	} catch (err) {
 		console.error("\nTEST FAILED! ❌");

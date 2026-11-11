@@ -216,9 +216,13 @@ class MpvSessionManager:
                     self.ipc_manager.send({"command": ["set_property", "user-data/cookies-browser", target_item.get('cookies_browser', "")]})
                     self.ipc_manager.send({"command": ["set_property", "user-data/project-root", self.SCRIPT_DIR]})
                     
-                    # 5. Reload
+                    # 5. Reload (preserve solid ID fragment so adaptive_headers.lua retains user-data/id)
+                    reload_url = url
+                    if item_id and f"mpv_organizer_id={item_id}" not in reload_url:
+                        sep = "#" if "#" not in reload_url else "&"
+                        reload_url = f"{reload_url}{sep}mpv_organizer_id={item_id}"
                     logging.info("Fallback: Reloading file with volatile cookies.")
-                    self.ipc_manager.send({"command": ["loadfile", url, "replace"]})
+                    self.ipc_manager.send({"command": ["loadfile", reload_url, "replace"]})
                 else:
                     logging.warning("Fallback: Failed to extract cookies.")
                     self.ipc_manager.send({"command": ["show-text", "Fallback Failed: Could not extract cookies.", 5000]})
@@ -255,6 +259,7 @@ class MpvSessionManager:
         cookies_to_remove = []
         session_file_to_remove = None
 
+        orphaned_exit = False
         with self.sync_lock:
             # --- ORPHANED EXIT GUARD ---
             # If we are clearing because the Native Host is exiting (mpv_return_code is None)
@@ -273,44 +278,44 @@ class MpvSessionManager:
                     self.ipc_manager = None
                 
                 self.is_alive = False
-                return {}
+                orphaned_exit = True
+            else:
+                # 1. Immediate State Inactivation
+                self.is_alive = False
+                self.is_closing = False
+                self.health = "ok"
+                pid_to_clear = self.pid
+                self.pid = None
 
-            # 1. Immediate State Inactivation
-            self.is_alive = False
-            self.is_closing = False
-            self.health = "ok"
-            pid_to_clear = self.pid
-            self.pid = None
+                if pid_to_clear:
+                    logging.info(f"Clearing session state for PID: {pid_to_clear}")
 
-            if pid_to_clear:
-                logging.info(f"Clearing session state for PID: {pid_to_clear}")
+                # Capture objects for cleanup outside lock
+                if self.playlist_tracker:
+                    tracker_to_stop = self.playlist_tracker
+                    self.playlist_tracker = None
 
-            # Capture objects for cleanup outside lock
-            if self.playlist_tracker:
-                tracker_to_stop = self.playlist_tracker
-                self.playlist_tracker = None
+                if self.ipc_manager:
+                    ipc_to_close = self.ipc_manager
+                    self.ipc_manager = None
 
-            if self.ipc_manager:
-                ipc_to_close = self.ipc_manager
-                self.ipc_manager = None
+                self.process = None
+                self.ipc_path = None
+                self.playlist = []
+                self.owner_folder_id = None
+                self.manual_quit = False
+                self.last_played_id_cache = None
 
-            self.process = None
-            self.ipc_path = None
-            self.playlist = []
-            self.owner_folder_id = None
-            self.manual_quit = False
-            self.last_played_id_cache = None
+                if self.handshake_path and os.path.exists(self.handshake_path):
+                    handshake_to_remove = self.handshake_path
+                self.handshake_path = None
 
-            if self.handshake_path and os.path.exists(self.handshake_path):
-                handshake_to_remove = self.handshake_path
-            self.handshake_path = None
+                if self.session_cookies:
+                    cookies_to_remove = list(self.session_cookies)
+                    self.session_cookies.clear()
 
-            if self.session_cookies:
-                cookies_to_remove = list(self.session_cookies)
-                self.session_cookies.clear()
-
-            if os.path.exists(self.session_file):
-                session_file_to_remove = self.session_file
+                if os.path.exists(self.session_file):
+                    session_file_to_remove = self.session_file
 
         # --- Cleanup Operations (OUTSIDE SYNC LOCK) ---
         # These operations can be slow (joins, I/O timeouts)
@@ -322,6 +327,9 @@ class MpvSessionManager:
         if ipc_to_close:
             logging.info("[PY][Session] Closing IPC manager (background)...")
             ipc_to_close.close()
+
+        if orphaned_exit:
+            return {}
 
         if handshake_to_remove:
             try:
@@ -378,6 +386,8 @@ class MpvSessionManager:
                     "was_stale": False, 
                     "folder_id": self.owner_folder_id, 
                     "last_played_id": getattr(self, 'last_played_id_cache', None),
+                    "is_paused": getattr(self, "is_paused", False),
+                    "is_idle": getattr(self, "is_idle", False),
                     "token": getattr(self, 'current_token', None),
                     "playlist": self.playlist
                 }
@@ -596,6 +606,9 @@ class MpvSessionManager:
         """Internal append logic with strict MPV-state filtering."""
         if not self.is_alive or not self.ipc_manager:
             return {"success": False, "error": "No active session."}
+        if folder_id and self.owner_folder_id and self.owner_folder_id.lower() != folder_id.lower():
+            logging.warning(f"[PY][Session] Aborting append_batch: folder mismatch (active='{self.owner_folder_id}', requested='{folder_id}').")
+            return {"success": False, "error": "Folder mismatch for append_batch."}
 
         # 1. Reality Sync: Get exactly what MPV currently has in its memory
         # This populates self.playlist with ONLY items already in the player.
@@ -805,18 +818,34 @@ class MpvSessionManager:
     def clear_live(self, folder_id):
         """Clears all items from the active MPV playlist."""
         with self.sync_lock:
+            if not self.ipc_manager:
+                return False
             if not self.is_alive or not self.owner_folder_id or self.owner_folder_id.lower() != folder_id.lower():
                 return {"success": False, "message": "Session not active or folder mismatch."}
             
             logging.info(f"Clearing live MPV playlist for folder '{folder_id}'.")
             # We use 'playlist-clear' which removes everything except the currently playing file.
-            # To clear everything, we might need a different approach or just stop.
             self.ipc_manager.send({"command": ["playlist-clear"]}, expect_response=True)
             
-            # Reset internal playlist state
-            self.playlist = []
+            # Keep the currently playing item in self.playlist / self.playlist_tracker
+            current_id = None
+            if self.playlist_tracker and getattr(self.playlist_tracker, 'current_id', None):
+                current_id = self.playlist_tracker.current_id
+            if not current_id:
+                prop_id = self.ipc_manager.get_property("user-data/id", timeout=0.3)
+                if isinstance(prop_id, str) and prop_id:
+                    current_id = prop_id
+            if not current_id:
+                current_id = getattr(self, 'last_played_id_cache', None)
+
+            if current_id:
+                kept_items = [i for i in self.playlist if i.get('id') == current_id]
+            else:
+                kept_items = [i for i in self.playlist if i.get('currently_playing')][:1]
+
+            self.playlist = kept_items
             if self.playlist_tracker:
-                self.playlist_tracker.update_playlist_order([])
+                self.playlist_tracker.update_playlist_order(self.playlist)
             
             self.ipc_manager.send({"command": ["show-text", "Playlist cleared", 2000]}, expect_response=True)
             return {"success": True, "message": "Live playlist cleared."}
@@ -965,7 +994,7 @@ class MpvSessionManager:
 
                 if not currently_alive:
                     logging.info(f"Session for PID {self.pid} is confirmed dead. Clearing.")
-                    self.clear() 
+                    self.clear(mpv_return_code=0) 
                 elif folder_id and self.owner_folder_id and folder_id.lower() == self.owner_folder_id.lower(): 
                     # --- NON-DESTRUCTIVE HOT SWAP ---
                     logging.info("[PY][Session] Same folder active. Attempting hot swap.")
@@ -1069,7 +1098,7 @@ class MpvSessionManager:
                     if ipc_utils.is_pid_running(self.pid):
                         self.close()
                     else:
-                        self.clear()
+                        self.clear(mpv_return_code=0)
 
             # --- LAUNCH LOGIC (Only if not already active) ---
             if not launch_result.get("already_active"):
@@ -1099,11 +1128,8 @@ class MpvSessionManager:
                 self.enricher.handle_standard_flow_launch(self, _url_items_list, playlist_start_index, folder_id, settings, file_io)
 
         if launch_result.get("success") and input_was_raw and not launch_result.get("already_active"):
-            # Only mark as fully handled if it's a single item launch.
-            # For batches, we need the handler to set up the M3U server for the remaining items.
-            if len(_url_items_list) == 1:
-                launch_result["handled_directly"] = True
-            
+            # Standard Flow already launched MPV and started background enrichment.
+            launch_result["handled_directly"] = True
             launch_result["enriched_url_items"] = _url_items_list
             launch_result["enriched_m3u_content"] = self._generate_m3u_content(_url_items_list)
 

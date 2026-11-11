@@ -146,6 +146,7 @@ end)
 local completion_triggered = false
 local has_started = false
 local last_error = false
+local last_end_reason = nil
 local max_playback_time = 0
 local playing_pos = nil
 local playing_id = nil
@@ -162,6 +163,7 @@ end)
 mp.register_event("start-file", function()
     completion_triggered = false
     last_error = false
+    last_end_reason = nil
     max_playback_time = 0
     
     log("[TRACE] start-file: resetting state")
@@ -234,6 +236,7 @@ local function handle_natural_completion(reason)
 end
 
 function on_end_file(event)
+    last_end_reason = event.reason
     -- Use playlist-pos-1 as a fallback for the item that just finished if pos is gone
     local pos = mp.get_property_number("playlist-pos")
     local count = mp.get_property_number("playlist-count", 0)
@@ -248,6 +251,10 @@ function on_end_file(event)
 
     -- Case 1: The file finished naturally
     if event.reason == 'eof' then
+        if max_playback_time < 5 then
+            log("on_end_file (eof) ignored: playback time too short (" .. tostring(max_playback_time) .. "s).")
+            return
+        end
         log(string.format("[TRACE] on_end_file (eof): reporting id=%s, pos=%s", tostring(playing_id), tostring(playing_pos)))
         
         -- Always notify Python that THIS item finished if it was natural
@@ -293,6 +300,10 @@ mp.observe_property("idle-active", "bool", function(name, val)
         mp.add_timeout(0.1, function()
             if last_error then
                 log("Idle active but last_error is true. Skipping completion.")
+                return
+            end
+            if last_end_reason ~= "eof" then
+                log("Idle active but last_end_reason is " .. tostring(last_end_reason) .. " (not eof). Skipping completion.")
                 return
             end
             

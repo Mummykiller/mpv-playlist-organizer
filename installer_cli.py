@@ -87,7 +87,7 @@ class CommandLineApp:
         selected_browser = "brave"
         use_youtube = False
         if use_bypass:
-            selected_browser = input("Which browser do you use? (brave/chrome/edge/vivaldi/opera) [brave]: ").strip().lower() or "brave"
+            selected_browser = input("Which browser do you use? (brave/chrome/chromium/edge/vivaldi/opera) [brave]: ").strip().lower() or "brave"
             use_youtube = input("Enable YouTube Account Integration? (y/n) [n]: ").lower().startswith('y')
 
         print("\nChecking Dependencies...")
@@ -129,7 +129,7 @@ class CommandLineApp:
 
     def perform_detection(self):
         self._print_header("EXTENSION ID DETECTION")
-        browser = input("Which browser to scan? (brave/chrome/edge/vivaldi/opera) [brave]: ").strip().lower() or "brave"
+        browser = input("Which browser to scan? (brave/chrome/chromium/edge/vivaldi/opera) [brave]: ").strip().lower() or "brave"
         print(f"Scanning {browser} profiles...")
         ext_id = self.logic.find_extension_id(browser)
         if ext_id:

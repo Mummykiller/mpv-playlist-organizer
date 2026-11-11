@@ -230,3 +230,7 @@ class SystemLogger {
 }
 
 export const logger = new SystemLogger();
+
+globalThis.MPV_INTERNAL = globalThis.MPV_INTERNAL || {};
+globalThis.MPV_INTERNAL.logger = logger;
+globalThis.MPV_INTERNAL.LogLevel = LogLevel;

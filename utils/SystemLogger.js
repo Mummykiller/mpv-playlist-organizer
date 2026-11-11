@@ -235,4 +235,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 	const logger = MPV.logger = new SystemLogger();
 
+	globalThis.MPV_INTERNAL = globalThis.MPV_INTERNAL || {};
+	globalThis.MPV_INTERNAL.logger = logger;
+	globalThis.MPV_INTERNAL.LogLevel = LogLevel;
+
 })();

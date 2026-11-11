@@ -2,6 +2,7 @@ import sys
 import json
 import subprocess
 import os
+import shutil
 import re
 import platform
 import logging
@@ -313,7 +314,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     or 'cookies_file' path if extraction was forced (e.g. for Python-side expansion).
     """
     # First line of defense inside analyzer: sanitize the URL
-    url = file_io.sanitize_string(url, is_filename=False)
+    url = file_io.sanitize_string(url, is_filename=False, is_url=True)
     
     # --- Protocol Validation ---
     if not url.lower().startswith(security.ALLOWED_PROTOCOLS):
@@ -333,6 +334,9 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     # Use provided UA or a reasonable Chrome-like default
     effective_user_agent = user_agent_str if user_agent_str else "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     
+    settings = file_io.get_settings()
+    ytdlp_bin = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
+
     is_yt_enabled = str(youtube_enabled).lower() == "true"
     is_yt_cookies_enabled = str(yt_use_cookies).lower() == "true"
     is_mark_watched_enabled = str(yt_mark_watched).lower() == "true"
@@ -370,7 +374,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         is_direct_vault = (".m3u8" in url.lower()) and ("owocdn" in url or "uwucdn" in url or VAULT_RE.search(url))
         
         # Anti-bot args for yt-dlp just in case it's used elsewhere (landing pages)
-        ytdl_args = "--extractor-args \"generic:impersonate;youtube:player_client=android,ios\""
+        ytdl_args = "extractor-args=generic:impersonate;youtube:player_client=android,ios"
 
         return {
             "success": True,
@@ -414,7 +418,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
             try:
                 logging.info(f"Expanding YouTube playlist: {url}")
                 cmd = [
-                    'yt-dlp',
+                    ytdlp_bin,
                     '--flat-playlist',
                     '--print', '%(title)s|%(webpage_url)s'
                 ]
@@ -528,7 +532,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     # --- Case 3: Other URLs (External resolution as fallback) ---
     try:
         cmd = [
-            'yt-dlp',
+            ytdlp_bin,
             '--force-ipv4',
             '--format', ytdl_format,
             '--get-url',

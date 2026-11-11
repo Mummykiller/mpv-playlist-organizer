@@ -30,7 +30,9 @@ const SETTINGS_FIELDS = new Set([
     "yt_mark_watched",
     "os_platform",
     "ffmpeg_path",
-    "ytdlp_path"
+    "ytdlp_path",
+    "clear_on_completion",
+    "clear_on_item_finish"
 ]);
 
 const ACTION_SCHEMAS = {
@@ -48,7 +50,8 @@ const ACTION_SCHEMAS = {
         "automatic_mpv_flags",
         "start_paused",
         "force_terminal",
-        "play_new_instance"
+        "play_new_instance",
+        "is_unmanaged"
     ],
     "play_batch": [
         "folder_id",
@@ -64,7 +67,8 @@ const ACTION_SCHEMAS = {
         "automatic_mpv_flags",
         "start_paused",
         "force_terminal",
-        "play_new_instance"
+        "play_new_instance",
+        "is_unmanaged"
     ],
     "play_m3u": [
         "folder_id",
@@ -80,7 +84,8 @@ const ACTION_SCHEMAS = {
         "automatic_mpv_flags",
         "start_paused",
         "force_terminal",
-        "play_new_instance"
+        "play_new_instance",
+        "is_unmanaged"
     ],
     "append": [
         "folder_id",
@@ -96,7 +101,8 @@ const ACTION_SCHEMAS = {
         "automatic_mpv_flags",
         "start_paused",
         "force_terminal",
-        "play_new_instance"
+        "play_new_instance",
+        "is_unmanaged"
     ],
     "play_new_instance": [
         "folder_id",
@@ -112,7 +118,8 @@ const ACTION_SCHEMAS = {
         "automatic_mpv_flags",
         "start_paused",
         "force_terminal",
-        "play_new_instance"
+        "play_new_instance",
+        "is_unmanaged"
     ],
     "remove_item_live": [
         "folder_id",

@@ -97,7 +97,7 @@ class DataHandler(BaseHandler):
             return native_link.failure("No data provided.")
             
         if request.is_incremental:
-            success = self.file_io.save_library_batch(data)
+            success = self.file_io.save_library_batch(data, is_incremental=True)
             if success:
                 return native_link.success(message="Incremental sync complete.", log={"text": "[Native Host]: Incremental sync complete.", "type": "info"})
             else:

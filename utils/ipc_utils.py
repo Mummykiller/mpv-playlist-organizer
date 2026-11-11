@@ -86,6 +86,21 @@ class IPCSocketManager:
         """Registers a callback function for a specific client-message name."""
         self._script_handlers[name] = handler
 
+    def _cleanup_attempt_handles(self):
+        """Closes socket/file handles from a failed connect() attempt without wiping _ipc_path or scanning all sockets."""
+        if self._sock_file:
+            try:
+                self._sock_file.close()
+            except (OSError, ValueError) as e:
+                logging.debug(f"Error closing sock_file during connect retry: {e}")
+            self._sock_file = None
+        if self._sock:
+            try:
+                self._sock.close()
+            except OSError as e:
+                logging.debug(f"Error closing sock during connect retry: {e}")
+            self._sock = None
+
     def connect(self, ipc_path, timeout=15.0, start_event_reader=True):
         """
         Connects to the MPV IPC server.
@@ -109,6 +124,7 @@ class IPCSocketManager:
                     self._sock.connect(ipc_path)
                     self._sock_file = self._sock.makefile('rb')
                 
+                self._ipc_path = ipc_path
                 logging.info(f"Successfully connected to MPV IPC: {ipc_path}")
                 
                 if start_event_reader:
@@ -122,82 +138,112 @@ class IPCSocketManager:
                 return True
             except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
                 logging.debug(f"IPC connection failed (will retry): {e}")
-                if self._sock: # Only close if a socket was actually opened
-                    self.close() 
+                self._cleanup_attempt_handles()
                 time.sleep(0.2) # Small delay before next attempt
             except Exception as e:
                 logging.error(f"Unexpected error during IPC connection attempt (will retry): {e}")
-                if self._sock:
-                    self.close()
+                self._cleanup_attempt_handles()
                 time.sleep(0.2)
         
         logging.error(f"Failed to connect to MPV IPC at {ipc_path} after {timeout} seconds.")
         return False
+
+    def _process_raw_ipc_line(self, raw_line):
+        """Decodes and dispatches a single newline-delimited IPC JSON line."""
+        line_str = raw_line.decode('utf-8', errors='replace').strip()
+        if not line_str:
+            return
+        try:
+            event = json.loads(line_str)
+        except json.JSONDecodeError:
+            return
+
+        handled = False
+        if event.get("event") == "client-message":
+            args = event.get("args", [])
+            if args and len(args) > 0 and isinstance(args[0], str):
+                msg_name = args[0]
+
+                # Filter out noisy thumbnail script events
+                if msg_name.startswith("mpv_thumbnail_script"):
+                    return
+
+                if msg_name in self._script_handlers:
+                    try:
+                        # We invoke the handler directly. Handlers must be non-blocking!
+                        self._script_handlers[msg_name](args[1:])
+                        handled = True
+                    except Exception as e:
+                        logging.error(f"Error in script handler for {msg_name}: {e}")
+
+        if not handled:
+            ipc_logger.debug(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
+            with self._buffer_lock:
+                self._event_buffer.append(event)
+                # Limit buffer size to prevent memory leaks/performance degradation
+                if len(self._event_buffer) > 1000:
+                    self._event_buffer.popleft()
+                self._buffer_lock.notify_all()
 
     def _event_reader_loop(self):
         """
         Continuously reads events from the IPC socket and appends them to the internal buffer.
         Runs in a separate thread to prevent mpv's output buffer from filling up.
         """
+        raw_buffer = bytearray()
         while True:
-            # 1. Thread-safe state check and handle capture
+            # 1. Process any complete lines already buffered before waiting on select()
+            while b"\n" in raw_buffer:
+                newline_idx = raw_buffer.find(b"\n")
+                raw_line = bytes(raw_buffer[:newline_idx])
+                del raw_buffer[:newline_idx + 1]
+                self._process_raw_ipc_line(raw_line)
+
+            # 2. Thread-safe state check and handle capture
             with self._buffer_lock:
                 if not self._event_reader_running:
                     break
                 
-                # Capture handle to local variable to avoid NoneType race condition
+                sock_handle = self._sock
                 reader_handle = self._sock_file
-                if not reader_handle:
+                if not sock_handle and not reader_handle:
                     self._buffer_lock.wait(0.1)
                     continue
 
             try:
-                if self._system != "Windows" and self._sock:
+                if self._system != "Windows" and sock_handle:
                     # Use select to check for data availability with a timeout on Unix
-                    readable, _, _ = select.select([self._sock], [], [], 0.1)
-                    if self._sock not in readable:
+                    readable, _, _ = select.select([sock_handle], [], [], 0.1)
+                    if sock_handle not in readable:
                         continue
 
-                # 2. Use the LOCAL handle reference
-                response_line = reader_handle.readline()
+                # 3. Read raw bytes from Unix socket via recv(4096) to avoid BufferedReader stranding
+                chunk = None
+                used_recv = False
+                if self._system != "Windows" and sock_handle is not None:
+                    if isinstance(sock_handle, socket.socket):
+                        chunk = sock_handle.recv(4096)
+                        used_recv = True
+                    elif hasattr(sock_handle, "recv"):
+                        maybe_chunk = sock_handle.recv(4096)
+                        if isinstance(maybe_chunk, (bytes, bytearray)):
+                            chunk = maybe_chunk
+                            used_recv = True
 
-                if response_line:
-                    line_str = response_line.decode('utf-8').strip()
-                    if not line_str:
-                        continue # Skip empty lines
-                    
-                    try:
-                        event = json.loads(line_str)
-                    except json.JSONDecodeError:
-                        continue
-                    
-                    # Check for script handlers
-                    handled = False
-                    if event.get("event") == "client-message":
-                        args = event.get("args", [])
-                        if args and len(args) > 0 and isinstance(args[0], str):
-                            msg_name = args[0]
-                            
-                            # Filter out noisy thumbnail script events
-                            if msg_name.startswith("mpv_thumbnail_script"):
-                                continue
+                if not used_recv:
+                    if not reader_handle:
+                        break
+                    chunk = reader_handle.readline()
 
-                            if msg_name in self._script_handlers:
-                                try:
-                                    # We invoke the handler directly. Handlers must be non-blocking!
-                                    self._script_handlers[msg_name](args[1:])
-                                    handled = True
-                                except Exception as e:
-                                    logging.error(f"Error in script handler for {msg_name}: {e}")
-
-                    if not handled:
-                        ipc_logger.debug(f"IPC EVENT (Reader Thread): {json.dumps(event)}")
-                        with self._buffer_lock:
-                            self._event_buffer.append(event)
-                            # NEW: Limit buffer size to prevent memory leaks/performance degradation
-                            if len(self._event_buffer) > 1000:
-                                self._event_buffer.popleft()
-                            self._buffer_lock.notify_all() # Notify waiters that new data arrived
+                if chunk:
+                    raw_buffer.extend(chunk)
+                    if not used_recv and b"\n" not in raw_buffer:
+                        raw_buffer.extend(b"\n")
+                    while b"\n" in raw_buffer:
+                        newline_idx = raw_buffer.find(b"\n")
+                        raw_line = bytes(raw_buffer[:newline_idx])
+                        del raw_buffer[:newline_idx + 1]
+                        self._process_raw_ipc_line(raw_line)
                 else:
                     # EOF detected, connection closed by MPV or remote end
                     ipc_logger.info("IPC event reader detected EOF. Signaling connection closure.")
@@ -257,9 +303,34 @@ class IPCSocketManager:
                 # --- Handle Synchronous Read if Reader Thread is Disabled ---
                 if not self._event_reader_running:
                     start_wait = time.time()
+                    sync_buffer = bytearray()
                     while time.time() - start_wait < timeout:
+                        remaining_timeout = max(0.01, timeout - (time.time() - start_wait))
                         try:
-                            # Direct read from file handle
+                            if self._system != "Windows" and self._sock:
+                                readable, _, _ = select.select([self._sock], [], [], remaining_timeout)
+                                if not readable:
+                                    break
+                                if isinstance(self._sock, socket.socket):
+                                    chunk = self._sock.recv(4096)
+                                    if not chunk:
+                                        break
+                                    sync_buffer.extend(chunk)
+                                    while b"\n" in sync_buffer:
+                                        newline_idx = sync_buffer.find(b"\n")
+                                        raw_line = bytes(sync_buffer[:newline_idx])
+                                        del sync_buffer[:newline_idx + 1]
+                                        if not raw_line.strip():
+                                            continue
+                                        try:
+                                            resp = json.loads(raw_line.decode('utf-8'))
+                                        except json.JSONDecodeError:
+                                            continue
+                                        if resp.get("request_id") == req_id or ("event" not in resp and "request_id" not in resp):
+                                            return resp
+                                    continue
+
+                            # Direct read from file handle (Windows or mocked handle)
                             line = self._sock_file.readline()
                             if not line:
                                 break

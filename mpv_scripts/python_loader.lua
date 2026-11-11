@@ -134,7 +134,7 @@ end)
 -- 3. On File End / Shutdown: Final Time Sync
 mp.register_event("end-file", function(event)
     playback_active = false
-    local time = mp.get_property_number("time-pos")
+    local time = mp.get_property_number("time-pos") or last_time_pos
     
     if event.reason == "eof" then
         -- REMOVED force=true: We trust the primary Python tracker to handle EOF if active.

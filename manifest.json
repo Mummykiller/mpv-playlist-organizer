@@ -21,6 +21,7 @@
 		{
 			"matches": ["<all_urls>"],
 			"js": [
+				"utils/SystemLogger.js",
 				"utils/security.js",
 				"utils/commUtils.js",
 				"utils/domUtils.js",
@@ -46,7 +47,7 @@
 	"web_accessible_resources": [
 		{
 			"resources": ["shared.css", "content.css", "images/*"],
-			"matches": ["<all_urls>"]
+			"matches": ["*://*/*", "<all_urls>"]
 		}
 	],
 	"action": {

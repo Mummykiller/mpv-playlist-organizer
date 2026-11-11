@@ -172,7 +172,7 @@ class Janitor:
                                     logging.info(f"Janitor: Removing stale flag older than 72h: {item}")
                                     os.remove(item_path)
                         except FileNotFoundError as e:
-                            logging.debug(f"Janitor: Temp file already removed {file_path}: {e}")
+                            logging.debug(f"Janitor: Temp file already removed {item_path}: {e}")
                         except OSError as e:
                             logging.warning(f"Janitor: Error removing stale flag {item}: {e}")
                         continue
@@ -186,7 +186,7 @@ class Janitor:
                 logging.warning(f"Janitor: Error during IPC cleanup in {ipc_dir}: {e}")
 
     def cleanup_flags(self):
-        """Scans for stale natural completion flags in the dedicated flags directory."""
+        """Scans for stale natural completion flags and handshake files in the dedicated flags directory."""
         flag_dir = os.path.join(self.data_dir, "flags")
         if not os.path.exists(flag_dir):
             return
@@ -194,8 +194,10 @@ class Janitor:
         logging.info(f"Janitor: Checking for stale flags in {flag_dir} (72h threshold)")
         now = time.time()
         three_days_ago = now - (72 * 3600)
+        one_hour_ago = now - 3600
         
         flag_re = re.compile(r'^mpv_natural_completion_(?P<pid>\d+)\.flag$')
+        handshake_re = re.compile(r'^handshake_.*\.json$')
         
         try:
             for item in os.listdir(flag_dir):
@@ -212,6 +214,17 @@ class Janitor:
                         logging.debug(f"Janitor: Flag already removed {item_path}: {e}")
                     except OSError as e:
                         logging.warning(f"Janitor: Error removing stale flag {item}: {e}")
+                    continue
+
+                if handshake_re.match(item):
+                    try:
+                        if os.path.getmtime(item_path) < one_hour_ago:
+                            logging.info(f"Janitor: Removing stale handshake file older than 1h: {item}")
+                            os.remove(item_path)
+                    except FileNotFoundError as e:
+                        logging.debug(f"Janitor: Handshake file already removed {item_path}: {e}")
+                    except OSError as e:
+                        logging.warning(f"Janitor: Error removing stale handshake file {item}: {e}")
         except Exception as e:
             logging.warning(f"Janitor: Error during flag cleanup: {e}")
 

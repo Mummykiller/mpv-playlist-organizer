@@ -10,7 +10,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	const AniListRenderer = MPV.AniListRenderer = class AniListRenderer {
 		static _cache = null;
 		static _cacheTimestamp = 0;
-		static _inFlightRequest = null;
+		static _inFlightRequests = new Map();
 		static CACHE_DURATION_MS = 60 * 1000;
 
 		static async fetchReleases(forceRefresh = false, daysOffset = 0) {
@@ -24,9 +24,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			)
 				return AniListRenderer._cache;
 
-			if (AniListRenderer._inFlightRequest && !forceRefresh)
-				return AniListRenderer._inFlightRequest;
-			AniListRenderer._inFlightRequest = (async () => {
+			if (AniListRenderer._inFlightRequests.has(daysOffset) && !forceRefresh)
+				return AniListRenderer._inFlightRequests.get(daysOffset);
+
+			const requestPromise = (async () => {
 				try {
 					const response = await sendMessageAsync({
 						action: "get_anilist_releases",
@@ -42,10 +43,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					}
 					throw new Error(response.error || "Failed to fetch releases.");
 				} finally {
-					AniListRenderer._inFlightRequest = null;
+					if (AniListRenderer._inFlightRequests.get(daysOffset) === requestPromise) {
+						AniListRenderer._inFlightRequests.delete(daysOffset);
+					}
 				}
 			})();
-			return AniListRenderer._inFlightRequest;
+			AniListRenderer._inFlightRequests.set(daysOffset, requestPromise);
+			return requestPromise;
 		}
 
 		static render(container, releases, offset = 0) {

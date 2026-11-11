@@ -84,8 +84,14 @@ global.chrome = {
         }
     },
     runtime: {
+        sendMessage: (msg, cb) => {
+            const res = { success: true, css: "" };
+            if (typeof cb === "function") cb(res);
+            return Promise.resolve(res);
+        },
         onMessage: { addListener: () => {} },
-        connect: () => ({ onMessage: { addListener: () => {} } })
+        connect: () => ({ onMessage: { addListener: () => {} } }),
+        connectNative: () => ({ onMessage: { addListener: () => {} }, postMessage: () => {} })
     }
 };
 
@@ -598,6 +604,67 @@ async function testUiSync() {
     assert.deepStrictEqual(janitorSavedData.folderOrder, ["Folder1", "Folder2"], "GhostFolder pruned, Folder2 appended");
 
     console.log("  ✅ Folder ordering, cyclic switching, and Janitor reconciliation verified.");
+
+    // Operation 7: UI Preference & Minimized State Isolation Verification
+    console.log("Testing UI Preference & Minimized State Isolation...");
+    const { handleSetUiPreferences } = await import("../../background/handlers/ui_state.js");
+    const { DOMAIN_SPECIFIC_KEYS } = await import("../../utils/commUtils.module.js");
+
+    // 7.1 Verify domain-specific keys are correctly isolated
+    const resDomain = await handleSetUiPreferences({
+        preferences: {
+            minimized: true,
+            position: { top: "20px" },
+            minimizedStubPosition: { top: "50px" },
+            launchGeometry: "fullscreen"
+        }
+    }, { origin: "https://www.youtube.com" });
+
+    assert.strictEqual(resDomain.success, true);
+    assert.strictEqual(resDomain.domain, "www.youtube.com");
+    assert.strictEqual(resDomain.domainPrefs?.minimized, true, "Domain should receive minimized preference");
+    assert.deepStrictEqual(resDomain.domainPrefs?.position, { top: "20px" }, "Domain should receive position preference");
+    assert.deepStrictEqual(resDomain.domainPrefs?.minimizedStubPosition, { top: "50px" }, "Domain should receive minimizedStubPosition");
+    assert.strictEqual(resDomain.globalPrefs.minimized, undefined, "Global preferences must NEVER contain minimized");
+    assert.strictEqual(resDomain.globalPrefs.position, undefined, "Global preferences must not contain position from domain");
+    assert.strictEqual(resDomain.globalPrefs.launchGeometry, "fullscreen", "Global preferences should receive non-domain keys");
+
+    // 7.2 Call handleSetUiPreferences without resolvable domain: DOMAIN_SPECIFIC_KEYS must NOT pollute global
+    const resNoDomain = await handleSetUiPreferences({
+        preferences: {
+            minimized: true,
+            position: { top: "100px" },
+            mpvDecoder: "nvdec"
+        }
+    }, { origin: null });
+
+    assert.strictEqual(resNoDomain.success, true);
+    assert.strictEqual(resNoDomain.globalPrefs.minimized, undefined, "Global must NOT be polluted with minimized when domain is null");
+    assert.strictEqual(resNoDomain.globalPrefs.position, undefined, "Global must NOT be polluted with position when domain is null");
+    assert.strictEqual(resNoDomain.globalPrefs.mpvDecoder, "nvdec", "Global should receive valid global preference mpvDecoder");
+
+    // 7.3 StorageManager self-healing of global.minimized
+    const mockStorageKeys = {
+        mpv_settings: {
+            uiPreferences: {
+                global: {
+                    minimized: true,
+                    invalid_snake_key: "trash",
+                    launchGeometry: "custom"
+                }
+            }
+        }
+    };
+    let setStorageData = null;
+    dummyStorage.get = () => Promise.resolve(mockStorageKeys);
+    dummyStorage.set = (d) => { setStorageData = d; return Promise.resolve(); };
+
+    // Test migration purges global.minimized
+    const storageManagerInstance = new StorageManager("test_storage", () => {});
+    const defaultData = storageManagerInstance._getDefaultData();
+    assert.strictEqual(defaultData.settings.uiPreferences.global.minimized, undefined, "_getDefaultData must NOT have minimized in global preferences");
+
+    console.log("  ✅ UI preference and minimized state isolation verified.");
 
     console.log("\n✨ UI SYNC TEST PASSED! ✨");
 }

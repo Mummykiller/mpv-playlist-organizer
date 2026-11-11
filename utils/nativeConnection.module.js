@@ -34,6 +34,7 @@ const eventListeners = {
 	mpv_quitting: [],
 	session_restored: [],
 	task_update: [],
+	ytdlp_update_check: [],
 	log: [],
 };
 
@@ -111,11 +112,30 @@ function connectToNativeHost() {
 
 		nativePort.onDisconnect.addListener(onDisconnect);
 
+		let lastRestoredIsPaused;
+
 		nativePort.onMessage.addListener((response) => {
 			const { request_id, ...responseData } = response;
 			const normalizedResponse = normalizeKeys(responseData);
 
+			if (normalizedResponse.action === "session_restored") {
+				if (normalizedResponse.isPaused !== undefined) {
+					lastRestoredIsPaused = Boolean(normalizedResponse.isPaused);
+				} else if (lastRestoredIsPaused !== undefined) {
+					normalizedResponse.isPaused = lastRestoredIsPaused;
+				}
+			}
+
 			if (request_id && requestPromises[request_id]) {
+				if (normalizedResponse.log) {
+					dispatchNativeEvent("log", {
+						action: "log",
+						log: normalizedResponse.log,
+						...(typeof normalizedResponse.log === "object" && normalizedResponse.log !== null
+							? normalizedResponse.log
+							: {}),
+					});
+				}
 				requestPromises[request_id].resolve(normalizedResponse);
 				delete requestPromises[request_id];
 				return;
@@ -124,7 +144,13 @@ function connectToNativeHost() {
 				dispatchNativeEvent(normalizedResponse.action, normalizedResponse);
 			
 			if (normalizedResponse.log) {
-				dispatchNativeEvent("log", { action: "log", log: normalizedResponse.log });
+				dispatchNativeEvent("log", {
+					action: "log",
+					log: normalizedResponse.log,
+					...(typeof normalizedResponse.log === "object" && normalizedResponse.log !== null
+						? normalizedResponse.log
+						: {}),
+				});
 			}
 		});
 

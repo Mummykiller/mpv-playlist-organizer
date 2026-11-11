@@ -146,6 +146,8 @@ export const handleGetUiStateForTab = createHandler(async ({ request }) => {
 			detectedUrl: m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId),
 		},
 	};
+}, {
+	manualPersistence: true,
 });
 
 export async function handleReportPageUrl(request, sender) {
@@ -285,6 +287,22 @@ export const handleGetUiPreferences = createHandler(async ({ request, data, send
 		}
 	}
 
+	if (!domain && sender.tab?.url) {
+		try {
+			domain = new URL(sender.tab.url).hostname;
+		} catch (e) {
+			console.debug("[UiState] Invalid sender tab URL:", sender.tab.url, e);
+		}
+	}
+
+	if (!domain && sender.url) {
+		try {
+			domain = new URL(sender.url).hostname;
+		} catch (e) {
+			console.debug("[UiState] Invalid sender URL:", sender.url, e);
+		}
+	}
+
 	if (!domain && request.tabId) {
 		try {
 			const tab = await chrome.tabs.get(request.tabId);
@@ -309,10 +327,12 @@ export const handleGetUiPreferences = createHandler(async ({ request, data, send
 		return { success: true, preferences: { ...globalPrefs, ...domainPrefs } };
 	}
 	return { success: true, preferences: globalPrefs };
+}, {
+	manualPersistence: true,
 });
 
 export const handleSetUiPreferences = createHandler(async ({ request, data, sender }) => {
-	const newPreferences = request.preferences;
+	const newPreferences = request.preferences || {};
 	let domain = null;
 
 	if (sender.origin && (sender.origin.startsWith("http:") || sender.origin.startsWith("https:"))) {
@@ -323,13 +343,41 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 		}
 	}
 
+	if (!domain && sender.tab?.url) {
+		try {
+			domain = new URL(sender.tab.url).hostname;
+		} catch (e) {
+			console.debug("[UiState] Invalid sender tab URL in setUiPreferences:", sender.tab.url, e);
+		}
+	}
+
+	if (!domain && sender.url) {
+		try {
+			domain = new URL(sender.url).hostname;
+		} catch (e) {
+			console.debug("[UiState] Invalid sender URL in setUiPreferences:", sender.url, e);
+		}
+	}
+
+	if (!domain && request.tabId) {
+		try {
+			const tab = await chrome.tabs.get(request.tabId);
+			if (tab?.url) domain = new URL(tab.url).hostname;
+		} catch (e) {
+			console.debug("[UiState] Failed to get tab URL for tabId in setUiPreferences:", request.tabId, e);
+		}
+	}
+
 	const domainPrefs = {};
 	const globalPrefs = {};
 
 	// Categorize preferences based on whether they are domain-specific or global
 	for (const [key, value] of Object.entries(newPreferences)) {
-		if (domain && DOMAIN_SPECIFIC_KEYS.includes(key)) {
-			domainPrefs[key] = value;
+		if (DOMAIN_SPECIFIC_KEYS.includes(key)) {
+			if (domain) {
+				domainPrefs[key] = value;
+			}
+			// Never let domain-specific keys spill into globalPrefs
 		} else {
 			globalPrefs[key] = value;
 		}
@@ -402,6 +450,8 @@ export const handleGetDefaultAutomaticFlags = createHandler(async () => {
 
 	const defaultData = storage._getDefaultData();
 	return { success: true, flags: defaultData.settings.uiPreferences.global.automaticMpvFlags };
+}, {
+	manualPersistence: true,
 });
 
 export const handleSetMinimizedState = createHandler(async ({ request, data }) => {
@@ -473,7 +523,7 @@ export async function handleOpenPopup(request, sender) {
 	}
 
 	if (chrome.action && chrome.action.openPopup) {
-		chrome.action.openPopup({ windowId: sender.tab.windowId }).catch(() => {});
+		chrome.action.openPopup({ windowId: sender?.tab?.windowId }).catch(() => {});
 		return { success: true };
 	}
 	return { success: false, error: "openPopup not supported." };

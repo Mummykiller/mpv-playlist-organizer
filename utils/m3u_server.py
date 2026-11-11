@@ -25,6 +25,7 @@ class M3UServer:
     def start(self, m3u_content):
         """Starts the local M3U server with the given content."""
         with self.server_lock:
+            os.makedirs(self.temp_playlists_dir, exist_ok=True)
             if not self.temp_file:
                 self.temp_file = os.path.join(self.temp_playlists_dir, f"{SERVER_PREFIX}{os.getpid()}{SERVER_EXT}")
             
@@ -51,22 +52,21 @@ class M3UServer:
                 # Wait for port identification (non-blocking)
                 start_time = time.time()
                 self.port = None
+                fcntl = None
+                orig_fl = None
+                fd = None
+                try:
+                    import fcntl
+                    fd = self.process.stdout.fileno()
+                    orig_fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                    fcntl.fcntl(fd, fcntl.F_SETFL, orig_fl | os.O_NONBLOCK)
+                except (ImportError, OSError, ValueError):
+                    fcntl = None
+
                 while time.time() - start_time < 5:
                     # check if process died
                     if self.process.poll() is not None:
                         break
-                    
-                    # Try to read line without blocking indefinitely
-                    # We use a simple read-and-check approach for compatibility
-                    try:
-                        import fcntl
-                    except ImportError:
-                        fcntl = None
-
-                    if fcntl is not None:
-                        fd = self.process.stdout.fileno()
-                        fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-                        fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
                     
                     try:
                         line = self.process.stdout.readline()
@@ -81,13 +81,12 @@ class M3UServer:
                     except (IOError, ValueError) as io_err:
                         logging.debug(f"[M3U_SERVER] Error reading stdout line: {io_err}")
                     
-                    # Reset to blocking for future reads if needed, or just sleep
                     time.sleep(0.1)
                 
                 # Restore blocking mode for safety
-                if fcntl is not None:
+                if fcntl is not None and fd is not None and orig_fl is not None:
                     try:
-                        fcntl.fcntl(fd, fcntl.F_SETFL, fl)
+                        fcntl.fcntl(fd, fcntl.F_SETFL, orig_fl)
                     except OSError as fcntl_err:
                         logging.debug(f"[M3U_SERVER] Error resetting fcntl flags: {fcntl_err}")
                 

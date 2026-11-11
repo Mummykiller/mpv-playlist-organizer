@@ -53,20 +53,35 @@ def _camel_to_snake(camel_str: str) -> str:
     """Converts camelCase to snake_case."""
     if camel_str in WHITELIST:
         return camel_str
-    # Handle acronyms and standard camelCase
-    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', camel_str)
-    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+    # Handle acronyms and standard camelCase (only between alphanumeric characters)
+    s1 = re.sub(r'([a-zA-Z0-9])([A-Z][a-z]+)', r'\1_\2', camel_str)
+    return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
-def _normalize_message(data: Any) -> Any:
+def _normalize_message(data: Any, parent_key: Optional[str] = None) -> Any:
     """Recursively normalizes camelCase keys to snake_case for Python logic."""
     if isinstance(data, dict):
         new_dict = {}
+        preserve_immediate_keys = parent_key in (
+            "data", "folders", "headers", "http_headers", "httpHeaders", "custom_names", "customNames"
+        )
         for k, v in data.items():
-            new_key = _camel_to_snake(k) if isinstance(k, str) else k
-            new_dict[new_key] = _normalize_message(v)
+            if preserve_immediate_keys or not isinstance(k, str):
+                new_key = k
+            else:
+                new_key = _camel_to_snake(k)
+
+            # Determine child parent_key so nested item dicts inside folder maps are still normalized
+            if parent_key in ("data", "folders") and new_key != "folders":
+                child_parent_key = None
+            elif parent_key in ("headers", "http_headers", "httpHeaders"):
+                child_parent_key = None
+            else:
+                child_parent_key = new_key if isinstance(new_key, str) else None
+
+            new_dict[new_key] = _normalize_message(v, parent_key=child_parent_key)
         return new_dict
     elif isinstance(data, list):
-        return [_normalize_message(i) for i in data]
+        return [_normalize_message(i, parent_key=None) for i in data]
     return data
 
 def translate(message: Dict[str, Any]) -> BaseRequest:
@@ -96,6 +111,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             start_paused=norm_message.get('start_paused', False),
             force_terminal=norm_message.get('force_terminal', False),
             play_new_instance=norm_message.get('play_new_instance', False),
+            is_unmanaged=norm_message.get('is_unmanaged', False),
             settings=SettingsOverrides.from_dict(norm_message)
         )
     

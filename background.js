@@ -160,8 +160,29 @@ const actionHandlers = {
 		const context = request.context || "Browser";
 		const message = request.message || request.error || "Unknown error";
 		const stack = request.stack || "";
-		logger.error(`[${context}] ${message}`, { persist: true, stack });
+		logger.error(`[${context}] ${message}`, { persist: false, stack });
+		try {
+			await nativeLink.call("log_browser_error", {
+				context,
+				message,
+				stack,
+			});
+		} catch (e) {
+			logger.debug(`[Background] Failed to forward browser error to native host: ${e.message}`);
+		}
 		return { success: true };
+	},
+	get_extension_styles: async () => {
+		try {
+			const [shared, content] = await Promise.all([
+				fetch(chrome.runtime.getURL("shared.css")).then((r) => (r.ok ? r.text() : "")).catch(() => ""),
+				fetch(chrome.runtime.getURL("content.css")).then((r) => (r.ok ? r.text() : "")).catch(() => ""),
+			]);
+			return { success: true, css: `${shared}\n${content}`.trim() };
+		} catch (e) {
+			logger.warn(`[Background] Failed to load extension styles: ${e.message}`);
+			return { success: false, error: e.message };
+		}
 	},
 	// UI State
 	content_script_init: ui_state_handlers.handleContentScriptInit,
@@ -485,6 +506,26 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 	}
 });
 
+function isScriptableUrl(urlStr) {
+	if (!urlStr) return false;
+	try {
+		const parsed = new URL(urlStr);
+		if (!["http:", "https:", "file:"].includes(parsed.protocol)) {
+			return false;
+		}
+		if (
+			parsed.hostname === "chromewebstore.google.com" ||
+			parsed.hostname === "chrome.google.com" ||
+			parsed.pathname.includes("/webstore")
+		) {
+			return false;
+		}
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 async function injectIntoTab(tabOrId, attempt = 1) {
 	const tabId = typeof tabOrId === "object" ? tabOrId.id : tabOrId;
 	if (!tabId) {
@@ -509,12 +550,8 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 		return;
 	}
 
-	if (
-		tab.url.startsWith("chrome://") ||
-		tab.url.startsWith("about:") ||
-		tab.url.includes("chrome.google.com/webstore")
-	) {
-		logger.info(`[Background] injectIntoTab: Tab ${tabId} is a restricted extension page. Skipping.`, { persist: true });
+	if (!isScriptableUrl(tab.url)) {
+		logger.debug(`[Background] injectIntoTab: Tab ${tabId} (${tab.url}) is a restricted or non-scriptable page. Skipping.`);
 		return;
 	}
 
@@ -616,6 +653,16 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 		}
 	} catch (err) {
 		const errorMsg = err.message || "Unknown error";
+		const isPermissionError =
+			errorMsg.includes("Cannot access contents of the page") ||
+			errorMsg.includes("Extension manifest must request permission") ||
+			errorMsg.includes("The extensions gallery cannot be scripted");
+
+		if (isPermissionError) {
+			logger.info(`[Background] Skipping injection for tab ${tabId} (${errorMsg}).`);
+			return;
+		}
+
 		if (attempt < MAX_ATTEMPTS) {
 			logger.warn(`[Background] Error in injection attempt ${attempt} for tab ${tabId}: ${errorMsg}. Retrying...`, { persist: true });
 			setTimeout(() => injectIntoTab(tabId, attempt + 1), RETRY_DELAY);
