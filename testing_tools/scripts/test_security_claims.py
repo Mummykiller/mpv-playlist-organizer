@@ -369,5 +369,65 @@ class TestSecurityClaims(BaseTestCase):
         self.assertIsNone(url_analyzer.normalize_url(None))
         self.assertEqual(url_analyzer.normalize_url(""), "")
 
+    def test_executable_path_validation(self):
+        """Claim 3.3: Validates executable binary paths against approved allowlists and forbids shell injection."""
+        # Valid binaries in system PATH
+        self.assertTrue(security.is_safe_executable_path("mpv", "mpv_path"))
+        self.assertTrue(security.is_safe_executable_path("node", "node_path"))
+        self.assertTrue(security.is_safe_executable_path("ffmpeg", "ffmpeg_path"))
+
+        # Injection characters
+        self.assertFalse(security.is_safe_executable_path("mpv; rm -rf /", "mpv_path"))
+        self.assertFalse(security.is_safe_executable_path("mpv$(whoami)", "mpv_path"))
+        self.assertFalse(security.is_safe_executable_path("mpv`id`", "mpv_path"))
+        self.assertFalse(security.is_safe_executable_path("mpv | evil", "mpv_path"))
+        self.assertFalse(security.is_safe_executable_path("mpv & evil", "mpv_path"))
+        self.assertFalse(security.is_safe_executable_path("mpv\ncalc", "mpv_path"))
+
+        # Base binary name mismatch for setting
+        self.assertFalse(security.is_safe_executable_path("/bin/sh", "mpv_path"))
+        self.assertFalse(security.is_safe_executable_path("/usr/bin/python3", "mpv_path"))
+        self.assertFalse(security.is_safe_executable_path("curl", "ytdlp_path"))
+
+        # Nonexistent path
+        self.assertFalse(security.is_safe_executable_path("/nonexistent/bin/mpv", "mpv_path"))
+
+        # Null or empty
+        self.assertFalse(security.is_safe_executable_path(None, "mpv_path"))
+        self.assertFalse(security.is_safe_executable_path("", "mpv_path"))
+
+    def test_settings_allowlist_enforcement(self):
+        """Claim 3.4: Enforces strict key and path validation in set_settings."""
+        # Unapproved key injection must be rejected
+        res = file_io.set_settings({"malicious_injected_key": "evil_payload", "ytdl_quality": "1080"})
+        self.assertTrue(res.get("success"))
+
+        saved_settings = file_io.get_settings()
+        self.assertNotIn("malicious_injected_key", saved_settings)
+        self.assertEqual(saved_settings.get("ytdl_quality"), "1080")
+
+        # Unsafe binary path injection must be rejected
+        res = file_io.set_settings({"mpv_path": "/bin/sh; rm -rf /"})
+        self.assertTrue(res.get("success"))
+        saved_settings = file_io.get_settings()
+        self.assertNotEqual(saved_settings.get("mpv_path"), "/bin/sh; rm -rf /")
+
+    def test_shell_free_terminal_execution(self):
+        """Claim 5.3: Terminal execution uses direct process argv without sh -c or shell wrapping."""
+        import services
+        cmd, has_terminal = services.construct_mpv_command(
+            mpv_exe="mpv",
+            url=["https://example.com/test.mp4"],
+            force_terminal=True,
+            settings={"os_platform": "Linux"}
+        )
+        self.assertTrue(has_terminal)
+        self.assertIsInstance(cmd, list)
+
+        # Ensure no shell invocation tokens appear in command list
+        self.assertNotIn("sh", cmd)
+        self.assertNotIn("-c", cmd)
+        self.assertNotIn("bash", cmd)
+
 if __name__ == '__main__':
     unittest.main()

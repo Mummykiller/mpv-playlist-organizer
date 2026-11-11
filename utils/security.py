@@ -5,6 +5,7 @@ import ipaddress
 import logging
 import platform
 import sys
+import shutil
 from urllib.parse import urlparse
 
 # Prevent __pycache__ generation
@@ -305,6 +306,100 @@ def is_safe_url(url, web_only=False):
 def is_safe_web_url(url):
     """Convenience helper enforcing web-only HTTP/HTTPS protocol with SSRF validation."""
     return is_safe_url(url, web_only=True)
+
+# --- Approved Binary Names & Executable Path Validation ---
+APPROVED_BINARY_NAMES = {
+    'mpv_path': {'mpv', 'mpv.exe', 'mpv.com'},
+    'ytdlp_path': {'yt-dlp', 'yt-dlp.exe', 'youtube-dl', 'youtube-dl.exe'},
+    'ffmpeg_path': {'ffmpeg', 'ffmpeg.exe'},
+    'node_path': {'node', 'node.exe', 'nodejs'},
+    'terminal_emulator': {
+        'xterm', 'alacritty', 'kitty', 'gnome-terminal', 'konsole',
+        'xfce4-terminal', 'terminator', 'foot', 'urxvt', 'st',
+        'wezterm', 'tilix', 'lxterminal', 'mate-terminal', 'xdg-terminal-exec',
+        'cmd.exe', 'powershell.exe', 'wt.exe'
+    }
+}
+
+FORBIDDEN_PATH_CHARS = set(';&|`$\n\r<>()"\'')
+
+def is_safe_executable_path(path: str, setting_key: str = None) -> bool:
+    """
+    Validates that a binary path is safe to execute:
+    - Checks for shell metacharacters and injection attempts.
+    - Confirms the base binary name is permitted for the given setting key.
+    - Confirms the executable exists on disk or in PATH and has execution permissions.
+    """
+    if not path or not isinstance(path, str):
+        return False
+
+    if len(path) > 1024:
+        logging.warning("Security: Executable path exceeds length limit.")
+        return False
+
+    # 1. Reject shell injection characters
+    if any(c in FORBIDDEN_PATH_CHARS for c in path):
+        logging.warning(f"Security: Executable path contains forbidden metacharacters: {path}")
+        return False
+
+    # 2. Check base filename against approved binary names if setting_key specified
+    base_name = os.path.basename(path).lower()
+    if setting_key and setting_key in APPROVED_BINARY_NAMES:
+        allowed = APPROVED_BINARY_NAMES[setting_key]
+        if base_name not in allowed:
+            logging.warning(f"Security: Executable base name '{base_name}' is not in approved list for {setting_key}: {allowed}")
+            return False
+
+    # 3. Resolve executable path
+    try:
+        resolved = shutil.which(path) or (os.path.realpath(path) if os.path.isfile(path) else None)
+    except OSError as e:
+        logging.debug(f"Security: Error resolving path '{path}': {e}")
+        return False
+
+    if not resolved:
+        logging.warning(f"Security: Executable not found in system or PATH: {path}")
+        return False
+
+    # 4. Check executable permissions
+    try:
+        if not os.access(resolved, os.X_OK):
+            logging.warning(f"Security: Path '{resolved}' is not executable.")
+            return False
+    except OSError as e:
+        logging.debug(f"Security: Error checking execution permission for '{resolved}': {e}")
+        return False
+
+    return True
+
+# --- Canonical Settings & Preferences Key Allowlist ---
+ALLOWED_SETTINGS_KEYS = {
+    # Backend application settings
+    "os_platform", "mpv_path", "ffmpeg_path", "node_path", "ytdlp_path", "terminal_emulator",
+    "enable_url_analysis", "browser_for_url_analysis", "enable_youtube_analysis",
+    "user_agent_string", "enable_smart_resume", "enable_precise_resume",
+    "enable_active_item_highlight", "yt_use_cookies", "yt_mark_watched",
+    "yt_ignore_config", "other_sites_use_cookies", "disable_network_overrides",
+    "targeted_defaults", "enable_cache", "http_persistence", "demuxer_max_bytes",
+    "demuxer_max_back_bytes", "cache_secs", "demuxer_readahead_secs",
+    "stream_buffer_size", "ytdlp_concurrent_fragments", "ytdl_quality",
+    "performance_profile", "ultra_scalers", "ultra_video_sync", "enable_display_sync",
+    "override_display_fps", "ultra_interpolation", "ultra_deband", "ultra_fbo",
+    "enable_reconnect", "reconnect_delay", "mpv_decoder", "automatic_mpv_flags",
+    "live_removal", "enable_per_item_mark_watched", "clear_on_item_finish",
+    # UI preferences & state synchronization keys
+    "minimized", "mode", "log_visible", "pinned", "position", "top", "left", "right", "bottom",
+    "anilist_panel_visible", "lock_anilist_panel", "force_panel_attached", "anilist_attach_on_open",
+    "minimized_stub_position", "dependency_status", "mpv", "ytdlp", "ffmpeg", "node",
+    "launch_geometry", "custom_geometry_width", "custom_geometry_height", "custom_mpv_flags",
+    "show_play_new_button", "duplicate_url_behavior", "sync_global_removals", "sync_global_removals_live",
+    "auto_append_on_add", "auto_add_inactivity_timeout", "auto_add_auto_off", "confirm_remove_folder",
+    "confirm_clear_playlist", "confirm_close_mpv", "confirm_play_new", "confirm_folder_switch",
+    "clear_on_completion", "clear_scope", "enable_dblclick_copy", "anilist_image_height", "popup_width",
+    "show_watched_status_gui", "show_minimized_stub", "one_click_add", "restricted_domains",
+    "kb_add_playlist", "kb_play_playlist", "kb_toggle_controller", "kb_switch_playlist", "kb_open_popup",
+    "force_terminal", "volume", "speed"
+}
 
 def sanitize_string(s, is_filename=False, is_url=False):
     """Sanitizes strings for safe OSD or Filesystem usage."""
