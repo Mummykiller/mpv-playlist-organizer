@@ -58,10 +58,18 @@ To prevent the Native Host and extension from being leveraged as an internal int
 
 ### Subprocess Rules
 
-1. **Never use `shell=True`:** All external process invocations (`mpv`, `yt-dlp`, `ffmpeg`, `node`) **MUST** use `subprocess.Popen` or `subprocess.run` with argument lists (arrays), never raw shell command strings.
-2. **Environment Variable Whitelisting (`get_mpv_popen_kwargs`):**
+1. **Never use `shell=True` or `sh -c`:** All external process invocations (`mpv`, `yt-dlp`, `ffmpeg`, `node`, terminal emulators) **MUST** use `subprocess.Popen` or `subprocess.run` with argument lists (arrays), never raw shell command strings or shell string wrapping (`sh -c`).
+2. **Shell-Free Terminal Emulation (`utils/mpv_command_builder.py`):**
+   - Terminal emulators (`konsole`, `alacritty`, `kitty`, `foot`, `xfce4-terminal`, `xterm`, `gnome-terminal`) receive command arrays directly.
+   - For terminals requiring a delayed exit hold, a direct Python runner (`sys.executable -c ...`) is invoked with argument arrays, eliminating shell string concatenation.
+3. **Executable Binary Validation (`is_safe_executable_path`):**
+   - User-supplied binary paths for `mpv_path`, `ytdlp_path`, `ffmpeg_path`, `node_path`, and `terminal_emulator` must point to existing, executable files matching vetted base names.
+   - Any path containing shell injection characters (`;`, `&`, `|`, `` ` ``, `$`, `\n`) is rejected immediately.
+4. **Settings Key Allowlist (`ALLOWED_SETTINGS_KEYS`):**
+   - Configuration updates in `file_io.py:set_settings` are strictly filtered against the canonical allowlist to prevent prototype or arbitrary state pollution.
+5. **Environment Variable Whitelisting (`get_mpv_popen_kwargs`):**
    - Subprocesses run with sanitized environments, stripping untrusted environment variables.
-3. **Tool Flag Allowlists:**
+6. **Tool Flag Allowlists:**
    - **`yt-dlp` Flag Allowlist (`YTDLP_SAFE_FLAGS_ALLOWLIST`):** Only vetted flags (e.g. `--cookies`, `--user-agent`, `--format`, `--sub-lang`) are permitted. Dangerous execution flags like `--exec`, `--output`, or `--config-location` are strictly rejected.
    - **`MPV` Safe Flags Allowlist (`SAFE_MPV_FLAGS_ALLOWLIST`):** Only safe player flags are permitted from UI inputs.
 

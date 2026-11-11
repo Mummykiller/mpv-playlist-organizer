@@ -365,29 +365,69 @@ class MpvCommandBuilder:
         
         if self.settings.get('os_platform', platform.system()) != "Windows" and self.has_terminal_flag:
             term_cmd = []
-            modern = ['konsole', 'gnome-terminal', 'xfce4-terminal', 'kitty', 'alacritty', 'tilix', 'foot', 'wezterm']
-            if self.is_forced_terminal:
-                inner = ' '.join(shlex.quote(a) for a in full_command)
-                kp = shutil.which('konsole')
-                if kp: term_cmd = [kp, '--hold', '-e'] + full_command
-                else:
-                    wrapped = f"{inner}; echo ''; echo '--- MPV Finished. Closing in 10s... ---'; sleep 10"
-                    if shutil.which('xdg-terminal-exec'): term_cmd = ['xdg-terminal-exec', 'sh', '-c', wrapped]
+
+            # Direct non-shell runner for holding terminal open without using 'sh -c'
+            def _get_python_runner():
+                return [
+                    sys.executable, '-c',
+                    'import subprocess, sys, time; subprocess.run(sys.argv[1:]); print("\\n--- MPV Finished. Closing in 10s... ---"); time.sleep(10)'
+                ]
+
+            hold_terminal_flags = {
+                'konsole': ['--hold', '-e'],
+                'alacritty': ['--hold', '-e'],
+                'kitty': ['--hold'],
+                'foot': ['--hold'],
+                'xfce4-terminal': ['--hold', '-x'],
+                'xterm': ['-hold', '-e']
+            }
+            exec_terminal_flags = {
+                'konsole': ['-e'],
+                'alacritty': ['-e'],
+                'kitty': [],
+                'foot': [],
+                'xfce4-terminal': ['-x'],
+                'xterm': ['-e'],
+                'gnome-terminal': ['--'],
+                'tilix': ['-e'],
+                'wezterm': ['start', '--']
+            }
+
+            candidate_terms = []
+            custom_term = self.settings.get('terminal_emulator')
+            if custom_term and security.is_safe_executable_path(custom_term, 'terminal_emulator'):
+                candidate_terms.append(custom_term)
+
+            candidate_terms.extend([
+                'konsole', 'alacritty', 'kitty', 'xfce4-terminal',
+                'foot', 'xterm', 'gnome-terminal', 'tilix', 'wezterm'
+            ])
+
+            for t in candidate_terms:
+                tp = shutil.which(t)
+                if not tp:
+                    continue
+                base_t = os.path.basename(t).lower()
+                if self.is_forced_terminal:
+                    if base_t in hold_terminal_flags:
+                        term_cmd = [tp] + hold_terminal_flags[base_t] + full_command
                     else:
-                        for t in modern:
-                            tp = shutil.which(t)
-                            if tp:
-                                term_cmd = [tp, '--', 'sh', '-c', wrapped]
-                                break
-            else:
-                if shutil.which('xdg-terminal-exec'): term_cmd = ['xdg-terminal-exec'] + full_command
+                        runner = _get_python_runner()
+                        flags = exec_terminal_flags.get(base_t, ['--'])
+                        term_cmd = [tp] + flags + runner + full_command
                 else:
-                    for t in modern:
-                        tp = shutil.which(t)
-                        if tp:
-                            term_cmd = [tp, '-e'] + full_command
-                            break
-            if term_cmd: full_command = term_cmd
+                    flags = exec_terminal_flags.get(base_t, ['-e'])
+                    term_cmd = [tp] + flags + full_command
+                break
+
+            if not term_cmd and shutil.which('xdg-terminal-exec'):
+                if self.is_forced_terminal:
+                    term_cmd = ['xdg-terminal-exec'] + _get_python_runner() + full_command
+                else:
+                    term_cmd = ['xdg-terminal-exec'] + full_command
+
+            if term_cmd:
+                full_command = term_cmd
 
         cmd_str = ' '.join(_smart_quote(a) for a in full_command)
         if self.settings.get('os_platform', platform.system()) == "Windows" and len(cmd_str) > 7500:

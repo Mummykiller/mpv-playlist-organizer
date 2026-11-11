@@ -79,6 +79,15 @@ Only flags in the `YTDLP_SAFE_FLAGS_ALLOWLIST` are permitted. Dangerous flags li
 - Shadow copying is used to bypass browser database locks without compromising the original file.
 - Cookies are cleaned up on session exit or by "The Janitor" on startup.
 
+### 5.3 Settings & Binary Path Validation (`is_safe_executable_path`)
+- **Key Allowlist (`ALLOWED_SETTINGS_KEYS`):** Incoming configuration and UI preference updates are strictly filtered against a canonical key allowlist to prevent arbitrary state pollution.
+- **Binary Allowlist:** Executable binary paths (`mpv_path`, `ytdlp_path`, `ffmpeg_path`, `node_path`, `terminal_emulator`) must point to existing executables matching vetted base binary names and must not contain shell metacharacters (`;`, `&`, `|`, `` ` ``, `$`, `\n`).
+
+### 5.4 Shell-Free Terminal Execution
+- Subprocess execution never invokes raw shells (`sh -c` or `bash -c`).
+- Terminal emulators (`konsole`, `alacritty`, `kitty`, `xfce4-terminal`, `xterm`, `gnome-terminal`) are invoked with discrete argv argument lists.
+- Delayed window closing logic utilizes direct process invocation (`sys.executable -c ...`) with direct argument lists rather than shell string concatenation.
+
 ---
 
 ## 6. Unified Logging & Diagnostics

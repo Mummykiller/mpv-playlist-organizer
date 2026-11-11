@@ -929,9 +929,22 @@ def get_settings():
 
 def set_settings(settings_dict):
     """Writes the provided settings to config.json, merging with existing settings."""
+    if not isinstance(settings_dict, dict):
+        return {"success": False, "error": "Invalid settings payload type."}
+
     try:
         with FileLock(CONFIG_FILE):
             current_settings = get_settings()
+
+            # Filter settings_dict against canonical allowlist
+            filtered_dict = {}
+            for k, v in settings_dict.items():
+                if k in security.ALLOWED_SETTINGS_KEYS:
+                    filtered_dict[k] = v
+                else:
+                    logging.warning(f"[PY][SEC] Rejected unknown settings key '{k}'.")
+
+            settings_dict = filtered_dict
 
             if 'ytdl_quality' in settings_dict:
                 valid_qualities = ['best', '2160', '1440', '1080', '720', '480']
@@ -956,15 +969,26 @@ def set_settings(settings_dict):
                         settings_dict[key] = f"{val}M"
                         logging.info(f"[PY][IO] Normalized {key} to {settings_dict[key]}")
 
-            # 3. Normalize paths for the current platform
-            path_keys = ['mpv_path', 'ffmpeg_path', 'node_path']
+            # 3. Validate executable binary paths against approved allowlists
+            path_keys = ['mpv_path', 'ffmpeg_path', 'node_path', 'ytdlp_path', 'terminal_emulator']
             for key in path_keys:
-                if key in settings_dict and settings_dict[key]:
-                    # Always use forward slashes on Windows to avoid \U (Unicode) escaping issues in JSON/logs
-                    path = os.path.normpath(settings_dict[key])
-                    if platform.system() == "Windows":
-                        path = path.replace("\\", "/")
-                    settings_dict[key] = path
+                if key in settings_dict:
+                    val = settings_dict[key]
+                    if val is None or val == "":
+                        settings_dict[key] = None
+                    elif isinstance(val, str):
+                        if not security.is_safe_executable_path(val, setting_key=key):
+                            logging.warning(f"[PY][SEC] Blocked invalid or unsafe executable path for {key}: '{val}'.")
+                            del settings_dict[key]
+                        else:
+                            # Always use forward slashes on Windows to avoid \U escaping issues in JSON/logs
+                            path = os.path.normpath(val)
+                            if platform.system() == "Windows":
+                                path = path.replace("\\", "/")
+                            settings_dict[key] = path
+                    else:
+                        logging.warning(f"[PY][SEC] Invalid type for executable path key {key}: {type(val)}.")
+                        del settings_dict[key]
 
             merged_settings = {**current_settings, **settings_dict}
 
