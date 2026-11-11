@@ -1,6 +1,7 @@
 // utils/item_processor.js
 
 import { sanitizeString, normalizeYouTubeUrl } from "./commUtils.module.js";
+import { isValidUrl, isValidWebUrl } from "./security.module.js";
 
 /**
  * Generates a unique ID for playlist items.
@@ -54,6 +55,13 @@ export function processPlaylistItem(rawItem, options = {}) {
 
 	const sanitizedUrl = sanitizeString(url);
 	const normalizedUrl = normalizeYouTubeUrl(sanitizedUrl);
+
+	if (options.webOnly) {
+		if (!isValidWebUrl(normalizedUrl)) return null;
+	} else if (!isValidUrl(normalizedUrl)) {
+		return null;
+	}
+
 	const sanitizedTitle = sanitizeString(title);
 
 	return {

@@ -85,6 +85,75 @@ def get_scrubbed_env(base_env=None, keep_terminal=False) -> dict:
 
 # --- Protocol Allowlist ---
 ALLOWED_PROTOCOLS = ('http://', 'https://', 'file://', 'udp://', 'rtmp://', 'rtsp://', 'mms://')
+ALLOWED_WEB_PROTOCOLS = ('http://', 'https://')
+
+# --- SSRF Blocked Hostnames ---
+BLOCKED_HOSTNAMES = {
+    'localhost',
+    'localhost.localdomain',
+    'ip6-localhost',
+    'ip6-loopback',
+    'metadata.google.internal',
+    'metadata.internal',
+    'instance-data',
+}
+
+def parse_obscured_ip(host: str):
+    """
+    Parses numeric, octal, hex, and dotted-integer IP obfuscation formats
+    commonly used in SSRF evasions (e.g., 2130706433, 0177.0.0.1, 0x7f000001).
+    Returns an ipaddress.IPv4Address object or None.
+    """
+    if not host or not isinstance(host, str):
+        return None
+
+    # 1. Direct Integer / Dword literal (e.g., 2130706433 for 127.0.0.1)
+    if host.isdigit():
+        try:
+            val = int(host, 10)
+            if 0 <= val <= 0xFFFFFFFF:
+                return ipaddress.IPv4Address(val)
+        except (ValueError, OverflowError) as e:
+            logging.debug(f"Obscured IP: Failed to parse integer host '{host}': {e}")
+
+    # 2. Hex Dword (e.g., 0x7f000001 or 0xa9fea9fe)
+    if host.lower().startswith('0x') and not any(c in host for c in ':.'):
+        try:
+            val = int(host, 16)
+            if 0 <= val <= 0xFFFFFFFF:
+                return ipaddress.IPv4Address(val)
+        except (ValueError, OverflowError) as e:
+            logging.debug(f"Obscured IP: Failed to parse hex host '{host}': {e}")
+
+    # 3. Classful Dotted variations (octal, hex, and decimal)
+    parts = host.split('.')
+    if len(parts) in (1, 2, 3, 4):
+        try:
+            nums = []
+            for p in parts:
+                p_lower = p.lower()
+                if p_lower.startswith('0x'):
+                    nums.append(int(p_lower, 16))
+                elif p_lower.startswith('0') and len(p_lower) > 1 and p_lower.isdigit():
+                    nums.append(int(p_lower, 8))
+                elif p_lower.isdigit():
+                    nums.append(int(p_lower, 10))
+                else:
+                    return None
+
+            if len(nums) == 4 and all(0 <= n <= 255 for n in nums):
+                return ipaddress.IPv4Address((nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3])
+            elif len(nums) == 3 and 0 <= nums[0] <= 255 and 0 <= nums[1] <= 255 and 0 <= nums[2] <= 0xFFFF:
+                return ipaddress.IPv4Address((nums[0] << 24) | (nums[1] << 16) | nums[2])
+            elif len(nums) == 2 and 0 <= nums[0] <= 255 and 0 <= nums[1] <= 0xFFFFFF:
+                return ipaddress.IPv4Address((nums[0] << 24) | nums[1])
+            elif len(nums) == 1 and 0 <= nums[0] <= 0xFFFFFFFF:
+                return ipaddress.IPv4Address(nums[0])
+        except (ValueError, OverflowError) as e:
+            logging.debug(f"Obscured IP: Failed to parse classful dotted host '{host}': {e}")
+            return None
+
+    return None
 
 # --- yt-dlp Safe Flags Allowlist ---
 YTDLP_SAFE_FLAGS_ALLOWLIST = {
@@ -121,37 +190,56 @@ SAFE_MPV_FLAGS_ALLOWLIST = {
     '--ytdl-format', '--ytdl-raw-options', '--user-agent', '--referrer', '--idle'
 }
 
-def is_safe_url(url):
+def is_safe_url(url, web_only=False):
     """
     Validates a URL against SSRF attacks and unsafe protocols.
-    NOTE: This check is subject to TOCTOU (DNS Rebinding) if the caller resolves 
-    the hostname again during the actual fetch. Secure implementations should 
-    pin the resolved IP or use a fetcher that respects the validated IP.
+    - Rejects disallowed URI schemes (web_only strictly permits http/https).
+    - Blocks private IP ranges (RFC 1918), loopback, link-local, CGNAT, 0.0.0.0/8,
+      cloud metadata addresses (169.254.169.254, metadata.google.internal),
+      and IPv4-mapped IPv6 evasions.
+    - Strips userinfo credentials and inspects integer/octal/hex obfuscations.
     """
     if not url or not isinstance(url, str):
         return False
         
     if len(url) > SECURITY_LIMITS['MAX_URL_LENGTH']:
-        logging.warning(f"Security: URL exceeds length limit.")
+        logging.warning("Security: URL exceeds length limit.")
         return False
 
     try:
-        # Protocol Check
-        if not url.lower().startswith(ALLOWED_PROTOCOLS):
-             logging.warning(f"Security: Rejected unsafe protocol: {url[:10]}...")
-             return False
+        url_lower = url.lower()
+        allowed = ALLOWED_WEB_PROTOCOLS if web_only else ALLOWED_PROTOCOLS
+        if not url_lower.startswith(allowed):
+            logging.warning(f"Security: Rejected unsafe protocol: {url[:10]}...")
+            return False
 
         parsed = urlparse(url)
-        hostname = parsed.hostname
-        if not hostname:
-            return True # Local file or similar
-
         scheme = parsed.scheme.lower()
-        clean_host = hostname.strip("[]")
+        hostname = parsed.hostname
+
+        # For file:// URLs, hostname is usually empty for local paths (file:///path/to/file)
+        if not hostname:
+            if scheme == 'file':
+                return not web_only
+            return True
+
+        clean_host = hostname.strip("[]").lower()
         if "%" in clean_host:
             clean_host = clean_host.split("%", 1)[0]
 
+        # 1. Cloud Metadata & Loopback Hostname Denylist
+        if (
+            clean_host in BLOCKED_HOSTNAMES
+            or clean_host.endswith('.localhost')
+            or clean_host.endswith('.local')
+        ):
+            logging.warning(f"Security: SSRF Block for restricted hostname: {clean_host}")
+            return False
+
         def _is_unsafe_ip(ip_obj):
+            if ip_obj.version == 6 and ip_obj.ipv4_mapped:
+                ip_obj = ip_obj.ipv4_mapped
+
             if (
                 ip_obj.is_private
                 or ip_obj.is_loopback
@@ -161,20 +249,36 @@ def is_safe_url(url):
                 or (ip_obj.is_multicast and scheme != "udp")
             ):
                 return True
+
+            if ip_obj.version == 4:
+                # 0.0.0.0/8 (current network / Linux local)
+                if (int(ip_obj) & 0xFF000000) == 0:
+                    return True
+                # 100.64.0.0/10 (Carrier-Grade NAT RFC 6598)
+                if (int(ip_obj) & 0xFFC00000) == 0x64400000:
+                    return True
+
             return False
 
-        # 1. Direct IP Check
+        # 2. Obscured IP Check (integer, hex dword, octal dotted)
+        obscured_ip = parse_obscured_ip(clean_host)
+        if obscured_ip is not None:
+            if _is_unsafe_ip(obscured_ip):
+                logging.warning(f"Security: Obscured IP SSRF Block for {clean_host} ({obscured_ip})")
+                return False
+            return True
+
+        # 3. Direct IP Literal Check (IPv4 or IPv6)
         try:
             ip = ipaddress.ip_address(clean_host)
             if _is_unsafe_ip(ip):
-                logging.warning(f"Security: Direct IP SSRF Block for {hostname}")
+                logging.warning(f"Security: Direct IP SSRF Block for {clean_host}")
                 return False
             return True
         except ValueError as e:
-            # Not a direct IP, continue to resolution
-            logging.debug(f"SSRF Check: Hostname '{hostname}' is not a direct IP literal: {e}")
+            logging.debug(f"SSRF Check: Hostname '{clean_host}' is not a direct IP literal: {e}")
 
-        # 2. Resolution Check
+        # 4. Resolution Check (DNS lookup with offline/sandbox fallback)
         try:
             addr_info = socket.getaddrinfo(clean_host, None)
             if addr_info:
@@ -186,17 +290,21 @@ def is_safe_url(url):
                     if "%" in ip_str:
                         ip_str = ip_str.split("%", 1)[0]
                     ip = ipaddress.ip_address(ip_str)
-                    # Block Private/Local IPs
                     if _is_unsafe_ip(ip):
-                        logging.warning(f"Security: SSRF Block for {clean_host} ({ip_str})")
+                        logging.warning(f"Security: SSRF Block for resolved IP {clean_host} ({ip_str})")
                         return False
         except socket.gaierror as e:
+            # When offline or inside network-isolated sandbox, gaierror is expected for legitimate domains
             logging.debug(f"SSRF Check: DNS resolution failed for '{clean_host}': {e}")
 
         return True
     except Exception as e:
         logging.error(f"Security: SSRF Check Error: {e}")
         return False
+
+def is_safe_web_url(url):
+    """Convenience helper enforcing web-only HTTP/HTTPS protocol with SSRF validation."""
+    return is_safe_url(url, web_only=True)
 
 def sanitize_string(s, is_filename=False, is_url=False):
     """Sanitizes strings for safe OSD or Filesystem usage."""

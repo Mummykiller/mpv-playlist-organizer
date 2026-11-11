@@ -20,14 +20,18 @@ Strict enforcement of input sizes prevents Denial of Service (DoS) via memory ex
 ---
 
 ## 2. Protocol & URL Security
-### 2.1 Protocol Allowlist
-Only the following URI schemes are permitted:
-`http://`, `https://`, `file://`, `udp://`, `rtmp://`, `rtsp://`, `mms://`
+### 2.1 Protocol Allowlist & Web Scraper Isolation
+- **Global Permitted Schemes:** `http://`, `https://`, `file://`, `udp://`, `rtmp://`, `rtsp://`, `mms://`
+- **Web Scraper Protocol Isolation (`isValidWebUrl` / `is_safe_web_url`):** Content scripts and automated page scrapers (`PageScraper.js`, `item_processor.js`) strictly permit `http:` and `https:`. Local system schemes (`file:`) and streaming protocols (`rtmp:`, `udp:`) are blocked from automated web ingestion and are reserved exclusively for explicit user actions.
 
-### 2.2 SSRF Protection (`is_safe_url`)
-To prevent the Native Host from being used as an internal network proxy:
-- All hostnames are resolved before access.
-- Private IP ranges (10.x, 192.168.x, 172.16.x), Loopback (127.x), and Link-local addresses are **BLOCKED**.
+### 2.2 SSRF Protection & Obfuscation Defense (`is_safe_url`)
+To prevent the Native Host from being used as an internal network proxy or SSRF gateway:
+- **Private IP Ranges Blocked:** RFC 1918 (10.x, 192.168.x, 172.16-31.x), Loopback (127.x), Link-Local (169.254.x), 0.0.0.0/8, and Carrier-Grade NAT (100.64.0.0/10).
+- **IPv6 Protection:** Blocked loopback (`::1`, `::`), link-local (`fe80::/10`), unique-local (`fc00::/7`, `fd00::/8`), and IPv4-mapped IPv6 evasions (`::ffff:127.0.0.1`, `::ffff:7f00:1`).
+- **Cloud Metadata Endpoints Blocked:** `169.254.169.254`, `metadata.google.internal`, `metadata.internal`, `instance-data`.
+- **IP Obfuscation Defenses:** Detects and decodes integer/dword literals (e.g. `http://2130706433/`), octal octets (`http://0177.0.0.1/`), and hex addresses (`http://0x7f000001/`) to prevent filter evasion.
+- **DNS Resolution Inspection:** Resolves candidate hostnames via DNS and validates all returned target IP addresses, with offline/sandbox resilience when resolution fails.
+- **Stream Output Verification:** Secondary validation on stream URLs returned by `yt-dlp` before player handoff.
 
 ### 2.3 URL Normalization
 YouTube URLs must be normalized to strip non-essential tracking parameters (`t`, `index`, `si`, etc.) to ensure deduplication and robust resume logic.

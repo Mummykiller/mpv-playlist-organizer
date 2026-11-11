@@ -556,6 +556,10 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         if not resolved_url:
             raise ValueError("yt-dlp returned no URL.")
 
+        if not is_safe_url(resolved_url):
+            logging.warning(f"Security: Blocked unsafe resolved stream URL: {resolved_url}")
+            return {"success": False, "error": "Security Block: Resolved stream URL points to restricted network."}
+
         return {
             "success": True,
             "url": resolved_url,

@@ -98,11 +98,23 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		/**
 		 * Scrapes the page for the best possible title and URL.
+		 * Automatically isolates web scraping to valid HTTP/HTTPS schemes.
 		 * @param {string} url - The URL to scrape details for.
 		 * @returns {object} { url, title, isProvisional, fingerprint }
 		 */
 		scrapePageDetails(url) {
-			if (!url) return { url: null, title: document.title, isProvisional: true, fingerprint: this.getEpisodeFingerprint() };
+			const isWebUrl = (u) => {
+				if (!u || typeof u !== "string") return false;
+				if (typeof window !== "undefined" && window.MPV_SECURITY && typeof window.MPV_SECURITY.isValidWebUrl === "function") {
+					return window.MPV_SECURITY.isValidWebUrl(u);
+				}
+				const lower = u.trim().toLowerCase();
+				return lower.startsWith("http://") || lower.startsWith("https://");
+			};
+
+			if (!url || !isWebUrl(url)) {
+				return { url: null, title: document.title, isProvisional: true, fingerprint: this.getEpisodeFingerprint() };
+			}
 
 			const fingerprint = this.getEpisodeFingerprint();
 

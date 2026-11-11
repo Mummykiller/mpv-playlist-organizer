@@ -314,7 +314,37 @@ async function testSecurityComponent() {
 	// Overly long URL
 	const hugeUrl = "https://example.com/" + "a".repeat(5000);
 	assert.strictEqual(SECURITY.isValidUrl(hugeUrl), false);
-	console.log("  [OK] Security Protocol Validation");
+
+	// Web protocol isolation
+	assert.ok(Array.isArray(SECURITY.ALLOWED_WEB_PROTOCOLS), "ALLOWED_WEB_PROTOCOLS must be array");
+	assert.strictEqual(SECURITY.isValidWebUrl("https://youtube.com/watch?v=abc"), true);
+	assert.strictEqual(SECURITY.isValidWebUrl("http://example.com/video.mp4"), true);
+	assert.strictEqual(SECURITY.isValidWebUrl("file:///home/user/video.mkv"), false);
+	assert.strictEqual(SECURITY.isValidWebUrl("rtmp://live.stream/channel"), false);
+	assert.strictEqual(SECURITY.isValidWebUrl("udp://127.0.0.1:1234"), false);
+
+	// SSRF & Obfuscated IP Protection
+	assert.strictEqual(SECURITY.isSafeUrl("https://google.com"), true);
+	assert.strictEqual(SECURITY.isSafeUrl("http://localhost:8080"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://127.0.0.1:8080"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://192.168.1.1/stream"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://10.0.0.1/video"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://169.254.169.254/latest/meta-data"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://2130706433/admin"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://0177.0.0.1/admin"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://0x7f000001/admin"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://2852039166/metadata"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://[::1]/status"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://[fe80::1]/test"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://[::ffff:127.0.0.1]/test"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("file:///home/user/video.mkv", { allowLocal: true }), true);
+	assert.strictEqual(SECURITY.isSafeUrl("file:///home/user/video.mkv", { allowLocal: false }), false);
+
+	assert.strictEqual(SECURITY.isSafeWebUrl("https://youtube.com/watch?v=abc"), true);
+	assert.strictEqual(SECURITY.isSafeWebUrl("http://127.0.0.1"), false);
+	assert.strictEqual(SECURITY.isSafeWebUrl("file:///home/user/video.mkv"), false);
+
+	console.log("  [OK] Security Protocol Validation & SSRF Isolation");
 }
 
 async function testMessageBridge() {
