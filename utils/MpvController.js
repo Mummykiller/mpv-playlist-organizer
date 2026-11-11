@@ -1061,7 +1061,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						"a#video-title-link, a#thumbnail, a.yt-simple-endpoint",
 					);
 					if (linkEl && linkEl.href) {
-						url = linkEl.href;
+						const href = linkEl.href;
+						const isWeb = typeof window !== "undefined" && window.MPV_SECURITY && typeof window.MPV_SECURITY.isValidWebUrl === "function"
+							? window.MPV_SECURITY.isValidWebUrl(href)
+							: (href.startsWith("http://") || href.startsWith("https://"));
+						if (isWeb) {
+							url = href;
+						}
 					}
 
 					const titleSelectors = [
@@ -1104,8 +1110,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (!title && this.lastRightClickedElement) {
 				const linkElement = this.lastRightClickedElement.closest("a");
 				if (linkElement && linkElement.href) {
-					url = linkElement.href;
-					title = linkElement.textContent.trim();
+					const href = linkElement.href;
+					const isWeb = typeof window !== "undefined" && window.MPV_SECURITY && typeof window.MPV_SECURITY.isValidWebUrl === "function"
+						? window.MPV_SECURITY.isValidWebUrl(href)
+						: (href.startsWith("http://") || href.startsWith("https://"));
+					if (isWeb) {
+						url = href;
+						title = linkElement.textContent.trim();
+					}
 				}
 			}
 

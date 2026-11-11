@@ -32,21 +32,25 @@ To prevent Denial of Service (DoS) via memory exhaustion and buffer overflows, i
 
 ## 2. Protocol Security & SSRF Protection
 
-### Permitted Protocols Allowlist
+### Permitted Protocols Allowlist & Web Scraper Isolation
 
-Only the following URI schemes are allowed:
-`http://`, `https://`, `file://`, `udp://`, `rtmp://`, `rtsp://`, `mms://`
+- **Global Allowlist:** `http://`, `https://`, `file://`, `udp://`, `rtmp://`, `rtsp://`, `mms://`
+- **Web Isolation Boundary (`isValidWebUrl` / `is_safe_web_url`):** Injected content scripts and automated page scrapers (`PageScraper.js`, `item_processor.js`) strictly accept `http:` and `https:`. The `file:` scheme and streaming protocols cannot be injected via web DOM scraping and are restricted to explicit user UI operations.
 
-### SSRF Protection (`utils/security.py:is_safe_url`)
+### SSRF Protection (`utils/security.py:is_safe_url` & `utils/security.module.js:isSafeUrl`)
 
-To prevent the Native Host from being leveraged as an internal intranet proxy or SSRF gateway:
-1. URL hostnames are resolved via DNS (`socket.gethostbyname`).
-2. The resolved IP is inspected using `ipaddress.ip_address`.
-3. All internal IP ranges are strictly blocked:
-   - **Loopback:** `127.0.0.0/8`, `localhost`, `::1`.
+To prevent the Native Host and extension from being leveraged as an internal intranet proxy or SSRF gateway:
+1. **Hostname & Metadata Inspection:** Hostnames matching `localhost`, `*.localhost`, `*.local`, `metadata.google.internal`, or `instance-data` are rejected immediately.
+2. **Obfuscation Normalization:** Evaluates integer/dword addresses (e.g. `2130706433`), hex literals (`0x7f000001`), and octal dotted octets (`0177.0.0.1`) into normalized IPv4 addresses prior to inspection.
+3. **Internal IP Range Blocking:**
+   - **Loopback:** `127.0.0.0/8`, `::1`.
+   - **Current Network / Linux Local:** `0.0.0.0/8`, `::`.
    - **Private RFC 1918:** `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`.
-   - **Link-Local & Cloud Metadata:** `169.254.0.0/16`, `fe80::/10`.
-   - **IPv6 Private / Unique-Local:** `fc00::/7`, `fd00::/8`, `::`.
+   - **Link-Local & Cloud Metadata:** `169.254.0.0/16`, `169.254.169.254`, `fe80::/10`.
+   - **Carrier-Grade NAT (CGNAT):** `100.64.0.0/10`.
+   - **IPv6 Private / Unique-Local:** `fc00::/7`, `fd00::/8`.
+   - **IPv4-Mapped IPv6:** `::ffff:127.0.0.1`, `::ffff:7f00:1`.
+4. **DNS Resolution & Stream Output Validation:** Candidate hostnames are resolved via `socket.getaddrinfo` and all returned IP records must satisfy IP safety checks. In addition, stream URLs resolved externally by `yt-dlp` must pass `is_safe_url` before player execution.
 
 ---
 

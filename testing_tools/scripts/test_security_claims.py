@@ -45,6 +45,28 @@ class TestSecurityClaims(BaseTestCase):
         self.assertFalse(security.is_safe_url("http://[fe80::1]/private"))
         self.assertFalse(security.is_safe_url("http://[fc00::1]/internal"))
         self.assertFalse(security.is_safe_url("http://[fd12:3456:789a::1]/data"))
+        self.assertFalse(security.is_safe_url("http://[::ffff:127.0.0.1]/status"))
+        self.assertFalse(security.is_safe_url("http://[::ffff:169.254.169.254]/meta-data"))
+
+        # Obfuscated Dword/Hex/Octal SSRF evasions
+        self.assertFalse(security.is_safe_url("http://2130706433/")) # 127.0.0.1 as dword integer
+        self.assertFalse(security.is_safe_url("http://0177.0.0.1/")) # 127.0.0.1 octal
+        self.assertFalse(security.is_safe_url("http://017700000001/")) # 127.0.0.1 single octal
+        self.assertFalse(security.is_safe_url("http://0x7f000001/")) # 127.0.0.1 hex
+        self.assertFalse(security.is_safe_url("http://0x7f.0.0.1/")) # 127.0.0.1 mixed hex
+        self.assertFalse(security.is_safe_url("http://2852039166/")) # 169.254.169.254 as dword
+        self.assertFalse(security.is_safe_url("http://0xa9fea9fe/")) # 169.254.169.254 as hex
+        self.assertFalse(security.is_safe_url("http://0.0.0.0/")) # Linux local bind
+        self.assertFalse(security.is_safe_url("http://metadata.google.internal/computeMetadata/v1/"))
+        self.assertFalse(security.is_safe_url("http://instance-data/latest/meta-data"))
+
+        # Web Protocol Isolation (is_safe_web_url)
+        self.assertTrue(security.is_safe_web_url("https://youtube.com/watch?v=dQw4w9WgXcQ"))
+        self.assertTrue(security.is_safe_web_url("http://example.com/video.mp4"))
+        self.assertFalse(security.is_safe_web_url("file:///tmp/test.mp4"))
+        self.assertFalse(security.is_safe_web_url("rtmp://example.com/live"))
+        self.assertFalse(security.is_safe_web_url("http://127.0.0.1:8080/stream"))
+        self.assertFalse(security.is_safe_web_url("http://169.254.169.254"))
 
         # Public / Safe URLs
         self.assertTrue(security.is_safe_url("https://www.google.com"))
