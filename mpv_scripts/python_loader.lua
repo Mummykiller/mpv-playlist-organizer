@@ -58,7 +58,7 @@ local function run_fallback_sync(params)
 
     local project_root = clean_value(mp.get_property("user-data/project-root"))
     local folder_id = clean_value(mp.get_property("user-data/folder-id"))
-    local item_id = clean_value(mp.get_property("user-data/id"))
+    local item_id = params.item_id or current_item_id or clean_value(mp.get_property("user-data/id"))
 
     if not project_root or not folder_id or not item_id then return end
 
@@ -93,6 +93,12 @@ local function run_fallback_sync(params)
     
     mp.command_native_async(cmd, function() end)
 end
+
+local current_item_id = nil
+
+mp.register_event("file-loaded", function()
+    current_item_id = clean_value(mp.get_property("user-data/id"))
+end)
 
 -- 1. On File Start: Update 'Last Played' highlight
 mp.register_event("start-file", function()
@@ -135,13 +141,15 @@ end)
 mp.register_event("end-file", function(event)
     playback_active = false
     local time = mp.get_property_number("time-pos") or last_time_pos
+    local target_id = current_item_id
+    current_item_id = nil
     
     if event.reason == "eof" then
         -- REMOVED force=true: We trust the primary Python tracker to handle EOF if active.
         -- If Python is dead (hb > 12s), fallback will still trigger.
-        run_fallback_sync({mark_watched = true, time = 0}) 
+        run_fallback_sync({mark_watched = true, time = 0, item_id = target_id}) 
     elseif event.reason == "stop" or event.reason == "quit" then
-        run_fallback_sync({time = time, force = true})
+        run_fallback_sync({time = time, force = true, item_id = target_id})
     end
 end)
 

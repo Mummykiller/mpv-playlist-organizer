@@ -243,6 +243,7 @@ class PlaylistTracker:
                             self.pending_last_played_id = new_id # Mark as pending
                             self.current_session_duration = 0
                             self.last_time_pos = None # CRITICAL: Reset last_time_pos to ignore the first jump
+                            current_time = 0 # CRITICAL: Reset current_time so previous file's timestamp doesn't linger
 
                             # Try to find title for better logs/OSD
                             display_name = self.current_id
@@ -369,8 +370,11 @@ class PlaylistTracker:
                                     self.is_naturally_completed = True
                             
                     elif reason == 'stop' or reason == 'quit':
-                        if self.current_id and current_time > 1:
-                            self._update_resume_time(self.current_id, current_time)
+                        target_id = self.current_id
+                        if self.current_session_duration < 1 and self.previous_id:
+                            target_id = self.previous_id
+                        if target_id and current_time > 1:
+                            self._update_resume_time(target_id, current_time)
 
                 elif event.get('event') == 'shutdown':
                     logging.info(f"[PY][Tracker] MPV shutdown detected for folder '{self.folder_id}'. Notifying UI.")

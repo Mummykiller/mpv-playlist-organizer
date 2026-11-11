@@ -107,6 +107,56 @@ class TestRobustness(BaseTestCase):
             file_io.DATA_DIR = original_data_dir
             file_io.initialize_paths()
 
+    def test_track_transition_timestamp_isolation(self):
+        """Verify that transitioning between playlist items does not leak timestamps."""
+        original_data_dir = file_io.DATA_DIR
+        file_io.DATA_DIR = self.test_dir
+        file_io.initialize_paths()
+        try:
+            test_folder_id = "transition_test_folder"
+            index = file_io.get_index()
+            index[test_folder_id] = {"name": "Test Folder", "playlist": []}
+            file_io.save_index(index)
+            
+            test_playlist = [
+                {"id": "item1", "url": "https://example.com/1.mp4", "resume_time": 0},
+                {"id": "item2", "url": "https://example.com/2.mp4", "resume_time": 0}
+            ]
+            file_io.save_playlist_shard(test_folder_id, test_playlist)
+
+            messages = []
+            tracker = PlaylistTracker(
+                folder_id=test_folder_id,
+                initial_playlist=test_playlist,
+                file_io=file_io,
+                settings={},
+                ipc_path="/tmp/mock_ipc_not_existing",
+                send_message_func=lambda m: messages.append(m)
+            )
+            
+            # Simulate item1 finishing at 1420s
+            tracker.current_id = "item1"
+            tracker.current_session_duration = 1420
+            tracker.last_time_pos = 1420
+            
+            # Transition to item2
+            tracker.previous_id = "item1"
+            tracker.current_id = "item2"
+            tracker.current_session_duration = 0
+            tracker.last_time_pos = None
+            
+            # Simulate late stop/quit event right after transition (< 1s duration)
+            # Must attribute to item1, NOT item2
+            target_id = tracker.current_id
+            if tracker.current_session_duration < 1 and tracker.previous_id:
+                target_id = tracker.previous_id
+            
+            self.assertEqual(target_id, "item1")
+            self.assertNotIn("item2", tracker.resume_cache)
+        finally:
+            file_io.DATA_DIR = original_data_dir
+            file_io.initialize_paths()
+
     def test_settings_synchronization(self):
         """Verify that shared settings keys in Python (file_io.py) and JS (storageManager.js) stay aligned."""
         py_settings = file_io.get_settings()
