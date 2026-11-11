@@ -33,6 +33,7 @@ class PlaylistTracker:
         self.watched_status_cache = {} # Map of item_id -> bool for pending disk writes
         self.watched_cache = {} # NEW: Map of item_id -> bool for pending 'watched' disk writes
         self.dirty_last_played_id = None # Pending last_played_id for disk commit
+        self.confirmed_playing_id = None # Confirmed playing ID after 2s playback threshold
         
         self.file_io = file_io
         self.settings = settings # Store settings for global fallbacks
@@ -309,6 +310,7 @@ class PlaylistTracker:
                                 logging.info(f"[PY][Tracker] Playback confirmed for {self.current_id}. Committing last_played_id to disk.")
                                 self._update_last_played(self.current_id)
                                 self.pending_last_played_id = None
+                                self._commit_to_disk()
 
                             # 1. Check for mark-as-watched threshold (30s of SESSION playback)
                             if self.current_session_duration >= 30 and self.current_id not in self.threshold_met_ids:
@@ -468,6 +470,7 @@ class PlaylistTracker:
         with self.lock:
             if self.folder_id:
                 self.dirty_last_played_id = item_id
+                self.confirmed_playing_id = item_id
 
         # Notify the extension so it can update its internal storage
         self.send_message({
@@ -547,6 +550,9 @@ class PlaylistTracker:
             stat_snap = dict(self.watched_status_cache)
             watch_snap = dict(self.watched_cache)
             last_played_snap = self.dirty_last_played_id
+            if last_played_snap:
+                self.confirmed_playing_id = last_played_snap
+            confirmed_id = last_played_snap or self.confirmed_playing_id
             
             self.resume_cache.clear()
             self.watched_status_cache.clear()
@@ -570,12 +576,13 @@ class PlaylistTracker:
                 for item in playlist:
                     item_id = item.get("id")
                     
-                    # Mutually Exclusive 'currently_playing'
-                    is_current = (self.current_id and item_id == self.current_id)
-                    if item.get("currently_playing") != is_current:
-                        item["currently_playing"] = is_current
-                        item["last_modified"] = int(time.time() * 1000)
-                        changed = True
+                    # Mutually Exclusive 'currently_playing' (only mark once confirmed after 2s threshold)
+                    if confirmed_id:
+                        is_current = (item_id == confirmed_id)
+                        if item.get("currently_playing") != is_current:
+                            item["currently_playing"] = is_current
+                            item["last_modified"] = int(time.time() * 1000)
+                            changed = True
                     
                     # Sync from Snapshots
                     if item_id in res_snap:

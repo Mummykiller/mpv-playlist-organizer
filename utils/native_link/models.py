@@ -30,6 +30,8 @@ class SettingsOverrides:
     os_platform: Optional[str] = None
     ffmpeg_path: Optional[str] = None
     ytdlp_path: Optional[str] = None
+    clear_on_completion: bool = False
+    clear_on_item_finish: bool = False
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SettingsOverrides':
@@ -42,7 +44,8 @@ class SettingsOverrides:
             'enable_display_sync', 'override_display_fps',
             'ultra_interpolation', 'ultra_deband', 'ultra_fbo',
             'enable_precise_resume', 'yt_mark_watched', 'os_platform',
-            'ffmpeg_path', 'ytdlp_path'
+            'ffmpeg_path', 'ytdlp_path',
+            'clear_on_completion', 'clear_on_item_finish'
         }
         return cls(**{k: data.get(k) for k in fields if k in data})
 
@@ -69,6 +72,7 @@ class PlaybackRequest(BaseRequest):
     start_paused: bool = False
     force_terminal: bool = False
     play_new_instance: bool = False
+    is_unmanaged: bool = False
     
     # Settings
     settings: SettingsOverrides = field(default_factory=SettingsOverrides)

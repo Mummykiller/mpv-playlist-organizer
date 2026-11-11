@@ -18,6 +18,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				...options,
 			};
 			this.isDragging = false;
+			this.hasMoved = false;
+			this.startX = 0;
+			this.startY = 0;
 			this.offsetX = 0;
 			this.offsetY = 0;
 			this.onMouseDown = this.onMouseDown.bind(this);
@@ -34,23 +37,34 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			)
 				return;
 			
-			// Only prevent default if we're actually going to start dragging
-			// This avoids blocking child click events on some browsers/OSs
 			this.isDragging = true;
-			document.body.classList.add("mpv-controller-dragging");
+			this.hasMoved = false;
+			this.startX = e.clientX || 0;
+			this.startY = e.clientY || 0;
 			const rect = this.element.getBoundingClientRect();
-			this.offsetX = e.clientX - rect.left;
-			this.offsetY = e.clientY - rect.top;
-			this.element.style.transition = "none";
+			this.offsetX = (e.clientX || 0) - rect.left;
+			this.offsetY = (e.clientY || 0) - rect.top;
 			document.addEventListener("mousemove", this.onMouseMove);
 			document.addEventListener("mouseup", this.onMouseUp);
 		}
 
 		onMouseMove(e) {
 			if (!this.isDragging) return;
+			const clientX = e.clientX || 0;
+			const clientY = e.clientY || 0;
+			const dx = clientX - this.startX;
+			const dy = clientY - this.startY;
+
+			if (!this.hasMoved && Math.hypot(dx, dy) > 3) {
+				this.hasMoved = true;
+				document.body.classList.add("mpv-controller-dragging");
+				this.element.style.transition = "none";
+			}
+			if (!this.hasMoved) return;
+
 			e.preventDefault();
-			let newLeft = e.clientX - this.offsetX;
-			let newTop = e.clientY - this.offsetY;
+			let newLeft = clientX - this.offsetX;
+			let newTop = clientY - this.offsetY;
 			if (this.options.clamp) {
 				const maxX =
 					document.documentElement.clientWidth - this.element.offsetWidth;
@@ -67,32 +81,51 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		onMouseUp(e) {
 			if (!this.isDragging) return;
+			const didMove = this.hasMoved;
 			this.isDragging = false;
+			this.hasMoved = false;
 			document.body.classList.remove("mpv-controller-dragging");
 			this.element.style.transition = "";
 			document.removeEventListener("mousemove", this.onMouseMove);
 			document.removeEventListener("mouseup", this.onMouseUp);
-			const rect = this.element.getBoundingClientRect();
-			const vw = document.documentElement.clientWidth;
-			const vh = window.innerHeight;
-			const center = vw / 2;
-			const elCenter = rect.left + rect.width / 2;
-			let pos;
-			if (elCenter < center)
-				pos = {
-					left: `${(rect.left / vw) * 100}%`,
-					top: `${(rect.top / vh) * 100}%`,
-					right: "auto",
-					bottom: "auto",
+
+			if (didMove) {
+				// Suppress click / contextmenu / auxclick that may fire after dragging
+				const suppress = (ev) => {
+					ev.stopPropagation();
+					ev.preventDefault();
 				};
-			else
-				pos = {
-					left: "auto",
-					top: `${(rect.top / vh) * 100}%`,
-					right: `${((vw - rect.right) / vw) * 100}%`,
-					bottom: "auto",
-				};
-			this.options.onDragEnd(e, pos);
+				window.addEventListener("click", suppress, true);
+				window.addEventListener("contextmenu", suppress, true);
+				window.addEventListener("auxclick", suppress, true);
+				setTimeout(() => {
+					window.removeEventListener("click", suppress, true);
+					window.removeEventListener("contextmenu", suppress, true);
+					window.removeEventListener("auxclick", suppress, true);
+				}, 50);
+
+				const rect = this.element.getBoundingClientRect();
+				const vw = document.documentElement.clientWidth;
+				const vh = window.innerHeight;
+				const center = vw / 2;
+				const elCenter = rect.left + rect.width / 2;
+				let pos;
+				if (elCenter < center)
+					pos = {
+						left: `${(rect.left / vw) * 100}%`,
+						top: `${(rect.top / vh) * 100}%`,
+						right: "auto",
+						bottom: "auto",
+					};
+				else
+					pos = {
+						left: "auto",
+						top: `${(rect.top / vh) * 100}%`,
+						right: `${((vw - rect.right) / vw) * 100}%`,
+						bottom: "auto",
+					};
+				this.options.onDragEnd(e, pos);
+			}
 		}
 
 		onContextMenu(e) {
@@ -110,6 +143,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 			if (this.isDragging) {
 				this.isDragging = false;
+				this.hasMoved = false;
 				document.body.classList.remove("mpv-controller-dragging");
 				this.element.style.transition = "";
 			}

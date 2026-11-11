@@ -175,6 +175,7 @@ def construct_lua_options(item, settings, script_dir, index=None):
         "probesize": settings.get('probesize', 32),
         "resume_time": resume_time,
         "project_root": script_dir,
+        "folder_id": item.get("folder_id") or settings.get("folder_id"),
         "mark_watched": get_mark_watched(item, settings),
         "marked_as_watched": item.get('marked_as_watched') if item.get('marked_as_watched') is not None else item.get('markedAsWatched', False),
         "watched": item.get('watched') if item.get('watched') is not None else item.get('watched', False),

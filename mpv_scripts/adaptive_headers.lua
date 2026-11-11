@@ -7,6 +7,8 @@ local unmanaged_fallback_opts = nil -- Global fallback for disconnected launches
 local primed_resume_time = nil
 local has_started = false
 local handshake_processed = false -- Flag to ensure handshake is only processed once
+local last_playlist_index = nil
+local last_valid_time_pos = nil
 
 -- Store initial global states
 local initial_ua = mp.get_property("user-agent") or "libmpv"
@@ -37,11 +39,21 @@ local function url_decode(str)
     return str:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
 end
 
+mp.observe_property("time-pos", "number", function(_, val)
+    if val and val > 0 then
+        last_valid_time_pos = val
+    end
+end)
+
 local function save_current_position()
     local path = mp.get_property("path")
-    if not path or path == "" then return end
+    if not path or path == "" then
+        last_valid_time_pos = nil
+        return
+    end
     
-    local time = mp.get_property_number("time-pos")
+    local time = mp.get_property_number("time-pos") or last_valid_time_pos
+    last_valid_time_pos = nil
     if time and time > 5 then -- Only save if we are at least 5s in
         local id = mp.get_property("user-data/id")
         if id and id ~= "" then
@@ -123,6 +135,8 @@ local function apply_adaptive_settings()
     end
 
     -- 1. Extract Solid ID
+    local previous_id = mp.get_property("user-data/id") or ""
+    local current_index = mp.get_property_number("playlist-pos")
     local solid_id = path:match("[#&]mpv_organizer_id=([^#&]+)")
     if solid_id then 
         mp.set_property_native("user-data/id", solid_id) 
@@ -149,6 +163,18 @@ local function apply_adaptive_settings()
         mp.set_property("user-data/hot-swap-options", "")
     end
 
+    -- PROTECTION: Resolution Pass Detection (capture and restore ID before resolving options)
+    local id_in_path = path:match("[#&]mpv_organizer_id=([^#&]+)")
+    local is_resolution_pass = (id_in_path == nil and not is_hot_swap and previous_id ~= "" and current_index == last_playlist_index)
+    if is_resolution_pass then
+        mp.set_property_native("user-data/id", previous_id)
+    end
+    last_playlist_index = current_index
+
+    -- Capture primed resume values BEFORE state reset clears them
+    local sync_primed = mp.get_property("user-data/primed-resume-time")
+    local saved_primed_resume = primed_resume_time
+
     -- 3. Clean up previous state (Full Reset to Initial Defaults)
     -- ONLY reset if this is NOT the very first load of the process, 
     -- or if we are performing a hot-swap (item change).
@@ -164,14 +190,12 @@ local function apply_adaptive_settings()
         set_property_if_diff("ytdl", initial_ytdl)
         set_property_if_diff("demuxer-lavf-o", initial_lavf_opts)
         
-        -- Reset metadata strictly
+        -- Reset metadata strictly (preserve session-level folder-id and is-unmanaged unless overridden in opts)
         mp.set_property_native("user-data/original-url", nil)
         set_property_if_diff("user-data/is-youtube", "no")
         set_property_if_diff("user-data/marked-as-watched", "no")
         set_property_if_diff("user-data/cookies-browser", "")
         set_property_if_diff("user-data/project-root", "")
-        set_property_if_diff("user-data/folder-id", "")
-        set_property_if_diff("user-data/is-unmanaged", "no")
         
         -- Reset Start Time to prevent leakage from previous file
         mp.set_property("start", "none")
@@ -209,7 +233,6 @@ local function apply_adaptive_settings()
     local final_resume_time = nil
 
     -- Priority 1: Synchronous Primed Resume Time (from Python IPC)
-    local sync_primed = mp.get_property("user-data/primed-resume-time")
     if sync_primed and sync_primed ~= "" then
         sync_primed = sync_primed:gsub('^"', ''):gsub('"$', '')
         final_resume_time = tonumber(sync_primed)
@@ -226,8 +249,8 @@ local function apply_adaptive_settings()
     end
     
     -- Priority 3: Global Handshake Resume Time (One-time use)
-    if final_resume_time == nil and primed_resume_time then
-        final_resume_time = primed_resume_time
+    if final_resume_time == nil and saved_primed_resume then
+        final_resume_time = saved_primed_resume
         debug_log("Handshake resume time applied: " .. tostring(final_resume_time))
     end
 
@@ -238,11 +261,6 @@ local function apply_adaptive_settings()
             debug_log("Metadata resume time found: " .. tostring(final_resume_time))
         end
     end
-
-    -- PROTECTION: Resolution Pass Detection
-    local id_in_path = path:match("[#&]mpv_organizer_id=([^#&]+)")
-    local id_in_user_data = mp.get_property("user-data/id")
-    local is_resolution_pass = (id_in_path == nil and id_in_user_data ~= "")
 
     if final_resume_time == nil then
         if is_resolution_pass then

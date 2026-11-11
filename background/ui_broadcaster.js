@@ -89,13 +89,19 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
  */
 export async function broadcastPlaylistState(folderId, playlist = null, action = "playlist_dirty") {
 	const data = await storage.get();
-	const targetPlaylist = playlist || data.folders[folderId]?.playlist || [];
+	const actualFolderId =
+		(folderId &&
+			Object.keys(data.folders || {}).find(
+				(k) => k.toLowerCase() === folderId.toLowerCase(),
+			)) ||
+		folderId;
+	const targetPlaylist = playlist || data.folders?.[actualFolderId]?.playlist || [];
 	
 	const { isActive, isPaused, needsAppend, lastPlayedId, sessionIds } = 
-		await getVisualPlaybackState(folderId, targetPlaylist);
+		await getVisualPlaybackState(actualFolderId, targetPlaylist);
 
 	// Get completed items for visual filtering
-	const session = playbackManager.findSessionByFolderId(folderId);
+	const session = playbackManager.findSessionByFolderId(actualFolderId);
 	const completedIds = session ? Array.from(session.completedItemIds) : [];
 
 	// Fetch current cache for flag persistence (launching/idle/health)
@@ -104,7 +110,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 
 	// Standardize state object to ensure all flags are present for UI syncing.
 	const pbState = {
-		folderId: folderId,
+		folderId: actualFolderId,
 		isRunning: isActive,
 		isLaunching: !!mpv_playback_cache?.isLaunching,
 		isAppending: false, // Background is source of truth
@@ -112,7 +118,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 		isIdle: !!mpv_playback_cache?.isIdle,
 		needsAppend: needsAppend,
 		health: mpv_playback_cache?.health || "ok",
-		lastPlayedId: lastPlayedId || mpv_playback_cache?.last_played_id || data.folders[folderId]?.lastPlayedId,
+		lastPlayedId: lastPlayedId || mpv_playback_cache?.last_played_id || data.folders?.[actualFolderId]?.lastPlayedId,
 		sessionIds: isActive ? (sessionIds?.length ? sessionIds : mpv_playback_cache?.sessionIds || []) : [],
 		completedIds: completedIds
 	};
@@ -122,7 +128,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 
 	broadcastToTabs({
 		action: action,
-		folderId: folderId,
+		folderId: actualFolderId,
 		// Omit playlist array to prevent payload overload. 
 		// The UI will fetch from storage if needed.
 		lastPlayedId: pbState.lastPlayedId,
@@ -134,7 +140,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 	});
 
 	// broadcastPlaybackState will further sync the state and notify tabs
-	await broadcastPlaybackState(folderId, { needsAppend });
+	await broadcastPlaybackState(actualFolderId, { needsAppend });
 }
 
 /**

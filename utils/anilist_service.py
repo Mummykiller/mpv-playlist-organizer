@@ -89,7 +89,13 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
         today_ts = 0
 
     if is_cache_disabled:
-        return anilist_cache._fetch_from_anilist_script(is_ping=False, days=days)
+        res = anilist_cache._fetch_from_anilist_script(is_ping=False, days=days)
+        if res.get('success') and isinstance(res.get('output'), str):
+            try:
+                res['output'] = json.loads(res['output'])
+            except (json.JSONDecodeError, ValueError) as e:
+                logging.debug(f"[AniList] Output is not valid JSON: {e}")
+        return res
 
     offsets = full_cache.get("offsets", {})
     day_key = str(days)
@@ -118,20 +124,27 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
         return res
 
     is_today_expired = False
-    if day_key == "0" and day_cache:
+    if day_cache:
         is_expired_by_timer = (now - day_cache['timestamp'] > anilist_cache.CACHE_DURATION_S)
         next_airing_at = day_cache['data'].get('next_airing_at')
-        is_expired_by_release = next_airing_at and now > next_airing_at
+        is_expired_by_release = (day_key == "0" and next_airing_at and now > next_airing_at)
         
         if is_expired_by_timer or is_expired_by_release or force_refresh:
-            is_today_expired = True
-            if is_expired_by_timer:
-                logging.info("AniList Cache: Today expired by timer.")
-            if is_expired_by_release:
-                send_message_func({"log": {"text": "[AniList]: New episode aired. Refreshing...", "type": "info"}})
-            full_cache = {}
-            offsets = {}
-            day_cache = None
+            if day_key == "0":
+                is_today_expired = True
+                if is_expired_by_timer:
+                    logging.info("AniList Cache: Today expired by timer.")
+                if is_expired_by_release:
+                    send_message_func({"log": {"text": "[AniList]: New episode aired. Refreshing...", "type": "info"}})
+                full_cache = {}
+                offsets = {}
+                day_cache = None
+            else:
+                logging.info(f"AniList Cache: Offset {days} expired by timer.")
+                offsets.pop(day_key, None)
+                full_cache["offsets"] = offsets
+                anilist_cache._save_cache(full_cache)
+                day_cache = None
 
     if not force_refresh and day_cache:
         if day_key != "0" or not is_today_expired:

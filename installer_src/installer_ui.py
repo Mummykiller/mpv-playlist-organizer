@@ -31,7 +31,12 @@ class Tooltip:
         if str(self.widget['state']) == 'disabled':
             return
 
-        x, y, _, _ = self.widget.bbox("insert")
+        try:
+            bbox = self.widget.bbox("insert")
+            x, y, _, _ = bbox if bbox else (0, 0, 0, 0)
+        except Exception as e:
+            logging.debug(f"[UI] Tooltip bbox fallback for widget: {e}")
+            x, y, _, _ = (0, 0, 0, 0)
         x += self.widget.winfo_rootx() + 25
         y += self.widget.winfo_rooty() + 25
 
@@ -147,7 +152,7 @@ class HostManagerApp:
         browser_input_frame.columnconfigure(0, weight=1)
         self.browser_var = tk.StringVar()
         self.browser_combobox = ttk.Combobox(browser_input_frame, textvariable=self.browser_var, state="readonly", font=("Segoe UI", 11))
-        self.browser_combobox['values'] = ('brave', 'chrome', 'edge', 'vivaldi', 'opera')
+        self.browser_combobox['values'] = ('brave', 'chrome', 'chromium', 'edge', 'vivaldi', 'opera')
         self.browser_combobox.grid(row=0, column=0, sticky="ew")
         self.diagnostics_btn = ttk.Button(browser_input_frame, text="Run Diagnostics", command=self.run_diagnostics)
         self.diagnostics_btn.grid(row=0, column=1, sticky=tk.E, padx=(5, 0))

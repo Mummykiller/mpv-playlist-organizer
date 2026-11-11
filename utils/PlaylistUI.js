@@ -32,6 +32,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.isPickStartModeActive = false;
 			this.isLiveReorderModeActive = false;
 			this.reorderDebounceTimer = null;
+			this._renderGeneration = 0;
 		}
 
 		bindEvents() {
@@ -40,6 +41,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		render(playlist, lastPlayedId, isFolderActive = false, completedIds = []) {
+			const renderGen = (this._renderGeneration = (this._renderGeneration || 0) + 1);
 			const completedSet = new Set(completedIds || []);
 			let effectivePlaylist = playlist || [];
 			
@@ -63,7 +65,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.controller.state.update({ lastPlayedId: lastPlayedId }, true);
 			}
 
-			if (!this.fullContainer) return;
+			if (!this.fullContainer || !this.controller.checkContext()) return;
 
 			// Optimization: Fetch all potentially relevant cache shards in one go
 			const domains = new Set(effectivePlaylist.map(item => {
@@ -73,6 +75,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const storageKeys = Array.from(domains).map(d => `mpv_meta_cache_${d.replace(/[^a-zA-Z0-9.-]/g, "_")}`);
 			
 			chrome.storage.local.get(storageKeys, (cacheData) => {
+				if (renderGen !== this._renderGeneration || !this.controller.checkContext()) return;
 				const oldItemCount =
 					this.fullContainer.querySelectorAll(".list-item").length;
 				const scrollPosition = this.fullContainer.scrollTop;
@@ -547,6 +550,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 			});
 			this.fullContainer.addEventListener("dragover", (e) => {
+				if (!this.draggedItem) return;
 				e.preventDefault();
 				const existingIndicator =
 					this.fullContainer.querySelector(".drag-over");
@@ -567,6 +571,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				if (!folderId) return;
 				
 				const playlistItems = [...this.fullContainer.querySelectorAll(".list-item")];
+				playlistItems.forEach((item, idx) => {
+					item.dataset.index = idx;
+					const indexSpan = item.querySelector(".url-index");
+					if (indexSpan) indexSpan.textContent = `${idx + 1}.`;
+					const removeBtn = item.querySelector(".btn-remove-item");
+					if (removeBtn) removeBtn.dataset.index = idx;
+				});
 				const newOrder = playlistItems.map((item) => {
 					const originalItem = this.currentPlaylist.find(
 						(i) => i.id === item.dataset.id,
@@ -580,6 +591,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						}
 					);
 				});
+				this.currentPlaylist = newOrder;
 				
 				// Always save to browser storage immediately
 				this.controller.sendCommandToBackground(
@@ -618,7 +630,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		 */
 		updateItemDelta(itemId, delta) {
 			if (!this.fullContainer) return;
-			const itemDiv = this.fullContainer.querySelector(`[data-id="${itemId}"]`);
+			const safeId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
+				? CSS.escape(String(itemId ?? ""))
+				: String(itemId ?? "").replace(/["\\]/g, "\\$&");
+			const itemDiv = this.fullContainer.querySelector(`[data-id="${safeId}"]`);
 			if (!itemDiv) return;
 
 			// Update internal state copy if it exists

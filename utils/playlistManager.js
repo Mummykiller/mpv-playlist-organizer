@@ -297,7 +297,8 @@ const PLAYLIST_MUTATION_OPTIONS = Object.freeze({
 	broadcastPlaylist: true,
 });
 
-export const handleClear = createHandler(async ({ folderId, data }) => {
+export const handleClear = createHandler(async (context) => {
+	const { folderId, data } = context;
 	const actualFolderId = Object.keys(data.folders).find(
 		(id) => id.toLowerCase() === folderId.toLowerCase()
 	);
@@ -305,6 +306,7 @@ export const handleClear = createHandler(async ({ folderId, data }) => {
 	if (!actualFolderId || !data.folders[actualFolderId])
 		return { success: false, error: "Folder not found." };
 
+	context.folderId = actualFolderId;
 	data.folders[actualFolderId].playlist = [];
 	data.folders[actualFolderId].lastPlayedId = null;
 
@@ -312,10 +314,11 @@ export const handleClear = createHandler(async ({ folderId, data }) => {
 		nativeLink.clearLive(actualFolderId).catch(() => {});
 	}
 	
-	return { success: true, message: `Playlist for '${actualFolderId}' cleared.` };
+	return { success: true, folderId: actualFolderId, message: `Playlist for '${actualFolderId}' cleared.` };
 }, PLAYLIST_MUTATION_OPTIONS);
 
-export const handleRemoveItem = createHandler(async ({ request, folderId, data }) => {
+export const handleRemoveItem = createHandler(async (context) => {
+	const { request, folderId, data } = context;
 	const indexToRemove = request.data?.index;
 	const idToRemove = request.data?.id;
 
@@ -324,6 +327,7 @@ export const handleRemoveItem = createHandler(async ({ request, folderId, data }
 	);
 
 	if (actualFolderId && data.folders[actualFolderId]) {
+		context.folderId = actualFolderId;
 		const playlist = data.folders[actualFolderId].playlist;
 		let finalIndex = -1;
 
@@ -347,13 +351,14 @@ export const handleRemoveItem = createHandler(async ({ request, folderId, data }
 					itemId: itemToRemove.id,
 				}).catch((e) => console.warn("[PlaylistManager] Live removal failed:", e));
 			}
-			return { success: true, message: "Item removed." };
+			return { success: true, folderId: actualFolderId, message: "Item removed." };
 		}
 	}
 	return { success: false, error: "Invalid item index or ID." };
 }, PLAYLIST_MUTATION_OPTIONS);
 
-export const handleSetPlaylistOrder = createHandler(async ({ request, folderId, data }) => {
+export const handleSetPlaylistOrder = createHandler(async (context) => {
+	const { request, folderId, data } = context;
 	const { order } = request.data;
 	const actualFolderId = Object.keys(data.folders).find(
 		(id) => id.toLowerCase() === folderId.toLowerCase()
@@ -361,9 +366,10 @@ export const handleSetPlaylistOrder = createHandler(async ({ request, folderId, 
 
 	if (!actualFolderId || !data.folders[actualFolderId]) return { success: false };
 
+	context.folderId = actualFolderId;
 	data.folders[actualFolderId].playlist = order;
 	
-	return { success: true };
+	return { success: true, folderId: actualFolderId };
 }, PLAYLIST_MUTATION_OPTIONS);
 
 export const handleGetSmartReorder = createHandler(async (context) => {
@@ -381,8 +387,9 @@ export const handleGetSmartReorder = createHandler(async (context) => {
 		);
 
 		if (actualFolderId && freshData.folders[actualFolderId]) {
+			context.folderId = actualFolderId;
 			freshData.folders[actualFolderId].playlist = response.playlist;
-			return { success: true, playlist: response.playlist };
+			return { success: true, folderId: actualFolderId, playlist: response.playlist };
 		}
 	}
 	

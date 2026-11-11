@@ -197,6 +197,8 @@ export const handleExportSettings = createHandler(async ({ data, request }) => {
 		filename,
 		subfolder: "settings",
 	});
+}, {
+	manualPersistence: true,
 });
 
 export const handleExportAllPlaylistsSeparately = createHandler(async ({ data, request }) => {
@@ -216,6 +218,8 @@ export const handleExportAllPlaylistsSeparately = createHandler(async ({ data, r
 		data: filteredFolders,
 		customNames: options.customNames || {},
 	});
+}, {
+	manualPersistence: true,
 });
 
 export const handleExportFolderPlaylist = createHandler(async ({ data, request }) => {
@@ -239,6 +243,8 @@ export const handleExportFolderPlaylist = createHandler(async ({ data, request }
 		data: folderToExport,
 		filename: filename,
 	});
+}, {
+	manualPersistence: true,
 });
 
 export async function handleListImportFiles() {

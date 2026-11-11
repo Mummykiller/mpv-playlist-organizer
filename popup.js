@@ -100,6 +100,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 			 */
 			setMode(mode) {
 				if (mode !== "mini" && mode !== "full") return;
+				if (this.activeMode && this.activeMode !== mode && typeof cancelReorderMode === "function") {
+					cancelReorderMode();
+				}
 
 				this.activeMode = mode;
 				this.views.mini.style.display = mode === "mini" ? "flex" : "none";
@@ -301,6 +304,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		// Reorder State
 		let isReorderModeActive = false;
+		let reorderActiveMode = null;
 		let draggedItem = null;
 		const statusMessage = statusMessageElement;
 
@@ -832,9 +836,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		// --- Reorder Logic ---
 
-		function getActiveReorderControls() {
-			if (uiManager.isMiniView()) {
+		function getActiveReorderControls(mode = uiManager.activeMode) {
+			if (mode === "mini") {
 				return {
+					toggleBtn: miniToggleReorderBtn,
+					container: miniReorderContainer,
 					elementsToHide: [
 						document.getElementById("mini-folder-select"),
 						document.getElementById("btn-mini-manage-folders"),
@@ -844,6 +850,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 			// Full view
 			return {
+				toggleBtn: toggleReorderBtn,
+				container: reorderContainer,
 				elementsToHide: [
 					document.getElementById("remove-folder-select"),
 					document.getElementById("rename-remove-controls"),
@@ -851,11 +859,34 @@ document.addEventListener("DOMContentLoaded", async () => {
 			};
 		}
 
+		function cancelReorderMode() {
+			if (!isReorderModeActive) return;
+			const modeToRestore = reorderActiveMode || (uiManager.isMiniView() ? "mini" : "full");
+			const { toggleBtn, container, elementsToHide } = getActiveReorderControls(modeToRestore);
+			isReorderModeActive = false;
+			reorderActiveMode = null;
+			if (toggleBtn) {
+				toggleBtn.classList.remove("active");
+				if (toggleBtn === toggleReorderBtn) {
+					toggleBtn.textContent = "Reorder";
+				}
+			}
+			if (container) {
+				container.innerHTML = "";
+				container.style.display = "none";
+			}
+			elementsToHide.forEach((el) => {
+				if (el) el.style.display = "";
+			});
+		}
+
 		async function toggleReorderMode() {
 			isReorderModeActive = !isReorderModeActive;
-			const { elementsToHide } = getActiveReorderControls();
-			const toggleBtn = uiManager.reorderToggleBtn;
-			const container = uiManager.reorderContainer;
+			if (isReorderModeActive) {
+				reorderActiveMode = uiManager.isMiniView() ? "mini" : "full";
+			}
+			const targetMode = reorderActiveMode || (uiManager.isMiniView() ? "mini" : "full");
+			const { toggleBtn, container, elementsToHide } = getActiveReorderControls(targetMode);
 
 			toggleBtn.classList.toggle("active", isReorderModeActive);
 
@@ -865,7 +896,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 					toggleBtn.textContent = "Save Order";
 				}
 
-				elementsToHide.forEach((el) => (el.style.display = "none"));
+				elementsToHide.forEach((el) => {
+					if (el) el.style.display = "none";
+				});
 				container.style.display = "block";
 				try {
 					const response = await sendMessageAsync({
@@ -880,17 +913,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 			} else {
 				const list = container.querySelector(".reorder-list");
 				if (list) {
-					const newOrder = [...list.children].map(
-						(item) => item.dataset.folderId,
-					);
-					try {
-						await sendMessageAsync({
-							action: "set_folder_order",
-							order: newOrder,
-						});
-						showStatus("Folder order saved.");
-					} catch (e) {
-						showStatus("Failed to save folder order.", true);
+					const newOrder = [...list.children]
+						.map((item) => item.dataset.folderId)
+						.filter(Boolean);
+					if (newOrder.length > 0) {
+						try {
+							await sendMessageAsync({
+								action: "set_folder_order",
+								order: newOrder,
+							});
+							showStatus("Folder order saved.");
+						} catch (e) {
+							showStatus("Failed to save folder order.", true);
+						}
 					}
 				}
 
@@ -901,7 +936,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 				container.innerHTML = "";
 				container.style.display = "none";
-				elementsToHide.forEach((el) => (el.style.display = ""));
+				elementsToHide.forEach((el) => {
+					if (el) el.style.display = "";
+				});
+				reorderActiveMode = null;
 				populateFolderDropdowns(); // Refresh dropdowns with new order
 			}
 		}
@@ -951,6 +989,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			});
 
 			list.addEventListener("dragover", (e) => {
+				if (!draggedItem) return;
 				e.preventDefault();
 
 				const afterElement = domUtils.getDragAfterElement(list, e.clientY, ".reorder-item:not(.dragging), .list-item:not(.dragging)");
@@ -976,6 +1015,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 				}
 				if (draggedItem && draggedItem.parentElement === list) {
 					list.insertBefore(draggedItem, dropTarget);
+					if (list.id === "playlist-container") {
+						[...list.querySelectorAll(".list-item")].forEach((item, idx) => {
+							item.dataset.index = idx;
+							const indexSpan = item.querySelector(".url-index");
+							if (indexSpan) indexSpan.textContent = `${idx + 1}.`;
+							const removeBtn = item.querySelector(".btn-remove-item");
+							if (removeBtn) removeBtn.dataset.index = idx;
+						});
+					}
 				}
 			});
 		}
@@ -1441,6 +1489,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 			const miniAddBtn = document.getElementById("btn-mini-add");
 			if (!miniAddBtn) return;
 
+			const originalIcon = miniAddBtn.innerHTML;
+
 			try {
 				const [activeTab] = await chrome.tabs.query({
 					active: true,
@@ -1453,7 +1503,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				}
 
 				// Check if we actually have a detected stream URL or if it's YouTube
-				const isYouTube = activeTab.url.includes("youtube.com/watch");
+				const isYouTube = !!activeTab?.url?.includes("youtube.com/watch");
 				const streamUrl =
 					currentDetectedUrl ||
 					(isYouTube ? activeTab.url : null);
@@ -1473,7 +1523,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 				// Set loading state
 				miniAddBtn.disabled = true;
-				const originalIcon = miniAddBtn.innerHTML;
 				miniAddBtn.innerHTML = `<svg class="spin-animation" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
 
 				let title = details?.title || activeTab.title || finalStreamUrl;
@@ -1510,6 +1559,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					showStatus(`An error occurred: ${error.message}`, true);
 				}
 				if (miniAddBtn) {
+					miniAddBtn.innerHTML = originalIcon;
 					miniAddBtn.disabled = false;
 				}
 			}
@@ -1668,6 +1718,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (!folderId) return;
 
 				const playlistItems = [...playlistContainer.querySelectorAll(".list-item")];
+				playlistItems.forEach((item, idx) => {
+					item.dataset.index = idx;
+					const indexSpan = item.querySelector(".url-index");
+					if (indexSpan) indexSpan.textContent = `${idx + 1}.`;
+					const removeBtn = item.querySelector(".btn-remove-item");
+					if (removeBtn) removeBtn.dataset.index = idx;
+				});
 				const newOrder = playlistItems.map((item) => {
 					const originalItem = popupState.currentPlaylist.find(
 						(i) => i.id === item.dataset.id,
@@ -2133,13 +2190,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 		});
 
-		// Close the popup whenever it loses focus. This handles both clicking away
-		// within the browser and switching to another application, which is the
-		// standard and expected behavior for extension popups.
-		window.addEventListener("blur", () => {
-			window.close();
-		});
-
 		// Add a listener for log messages from the background script.
 		// This will only receive messages while the popup is open.
 		chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -2251,7 +2301,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 						if (activeTab && activeTab.id === request.tabId && miniAddBtn) {
 							currentDetectedUrl = request.url;
 
-							const isYouTube = activeTab.url.includes("youtube.com/watch");
+							const isYouTube = !!activeTab?.url?.includes("youtube.com/watch");
 							const hasStream = !!request.url || isYouTube;
 
 							miniAddBtn.classList.toggle("stream-present", hasStream);

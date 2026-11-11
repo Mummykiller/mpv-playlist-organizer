@@ -38,6 +38,7 @@ def _generate_user_agent(browser_name, os_name):
     browser_map = {
         "brave": "Brave Chrome/120.0.0.0",
         "chrome": "Chrome/120.0.0.0",
+        "chromium": "Chrome/120.0.0.0",
         "edge": "Edg/120.0.0.0",
         "firefox": "Firefox/120.0",
         "vivaldi": "Vivaldi/6.5.3206.50",
@@ -333,19 +334,11 @@ class WindowsLogic(InstallerLogic):
         self.log(f"Created manifest: {os.path.relpath(manifest_path, INSTALL_DIR)}")
 
         browsers = self.get_browser_configs()
-        browser_mapping = {
-            "chrome": "Google Chrome", "brave": "Brave", "edge": "Microsoft Edge",
-            "chromium": "Chromium", "vivaldi": "Vivaldi", "opera": "Opera"
-        }
-        target_key = browser_mapping.get(browser_for_bypass)
         
         # Registry paths on Windows MUST use backslashes
         native_manifest_path = os.path.normpath(manifest_path)
 
         for browser, (reg_path, _) in browsers.items():
-            if target_key and browser != target_key:
-                continue
-            
             # Register for specific browser AND fallback to Chrome for Brave/Vivaldi/etc
             keys_to_register = [f"{reg_path}\\{HOST_NAME}"]
             if browser != "Google Chrome":
@@ -451,11 +444,7 @@ class UnixLogic(InstallerLogic):
             json.dump({"name": HOST_NAME, "description": HOST_DESCRIPTION, "path": wrapper_path, "type": "stdio", "allowed_origins": [f"chrome-extension://{extension_id}/"]}, f, indent=4)
 
         browser_paths = self.get_browser_configs()
-        browser_mapping = {"chrome": "Google Chrome", "brave": "Brave", "edge": "Microsoft Edge", "chromium": "Chromium", "vivaldi": "Vivaldi", "opera": "Opera"}
-        target_key = browser_mapping.get(browser_for_bypass)
         for browser, path in browser_paths.items():
-            if target_key and browser != target_key:
-                continue
             if os.path.isdir(os.path.dirname(path)):
                 os.makedirs(path, exist_ok=True)
                 symlink_target = os.path.join(path, f"{HOST_NAME}.json")
@@ -501,6 +490,7 @@ class MacOSLogic(UnixLogic):
             "Brave": os.path.join(base_path, "BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             "Microsoft Edge": os.path.join(base_path, "Microsoft Edge/NativeMessagingHosts"),
             "Vivaldi": os.path.join(base_path, "Vivaldi/NativeMessagingHosts"),
+            "Opera": os.path.join(base_path, "com.operasoftware.Opera/NativeMessagingHosts"),
         }
 
     def get_browser_user_data_dir(self, browser_name):

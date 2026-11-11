@@ -31,6 +31,12 @@
 	--accent-danger-hover: #da3739; /* Darker red on hover */
 	--accent-success: #57f287; /* A brighter, more visible green */
 	--accent-inactive: #64748b; /* A greyish blue for inactive states */
+	--accent-positive: var(--accent-success);
+	--surface-color: var(--bg-secondary);
+	--surface-hover-color: var(--bg-tertiary);
+	--border-color: var(--border-primary);
+	--bg-color: var(--bg-primary);
+	--text-error: var(--accent-danger);
 	--font-sans:
 		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
 		sans-serif;
@@ -715,7 +721,8 @@ select:focus-visible {
 	overflow-wrap: break-word;
 }
 
-.log-timestamp {
+.log-timestamp,
+.log-time {
 	flex-shrink: 0; /* Prevent timestamp from shrinking */
 }
 

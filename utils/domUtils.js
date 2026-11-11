@@ -97,11 +97,21 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 	        /**
 	         * Performs a surgical delta update on a playlist item node.
-	         * @param {HTMLElement} itemDiv - The .list-item DOM node.
-	         * @param {Object} delta - The changes to apply (watched, markedAsWatched, title).
+	         * @param {HTMLElement} itemDivOrContainer - The .list-item DOM node (or container when 3 args provided).
+	         * @param {Object|string} deltaOrItemId - The changes to apply, or itemId when 3 args provided.
+	         * @param {Object} [maybeDelta] - The changes to apply when called as (container, itemId, delta).
 	         */
-	        updateItemDelta(itemDiv, delta) {
-	            if (!itemDiv) return;
+	        updateItemDelta(itemDivOrContainer, deltaOrItemId, maybeDelta) {
+	            let itemDiv = itemDivOrContainer;
+	            let delta = deltaOrItemId;
+	            if (maybeDelta !== undefined && itemDivOrContainer?.querySelector) {
+	                const safeId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
+	                    ? CSS.escape(String(deltaOrItemId ?? ""))
+	                    : String(deltaOrItemId ?? "").replace(/["\\]/g, "\\$&");
+	                itemDiv = itemDivOrContainer.querySelector(`[data-id="${safeId}"]`);
+	                delta = maybeDelta;
+	            }
+	            if (!itemDiv || !delta) return;
 	            const url = itemDiv.dataset.url || "";
 	            const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
 

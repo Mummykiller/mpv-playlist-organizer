@@ -8,8 +8,10 @@ class SmartReorder:
     """
     
     # Regex patterns for extraction
-    SEASON_REGEX = re.compile(r'(?:Season\s*(\d+)|S(\d+))', re.IGNORECASE)
-    EPISODE_REGEX = re.compile(r'(?:e(\d+)|Episode\s*(\d+)|(?:\s|^)(\d+)(?:\s|$))', re.IGNORECASE)
+    SEASON_REGEX = re.compile(r'(?:Season\s*(\d+)|(?<![a-zA-Z0-9])S(\d+))', re.IGNORECASE)
+    EXPLICIT_EPISODE_REGEX = re.compile(r'(?<![a-zA-Z])(?:e|ep\.?|episode)\s*(\d+(?:\.\d+)?)', re.IGNORECASE)
+    STANDALONE_EPISODE_REGEX = re.compile(r'(?:^|[\s\-_.,|\[\]()])(\d+(?:\.\d+)?)(?=$|[\s\-_.,|\[\]()])')
+    EPISODE_REGEX = re.compile(r'(?:(?<![a-zA-Z])(?:e|ep\.?|episode)\s*(\d+(?:\.\d+)?)|(?:\s|^)(\d+(?:\.\d+)?)(?:\s|$))', re.IGNORECASE)
     
     def __init__(self, threshold=0.85):
         self.threshold = threshold
@@ -21,10 +23,23 @@ class SmartReorder:
         if not title:
             return ""
         
-        # Remove Season indicators
+        # Remove Season indicators first
         normalized = self.SEASON_REGEX.sub('', title)
-        # Remove Episode indicators
-        normalized = self.EPISODE_REGEX.sub('', normalized)
+        # Remove Episode indicators: explicit first, otherwise standalone (only the episode match)
+        if self.EXPLICIT_EPISODE_REGEX.search(normalized):
+            normalized = self.EXPLICIT_EPISODE_REGEX.sub('', normalized)
+        else:
+            matches = list(self.STANDALONE_EPISODE_REGEX.finditer(normalized))
+            if len(matches) > 1:
+                # Multiple numbers (e.g. "86 - 05" or "Mob Psycho 100 - 05"): strip only the last number (the episode)
+                last = matches[-1]
+                normalized = normalized[:last.start(1)] + normalized[last.end(1):]
+            elif len(matches) == 1:
+                # Single standalone number: strip it unless doing so leaves the title empty
+                m = matches[0]
+                candidate = normalized[:m.start(1)] + normalized[m.end(1):]
+                if re.sub(r'[\s\-_.,|\[\](){}]+', ' ', candidate).strip():
+                    normalized = candidate
         
         # Clean up whitespace and special characters
         normalized = re.sub(r'[\s\-_.,|\[\](){}]+', ' ', normalized).strip().lower()
@@ -37,15 +52,29 @@ class SmartReorder:
         season = 0
         episode = 0.0
         
+        if not title:
+            return season, episode
+
         s_match = self.SEASON_REGEX.search(title)
         if s_match:
             # Groups 1 or 2 depending on which part of the regex matched
             season = int(s_match.group(1) or s_match.group(2))
             
-        e_match = self.EPISODE_REGEX.search(title)
+        # Strip matched season text before running episode matching so "Season 2 - 05" doesn't match "2"
+        cleaned_title = self.SEASON_REGEX.sub(' ', title)
+        
+        # Test explicit episode patterns first before falling back to standalone numbers
+        e_match = self.EXPLICIT_EPISODE_REGEX.search(cleaned_title)
+        val = None
         if e_match:
-            # Groups 1, 2, or 3
-            val = e_match.group(1) or e_match.group(2) or e_match.group(3)
+            val = e_match.group(1)
+        else:
+            standalone_matches = list(self.STANDALONE_EPISODE_REGEX.finditer(cleaned_title))
+            if standalone_matches:
+                # Use the last standalone number so show titles with numbers ("86 - 05", "Mob Psycho 100 - 02") pick the episode
+                val = standalone_matches[-1].group(1)
+
+        if val is not None:
             try:
                 episode = float(val)
             except (ValueError, TypeError) as e:

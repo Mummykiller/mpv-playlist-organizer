@@ -16,6 +16,8 @@ class EnrichmentService(ItemProcessor):
     def __init__(self, services, send_message_func, file_io_module, metadata_cache=None, task_manager=None, max_workers=5):
         super().__init__(services, send_message_func, file_io_module, metadata_cache=metadata_cache, task_manager=task_manager)
         self._sync_in_progress = False
+        self._active_sync_id = None
+        self._active_sync_folder = None
         self._lock = threading.Lock()
         self._max_workers = max_workers
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="enrichment_worker")
@@ -56,19 +58,40 @@ class EnrichmentService(ItemProcessor):
 
     def handle_standard_flow_launch(self, session, url_items, start_index, folder_id, settings, file_io):
         """Handles the background restoration of playlist order and sequential metadata enrichment."""
-        if self._sync_in_progress:
-            logging.info(f"[PY][Session] Sync already in progress for folder '{folder_id}'. Skipping redundant trigger.")
-            return
+        with self._lock:
+            if (
+                self._sync_in_progress
+                and self._active_sync_folder
+                and folder_id
+                and self._active_sync_folder.lower() == folder_id.lower()
+                and session.is_alive
+                and session.owner_folder_id
+                and session.owner_folder_id.lower() == folder_id.lower()
+            ):
+                logging.info(f"[PY][Session] Sync already in progress for folder '{folder_id}'. Skipping redundant trigger.")
+                return
+            sync_id = uuid.uuid4().hex
+            self._active_sync_id = sync_id
+            self._active_sync_folder = folder_id
+            self._sync_in_progress = True
+
+        def is_sync_valid():
+            if self._active_sync_id != sync_id:
+                return False
+            if not session.is_alive or getattr(session, 'launch_cancelled', False):
+                return False
+            if folder_id and session.owner_folder_id and session.owner_folder_id.lower() != folder_id.lower():
+                return False
+            return True
 
         def task():
-            self._sync_in_progress = True
             try:
                 # Poll for readiness instead of hard sleep
                 start_wait = time.time()
                 while time.time() - start_wait < 10.0:
-                    # --- CANCELLATION CHECK ---
-                    if not session.is_alive or getattr(session, 'launch_cancelled', False):
-                        logging.info(f"[PY][Session] Background Flow aborted: Session dead or cancelled.")
+                    # --- CANCELLATION & FOLDER CHECK ---
+                    if not is_sync_valid():
+                        logging.info(f"[PY][Session] Background Flow aborted: Session dead, cancelled, or folder switched.")
                         return
                     if session.ipc_manager and session.ipc_manager.is_connected():
                         # Optional: Ping to ensure responsiveness
@@ -76,7 +99,7 @@ class EnrichmentService(ItemProcessor):
                             break
                     time.sleep(0.2)
                 
-                if not session.is_alive:
+                if not is_sync_valid():
                     return
                 
                 history_items = url_items[:start_index]
@@ -93,7 +116,7 @@ class EnrichmentService(ItemProcessor):
                     logging.info(f"[PY][Session] Background: Enriching {len(future_items)} future items sequentially.")
                     enriched_batch = []
                     for item in future_items:
-                        if not session.is_alive:
+                        if not is_sync_valid():
                             return
                         res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session, quiet=True)
                         if res:
@@ -101,11 +124,13 @@ class EnrichmentService(ItemProcessor):
                         
                         # BATCH UPDATE: Every 5 items, push to MPV to keep UI alive
                         if len(enriched_batch) >= 5:
+                            if not is_sync_valid():
+                                return
                             logging.info(f"[PY][Session] Background: Pushing batch of {len(enriched_batch)} future items.")
                             session.append_batch(enriched_batch, mode="append", folder_id=folder_id, quiet=True)
                             enriched_batch = []
                     
-                    if enriched_batch and session.is_alive:
+                    if enriched_batch and is_sync_valid():
                         logging.info(f"[PY][Session] Background: Pushing final batch of {len(enriched_batch)} future items.")
                         session.append_batch(enriched_batch, mode="append", folder_id=folder_id, quiet=True)
 
@@ -114,7 +139,7 @@ class EnrichmentService(ItemProcessor):
                     logging.info(f"[PY][Session] Background: Enriching {len(history_items)} history items sequentially.")
                     enriched_batch = []
                     for item in reversed(history_items): # Process backwards so we can prepend in order
-                        if not session.is_alive:
+                        if not is_sync_valid():
                             return
                         res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session, quiet=True)
                         if res:
@@ -122,13 +147,18 @@ class EnrichmentService(ItemProcessor):
                             enriched_batch = res + enriched_batch
                         
                         if len(enriched_batch) >= 5:
+                            if not is_sync_valid():
+                                return
                             logging.info(f"[PY][Session] Background: Pushing batch of {len(enriched_batch)} history items.")
                             session.append_batch(enriched_batch, mode="prepend", folder_id=folder_id, quiet=True)
                             enriched_batch = []
                     
-                    if enriched_batch and session.is_alive:
+                    if enriched_batch and is_sync_valid():
                         logging.info(f"[PY][Session] Background: Pushing final batch of {len(enriched_batch)} history items.")
                         session.append_batch(enriched_batch, mode="prepend", folder_id=folder_id, quiet=True)
+
+                if not is_sync_valid():
+                    return
 
                 if session.playlist_tracker:
                     session.playlist_tracker.update_playlist_order(session.playlist)
@@ -149,7 +179,11 @@ class EnrichmentService(ItemProcessor):
             except Exception as e:
                 logging.error(f"[PY][Session] Background task error: {e}", exc_info=True)
             finally:
-                self._sync_in_progress = False
+                with self._lock:
+                    if self._active_sync_id == sync_id:
+                        self._sync_in_progress = False
+                        self._active_sync_id = None
+                        self._active_sync_folder = None
 
         self.submit(task)
 
@@ -224,9 +258,9 @@ class LauncherService:
         )
         mgr.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_opts), str(playlist_start_index)]})
 
-        # 2. Set Hot-Swap Properties for the current item
-        mgr.send({"command": ["set_property", "user-data/hot-swap-options", json.dumps(launch_lua_options)]})
-        
+        # 2. Set Properties for the current item (do NOT set user-data/hot-swap-options here,
+        # because the initial item already loaded its options from the handshake file, and leaving
+        # hot-swap-options set would hijack Item 2's metadata/ID on track transition)
         orig_url = url_item.get('original_url') or url_item.get('url', '')
         props = {
             "user-data/original-url": services.sanitize_url(orig_url),
@@ -278,6 +312,8 @@ class LauncherService:
             logging.info("[PY][Session] Launch cancelled flag detected.")
             return {"success": False, "error": "Launch cancelled by user."}
 
+        process = None
+        handshake_path = None
         try:
             # 2.5 Generate Metadata Handshake File
             logging.info("[PY][Session] Generating handshake file...")
@@ -363,6 +399,32 @@ class LauncherService:
             return {"success": True, "message": f"MPV playback initiated{resume_msg}."}
         except Exception as e:
             logging.error(f"Launcher Error: {type(e).__name__}: {e}", exc_info=True)
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=1.0)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                except Exception as proc_err:
+                    logging.debug(f"[PY][Session] Failed to terminate process on launch failure: {proc_err}")
+                self.session.process = None
+            if self.session.ipc_manager is not None:
+                try:
+                    self.session.ipc_manager.close()
+                except Exception as ipc_err:
+                    logging.debug(f"[PY][Session] Failed to close IPC manager on launch failure: {ipc_err}")
+                self.session.ipc_manager = None
+            if handshake_path and os.path.exists(handshake_path):
+                try:
+                    os.remove(handshake_path)
+                except OSError as hs_err:
+                    logging.debug(f"[PY][Session] Failed to remove handshake file on launch failure: {hs_err}")
+            self.session.handshake_path = None
+            self.session.ipc_path = None
+            self.session.pid = None
+            self.session.is_alive = False
             return {"success": False, "error": f"Error launching mpv: {str(e)}"}
 
     def _start_exit_watcher(self, process, folder_id):
@@ -453,6 +515,7 @@ class LauncherService:
         # 2. Try graceful exit via IPC
         if ipc_manager and ipc_manager.is_connected():
             try:
+                ipc_manager.send({"command": ["script-message", "manual_quit_initiated"]}, timeout=0.5, expect_response=False)
                 ipc_manager.send({"command": ["quit"]}, timeout=0.5)
                 time.sleep(0.1) # Give it a moment to react
             except Exception as e:
@@ -512,11 +575,11 @@ class LauncherService:
                 logging.debug(f"Error shutting down enricher executor: {e}")
 
         if was_killed:
-            self.session.clear()
+            self.session.clear(mpv_return_code=0)
             return {"success": True, "message": "MPV session closed."}
         else:
             # Even if we couldn't verify death, we clear our state if PID is gone
             if not ipc_utils.is_pid_running(pid):
-                self.session.clear()
+                self.session.clear(mpv_return_code=0)
                 return {"success": True, "message": "MPV session cleared (already dead)."}
             return {"success": False, "error": "Failed to close MPV session."}

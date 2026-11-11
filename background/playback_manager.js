@@ -17,6 +17,12 @@ export class PlaybackSession {
 		this.pendingClear = null; // { folderId, playedIds, sessionIds, scope, titles, isQuitting }
 	}
 
+	clearPlaylist() {
+		this.queue = [];
+		this.currentPlayingItem = null;
+		this.isProcessingQueue = false;
+	}
+
 	/**
 	 * Sends a single URL item to the native host for playback.
 	 */

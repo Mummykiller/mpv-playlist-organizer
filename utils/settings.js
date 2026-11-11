@@ -838,6 +838,8 @@ export class OptionsManager {
 			"watch",
 			"online",
 			"free",
+			"episode",
+			"season",
 			"full",
 			"hd",
 			"eng sub",
@@ -1227,7 +1229,7 @@ export class OptionsManager {
 			copyDiagBtn.addEventListener("click", async () => {
 				if (copyDiagBtn.disabled) return;
 				copyDiagBtn.disabled = true;
-				const originalText = copyDiagBtn.textContent;
+				const originalHtml = copyDiagBtn.innerHTML;
 				copyDiagBtn.textContent = "Generating Report...";
 
 				this.showStatus("Collecting system diagnostics...");
@@ -1248,7 +1250,7 @@ export class OptionsManager {
 					this.showStatus("Error: " + e.message, true);
 				} finally {
 					copyDiagBtn.disabled = false;
-					copyDiagBtn.textContent = originalText;
+					copyDiagBtn.innerHTML = originalHtml;
 				}
 			});
 		}

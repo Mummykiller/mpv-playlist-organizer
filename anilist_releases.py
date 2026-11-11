@@ -49,8 +49,8 @@ def get_today_airing_anime(start_timestamp, end_timestamp, page=1, per_page=50):
     """
 
     ping_query = """
-    query AiringSchedule($airingAt_greater: Int, $airingAt_lesser: Int) {
-      Page(page: 1, perPage: 50) {
+    query AiringSchedule($page: Int, $perPage: Int, $airingAt_greater: Int, $airingAt_lesser: Int) {
+      Page(page: $page, perPage: $perPage) {
         pageInfo {
           hasNextPage
         }
@@ -62,7 +62,7 @@ def get_today_airing_anime(start_timestamp, end_timestamp, page=1, per_page=50):
     }
     """
 
-    query = ping_query if "ping" in sys.argv else full_query
+    query = ping_query if ("--ping" in sys.argv or "ping" in sys.argv) else full_query
     variables = {
         'page': page,
         'perPage': per_page,
@@ -220,7 +220,7 @@ def main():
             'title': title,
             'episode': episode,
             'airing_at': local_airing_time,
-            'cover_image': media.get('coverImage', {}).get('large', '')
+            'cover_image': (media.get('coverImage') or {}).get('large', '')
         })
 
     # Find the timestamp of the next episode that hasn't aired yet.

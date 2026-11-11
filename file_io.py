@@ -117,7 +117,28 @@ class FileLock:
                 self.is_file_locked = True
                 FileLock._held_locks.counters[self.lock_key] = 1
                 return self
-            except OSError:
+            except OSError as err:
+                # If lock directory doesn't exist, try creating it
+                lock_dir = os.path.dirname(self.lockfile)
+                if lock_dir and not os.path.exists(lock_dir):
+                    try:
+                        os.makedirs(lock_dir, exist_ok=True)
+                        continue
+                    except OSError:
+                        # Cannot create lock directory (e.g. read-only filesystem or mock environment).
+                        # In this case, degrade gracefully to in-memory threading lock.
+                        logging.warning(f"[PY][IO] Lock directory {lock_dir} cannot be created: {err}. Falling back to thread lock.")
+                        self.is_file_locked = False
+                        FileLock._held_locks.counters[self.lock_key] = 1
+                        return self
+
+                if getattr(err, 'errno', None) in (30, 13) and not os.path.exists(self.lockfile):
+                    # Read-only filesystem (EROFS = 30) or Permission denied (EACCES = 13)
+                    logging.warning(f"[PY][IO] Filesystem for {self.lockfile} is not writable: {err}. Falling back to thread lock.")
+                    self.is_file_locked = False
+                    FileLock._held_locks.counters[self.lock_key] = 1
+                    return self
+
                 # Lock file exists. Check if it is stale.
                 try:
                     if os.path.exists(self.lockfile):
@@ -188,14 +209,24 @@ def get_user_data_dir():
     app_name = "MPVPlaylistOrganizer"
     system = platform.system()
     if system == "Windows":
-        return os.path.join(os.environ.get('APPDATA', os.path.expanduser('~\\AppData\\Roaming')), app_name)
+        base = os.environ.get('APPDATA', os.path.expanduser('~\\AppData\\Roaming'))
     elif system == "Darwin": # macOS
-        return os.path.join(os.path.expanduser('~/Library/Application Support'), app_name)
+        base = os.path.expanduser('~/Library/Application Support')
     else: # Linux and other Unix-like systems
-        xdg_data_home = os.getenv('XDG_DATA_HOME')
-        if xdg_data_home:
-            return os.path.join(xdg_data_home, app_name)
-        return os.path.join(os.path.expanduser('~/.local/share'), app_name)
+        base = os.getenv('XDG_DATA_HOME') or os.path.expanduser('~/.local/share')
+
+    target = os.path.join(base, app_name)
+    try:
+        os.makedirs(target, exist_ok=True)
+        return target
+    except OSError:
+        import tempfile
+        fallback = os.path.join(tempfile.gettempdir(), app_name)
+        try:
+            os.makedirs(fallback, exist_ok=True)
+            return fallback
+        except OSError:
+            return target
 
 # --- Path Definitions & Configuration ---
 
@@ -323,9 +354,10 @@ def migrate_to_shards():
             }
             
             # Shard gets the content
-            shard_path = os.path.join(PLAYLISTS_DIR, f"{folder_id}.json")
-            _atomic_json_dump({"playlist": playlist}, shard_path)
-            logging.info(f"[PY][IO] Created shard for folder: {folder_id}")
+            shard_path = _get_safe_shard_path(folder_id)
+            if shard_path:
+                _atomic_json_dump({"playlist": playlist}, shard_path)
+                logging.info(f"[PY][IO] Created shard for folder: {folder_id}")
 
         # Save the new index
         if _atomic_json_dump(index_data, INDEX_FILE):
@@ -335,6 +367,23 @@ def migrate_to_shards():
                 os.rename(FOLDERS_FILE, f"{FOLDERS_FILE}.migrated")
             except OSError as e:
                 logging.warning(f"[PY][IO] Failed to rename migrated folders file {FOLDERS_FILE}: {e}")
+
+def _get_safe_shard_path(folder_id):
+    """Validates and sanitizes folder_id so shard paths never escape PLAYLISTS_DIR."""
+    if not folder_id or not isinstance(folder_id, str):
+        return None
+    clean_id = folder_id
+    if "/" in clean_id or "\\" in clean_id or ".." in clean_id or clean_id in (".", ".."):
+        clean_id = sanitize_folder_name(clean_id).replace("..", "").strip(". ")
+    if not clean_id:
+        return None
+    playlists_real = os.path.realpath(PLAYLISTS_DIR)
+    shard_path = os.path.join(PLAYLISTS_DIR, f"{clean_id}.json")
+    shard_real = os.path.realpath(shard_path)
+    if os.path.commonpath([playlists_real, shard_real]) != playlists_real or os.path.dirname(shard_real) != playlists_real:
+        logging.warning(f"[PY][IO] Security: Blocked shard path outside PLAYLISTS_DIR: {folder_id}")
+        return None
+    return shard_path
 
 def get_index():
     """Loads the folder index (metadata only)."""
@@ -357,8 +406,8 @@ def get_playlist_shard(folder_id):
     """Loads a specific playlist shard (Lazy Loading)."""
     # Note: caller should ideally pass canonical ID, but we normalize here for safety
     canonical_id = _get_canonical_folder_id(folder_id)
-    shard_path = os.path.join(PLAYLISTS_DIR, f"{canonical_id}.json")
-    if not os.path.exists(shard_path):
+    shard_path = _get_safe_shard_path(canonical_id)
+    if not shard_path or not os.path.exists(shard_path):
         return []
     
     with FileLock(shard_path):
@@ -369,7 +418,9 @@ def save_playlist_shard(folder_id, playlist, update_index=True):
     """Saves a specific playlist shard and optionally updates the index count."""
     index = get_index()
     canonical_id = _get_canonical_folder_id(folder_id, index)
-    shard_path = os.path.join(PLAYLISTS_DIR, f"{canonical_id}.json")
+    shard_path = _get_safe_shard_path(canonical_id)
+    if not shard_path:
+        return False
     
     # 1. Save the Shard
     with FileLock(shard_path):
@@ -427,16 +478,26 @@ def _merge_playlists(existing_playlist, new_playlist):
     
     return merged_playlist
 
-def save_library_batch(folders_to_save):
+def save_library_batch(folders_to_save, is_incremental=False):
     """
     Saves multiple folders (shards + index) atomically with merge support.
     folders_to_save: Dict of { folder_id: { playlist, metadata } }
     """
+    if not isinstance(folders_to_save, dict):
+        return False
+
     with FileLock(INDEX_FILE):
         index = _safe_json_load(INDEX_FILE)
+        kept_canonical_ids = set()
         
         for folder_id, content in folders_to_save.items():
+            if not isinstance(content, dict):
+                continue
             canonical_id = _get_canonical_folder_id(folder_id, index)
+            shard_path = _get_safe_shard_path(canonical_id)
+            if not shard_path:
+                continue
+            kept_canonical_ids.add(canonical_id)
             new_playlist = content.get("playlist", [])
             
             # 1. Load existing for merge
@@ -444,7 +505,6 @@ def save_library_batch(folders_to_save):
             merged_playlist = _merge_playlists(existing_playlist, new_playlist)
             
             # 2. Save Shard
-            shard_path = os.path.join(PLAYLISTS_DIR, f"{canonical_id}.json")
             with FileLock(shard_path):
                 _atomic_json_dump({"playlist": merged_playlist}, shard_path)
             
@@ -455,6 +515,38 @@ def save_library_batch(folders_to_save):
                 "item_count": len(merged_playlist)
             }
         
+        if not is_incremental:
+            removed_ids = [fid for fid in list(index.keys()) if fid not in kept_canonical_ids]
+            for fid in removed_ids:
+                del index[fid]
+                orphan_shard = _get_safe_shard_path(fid)
+                if orphan_shard:
+                    for path_to_clean in (orphan_shard, f"{orphan_shard}.bak", f"{orphan_shard}.lock"):
+                        if os.path.exists(path_to_clean):
+                            try:
+                                os.remove(path_to_clean)
+                            except OSError as e:
+                                logging.debug(f"[PY][IO] Could not remove orphaned shard file {path_to_clean}: {e}")
+
+            if os.path.isdir(PLAYLISTS_DIR):
+                valid_filenames = {
+                    os.path.basename(p)
+                    for p in (_get_safe_shard_path(fid) for fid in kept_canonical_ids)
+                    if p
+                }
+                try:
+                    for fname in os.listdir(PLAYLISTS_DIR):
+                        if fname.endswith(".json") and fname not in valid_filenames:
+                            orphan_path = os.path.join(PLAYLISTS_DIR, fname)
+                            for p_clean in (orphan_path, f"{orphan_path}.bak", f"{orphan_path}.lock"):
+                                if os.path.exists(p_clean):
+                                    try:
+                                        os.remove(p_clean)
+                                    except OSError as e:
+                                        logging.debug(f"[PY][IO] Could not remove untracked shard {p_clean}: {e}")
+                except OSError as e:
+                    logging.debug(f"[PY][IO] Error scanning PLAYLISTS_DIR for orphans: {e}")
+
         # Finalize Index
         return _atomic_json_dump(index, INDEX_FILE)
 
@@ -462,7 +554,7 @@ def save_library_batch(folders_to_save):
 
 def _atomic_json_dump(data, filepath):
     """Writes JSON data to a file atomically using a .tmp file and os.replace."""
-    tmp_file = f"{filepath}.tmp"
+    tmp_file = f"{filepath}.{os.getpid()}.{threading.get_ident()}.tmp"
     bak_file = f"{filepath}.bak"
     
     try:
@@ -564,9 +656,9 @@ def get_mpv_executable():
 
     return mpv_default_name
 
-def sanitize_string(s, is_filename=False):
+def sanitize_string(s, is_filename=False, is_url=False):
     """Sanitizes a string. preserves URL integrity while preventing shell/M3U issues."""
-    return security.sanitize_string(s, is_filename)
+    return security.sanitize_string(s, is_filename=is_filename, is_url=is_url)
 
 def sanitize_folder_name(name):
     """Specific strict sanitization for folder names used in filesystem paths."""
@@ -795,7 +887,8 @@ def get_settings():
             {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
         ],
         "live_removal": True,
-        "enable_per_item_mark_watched": True
+        "enable_per_item_mark_watched": True,
+        "clear_on_item_finish": False
     }
 
     with FileLock(CONFIG_FILE):

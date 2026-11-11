@@ -35,6 +35,8 @@ export const handleGetAllFolderIds = createHandler(async ({ data }) => {
 		folderIds: data.folderOrder || Object.keys(data.folders),
 		lastUsedFolderId: data.settings.lastUsedFolderId,
 	};
+}, {
+	manualPersistence: true,
 });
 
 export const handleRemoveFolder = createHandler(async ({ request, data }) => {
@@ -49,6 +51,9 @@ export const handleRemoveFolder = createHandler(async ({ request, data }) => {
 	delete data.folders[folderId];
 	if (data.folderOrder) {
 		data.folderOrder = data.folderOrder.filter((id) => id !== folderId);
+	}
+	if (chrome.storage?.local?.remove) {
+		await chrome.storage.local.remove(`mpv_folder_data_${folderId}`);
 	}
 
 	// Ensure at least one folder exists
@@ -92,6 +97,9 @@ export const handleRenameFolder = createHandler(async ({ request, data }) => {
 
 	data.folders[newId] = data.folders[oldId];
 	delete data.folders[oldId];
+	if (chrome.storage?.local?.remove) {
+		await chrome.storage.local.remove(`mpv_folder_data_${oldId}`);
+	}
 
 	if (data.folderOrder) {
 		const index = data.folderOrder.indexOf(oldId);

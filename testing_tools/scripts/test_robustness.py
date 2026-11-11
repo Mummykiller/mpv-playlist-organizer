@@ -137,7 +137,14 @@ class TestRobustness(BaseTestCase):
         ui_only_keys = {
             "minimized", "mode", "log_visible", "pinned", "position", "top", "left", "right", "bottom",
             "anilist_panel_visible", "lock_anilist_panel", "force_panel_attached", "anilist_attach_on_open",
-            "minimized_stub_position", "dependency_status", "mpv", "ytdlp", "ffmpeg", "node"
+            "minimized_stub_position", "dependency_status", "mpv", "ytdlp", "ffmpeg", "node",
+            "launch_geometry", "custom_geometry_width", "custom_geometry_height", "custom_mpv_flags",
+            "show_play_new_button", "duplicate_url_behavior", "sync_global_removals", "sync_global_removals_live",
+            "auto_append_on_add", "auto_add_inactivity_timeout", "auto_add_auto_off", "confirm_remove_folder",
+            "confirm_clear_playlist", "confirm_close_mpv", "confirm_play_new", "confirm_folder_switch",
+            "clear_on_completion", "clear_scope", "enable_dblclick_copy", "anilist_image_height", "popup_width",
+            "show_watched_status_gui", "show_minimized_stub", "one_click_add", "restricted_domains",
+            "kb_add_playlist", "kb_play_playlist", "kb_toggle_controller", "kb_switch_playlist", "kb_open_popup"
         }
 
         missing_in_python = [

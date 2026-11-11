@@ -21,10 +21,10 @@ class BaseHandler:
             task_manager=getattr(ctx, 'task_manager', None)
         )
 
-        # Restore session token
-        restored_data = self.mpv_session.restore()
-        if restored_data and restored_data.get("token"):
-            self.server_token = restored_data["token"]
+        # Initialize session token without prematurely calling restore()
+        existing_token = getattr(self.mpv_session, 'current_token', None)
+        if isinstance(existing_token, str) and existing_token:
+            self.server_token = existing_token
             logging.info("[PY] BaseHandler: Restored existing session token.")
         else:
             self.server_token = uuid.uuid4().hex

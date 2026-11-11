@@ -174,10 +174,8 @@
             const input = document.createElement("input");
             input.type = "checkbox";
             input.className = "item-watched-checkbox";
-            // Check both flags - if either is true, it's watched.
-            const isWatched = item.markedAsWatched || item.watched;
-            input.checked = !!isWatched;
-            input.title = isWatched ? "Already marked as watched" : "Click to mark as watched on YouTube";
+            input.checked = !!item.markedAsWatched;
+            input.title = input.checked ? "Already marked as watched" : "Click to mark as watched on YouTube";
             
             input.onclick = (e) => e.stopPropagation();
             input.onchange = (e) => {
@@ -190,13 +188,25 @@
         _createRemoveButton(index, id) {
             const btn = document.createElement("button");
             btn.className = "btn-remove-item";
+            btn.dataset.index = index;
             btn.textContent = "×";
             btn.title = "Remove Item";
             btn.onclick = (e) => {
                 e.stopPropagation();
                 const listItem = btn.closest(".list-item");
-                if (listItem) listItem.classList.add("removing");
-                if (this.callbacks.onRemove) this.callbacks.onRemove(index, id);
+                let currentIndex = index;
+                if (listItem) {
+                    listItem.classList.add("removing");
+                    const items = this.container ? [...this.container.querySelectorAll(".list-item")] : [];
+                    const domIndex = items.indexOf(listItem);
+                    if (domIndex !== -1) {
+                        currentIndex = domIndex;
+                    } else if (listItem.dataset.index !== undefined) {
+                        const parsed = parseInt(listItem.dataset.index, 10);
+                        if (!isNaN(parsed)) currentIndex = parsed;
+                    }
+                }
+                if (this.callbacks.onRemove) this.callbacks.onRemove(currentIndex, id);
             };
             return btn;
         }
@@ -212,7 +222,10 @@
          * Delta update for a single item DOM node.
          */
         updateItemDelta(itemId, delta) {
-            const itemDiv = this.container.querySelector(`[data-id="${itemId}"]`);
+            const safeId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
+                ? CSS.escape(String(itemId ?? ""))
+                : String(itemId ?? "").replace(/["\\]/g, "\\$&");
+            const itemDiv = this.container.querySelector(`[data-id="${safeId}"]`);
             if (!itemDiv) return;
 
             const dom = MPV.domUtils || (typeof window !== "undefined" && window.MPV_INTERNAL?.domUtils);

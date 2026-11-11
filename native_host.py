@@ -181,7 +181,7 @@ try:
         """Encodes and sends a message to stdout."""
         try:
             with print_lock:
-                # Recursive Path Masking
+                # Mask paths only in log/diagnostic fields to avoid corrupting settings paths or file URLs
                 if isinstance(message_content, dict):
                     def mask_recursive(obj):
                         if isinstance(obj, str):
@@ -192,7 +192,9 @@ try:
                             return {k: mask_recursive(v) for k, v in obj.items()}
                         return obj
                     
-                    message_content = mask_recursive(message_content)
+                    message_content = dict(message_content)
+                    if "log" in message_content:
+                        message_content["log"] = mask_recursive(message_content["log"])
 
                 translated_content = native_link.responder._translate_keys(message_content)
                 encoded_content = json.dumps(translated_content).encode('utf-8')
@@ -317,15 +319,24 @@ try:
                 "status": "online"
             })
 
+        restore_lock = threading.Lock()
+        _restore_state = {"done_by_handler": False, "stale_result": None}
+
         @HandlerRegistry.command('restore_session')
         def handle_restore_session(request: native_link.BaseRequest):
-            res = mpv_session.restore()
+            with restore_lock:
+                _restore_state["done_by_handler"] = True
+                if _restore_state["stale_result"] is not None:
+                    res = _restore_state["stale_result"]
+                    _restore_state["stale_result"] = None
+                else:
+                    res = mpv_session.restore()
             current_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
             return native_link.success(res, action="session_restored", log_level=current_level)
 
         @logger.catch(ui_alert=True)
         def task_wrapper(message):
-            req_id = message.get('request_id')
+            req_id = message.get('request_id') if isinstance(message, dict) else None
             token = logger.request_id_var.set(req_id)
 
             try:
@@ -356,14 +367,21 @@ try:
                         response['request_id'] = req_id
                     send_message(response)
             except Exception as e:
-                diagnostic_collector.add_error(message.get("action", "TASK"), e)
+                diagnostic_collector.add_error(message.get("action", "TASK") if isinstance(message, dict) else "TASK", e)
+                if req_id:
+                    send_message(native_link.failure(str(e), request_id=req_id))
                 raise
             finally:
                 logger.request_id_var.reset(token)
 
         def async_restore():
             try:
-                restore_data = mpv_session.restore()
+                with restore_lock:
+                    if _restore_state["done_by_handler"]:
+                        return
+                    restore_data = mpv_session.restore()
+                    if restore_data and restore_data.get("was_stale"):
+                        _restore_state["stale_result"] = restore_data
                 if restore_data:
                     logging.info(f"[PY][MAIN] Automatic restoration successful for folder '{mpv_session.owner_folder_id}'.")
                     time.sleep(0.5)

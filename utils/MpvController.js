@@ -54,37 +54,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.pageScraper = new MPV.PageScraper();
 
 			// Unified Playback State Subscription (Must happen AFTER UI initialization)
-			this.playbackUnsubscribe = MPV.playbackStateManager.subscribe((pbState) => {
-				const currentFolderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
-				const isCurrentFolder = pbState.folderId && currentFolderId && pbState.folderId.toLowerCase() === currentFolderId.toLowerCase();
-
-				// Map the playback status to internal ContentState
-				this.state.update({
-					isFolderActive: isCurrentFolder && (pbState.status !== "stopped" || pbState.needsAppend),
-					lastPlayedId: isCurrentFolder ? pbState.lastPlayedId : this.state.state.lastPlayedId,
-					isClosing: isCurrentFolder ? pbState.isClosing : false
-				}, true);
-
-				// Only update UI if we are looking at the relevant folder
-				if (isCurrentFolder) {
-					this.setPlaybackActive(
-						pbState.status !== "stopped", 
-						pbState.needsAppend, 
-						pbState.status === "paused"
-					);
-					this.setPlaybackLoading(pbState.status === "loading");
-					this.setPlaybackClosing(pbState.isClosing);
-					
-					if (pbState.lastPlayedId) {
-						this.playlistUI?.syncActiveHighlight(pbState.lastPlayedId, pbState.status !== "stopped");
-					}
-				} else {
-					this.setPlaybackActive(false, false, false);
-					this.setPlaybackLoading(false);
-					this.setPlaybackClosing(false);
-					this.playlistUI?.syncActiveHighlight(null, false);
-				}
-			});
+			this.playbackUnsubscribe = null;
+			this._storageListener = null;
+			this._taskListener = null;
+			this.focusListener = null;
+			this.visibilityChangeListener = null;
+			this.messageListener = null;
+			this._initPlaybackSubscription();
 
 			// --- Message Dispatcher ---
 			this.actionMap = {
@@ -272,15 +248,70 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.handleMouseDown = this.handleMouseDown.bind(this);
 		}
 
+		_initPlaybackSubscription() {
+			if (this.playbackUnsubscribe) {
+				this.playbackUnsubscribe();
+				this.playbackUnsubscribe = null;
+			}
+			this.playbackUnsubscribe = MPV.playbackStateManager.subscribe((pbState) => {
+				const currentFolderId = this.ui.shadowRoot?.getElementById("folder-select")?.value;
+				const isCurrentFolder = pbState.folderId && currentFolderId && pbState.folderId.toLowerCase() === currentFolderId.toLowerCase();
+
+				// Map the playback status to internal ContentState
+				this.state.update({
+					isFolderActive: isCurrentFolder && (pbState.status !== "stopped" || pbState.needsAppend),
+					lastPlayedId: isCurrentFolder ? pbState.lastPlayedId : this.state.state.lastPlayedId,
+					isClosing: isCurrentFolder ? pbState.isClosing : false
+				}, true);
+
+				// Only update UI if we are looking at the relevant folder
+				if (isCurrentFolder) {
+					this.setPlaybackActive(
+						pbState.status !== "stopped", 
+						pbState.needsAppend, 
+						pbState.status === "paused"
+					);
+					this.setPlaybackLoading(pbState.status === "loading");
+					this.setPlaybackClosing(pbState.isClosing);
+					
+					if (pbState.lastPlayedId) {
+						this.playlistUI?.syncActiveHighlight(pbState.lastPlayedId, pbState.status !== "stopped");
+					}
+				} else {
+					this.setPlaybackActive(false, false, false);
+					this.setPlaybackLoading(false);
+					this.setPlaybackClosing(false);
+					this.playlistUI?.syncActiveHighlight(null, false);
+				}
+			});
+		}
+
 		_initStorageObservation() {
-			chrome.storage.onChanged.addListener((changes, area) => {
+			if (this._storageListener) {
+				chrome.storage.onChanged.removeListener(this._storageListener);
+			}
+			this._storageListener = (changes, area) => {
 				if (area !== "local") return;
 
 				// 1. Settings Channel: Sync Layout & UI Prefs
 				if (changes.mpv_settings) {
 					const newSettings = changes.mpv_settings.newValue;
-					if (newSettings) {
-						this.applyPreferences(newSettings.uiPreferences?.global || {});
+					if (newSettings && newSettings.uiPreferences) {
+						const domain = window.location.hostname;
+						const globalPrefs = newSettings.uiPreferences.global || {};
+						const domainPrefs = (domain && newSettings.uiPreferences.domains?.[domain]) || {};
+						const DOMAIN_KEYS = MPV.DOMAIN_SPECIFIC_KEYS || [];
+
+						// Filter out domain-specific keys from globalPrefs
+						const safeGlobalPrefs = {};
+						for (const [key, value] of Object.entries(globalPrefs)) {
+							if (!DOMAIN_KEYS.includes(key)) {
+								safeGlobalPrefs[key] = value;
+							}
+						}
+
+						// Merge safe global prefs with this domain's specific overrides
+						this.applyPreferences({ ...safeGlobalPrefs, ...domainPrefs });
 					}
 				}
 
@@ -320,7 +351,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						}
 					}
 				}
-			});
+			};
+			chrome.storage.onChanged.addListener(this._storageListener);
 		}
 
 		_getPlaylistFingerprint(playlist) {
@@ -333,11 +365,15 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		_initTaskObservation() {
-			chrome.storage.onChanged.addListener((changes, area) => {
+			if (this._taskListener) {
+				chrome.storage.onChanged.removeListener(this._taskListener);
+			}
+			this._taskListener = (changes, area) => {
 				if (area === "local" && changes.mpv_active_tasks) {
 					this._updateTaskUI(changes.mpv_active_tasks.newValue);
 				}
-			});
+			};
+			chrome.storage.onChanged.addListener(this._taskListener);
 
 			// Initial check
 			chrome.storage.local.get("mpv_active_tasks", (data) => {
@@ -391,6 +427,30 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		async init() {
+			// Strict Invariant: Never render or mount controller in an iframe
+			let isTopFrame = false;
+			try {
+				isTopFrame = window.top === window.self;
+			} catch (e) {
+				isTopFrame = false;
+			}
+			if (!isTopFrame) return;
+
+			// Revive state & modules if re-initializing after teardown()
+			this.isTearingDown = false;
+			this._lastUpdateHash = "";
+			if (this.bridge) this.bridge.isDestroyed = false;
+			if (this.state) this.state.isDestroyed = false;
+			if (this.nav) {
+				if (this.nav.observer || this.nav.pollInterval) {
+					this.nav.destroy();
+				}
+				this.nav.isDestroyed = false;
+			}
+			if (!this._storageListener) this._initStorageObservation();
+			if (!this._taskListener) this._initTaskObservation();
+			if (!this.playbackUnsubscribe) this._initPlaybackSubscription();
+
 			const initialPrefs = await this.bridge.send("get_ui_preferences");
 			const restrictedDomains =
 				initialPrefs?.preferences?.restrictedDomains || [];
@@ -403,7 +463,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			if (isRestricted) return;
 
+			window.mpvControllerInitialized = true;
+
 			// Setup message listener
+			if (this.messageListener) {
+				chrome.runtime.onMessage.removeListener(this.messageListener);
+			}
 			this.messageListener = (req, sender, send) =>
 				this.handleMessage(req, sender, send);
 			chrome.runtime.onMessage.addListener(this.messageListener);
@@ -442,11 +507,19 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// 6. Global Event Listeners
 			window.addEventListener("mousedown", this.handleMouseDown, true);
-			window.addEventListener("focus", this._safeWrap(() => {
+			if (this.focusListener) {
+				window.removeEventListener("focus", this.focusListener);
+			}
+			this.focusListener = this._safeWrap(() => {
 				// Proactively refresh status when tab gains focus
 				this.refreshPlaylist();
-			}));
-			document.addEventListener("visibilitychange", this._safeWrap(() => {
+			});
+			window.addEventListener("focus", this.focusListener);
+
+			if (this.visibilityChangeListener) {
+				document.removeEventListener("visibilitychange", this.visibilityChangeListener);
+			}
+			this.visibilityChangeListener = this._safeWrap(() => {
 				if (document.visibilityState === "visible") {
 					if (this._isPlaylistDirty) {
 						this.refreshPlaylist();
@@ -454,7 +527,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					}
 					MPV.playbackStateManager.requestSync();
 				}
-			}));
+			});
+			document.addEventListener("visibilitychange", this.visibilityChangeListener);
 		}
 
 		handleMouseDown(event) {
@@ -496,13 +570,37 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.playbackUnsubscribe();
 				this.playbackUnsubscribe = null;
 			}
+			if (this._storageListener) {
+				chrome.storage.onChanged.removeListener(this._storageListener);
+				this._storageListener = null;
+			}
+			if (this._taskListener) {
+				chrome.storage.onChanged.removeListener(this._taskListener);
+				this._taskListener = null;
+			}
 			this.bridge.destroy();
 			this.state.destroy();
 			this.nav.destroy();
-			if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
-			if (this.visualWatchdogInterval) clearInterval(this.visualWatchdogInterval);
-			if (this.resizeListener)
+			if (this.heartbeatInterval) {
+				clearInterval(this.heartbeatInterval);
+				this.heartbeatInterval = null;
+			}
+			if (this.visualWatchdogInterval) {
+				clearInterval(this.visualWatchdogInterval);
+				this.visualWatchdogInterval = null;
+			}
+			if (this.resizeListener) {
 				window.removeEventListener("resize", this.resizeListener);
+				this.resizeListener = null;
+			}
+			if (this.focusListener) {
+				window.removeEventListener("focus", this.focusListener);
+				this.focusListener = null;
+			}
+			if (this.visibilityChangeListener) {
+				document.removeEventListener("visibilitychange", this.visibilityChangeListener);
+				this.visibilityChangeListener = null;
+			}
 			document.removeEventListener(
 				"fullscreenchange",
 				this.handleFullscreenChange,
@@ -514,8 +612,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (this.draggableController) this.draggableController.destroy();
 			if (this.draggableMinimized) this.draggableMinimized.destroy();
 			window.mpvControllerInitialized = false;
-			if (this.messageListener)
+			if (this.messageListener) {
 				chrome.runtime.onMessage.removeListener(this.messageListener);
+				this.messageListener = null;
+			}
 		}
 
 		// --- State & UI Persistence ---
@@ -905,8 +1005,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		_handleDomMutation() {
 			if (!document.getElementById("m3u8-controller-host")) {
-				this.teardown();
-				setTimeout(() => this.init(), 100);
+				if (!this.isTearingDown) {
+					this.teardown();
+					setTimeout(() => this.init(), 100);
+				}
 				return;
 			}
 			this._reportCurrentUrl();
@@ -1691,6 +1793,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			minRoot
 				?.getElementById("m3u8-minimized-stub")
 				?.addEventListener("click", async (e) => {
+					if (e.button !== 0 && e.button !== undefined) return;
+
 					const stub = e.currentTarget;
 					const isStreamPresent = stub?.classList.contains("stream-present");
 					const isAlreadyInPlaylist =
@@ -1948,7 +2052,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				second: "2-digit",
 			});
 			const timeSpan = document.createElement("span");
-			timeSpan.className = "log-time";
+			timeSpan.className = "log-timestamp";
 			timeSpan.textContent = `[${timestamp}]`;
 			const textSpan = document.createElement("span");
 			textSpan.className = "log-text";
@@ -2181,12 +2285,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			const isNativeFullscreen = !!document.fullscreenElement;
 			
-			// Detect "Fake" Fullscreen (Theater modes or window-sized elements)
-			// We compare outer dimensions to available screen dimensions to account for OS-level 
-			// docks/panels (like on Linux) that might occupy space.
+			// Detect true browser/F11 fullscreen without falsely matching maximized windows
 			const isFakeFullscreen = 
-				(window.outerWidth >= window.screen.availWidth - 20 && 
-				 window.outerHeight >= window.screen.availHeight - 20) &&
+				window.screen.width > 0 &&
+				window.screen.height > 0 &&
+				window.innerWidth === window.screen.width && 
+				window.innerHeight === window.screen.height &&
 				!isNativeFullscreen;
 
 			const shouldHide = isNativeFullscreen || isFakeFullscreen;

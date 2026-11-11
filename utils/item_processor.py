@@ -143,15 +143,19 @@ class ItemProcessor:
             return [{'url': url_items_or_m3u}], True
 
         # 2. File Path Check
-        if os.path.exists(url_items_or_m3u):
-            with open(url_items_or_m3u, 'r', encoding='utf-8') as f:
-                return parse_m3u(f.read()), True
+        if url_items_or_m3u.lower().endswith(('.m3u', '.m3u8')) and os.path.exists(url_items_or_m3u):
+            if self.file_io.validate_safe_path(url_items_or_m3u):
+                with open(url_items_or_m3u, 'r', encoding='utf-8') as f:
+                    return parse_m3u(f.read()), True
+            else:
+                logging.error(f"Security: Blocked unsafe local M3U path: {url_items_or_m3u}")
+                return [], False
 
         # 3. URL Check
         if urlparse(url_items_or_m3u).scheme in ['http', 'https']:
             if not is_safe_url(url_items_or_m3u):
                 logging.error(f"SSRF Protection: Blocked access to {url_items_or_m3u}")
-                return None, False
+                return [], False
             
             m3u_content = self._fetch_remote_m3u(url_items_or_m3u, headers)
             if m3u_content:

@@ -8,6 +8,7 @@ import sys
 import json
 
 from utils.cli_base import BaseCLI, setup_script_env
+from utils.ipc_utils import is_pid_running
 
 setup_script_env()
 
@@ -125,8 +126,9 @@ def suicide_watch():
     parent_pid = os.getppid()
     while True:
         try:
-            # os.kill(pid, 0) checks if the process is alive
-            os.kill(parent_pid, 0)
+            if not is_pid_running(parent_pid):
+                logging.warning("Parent process died. Shutting down playlist server.")
+                os._exit(0)
         except OSError:
             logging.warning("Parent process died. Shutting down playlist server.")
             os._exit(0)

@@ -19,6 +19,7 @@ request_id_var: ContextVar[Optional[str]] = ContextVar("request_id", default=Non
 _log_queue = queue.Queue(-1)
 _listener: Optional[logging.handlers.QueueListener] = None
 _is_initialized = False
+_init_lock = threading.RLock()
 
 class ContextQueueHandler(logging.handlers.QueueHandler):
     """
@@ -64,110 +65,117 @@ def initialize(data_dir: str, script_dir: str = None, level=logging.DEBUG):
     Initializes the non-blocking logging system.
     """
     global _listener, _is_initialized
-    if _is_initialized:
-        return
-    
-    os.makedirs(data_dir, exist_ok=True)
-    
-    main_log_file = os.path.join(data_dir, "native_host.log")
-    ipc_log_file = os.path.join(data_dir, "ipc_events.log")
-    browser_log_file = os.path.join(data_dir, "browser_errors.log")
-
-    # Ensure browser_errors.log exists immediately for easy inspection / tailing
-    if not os.path.exists(browser_log_file):
-        try:
-            with open(browser_log_file, "a", encoding="utf-8") as f:
-                pass
-        except OSError as e:
-            print(f"[LOGGER] Could not touch browser log file: {e}", file=sys.stderr)
-    
-    # 1. Main Handler (Rotating File)
-    main_handler = logging.handlers.RotatingFileHandler(
-        main_log_file, maxBytes=1024 * 1024 * 5, backupCount=2, encoding='utf-8'
-    )
-    
-    # 2. IPC Handler (Rotating File)
-    ipc_handler = logging.handlers.RotatingFileHandler(
-        ipc_log_file, maxBytes=1024 * 1024 * 5, backupCount=1, encoding='utf-8'
-    )
-
-    # 3. Dedicated Browser Error Handler (Rotating File)
-    browser_handler = logging.handlers.RotatingFileHandler(
-        browser_log_file, maxBytes=1024 * 1024 * 2, backupCount=2, encoding='utf-8'
-    )
-    
-    # 4. Security Formatter
-    formatter = SecurityFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    formatter.data_dir = data_dir
-    formatter.script_dir = script_dir
-    
-    main_handler.setFormatter(formatter)
-    ipc_handler.setFormatter(formatter)
-    browser_handler.setFormatter(formatter)
-    
-    # 5. Routing Filters
-    class IPCFilter(logging.Filter):
-        def filter(self, record):
-            return record.name == "ipc_events"
-
-    class BrowserFilter(logging.Filter):
-        def filter(self, record):
-            return record.name == "browser_errors"
-            
-    class MainFilter(logging.Filter):
-        def filter(self, record):
-            return record.name not in ("ipc_events", "browser_errors")
-            
-    ipc_handler.addFilter(IPCFilter())
-    browser_handler.addFilter(BrowserFilter())
-    main_handler.addFilter(MainFilter())
-    
-    # 6. Queue Handler (The Non-blocking Part)
-    # Use our custom handler to preserve context
-    queue_handler = ContextQueueHandler(_log_queue)
-    
-    root = logging.getLogger()
-    # Remove existing handlers
-    for h in root.handlers[:]:
-        h.close()
-        root.removeHandler(h)
+    with _init_lock:
+        if _is_initialized:
+            return
         
-    root.addHandler(queue_handler)
-    root.setLevel(level)
-    
-    # 7. Start the Listener Thread
-    # It consumes from the queue and writes to the real handlers
-    _listener = logging.handlers.QueueListener(
-        _log_queue, main_handler, ipc_handler, browser_handler, respect_handler_level=True
-    )
-    _listener.start()
-    
-    _is_initialized = True
-    logging.info(f"Logging initialized. Data Dir: {data_dir}")
+        try:
+            os.makedirs(data_dir, exist_ok=True)
+        except OSError:
+            import tempfile
+            data_dir = os.path.join(tempfile.gettempdir(), "MPVPlaylistOrganizer")
+            os.makedirs(data_dir, exist_ok=True)
+        
+        main_log_file = os.path.join(data_dir, "native_host.log")
+        ipc_log_file = os.path.join(data_dir, "ipc_events.log")
+        browser_log_file = os.path.join(data_dir, "browser_errors.log")
+
+        # Ensure browser_errors.log exists immediately for easy inspection / tailing
+        if not os.path.exists(browser_log_file):
+            try:
+                with open(browser_log_file, "a", encoding="utf-8") as f:
+                    pass
+            except OSError as e:
+                print(f"[LOGGER] Could not touch browser log file: {e}", file=sys.stderr)
+        
+        # 1. Main Handler (Rotating File)
+        main_handler = logging.handlers.RotatingFileHandler(
+            main_log_file, maxBytes=1024 * 1024 * 5, backupCount=2, encoding='utf-8'
+        )
+        
+        # 2. IPC Handler (Rotating File)
+        ipc_handler = logging.handlers.RotatingFileHandler(
+            ipc_log_file, maxBytes=1024 * 1024 * 5, backupCount=1, encoding='utf-8'
+        )
+
+        # 3. Dedicated Browser Error Handler (Rotating File)
+        browser_handler = logging.handlers.RotatingFileHandler(
+            browser_log_file, maxBytes=1024 * 1024 * 2, backupCount=2, encoding='utf-8'
+        )
+        
+        # 4. Security Formatter
+        formatter = SecurityFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        formatter.data_dir = data_dir
+        formatter.script_dir = script_dir
+        
+        main_handler.setFormatter(formatter)
+        ipc_handler.setFormatter(formatter)
+        browser_handler.setFormatter(formatter)
+        
+        # 5. Routing Filters
+        class IPCFilter(logging.Filter):
+            def filter(self, record):
+                return record.name == "ipc_events"
+
+        class BrowserFilter(logging.Filter):
+            def filter(self, record):
+                return record.name == "browser_errors"
+                
+        class MainFilter(logging.Filter):
+            def filter(self, record):
+                return record.name not in ("ipc_events", "browser_errors")
+                
+        ipc_handler.addFilter(IPCFilter())
+        browser_handler.addFilter(BrowserFilter())
+        main_handler.addFilter(MainFilter())
+        
+        # 6. Queue Handler (The Non-blocking Part)
+        # Use our custom handler to preserve context
+        queue_handler = ContextQueueHandler(_log_queue)
+        
+        root = logging.getLogger()
+        # Remove existing handlers
+        for h in root.handlers[:]:
+            h.close()
+            root.removeHandler(h)
+            
+        root.addHandler(queue_handler)
+        root.setLevel(level)
+        
+        # 7. Start the Listener Thread
+        # It consumes from the queue and writes to the real handlers
+        _listener = logging.handlers.QueueListener(
+            _log_queue, main_handler, ipc_handler, browser_handler, respect_handler_level=True
+        )
+        _listener.start()
+        
+        _is_initialized = True
+        logging.info(f"Logging initialized. Data Dir: {data_dir}")
 
 def shutdown():
     """
     Ensures all logs are flushed before exit.
     """
     global _listener, _is_initialized
-    if _listener:
-        # Stop the listener first (it will flush the queue)
-        _listener.stop()
-        
-        # CRITICAL: Manually close the handlers that were passed to the listener
-        # because QueueListener.stop() does not automatically close them.
-        for handler in _listener.handlers:
-            handler.close()
+    with _init_lock:
+        if _listener:
+            # Stop the listener first (it will flush the queue)
+            _listener.stop()
             
-        _listener = None
-    
-    # Close all handlers in the root logger
-    root = logging.getLogger()
-    for h in root.handlers[:]:
-        h.close()
-        root.removeHandler(h)
-    
-    _is_initialized = False
+            # CRITICAL: Manually close the handlers that were passed to the listener
+            # because QueueListener.stop() does not automatically close them.
+            for handler in _listener.handlers:
+                handler.close()
+                
+            _listener = None
+        
+        # Close all handlers in the root logger
+        root = logging.getLogger()
+        for h in root.handlers[:]:
+            h.close()
+            root.removeHandler(h)
+        
+        _is_initialized = False
 
 # --- Convenience API ---
 
