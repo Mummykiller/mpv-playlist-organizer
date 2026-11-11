@@ -9,6 +9,8 @@ local has_started = false
 local handshake_processed = false -- Flag to ensure handshake is only processed once
 local last_playlist_index = nil
 local last_valid_time_pos = nil
+local current_playing_path = nil
+local current_playing_id = nil
 
 -- Store initial global states
 local initial_ua = mp.get_property("user-agent") or "libmpv"
@@ -45,22 +47,38 @@ mp.observe_property("time-pos", "number", function(_, val)
     end
 end)
 
-local function save_current_position()
-    local path = mp.get_property("path")
-    if not path or path == "" then
-        last_valid_time_pos = nil
+local function save_current_position(event)
+    -- Guard: Always use captured file identity, never query mp.get_property("path")
+    -- on end-file because MPV has already advanced to the next playlist item.
+    local save_path = current_playing_path
+    local save_id = current_playing_id
+    local time = mp.get_property_number("time-pos") or last_valid_time_pos
+    
+    last_valid_time_pos = nil
+    current_playing_path = nil
+    current_playing_id = nil
+
+    if not save_path or save_path == "" then
         return
     end
-    
-    local time = mp.get_property_number("time-pos") or last_valid_time_pos
-    last_valid_time_pos = nil
-    if time and time > 5 then -- Only save if we are at least 5s in
-        local id = mp.get_property("user-data/id")
-        if id and id ~= "" then
-            session_timestamps[id] = time
+
+    local reason = event and event.reason
+    if reason == "eof" then
+        -- File reached natural completion (EOF). Reset session memory to 0 to prevent leaking end timestamp
+        if save_id and save_id ~= "" then
+            session_timestamps[save_id] = 0
         end
-        session_timestamps[path] = time
-        debug_log("Saved position: " .. tostring(time) .. " for " .. path)
+        session_timestamps[save_path] = 0
+        debug_log("File reached EOF: reset session position to 0 for " .. save_path)
+        return
+    end
+
+    if time and time > 5 then -- Only save if we are at least 5s in
+        if save_id and save_id ~= "" then
+            session_timestamps[save_id] = time
+        end
+        session_timestamps[save_path] = time
+        debug_log("Saved position: " .. tostring(time) .. " for " .. save_path)
     end
 end
 
@@ -201,6 +219,9 @@ local function apply_adaptive_settings()
         mp.set_property("start", "none")
         mp.set_property("user-data/primed-resume-time", "")
         primed_resume_time = nil -- Consume Lua global early during reset
+        last_valid_time_pos = nil
+        current_playing_path = nil
+        current_playing_id = nil
 
         -- Reset Buffering to Launch Defaults
         set_property_if_diff("demuxer-max-bytes", initial_max_bytes)
@@ -217,11 +238,12 @@ local function apply_adaptive_settings()
     local item_id = mp.get_property("user-data/id")
     local stripped_path = path:gsub("[#&]mpv_organizer_id=[^#&]+", "")
     
-    -- Strictly use ID or URL. Fallback to unmanaged_fallback_opts for unmanaged instances.
+    -- Strictly use ID or URL. Fallback to unmanaged_fallback_opts ONLY for unmanaged instances.
+    local is_unmanaged_session = (mp.get_property("user-data/is-unmanaged") == "yes")
     local opts = (item_id and id_options[item_id]) or 
                  url_options[stripped_path] or 
                  url_options[path] or 
-                 unmanaged_fallback_opts
+                 (is_unmanaged_session and unmanaged_fallback_opts or nil)
 
     if not opts then
         debug_log("No options found for path: " .. path .. " (ID: " .. tostring(item_id) .. ")")
@@ -416,6 +438,9 @@ end)
 mp.register_event("end-file", save_current_position)
 
 local function on_file_loaded()
+    -- Capture the active file identity once loading has succeeded
+    current_playing_path = mp.get_property("path")
+    current_playing_id = mp.get_property("user-data/id")
     -- Final cleanup of primed data once playback has actually started
     mp.set_property("user-data/primed-resume-time", "")
     primed_resume_time = nil
