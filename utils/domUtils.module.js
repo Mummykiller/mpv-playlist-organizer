@@ -512,6 +512,136 @@ export const domUtils = {
                 title,
                 stateKey
             };
+        },
+
+        /**
+         * Builds a shared `.list-item` DOM element for both PlaylistRenderer (popup) and PlaylistUI (content script).
+         * @param {Object} item - Playlist item ({ id, url, title, watched, markedAsWatched, currentlyPlaying }).
+         * @param {number} index - Zero-based item index.
+         * @param {Object} [options] - Rendering and callback options.
+         * @returns {HTMLDivElement}
+         */
+        createPlaylistItemElement(item, index, options = {}) {
+            const {
+                highlightEnabled = true,
+                lastPlayedId = null,
+                isActive = false,
+                showCopyButton = false,
+                showWatchedGui = true,
+                setUrlTitle = false,
+                setDatasetIndex = false,
+                checkboxBeforeTitle = false,
+                onCopy = null,
+                onWatchedToggle = null,
+                onRemove = null,
+                onDblClick = null,
+            } = options;
+
+            const div = document.createElement("div");
+            div.className = "list-item";
+
+            const isWatched = !!(item.markedAsWatched || item.watched);
+            if (isWatched) {
+                div.classList.add("item-watched");
+            }
+
+            const isCurrent = !!item.currentlyPlaying || (!!lastPlayedId && item.id === lastPlayedId);
+            if (highlightEnabled && isCurrent) {
+                div.classList.add(isActive ? "active-item" : "last-played-item");
+            }
+
+            div.draggable = true;
+            if (setUrlTitle && item.url) div.title = item.url;
+            div.dataset.id = item.id || "";
+            div.dataset.url = item.url || "";
+            div.dataset.title = item.title || "";
+            if (setDatasetIndex) div.dataset.index = index;
+
+            if (onDblClick) {
+                div.ondblclick = (e) => onDblClick(item, div, e);
+            }
+
+            if (showCopyButton) {
+                const copyBtn = document.createElement("button");
+                copyBtn.className = "btn-copy-item";
+                copyBtn.dataset.url = item.url || "";
+                copyBtn.title = "Copy URL";
+                copyBtn.innerHTML =
+                    '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+                if (onCopy) {
+                    copyBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        onCopy(item.url, e);
+                    };
+                }
+                div.appendChild(copyBtn);
+            }
+
+            const indexSpan = document.createElement("span");
+            indexSpan.className = "url-index";
+            indexSpan.textContent = `${index + 1}.`;
+            div.appendChild(indexSpan);
+
+            const urlStr = item.url || "";
+            const isYouTube = urlStr.includes("youtube.com/") || urlStr.includes("youtu.be/");
+
+            if (isWatched && !isYouTube) {
+                const check = document.createElement("span");
+                check.className = "watched-checkmark index-checkmark";
+                check.textContent = "✔";
+                div.appendChild(check);
+            }
+
+            const titleSpan = document.createElement("span");
+            titleSpan.className = "url-text";
+            this.formatTitle(titleSpan, item);
+
+            const appendWatchedControls = () => {
+                if (!showWatchedGui || !isYouTube) return;
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.className = "item-watched-checkbox";
+                checkbox.checked = !!item.markedAsWatched;
+                checkbox.title = checkbox.checked
+                    ? "Already marked as watched"
+                    : "Click to mark as watched on YouTube";
+                checkbox.onclick = (e) => e.stopPropagation();
+                checkbox.onchange = (e) => {
+                    e.stopPropagation();
+                    if (onWatchedToggle) onWatchedToggle(item.id, e.target.checked, e);
+                };
+                div.appendChild(checkbox);
+
+                if (item.watched) {
+                    const check = document.createElement("span");
+                    check.className = "watched-checkmark checkbox-checkmark";
+                    check.textContent = "✔";
+                    div.appendChild(check);
+                }
+            };
+
+            if (checkboxBeforeTitle) {
+                appendWatchedControls();
+                div.appendChild(titleSpan);
+            } else {
+                div.appendChild(titleSpan);
+                appendWatchedControls();
+            }
+
+            const removeBtn = document.createElement("button");
+            removeBtn.className = "btn-remove-item";
+            removeBtn.dataset.index = index;
+            removeBtn.textContent = "×";
+            removeBtn.title = "Remove Item";
+            if (onRemove) {
+                removeBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    onRemove(index, item.id, removeBtn, e);
+                };
+            }
+            div.appendChild(removeBtn);
+
+            return div;
         }
 };
 

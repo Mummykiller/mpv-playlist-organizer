@@ -63,92 +63,95 @@ class SecurityFormatter(logging.Formatter):
 def initialize(data_dir: str, script_dir: str = None, level=logging.DEBUG):
     """
     Initializes the non-blocking logging system.
+    Degrades gracefully to stderr-only logging if data_dir is read-only or unwritable.
     """
     global _listener, _is_initialized
     with _init_lock:
         if _is_initialized:
             return
-        
-        try:
-            os.makedirs(data_dir, exist_ok=True)
-        except OSError:
-            import tempfile
-            data_dir = os.path.join(tempfile.gettempdir(), "MPVPlaylistOrganizer")
-            os.makedirs(data_dir, exist_ok=True)
-        
-        main_log_file = os.path.join(data_dir, "native_host.log")
-        ipc_log_file = os.path.join(data_dir, "ipc_events.log")
-        browser_log_file = os.path.join(data_dir, "browser_errors.log")
 
-        # Ensure browser_errors.log exists immediately for easy inspection / tailing
-        if not os.path.exists(browser_log_file):
-            try:
-                with open(browser_log_file, "a", encoding="utf-8") as f:
-                    pass
-            except OSError as e:
-                print(f"[LOGGER] Could not touch browser log file: {e}", file=sys.stderr)
-        
-        # 1. Main Handler (Rotating File)
-        main_handler = logging.handlers.RotatingFileHandler(
-            main_log_file, maxBytes=1024 * 1024 * 5, backupCount=2, encoding='utf-8'
-        )
-        
-        # 2. IPC Handler (Rotating File)
-        ipc_handler = logging.handlers.RotatingFileHandler(
-            ipc_log_file, maxBytes=1024 * 1024 * 5, backupCount=1, encoding='utf-8'
-        )
-
-        # 3. Dedicated Browser Error Handler (Rotating File)
-        browser_handler = logging.handlers.RotatingFileHandler(
-            browser_log_file, maxBytes=1024 * 1024 * 2, backupCount=2, encoding='utf-8'
-        )
-        
-        # 4. Security Formatter
         formatter = SecurityFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         formatter.data_dir = data_dir
         formatter.script_dir = script_dir
-        
-        main_handler.setFormatter(formatter)
-        ipc_handler.setFormatter(formatter)
-        browser_handler.setFormatter(formatter)
-        
-        # 5. Routing Filters
-        class IPCFilter(logging.Filter):
-            def filter(self, record):
-                return record.name == "ipc_events"
 
-        class BrowserFilter(logging.Filter):
-            def filter(self, record):
-                return record.name == "browser_errors"
-                
-        class MainFilter(logging.Filter):
-            def filter(self, record):
-                return record.name not in ("ipc_events", "browser_errors")
-                
-        ipc_handler.addFilter(IPCFilter())
-        browser_handler.addFilter(BrowserFilter())
-        main_handler.addFilter(MainFilter())
-        
-        # 6. Queue Handler (The Non-blocking Part)
-        # Use our custom handler to preserve context
+        handlers = []
+        try:
+            try:
+                os.makedirs(data_dir, exist_ok=True)
+            except OSError:
+                import tempfile
+                data_dir = os.path.join(tempfile.gettempdir(), "MPVPlaylistOrganizer")
+                os.makedirs(data_dir, exist_ok=True)
+                formatter.data_dir = data_dir
+
+            main_log_file = os.path.join(data_dir, "native_host.log")
+            ipc_log_file = os.path.join(data_dir, "ipc_events.log")
+            browser_log_file = os.path.join(data_dir, "browser_errors.log")
+
+            # Ensure browser_errors.log exists immediately for easy inspection / tailing
+            if not os.path.exists(browser_log_file):
+                with open(browser_log_file, "a", encoding="utf-8"):
+                    pass
+
+            # 1. Main Handler (Rotating File)
+            main_handler = logging.handlers.RotatingFileHandler(
+                main_log_file, maxBytes=1024 * 1024 * 5, backupCount=2, encoding='utf-8'
+            )
+            # 2. IPC Handler (Rotating File)
+            ipc_handler = logging.handlers.RotatingFileHandler(
+                ipc_log_file, maxBytes=1024 * 1024 * 5, backupCount=1, encoding='utf-8'
+            )
+            # 3. Dedicated Browser Error Handler (Rotating File)
+            browser_handler = logging.handlers.RotatingFileHandler(
+                browser_log_file, maxBytes=1024 * 1024 * 2, backupCount=2, encoding='utf-8'
+            )
+
+            main_handler.setFormatter(formatter)
+            ipc_handler.setFormatter(formatter)
+            browser_handler.setFormatter(formatter)
+
+            class IPCFilter(logging.Filter):
+                def filter(self, record):
+                    return record.name == "ipc_events"
+
+            class BrowserFilter(logging.Filter):
+                def filter(self, record):
+                    return record.name == "browser_errors"
+
+            class MainFilter(logging.Filter):
+                def filter(self, record):
+                    return record.name not in ("ipc_events", "browser_errors")
+
+            ipc_handler.addFilter(IPCFilter())
+            browser_handler.addFilter(BrowserFilter())
+            main_handler.addFilter(MainFilter())
+
+            handlers = [main_handler, ipc_handler, browser_handler]
+        except OSError as e:
+            for h in handlers:
+                h.close()
+            print(f"[LOGGER] Data dir '{data_dir}' is not writable ({e}); degrading to stderr logging.", file=sys.stderr)
+            stderr_handler = logging.StreamHandler(sys.stderr)
+            stderr_handler.setFormatter(formatter)
+            handlers = [stderr_handler]
+
+        # Queue Handler (The Non-blocking Part)
         queue_handler = ContextQueueHandler(_log_queue)
-        
+
         root = logging.getLogger()
-        # Remove existing handlers
         for h in root.handlers[:]:
             h.close()
             root.removeHandler(h)
-            
+
         root.addHandler(queue_handler)
         root.setLevel(level)
-        
-        # 7. Start the Listener Thread
-        # It consumes from the queue and writes to the real handlers
+
+        # Start the Listener Thread
         _listener = logging.handlers.QueueListener(
-            _log_queue, main_handler, ipc_handler, browser_handler, respect_handler_level=True
+            _log_queue, *handlers, respect_handler_level=True
         )
         _listener.start()
-        
+
         _is_initialized = True
         logging.info(f"Logging initialized. Data Dir: {data_dir}")
 

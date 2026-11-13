@@ -9,14 +9,28 @@ sys.dont_write_bytecode = True
 file_io = None
 mpv_session = None
 ipc_utils = None
+send_message = None
+
+def _default_cli_sender(message_content):
+    """Text logger / no-op sender for CLI mode so binary frames are never written to stdout."""
+    if isinstance(message_content, dict) and message_content.get('action') in ('error', 'failure'):
+        logging.error(f"[CLI] {message_content.get('error') or message_content}")
+    else:
+        logging.debug(f"[CLI] Suppressed background event: {message_content}")
 
 def inject_dependencies(deps):
     """Injects dependencies from the main native_host script."""
-    global file_io, mpv_session, ipc_utils, time
+    global file_io, mpv_session, ipc_utils, send_message
     file_io = deps['file_io']
     mpv_session = deps['mpv_session']
     ipc_utils = deps['ipc_utils']
-    time = deps['time']
+    send_message = deps.get('send_message', _default_cli_sender)
+    if mpv_session is not None:
+        mpv_session.send_message = send_message
+        if hasattr(mpv_session, 'dependencies') and isinstance(mpv_session.dependencies, dict):
+            mpv_session.dependencies['send_message'] = send_message
+        if hasattr(mpv_session, 'enricher') and mpv_session.enricher is not None:
+            mpv_session.enricher.send_message = send_message
 
 from utils.cli_base import BaseCLI
 
@@ -37,11 +51,19 @@ def _cli_play_folder(args):
     """CLI command to play a specific folder."""
     folder_id = args.folder_id
     folders_data = file_io.get_all_folders_from_file()
-    folder_info = folders_data.get(folder_id)
 
     if not folders_data:
          print("Error: Data file not found or is empty. Please add an item in the extension first to create it.", file=sys.stderr)
          sys.exit(1)
+
+    canonical_id = (
+        file_io._get_canonical_folder_id(folder_id, folders_data)
+        if hasattr(file_io, '_get_canonical_folder_id')
+        else next((k for k in folders_data if k.lower() == folder_id.lower()), folder_id)
+    )
+    folder_info = folders_data.get(canonical_id)
+    if folder_info is not None:
+        folder_id = canonical_id
 
     if folder_info is None:
         print(f"Error: Folder '{folder_id}' not found.", file=sys.stderr)

@@ -13,7 +13,7 @@ setup_script_env()
 # AniList GraphQL API endpoint
 ANILIST_API_URL = "https://graphql.anilist.co"
 
-def get_today_airing_anime(start_timestamp, end_timestamp, page=1, per_page=50):
+def get_today_airing_anime(start_timestamp, end_timestamp, page=1, per_page=50, is_ping=False):
     """
     Fetches anime airing today from AniList API within the given UTC timestamp range.
     """
@@ -62,7 +62,7 @@ def get_today_airing_anime(start_timestamp, end_timestamp, page=1, per_page=50):
     }
     """
 
-    query = ping_query if ("--ping" in sys.argv or "ping" in sys.argv) else full_query
+    query = ping_query if is_ping else full_query
     variables = {
         'page': page,
         'perPage': per_page,
@@ -88,9 +88,6 @@ def get_today_airing_anime(start_timestamp, end_timestamp, page=1, per_page=50):
             secure_context = ssl.create_default_context()
 
         with urllib.request.urlopen(req, context=secure_context, timeout=15) as response:
-            if response.status != 200:
-                logging.error(f"Received status code {response.status}")
-                return None
             return json.loads(response.read().decode('utf-8'))
     except urllib.error.URLError as e:
         # Check if the error is specifically an SSL certificate verification failure.
@@ -133,6 +130,9 @@ def main():
     cli.add_argument('--days', type=int, default=0, help='Day offset from today (e.g., 1 for tomorrow).')
     args = cli.parse_args()
 
+    if not -30 <= args.days <= 30:
+        cli.parser.error("--days must be between -30 and 30.")
+
     if args.ping:
         # In ping mode, we don't need to print this verbose message.
         pass
@@ -163,7 +163,7 @@ def main():
         page = 1
         has_next_page = True
         while has_next_page and page <= 5: # Safety limit of 5 pages
-            data = get_today_airing_anime(start_timestamp_utc, end_timestamp_utc, page=page)
+            data = get_today_airing_anime(start_timestamp_utc, end_timestamp_utc, page=page, is_ping=True)
             if not data:
                 sys.exit("Failed to ping AniList for release timestamps.")
 

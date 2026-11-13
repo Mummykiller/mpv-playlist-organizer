@@ -5,8 +5,17 @@ import { nativeLink } from "../utils/nativeLink.js";
 import { broadcastLog } from "./messaging.js";
 import { broadcastPlaylistState } from "./ui_broadcaster.js";
 
+const SESSIONS_STORAGE_KEY = "mpv_playback_sessions";
+
+const getSessionStorage = () => {
+	if (typeof chrome !== "undefined" && chrome?.storage?.session) {
+		return chrome.storage.session;
+	}
+	return chrome?.storage?.local || null;
+};
+
 export class PlaybackSession {
-	constructor(folderId) {
+	constructor(folderId, onChange = null) {
 		this.folderId = folderId;
 		this.queue = [];
 		this.isPlaying = false;
@@ -15,12 +24,14 @@ export class PlaybackSession {
 		this.completedItemIds = new Set();
 		this.watchedItemIds = new Set();
 		this.pendingClear = null; // { folderId, playedIds, sessionIds, scope, titles, isQuitting }
+		this._onChange = onChange;
 	}
 
 	clearPlaylist() {
 		this.queue = [];
 		this.currentPlayingItem = null;
 		this.isProcessingQueue = false;
+		this._onChange?.();
 	}
 
 	/**
@@ -72,6 +83,7 @@ export class PlaybackSession {
 							}
 
 							this.currentPlayingItem = lastBatchItem;
+							this._onChange?.();
 							// Notify UI immediately after successful append to clear "Needs Append" status
 							broadcastPlaylistState(this.folderId).catch(() => {});
 							continue;
@@ -102,6 +114,7 @@ export class PlaybackSession {
 					this.isPlaying = true;
 					this.queue.shift();
 					this.currentPlayingItem = nextItem;
+					this._onChange?.();
 				} catch (error) {
 					broadcastLog({
 						text: `[Background]: Error playing item: ${error.message}`,
@@ -109,6 +122,7 @@ export class PlaybackSession {
 					});
 					this.queue.shift();
 					this.isPlaying = false;
+					this._onChange?.();
 				}
 			}
 
@@ -121,6 +135,7 @@ export class PlaybackSession {
 			}
 		} finally {
 			this.isProcessingQueue = false;
+			this._onChange?.();
 		}
 	}
 }
@@ -130,14 +145,76 @@ export class PlaybackManager {
 		this.sessions = new Map(); // folderId -> PlaybackSession
 		this.syncCache = null; // Synchronous copy of mpv_playback_cache
 		this.earlyClearsInProgress = new Set(); // Track folders being cleared during shutdown
-		this._initFromCache();
+		this.initPromise = this._initFromCache();
+	}
+
+	persistSessions() {
+		try {
+			const store = getSessionStorage();
+			if (!store) return;
+			const serialized = {};
+			for (const [folderId, session] of this.sessions.entries()) {
+				const hasQueue = Array.isArray(session.queue) && session.queue.length > 0;
+				const hasCompleted = session.completedItemIds?.size > 0;
+				const hasWatched = session.watchedItemIds?.size > 0;
+				const hasPendingClear = Boolean(session.pendingClear);
+				if (hasQueue || hasCompleted || hasWatched || hasPendingClear || session.isPlaying) {
+					serialized[folderId] = {
+						folderId: session.folderId,
+						queue: hasQueue ? session.queue : [],
+						completedItemIds: Array.from(session.completedItemIds || []),
+						watchedItemIds: Array.from(session.watchedItemIds || []),
+						pendingClear: session.pendingClear || null,
+						isPlaying: Boolean(session.isPlaying),
+						currentPlayingItem: session.currentPlayingItem || null,
+					};
+				}
+			}
+			store.set({ [SESSIONS_STORAGE_KEY]: serialized }).catch(() => {});
+		} catch (e) {
+			console.debug("[PlaybackManager] Failed to persist sessions:", e);
+		}
 	}
 
 	async _initFromCache() {
 		try {
-			const { mpv_playback_cache } = await chrome.storage.local.get(
-				"mpv_playback_cache",
-			);
+			const store = getSessionStorage();
+			const [localRes, sessionRes] = await Promise.all([
+				chrome.storage.local.get("mpv_playback_cache").catch(() => ({})),
+				store ? store.get(SESSIONS_STORAGE_KEY).catch(() => ({})) : Promise.resolve({}),
+			]);
+
+			const savedSessions = sessionRes?.[SESSIONS_STORAGE_KEY];
+			if (savedSessions && typeof savedSessions === "object") {
+				for (const [folderId, saved] of Object.entries(savedSessions)) {
+					if (!saved || typeof saved !== "object") continue;
+					const session = this.getSession(folderId);
+					if (session.queue.length === 0 && Array.isArray(saved.queue) && saved.queue.length > 0) {
+						session.queue = saved.queue;
+					}
+					if (Array.isArray(saved.completedItemIds)) {
+						for (const id of saved.completedItemIds) {
+							session.completedItemIds.add(id);
+						}
+					}
+					if (Array.isArray(saved.watchedItemIds)) {
+						for (const id of saved.watchedItemIds) {
+							session.watchedItemIds.add(id);
+						}
+					}
+					if (!session.pendingClear && saved.pendingClear) {
+						session.pendingClear = saved.pendingClear;
+					}
+					if (!session.currentPlayingItem && saved.currentPlayingItem) {
+						session.currentPlayingItem = saved.currentPlayingItem;
+					}
+					if (!session.isPlaying && saved.isPlaying) {
+						session.isPlaying = true;
+					}
+				}
+			}
+
+			const mpv_playback_cache = localRes?.mpv_playback_cache;
 			if (mpv_playback_cache) {
 				this.syncCache = mpv_playback_cache;
 				if (mpv_playback_cache.folderId) {
@@ -152,7 +229,10 @@ export class PlaybackManager {
 
 	getSession(folderId) {
 		if (!this.sessions.has(folderId)) {
-			this.sessions.set(folderId, new PlaybackSession(folderId));
+			this.sessions.set(
+				folderId,
+				new PlaybackSession(folderId, () => this.persistSessions()),
+			);
 		}
 		const session = this.sessions.get(folderId);
 
@@ -171,6 +251,7 @@ export class PlaybackManager {
 
 	cleanupSession(folderId) {
 		this.sessions.delete(folderId);
+		this.persistSessions();
 	}
 
 	findSessionByFolderId(folderId) {

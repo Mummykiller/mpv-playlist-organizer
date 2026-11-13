@@ -128,12 +128,17 @@ def construct_lua_options(item, settings, script_dir, index=None):
     essential_flags = get_essential_ytdlp_flags(settings)
     raw_opts = item.get('ytdl_raw_options')
     
+    # Strip dangerous settings-only flags from untrusted item payload BEFORE merging
+    if raw_opts:
+        import utils.security as security
+        raw_opts = security.sanitize_ytdlp_options(raw_opts, allow_settings_flags=False)
+
     # Support Direct Browser Access
     if item.get('cookies_browser'):
          browser_opt = f"cookies-from-browser={item['cookies_browser']}"
          raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
 
-    final_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags)
+    final_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags, allow_settings_flags=True)
     
     item_url = sanitize_url(item.get('original_url') or item.get('url'))
     

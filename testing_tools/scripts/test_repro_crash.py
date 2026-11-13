@@ -61,6 +61,11 @@ class TestReproCrash(BaseTestCase):
         
         self.handler = PlaybackHandler(self.ctx)
 
+    def tearDown(self):
+        if hasattr(self, "mpv_session") and self.mpv_session is not None:
+            self.mpv_session.is_alive = False
+        super().tearDown()
+
     def test_concurrent_launch_and_status(self):
         """Stress test with multiple threads to catch unhandled exceptions."""
         stop_event = threading.Event()
@@ -244,23 +249,18 @@ class TestReproCrash(BaseTestCase):
             mock_close.assert_called_once()
 
     def test_native_host_send_message_broken_pipe(self):
-        """Verifies native_host.send_message handles BrokenPipeError when browser disconnects."""
-        print_lock = threading.Lock()
-        broken_pipe_handled = False
-        
-        def simulate_send(msg):
-            nonlocal broken_pipe_handled
-            try:
-                with print_lock:
-                    raise BrokenPipeError("[Errno 32] Broken pipe")
-            except BrokenPipeError:
-                broken_pipe_handled = True
-            except Exception as e:
-                self.fail(f"Unexpected exception raised: {e}")
+        """Verifies native_host.send_message_binary handles BrokenPipeError when browser disconnects."""
+        import native_host
 
-        # Calling simulate_send must not raise an unhandled exception
-        simulate_send({"action": "log", "text": "test"})
-        self.assertTrue(broken_pipe_handled, "BrokenPipeError should be cleanly caught")
+        mock_stdout = MagicMock()
+        mock_stdout.buffer.write.side_effect = BrokenPipeError("[Errno 32] Broken pipe")
+
+        with patch.object(native_host.sys, "stdout", mock_stdout):
+            with self.assertLogs(level="INFO") as cm:
+                native_host.send_message_binary({"action": "log", "text": "test"})
+
+        mock_stdout.buffer.write.assert_called_once()
+        self.assertTrue(any("Broken Pipe" in msg for msg in cm.output), "BrokenPipeError should be cleanly caught and logged")
 
     # =========================================================================
     # Unexpected Disconnection Resilience
@@ -305,19 +305,27 @@ class TestReproCrash(BaseTestCase):
         self.mpv_session.ipc_manager = mock_ipc
 
         with patch("utils.ipc_utils.is_pid_running", return_value=False):
-            self.mpv_session._start_health_watcher()
-            
-            # Allow watcher thread to cycle (500ms intervals)
-            time.sleep(1.8)
-            
-            # Session should be cleared when PID is dead
-            self.assertFalse(self.mpv_session.is_alive)
-            self.assertIsNone(self.mpv_session.pid)
+            try:
+                self.mpv_session._start_health_watcher()
+                
+                # Poll until watcher thread transitions session to dead (500ms intervals)
+                deadline = time.time() + 2.0
+                while time.time() < deadline:
+                    health_states = [m.get("health") for m in self.sent_messages if m.get("action") == "playback_health_changed"]
+                    if not self.mpv_session.is_alive and "dead" in health_states:
+                        break
+                    time.sleep(0.05)
+                
+                # Session should be cleared when PID is dead
+                self.assertFalse(self.mpv_session.is_alive)
+                self.assertIsNone(self.mpv_session.pid)
 
-            # Check that health change messages were emitted
-            health_states = [m.get("health") for m in self.sent_messages if m.get("action") == "playback_health_changed"]
-            self.assertIn("stale", health_states)
-            self.assertIn("dead", health_states)
+                # Check that health change messages were emitted
+                health_states = [m.get("health") for m in self.sent_messages if m.get("action") == "playback_health_changed"]
+                self.assertIn("stale", health_states)
+                self.assertIn("dead", health_states)
+            finally:
+                self.mpv_session.is_alive = False
 
     def test_mid_launch_cancellation_resilience(self):
         """Verifies that user cancelling an in-flight launch aborts cleanly without unhandled exceptions."""

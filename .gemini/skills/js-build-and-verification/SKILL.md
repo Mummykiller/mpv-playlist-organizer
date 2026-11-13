@@ -35,6 +35,14 @@ Chrome Content Scripts cannot natively use ES Module `import` statements across 
 | `utils/MpvInterface.module.js` | `utils/MpvInterface.js` | `MPV_INTERNAL` | `window.MPV_INTERNAL.MpvInterface` |
 | `utils/domUtils.module.js` | `utils/domUtils.js` | `MPV_INTERNAL` | `window.MPV_INTERNAL.domUtils` |
 
+### Generated vs. Hand-Written `utils/*.js`
+
+Only the **7 files** listed in the table above are generated from `utils/*.module.js` (and marked with `// AUTO-GENERATED from <Module>.module.js. DO NOT EDIT MANUALLY.`).
+
+All other `utils/*.js` files are **hand-written sources** and are safe to edit directly:
+- **Classic content-script / UI helpers (`window.MPV_INTERNAL`):** `AniListUI.js`, `ContentState.js`, `ControllerActions.js`, `ControllerTimers.js`, `Draggable.js`, `MessageBridge.js`, `MpvController.js`, `NavigationObserver.js`, `PageScraper.js`, `PlaybackStateManager.js`, `PlaylistRenderer.js`, `PlaylistUI.js`, `Resizable.js`, `UIManager.js`, `janitor.js`.
+- **ES modules (background / popup):** `contextMenu.js`, `item_processor.js`, `nativeLink.js`, `playlistManager.js`, `settings.js`, `storageManager.js`.
+
 ### Transpilation Mechanism
 
 When transpiling, `generate_js.py`:

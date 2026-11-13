@@ -97,10 +97,15 @@ class TestRobustness(BaseTestCase):
             tracker._start_heartbeat()
             
             tracker._update_resume_time("item1", 123)
-            time.sleep(2.5)
-            
-            reloaded_playlist = file_io.get_playlist_shard(test_folder_id)
-            saved_time = reloaded_playlist[0].get("resume_time")
+            deadline = time.time() + 2.5
+            saved_time = None
+            while time.time() < deadline:
+                reloaded_playlist = file_io.get_playlist_shard(test_folder_id)
+                saved_time = reloaded_playlist[0].get("resume_time")
+                if saved_time == 123:
+                    break
+                time.sleep(0.05)
+
             self.assertEqual(saved_time, 123, "Progress should have been saved by heartbeat.")
             tracker.stop_tracking()
         finally:
@@ -159,53 +164,58 @@ class TestRobustness(BaseTestCase):
 
     def test_settings_synchronization(self):
         """Verify that shared settings keys in Python (file_io.py) and JS (storageManager.js) stay aligned."""
-        py_settings = file_io.get_settings()
-        js_file = os.path.join(PROJECT_ROOT, "utils", "storageManager.js")
-        self.assertTrue(os.path.exists(js_file), "storageManager.js must exist")
-        
-        with open(js_file, "r", encoding="utf-8") as f:
-            js_content = f.read()
+        original_data_dir = file_io.DATA_DIR
+        file_io.initialize_paths(self.test_dir)
+        try:
+            py_settings = file_io.get_settings()
+            js_file = os.path.join(PROJECT_ROOT, "utils", "storageManager.js")
+            self.assertTrue(os.path.exists(js_file), "storageManager.js must exist")
+            
+            with open(js_file, "r", encoding="utf-8") as f:
+                js_content = f.read()
 
-        start = js_content.find("global: {")
-        end = js_content.find("domains: {},")
-        self.assertGreater(start, 0)
-        self.assertGreater(end, start)
-        block = js_content[start:end]
+            start = js_content.find("global: {")
+            end = js_content.find("domains: {},")
+            self.assertGreater(start, 0)
+            self.assertGreater(end, start)
+            block = js_content[start:end]
 
-        js_keys = []
-        for line in block.splitlines():
-            m = re.match(r"\s{6,8}([a-zA-Z0-9_]+):", line)
-            if m:
-                js_keys.append(m.group(1))
+            js_keys = []
+            for line in block.splitlines():
+                m = re.match(r"\s{6,8}([a-zA-Z0-9_]+):", line)
+                if m:
+                    js_keys.append(m.group(1))
 
-        def camel_to_snake(name):
-            s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
-            return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+            def camel_to_snake(name):
+                s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+                return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
-        js_snake = {camel_to_snake(k): k for k in js_keys}
-        
-        ui_only_keys = {
-            "minimized", "mode", "log_visible", "pinned", "position", "top", "left", "right", "bottom",
-            "anilist_panel_visible", "lock_anilist_panel", "force_panel_attached", "anilist_attach_on_open",
-            "minimized_stub_position", "dependency_status", "mpv", "ytdlp", "ffmpeg", "node",
-            "launch_geometry", "custom_geometry_width", "custom_geometry_height", "custom_mpv_flags",
-            "show_play_new_button", "duplicate_url_behavior", "sync_global_removals", "sync_global_removals_live",
-            "auto_append_on_add", "auto_add_inactivity_timeout", "auto_add_auto_off", "confirm_remove_folder",
-            "confirm_clear_playlist", "confirm_close_mpv", "confirm_play_new", "confirm_folder_switch",
-            "clear_on_completion", "clear_scope", "enable_dblclick_copy", "anilist_image_height", "popup_width",
-            "show_watched_status_gui", "show_minimized_stub", "one_click_add", "restricted_domains",
-            "kb_add_playlist", "kb_play_playlist", "kb_toggle_controller", "kb_switch_playlist", "kb_open_popup"
-        }
+            js_snake = {camel_to_snake(k): k for k in js_keys}
+            
+            ui_only_keys = {
+                "minimized", "mode", "log_visible", "pinned", "position", "top", "left", "right", "bottom",
+                "anilist_panel_visible", "lock_anilist_panel", "force_panel_attached", "anilist_attach_on_open",
+                "minimized_stub_position", "dependency_status", "mpv", "ytdlp", "ffmpeg", "node",
+                "launch_geometry", "custom_geometry_width", "custom_geometry_height", "custom_mpv_flags",
+                "show_play_new_button", "duplicate_url_behavior", "sync_global_removals", "sync_global_removals_live",
+                "auto_append_on_add", "auto_add_inactivity_timeout", "auto_add_auto_off", "confirm_remove_folder",
+                "confirm_clear_playlist", "confirm_close_mpv", "confirm_play_new", "confirm_folder_switch",
+                "clear_on_completion", "clear_scope", "enable_dblclick_copy", "anilist_image_height", "popup_width",
+                "show_watched_status_gui", "show_minimized_stub", "one_click_add", "restricted_domains",
+                "kb_add_playlist", "kb_play_playlist", "kb_toggle_controller", "kb_switch_playlist", "kb_open_popup"
+            }
 
-        missing_in_python = [
-            snake_k for snake_k in js_snake
-            if snake_k not in py_settings and snake_k not in ui_only_keys
-        ]
-        self.assertEqual(
-            missing_in_python,
-            [],
-            f"JS settings keys missing in Python file_io.py: {missing_in_python}"
-        )
+            missing_in_python = [
+                snake_k for snake_k in js_snake
+                if snake_k not in py_settings and snake_k not in ui_only_keys
+            ]
+            self.assertEqual(
+                missing_in_python,
+                [],
+                f"JS settings keys missing in Python file_io.py: {missing_in_python}"
+            )
+        finally:
+            file_io.initialize_paths(original_data_dir)
 
     def test_popup_html_settings_id_integrity(self):
         """Ensures every setting elementId registered in utils/settings.js exists in popup.html."""
@@ -395,7 +405,7 @@ class TestRobustness(BaseTestCase):
         cmd, has_terminal = services.construct_mpv_command(
             mpv_exe="mpv",
             url=["https://example.com/stream.m3u8"],
-            flag_dir="/tmp/flags_test"
+            flag_dir=os.path.join(self.test_dir, "flags_test")
         )
         self.assertTrue(isinstance(cmd, list))
         self.assertIn("mpv", cmd[0])

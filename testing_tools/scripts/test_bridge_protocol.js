@@ -1,9 +1,16 @@
 const assert = require("node:assert").strict;
+const path = require("node:path");
 const { validateContract, ACTION_SCHEMAS } = require("./bridge_contract");
+
+// Load the real utils/commUtils.js in a minimal browser-like window shim
+const savedWindow = global.window;
+global.window = global.window || {};
+require(path.join(__dirname, "../../utils/commUtils.js"));
+const { normalizeKeys } = global.window.MPV_INTERNAL;
 
 /**
  * JS-to-Python Case Normalizer Mock
- * (Matches logic in translator.py + commUtils.js)
+ * (Mirrors Python translator.py outbound key normalization for bridge contract validation)
  */
 function toSnakeCase(obj) {
 	if (Array.isArray(obj)) return obj.map(toSnakeCase);
@@ -200,6 +207,64 @@ function runTests() {
 
 	console.log("  [OK] Extended Action Schemas (cancel_task, get_smart_reorder, set_ui_preferences)");
 
+	// --- TEST 9: Real utils/commUtils.js normalizeKeys (Python snake_case -> JS camelCase) ---
+	assert.strictEqual(typeof normalizeKeys, "function", "commUtils.js must export normalizeKeys");
+
+	const nativeResponse = {
+		action: "playback_status",
+		request_id: "req_status_42",
+		is_running: true,
+		is_paused: false,
+		folder_id: "Anime",
+		url: "https://example.com/watch?v=1",
+		m3u8: "https://example.com/stream.m3u8",
+		mp4: "https://example.com/video.mp4",
+		url_item: {
+			item_id: "ep_1",
+			resume_time: 120.5,
+			mark_watched: true
+		},
+		playlist_items: [
+			{ folder_id: "Anime", start_paused: false }
+		]
+	};
+
+	const camelNormalized = normalizeKeys(nativeResponse);
+	assert.strictEqual(camelNormalized.action, "playback_status");
+	assert.strictEqual(camelNormalized.request_id, "req_status_42", "request_id must stay snake_case (whitelisted)");
+	assert.strictEqual(camelNormalized.url, "https://example.com/watch?v=1", "url must be preserved");
+	assert.strictEqual(camelNormalized.m3u8, "https://example.com/stream.m3u8", "m3u8 must be preserved");
+	assert.strictEqual(camelNormalized.mp4, "https://example.com/video.mp4", "mp4 must be preserved");
+	assert.strictEqual(camelNormalized.isRunning, true);
+	assert.strictEqual(camelNormalized.isPaused, false);
+	assert.strictEqual(camelNormalized.folderId, "Anime");
+	assert.deepStrictEqual(camelNormalized.urlItem, {
+		itemId: "ep_1",
+		resumeTime: 120.5,
+		markWatched: true
+	});
+	assert.deepStrictEqual(camelNormalized.playlistItems, [
+		{ folderId: "Anime", startPaused: false }
+	]);
+
+	// Round-trip: JS camelCase -> snake_case (contract) -> commUtils.normalizeKeys -> JS camelCase
+	const roundTripped = normalizeKeys(snakedPlayback);
+	assert.deepStrictEqual(roundTripped, {
+		action: "play",
+		request_id: "req_1",
+		folderId: "Default",
+		urlItem: { url: "https://test.com", title: "Test" },
+		startPaused: true,
+		ytdlQuality: "best"
+	});
+
+	// Primitives and null pass through unchanged
+	assert.strictEqual(normalizeKeys(null), null);
+	assert.strictEqual(normalizeKeys(undefined), undefined);
+	assert.strictEqual(normalizeKeys("hello_world"), "hello_world");
+	assert.strictEqual(normalizeKeys(42), 42);
+	console.log("  [OK] Real utils/commUtils.js normalizeKeys & Round-Trip");
+
 	console.log("\nALL BRIDGE PROTOCOL TESTS PASSED! 🤝");
 }
 
@@ -209,4 +274,6 @@ try {
 	console.error("\nTEST FAILED! ❌");
 	console.error(err);
 	process.exit(1);
+} finally {
+	global.window = savedWindow;
 }

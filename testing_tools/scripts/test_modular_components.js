@@ -133,6 +133,7 @@ require("../../utils/SystemLogger.js");
 require("../../utils/commUtils.js");
 require("../../utils/domUtils.js");
 require("../../utils/security.js");
+require("../../utils/nativeConnection.js");
 require("../../utils/anilist_renderer.js");
 require("../../utils/MpvInterface.js");
 require("../../utils/MessageBridge.js");
@@ -145,6 +146,9 @@ require("../../utils/Resizable.js");
 require("../../utils/PlaylistUI.js");
 require("../../utils/PageScraper.js");
 require("../../utils/AniListUI.js");
+require("../../utils/ControllerTimers.js");
+require("../../utils/ControllerActions.js");
+require("../../utils/ControllerView.js");
 require("../../utils/MpvController.js");
 
 const MPV = global.window.MPV_INTERNAL;
@@ -310,6 +314,20 @@ async function testSecurityComponent() {
 	assert.strictEqual(SECURITY.isValidUrl("data:text/html,<h1>bad</h1>"), false);
 	assert.strictEqual(SECURITY.isValidUrl("blob:https://example.com/uuid"), false);
 	assert.strictEqual(SECURITY.isValidUrl("chrome-extension://id/popup.html"), false);
+
+	// Malformed URLs where new URL() throws must return false (no loose prefix match)
+	assert.strictEqual(SECURITY.isValidUrl("http://"), false);
+	assert.strictEqual(SECURITY.isValidUrl("https://"), false);
+	assert.strictEqual(SECURITY.isValidUrl("https://[::ffff:invalid/"), false);
+
+	// Batch URL and URL Item validation
+	assert.strictEqual(SECURITY.isValidUrl(["https://youtube.com/watch?v=abc", "http://example.com/video.mp4"]), true);
+	assert.strictEqual(SECURITY.isValidUrl(["https://youtube.com/watch?v=abc", "javascript:alert(1)"]), false);
+	assert.strictEqual(SECURITY.isValidUrl([{ url: "https://youtube.com/watch?v=abc" }, { url: "http://example.com/video.mp4" }]), true);
+	assert.strictEqual(SECURITY.isValidUrl([{ url: "https://youtube.com/watch?v=abc" }, { url: "data:bad" }]), false);
+	assert.strictEqual(typeof SECURITY.areValidUrls, "function", "areValidUrls must be exported");
+	assert.strictEqual(SECURITY.areValidUrls([{ url: "https://youtube.com/watch?v=abc" }]), true);
+	assert.strictEqual(SECURITY.areValidUrls([{ url: "javascript:bad" }]), false);
 
 	// Overly long URL
 	const hugeUrl = "https://example.com/" + "a".repeat(5000);
@@ -521,6 +539,153 @@ async function testDraggableComponent() {
 	console.log("  [OK] Draggable (Threshold & Click Suppression)");
 }
 
+async function testNativeConnection() {
+	console.log("Testing NativeConnection (Timeouts, Listener Isolation, LogBroadcaster)...");
+
+	assert.strictEqual(typeof MPV.setLogBroadcaster, "function", "setLogBroadcaster must be exported");
+	assert.strictEqual(typeof MPV.addNativeListener, "function", "addNativeListener must be exported");
+	assert.strictEqual(typeof MPV.callNativeHost, "function", "callNativeHost must be exported");
+
+	const origConnectNative = global.chrome.runtime.connectNative;
+	const origSetTimeout = global.setTimeout;
+	const origClearTimeout = global.clearTimeout;
+	const origConsoleError = console.error;
+
+	let activePort = null;
+	let autoCompleteHandshake = false;
+	const scheduledTimers = new Map();
+	const clearedTimerIds = new Set();
+	let nextTimerId = 1;
+
+	global.setTimeout = (fn, ms, ...args) => {
+		const id = nextTimerId++;
+		scheduledTimers.set(id, { fn, ms, args });
+		return id;
+	};
+	global.clearTimeout = (id) => {
+		clearedTimerIds.add(id);
+		scheduledTimers.delete(id);
+	};
+
+	global.chrome.runtime.connectNative = () => {
+		const messageListeners = [];
+		const disconnectListeners = [];
+		let disconnected = false;
+		activePort = {
+			onMessage: { addListener: (cb) => messageListeners.push(cb) },
+			onDisconnect: { addListener: (cb) => disconnectListeners.push(cb) },
+			postMessage: (msg) => {
+				if (autoCompleteHandshake && msg.action === "restore_session") {
+					for (const cb of messageListeners) {
+						cb({ request_id: msg.request_id, action: "session_restored", success: true });
+					}
+				}
+			},
+			disconnect: () => {
+				disconnected = true;
+			},
+			isDisconnected: () => disconnected,
+			emitMessage: (payload) => {
+				for (const cb of messageListeners) cb(payload);
+			},
+			emitDisconnect: () => {
+				for (const cb of disconnectListeners) cb();
+			},
+		};
+		return activePort;
+	};
+
+	try {
+		// 1. setLogBroadcaster injection & error isolation
+		const capturedLogs = [];
+		MPV.setLogBroadcaster((payload) => capturedLogs.push(payload));
+
+		// 2. 30s handshake timeout cleanup
+		autoCompleteHandshake = false;
+		const handshakeFailPromise = MPV.callNativeHost({ action: "ping" }, true);
+		const timedOutPort = activePort;
+		const handshakeEntry = Array.from(scheduledTimers.entries()).find(([, t]) => t.ms === 30000);
+		assert.ok(handshakeEntry, "Handshake should schedule a 30s timeout");
+		const [handshakeTimerId, handshakeTimer] = handshakeEntry;
+		scheduledTimers.delete(handshakeTimerId);
+		handshakeTimer.fn(...handshakeTimer.args);
+
+		assert.strictEqual(timedOutPort.isDisconnected(), true, "Timed-out port should be disconnected");
+		await assert.rejects(
+			handshakeFailPromise,
+			/Native host handshake timed out after 30s/,
+			"Handshake timeout should reject callNativeHost"
+		);
+		// Reset any background log_event connection attempt triggered by logger.error
+		if (activePort && activePort !== timedOutPort) {
+			activePort.emitDisconnect();
+			await Promise.resolve();
+		}
+		assert.ok(
+			capturedLogs.some((l) => l.text && l.text.includes("Establishing connection to native host")),
+			"setLogBroadcaster should receive connection logs"
+		);
+		assert.ok(
+			capturedLogs.some((l) => l.text && l.text.includes("Session restoration failed")),
+			"setLogBroadcaster should receive handshake timeout error log"
+		);
+
+		// Verify throwing/null logBroadcaster does not break execution
+		MPV.setLogBroadcaster(() => {
+			throw new Error("broadcaster crash");
+		});
+		autoCompleteHandshake = true;
+
+		// 3. 30s request timeout cleanup
+		scheduledTimers.clear();
+		clearedTimerIds.clear();
+		const reqTimeoutPromise = MPV.callNativeHost({ action: "get_status" }, true);
+		// Allow microtasks for connectToNativeHost() to resolve and schedule request timer
+		await Promise.resolve();
+		await Promise.resolve();
+
+		const reqEntry = Array.from(scheduledTimers.entries()).find(([, t]) => t.ms === 30000);
+		assert.ok(reqEntry, "callNativeHost should schedule a 30s request timeout");
+		const [reqTimerId, reqTimer] = reqEntry;
+		scheduledTimers.delete(reqTimerId);
+		reqTimer.fn(...reqTimer.args);
+
+		await assert.rejects(
+			reqTimeoutPromise,
+			/Native host request timed out after 30s \(get_status\)/,
+			"Request timeout should reject with action name"
+		);
+
+		// 4. Throwing listener isolation in dispatchNativeEvent
+		MPV.setLogBroadcaster(null);
+		let throwingCalled = false;
+		let healthyPayload = null;
+		MPV.addNativeListener("task_update", () => {
+			throwingCalled = true;
+			throw new Error("listener boom");
+		});
+		MPV.addNativeListener("task_update", (data) => {
+			healthyPayload = data;
+		});
+
+		console.error = () => {};
+		activePort.emitMessage({ action: "task_update", task_id: "task-42" });
+		console.error = origConsoleError;
+
+		assert.strictEqual(throwingCalled, true, "Throwing listener should have been invoked");
+		assert.ok(healthyPayload, "Healthy listener should still be invoked after throwing listener");
+		assert.strictEqual(healthyPayload.taskId, "task-42", "Event payload keys should be normalized");
+	} finally {
+		console.error = origConsoleError;
+		global.chrome.runtime.connectNative = origConnectNative;
+		global.setTimeout = origSetTimeout;
+		global.clearTimeout = origClearTimeout;
+		MPV.setLogBroadcaster(null);
+	}
+
+	console.log("  [OK] NativeConnection (Timeouts, Listener Isolation, LogBroadcaster)");
+}
+
 (async () => {
 	try {
 		testTranspilationIntegrity();
@@ -533,6 +698,7 @@ async function testDraggableComponent() {
 		testPageScraperWithInjection();
 		await testMpvControllerInit();
 		await testDraggableComponent();
+		await testNativeConnection();
 		console.log("\nALL MODULAR COMPONENT TESTS PASSED (JSDOM)! 📦✨");
 	} catch (err) {
 		console.error("\nTEST FAILED! ❌");

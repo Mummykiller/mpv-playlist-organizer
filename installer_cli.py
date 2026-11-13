@@ -58,11 +58,7 @@ class CommandLineApp:
         
         # 1. Get Extension ID
         current_id = ""
-        manifest_candidates = [
-            os.path.join(file_io.DATA_DIR, f"{HOST_NAME}-chrome.json"),
-            os.path.join(file_io.DATA_DIR, f"{HOST_NAME}.json"),
-        ]
-        manifest_path = next((p for p in manifest_candidates if os.path.exists(p)), manifest_candidates[0])
+        manifest_path = os.path.join(file_io.DATA_DIR, f"{HOST_NAME}-chrome.json")
         if os.path.exists(manifest_path):
             try:
                 with open(manifest_path, 'r') as f:
@@ -79,6 +75,11 @@ class CommandLineApp:
             
         if not ext_id:
             print("Error: Extension ID is required.")
+            return
+
+        import re
+        if not re.match(r"^[a-p]{32}$", ext_id):
+            print(f"Error: Invalid Extension ID '{ext_id}'. Must be exactly 32 lowercase letters (a-p).")
             return
 
         # 2. Settings

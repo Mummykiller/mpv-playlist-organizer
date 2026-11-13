@@ -1,7 +1,7 @@
 # MPV Playlist Organizer - Agent Rules & Router
 
 ## Non-Negotiable Invariants
-1. **Golden Build Rule**: Always edit `utils/*.module.js`. Never edit generated `utils/*.js` directly. Always run `python3 verify_changes.py` after editing JS modules or tests.
+1. **Golden Build Rule**: For the 7 transpiled modules, always edit `utils/*.module.js` and never edit their generated `utils/*.js` outputs directly (`SystemLogger.js`, `anilist_renderer.js`, `commUtils.js`, `security.js`, `nativeConnection.js`, `MpvInterface.js`, `domUtils.js`). All other `utils/*.js` files are hand-written sources and are safe to edit directly. Always run `python3 verify_changes.py` after editing JS modules or tests.
 2. **Shadow DOM Styles**: Inject CSS via `<style>` textContent (fetched via `chrome.runtime.getURL`). Never use `<link rel="stylesheet">` (fails in Chrome extensions). Never overwrite `shadowRoot.innerHTML` after style injection.
 3. **Bridge Protocol & Casing**: Action names MUST be `snake_case`. Native messaging auto-converts payload keys (`camelCase` in JS ↔ `snake_case` in Python). Always preserve `request_id`.
 

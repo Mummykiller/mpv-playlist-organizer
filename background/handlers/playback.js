@@ -90,6 +90,7 @@ async function promptClearConfirmation(folderId, targetIds, folder, clearScope, 
 	};
 	if (session) {
 		session.pendingClear = pendingClear;
+		playbackManager.persistSessions();
 	}
 
 	chrome.tabs
@@ -170,6 +171,7 @@ export async function handleItemNaturalCompletion(data) {
 	if (globalPrefs.clearOnItemFinish && clearMode !== "no") {
 		const session = playbackManager.getSession(folderId);
 		session.completedItemIds.add(itemId);
+		playbackManager.persistSessions();
 		
 		// Flag this folder so handleMpvExited knows a batch clear is already being managed
 		playbackManager.earlyClearsInProgress.add(folderId);
@@ -195,6 +197,7 @@ export async function handleItemNaturalCompletion(data) {
 			// Still remove from session set just in case
 			session.completedItemIds.delete(itemId);
 			session.watchedItemIds.delete(itemId);
+			playbackManager.persistSessions();
 		} else if (clearMode === "confirm") {
 			// Mode: "confirm" -> Visual clear nice + Stacked popup
 			broadcastLog({
@@ -282,6 +285,7 @@ export async function handleMpvQuitting(data) {
 }
 
 export async function handleMpvExited(data) {
+	await playbackManager.initPromise;
 	const { folderId, returnCode, reason, playedIds, sessionIds } = data;
 	if (!folderId) return;
 
@@ -564,6 +568,7 @@ async function clearFolderPlaylist(folderId, options = {}) {
 }
 
 export const handleClearPlaylistConfirmation = createHandler(async ({ request }) => {
+	await playbackManager.initPromise;
 	const folderId = request.folderId;
 	if (!folderId) return { success: false };
 
@@ -575,6 +580,7 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 	const session = playbackManager.findSessionByFolderId(folderId);
 	if (session) {
 		session.pendingClear = null;
+		playbackManager.persistSessions();
 	}
 
 	if (request.confirmed) {
@@ -604,6 +610,7 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 					session.completedItemIds.delete(id);
 				}
 			}
+			playbackManager.persistSessions();
 		}
 	} else {
 		broadcastLog({
@@ -616,6 +623,7 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 		if (session) {
 			session.completedItemIds.clear();
 			session.pendingClear = null;
+			playbackManager.persistSessions();
 			await broadcastPlaylistState(folderId);
 		}
 		// Critical: Remove from early clears so next completion isn't blocked
@@ -808,6 +816,7 @@ async function _handlePlayM3ULogic(request, data) {
             session.currentPlayingItem = null;
         }
         session.isProcessingQueue = false;
+        playbackManager.persistSessions();
     }
 
     const options = {
@@ -1002,6 +1011,7 @@ export async function handlePlaybackStatusChanged(data) {
 	const session = playbackManager.getSession(actualFolderId);
 	if (watchedIds && Array.isArray(watchedIds)) {
 		watchedIds.forEach(id => session.watchedItemIds.add(id));
+		playbackManager.persistSessions();
 	}
 
 	broadcastPlaybackState(actualFolderId);
@@ -1130,6 +1140,7 @@ export const handleAppend = createHandler(async ({ request, folderId }) => {
 		folderId: folderId,
 		isLastInFolder: false,
 	});
+	playbackManager.persistSessions();
 
 	broadcastLog({
 		text: `[Background]: Received 'queue' request for (${folderId}): ${urlItem.title || urlItem.url}`,
@@ -1195,6 +1206,7 @@ export async function handleSessionRestored(request) {
 		session.isPlaying = true;
 		session.isProcessingQueue = false;
 		session.currentPlayingItem = { folderId: result.folderId, isLastInFolder: true };
+		playbackManager.persistSessions();
 
 		const { mpv_playback_cache: storageCache } = await chrome.storage.local.get("mpv_playback_cache");
 		const existingCache = playbackManager.syncCache || storageCache;

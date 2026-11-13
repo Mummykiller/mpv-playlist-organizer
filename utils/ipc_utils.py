@@ -57,8 +57,133 @@ def is_pid_running(pid):
         except PermissionError:
             # If we get a PermissionError, the process exists but we can't signal it.
             return True
-        except (OSError, ImportError):
+        except (OSError, ImportError) as err:
+            logging.debug(f"is_pid_running check failed for {pid}: {err}")
             return False
+
+def _pipe_has_data_windows(handle_or_file):
+    """Checks if a Windows named pipe handle has data available using PeekNamedPipe."""
+    if platform.system() != "Windows":
+        return True
+    try:
+        import msvcrt
+        import ctypes
+        if hasattr(handle_or_file, "fileno"):
+            fd = handle_or_file.fileno()
+        else:
+            fd = int(handle_or_file)
+        osf = msvcrt.get_osfhandle(fd)
+        bytes_avail = ctypes.c_ulong(0)
+        res = ctypes.windll.kernel32.PeekNamedPipe(osf, None, 0, None, ctypes.byref(bytes_avail), None)
+        if res:
+            return bytes_avail.value > 0
+        return False
+    except Exception as e:
+        logging.debug(f"PeekNamedPipe check note: {e}")
+        return True
+
+def verify_mpv_process(pid, ipc_path=None):
+    """
+    Verifies that a PID actually belongs to an MPV process and matches our session.
+    Never relies solely on PID running check to prevent PID reuse attacks (PY-H3).
+    """
+    if pid is None:
+        return False
+    try:
+        pid = int(pid)
+    except (ValueError, TypeError):
+        return False
+    if pid <= 0 or not is_pid_running(pid):
+        return False
+
+    # 1. First Priority: Check IPC response if ipc_path is available
+    if ipc_path:
+        try:
+            probe_mgr = IPCSocketManager()
+            if probe_mgr.connect(ipc_path, timeout=0.4, start_event_reader=False):
+                mpv_pid = probe_mgr.get_property("pid", timeout=0.4)
+                probe_mgr.close()
+                if mpv_pid is not None and int(mpv_pid) == pid:
+                    return True
+        except Exception as e:
+            logging.debug(f"IPC probe during process verification for PID {pid} failed: {e}")
+
+    # 2. Check process command line / name on Linux via /proc
+    system = platform.system()
+    if system == "Linux":
+        proc_cmdline = f"/proc/{pid}/cmdline"
+        try:
+            if os.path.exists(proc_cmdline):
+                with open(proc_cmdline, "rb") as f:
+                    cmd_bytes = f.read(4096)
+                if cmd_bytes:
+                    cmd_str = cmd_bytes.decode("utf-8", errors="replace")
+                    args = cmd_str.split("\0")
+                    first_arg = os.path.basename(args[0]).lower() if args else ""
+                    is_mpv_bin = "mpv" in first_arg or any("mpv" in a.lower() for a in args[:2])
+                    if is_mpv_bin:
+                        if ipc_path:
+                            ipc_basename = os.path.basename(ipc_path)
+                            if ipc_basename in cmd_str or ipc_path in cmd_str or "--input-ipc-server" in cmd_str:
+                                return True
+                        else:
+                            return True
+        except Exception as e:
+            logging.debug(f"Failed to inspect /proc/{pid}/cmdline: {e}")
+
+    # 3. Check via psutil if installed
+    try:
+        import psutil
+        p = psutil.Process(pid)
+        name = p.name().lower()
+        if "mpv" in name:
+            if ipc_path:
+                try:
+                    cmdline = " ".join(p.cmdline())
+                    if os.path.basename(ipc_path) in cmdline or ipc_path in cmdline or "mpv" in cmdline:
+                        return True
+                except Exception as e:
+                    logging.debug(f"psutil cmdline inspection failed for PID {pid}: {e}")
+                    return True
+            else:
+                return True
+    except ImportError as e:
+        logging.debug(f"psutil not available for process check: {e}")
+    except Exception as e:
+        logging.debug(f"psutil inspection failed for PID {pid}: {e}")
+
+    # 4. Windows ctypes process image name check
+    if system == "Windows":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            kernel32 = ctypes.windll.kernel32
+            h_proc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if h_proc:
+                try:
+                    buf = ctypes.create_unicode_buffer(1024)
+                    size = wintypes.DWORD(1024)
+                    if hasattr(kernel32, "QueryFullProcessImageNameW") and kernel32.QueryFullProcessImageNameW(h_proc, 0, buf, ctypes.byref(size)):
+                        exe_name = os.path.basename(buf.value).lower()
+                        if "mpv" in exe_name:
+                            return True
+                finally:
+                    kernel32.CloseHandle(h_proc)
+        except Exception as e:
+            logging.debug(f"Windows ctypes process image check failed for PID {pid}: {e}")
+
+    # 5. Fallback for macOS / BSD via ps command
+    if system in ("Darwin", "FreeBSD"):
+        try:
+            import subprocess
+            res = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True, timeout=0.5)
+            if res.returncode == 0 and "mpv" in res.stdout.lower():
+                return True
+        except Exception as e:
+            logging.debug(f"ps fallback inspection failed for PID {pid}: {e}")
+
+    return False
 
 class IPCSocketManager:
     """
@@ -216,6 +341,10 @@ class IPCSocketManager:
                     readable, _, _ = select.select([sock_handle], [], [], 0.1)
                     if sock_handle not in readable:
                         continue
+                elif self._system == "Windows" and reader_handle:
+                    if not _pipe_has_data_windows(reader_handle):
+                        time.sleep(0.05)
+                        continue
 
                 # 3. Read raw bytes from Unix socket via recv(4096) to avoid BufferedReader stranding
                 chunk = None
@@ -331,6 +460,10 @@ class IPCSocketManager:
                                     continue
 
                             # Direct read from file handle (Windows or mocked handle)
+                            if self._system == "Windows" and self._sock_file:
+                                if not _pipe_has_data_windows(self._sock_file):
+                                    time.sleep(0.02)
+                                    continue
                             line = self._sock_file.readline()
                             if not line:
                                 break
@@ -430,50 +563,61 @@ class IPCSocketManager:
         """Returns True if the Unix socket file at path is stale/dead (cannot connect)."""
         if platform.system() == "Windows" or not path or not os.path.exists(path):
             return False
+        test_sock = None
         try:
             test_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             test_sock.settimeout(0.1)
-            try:
-                test_sock.connect(path)
-                test_sock.close()
-                return False  # Actively listening
-            except (ConnectionRefusedError, FileNotFoundError, OSError):
-                return True   # Refused or dead socket
-            finally:
+            test_sock.connect(path)
+            return False  # Actively listening
+        except (socket.timeout, TimeoutError):
+            # Busy MPV instance - definitely NOT stale!
+            return False
+        except (ConnectionRefusedError, FileNotFoundError):
+            return True   # Refused or missing socket -> stale
+        except OSError as e:
+            import errno
+            if e.errno in (errno.ECONNREFUSED, errno.ENOENT):
+                return True
+            if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINPROGRESS, errno.ETIMEDOUT):
+                return False
+            logging.debug(f"Socket probe returned unexpected OSError {e.errno} for {path}: {e}")
+            return False
+        except Exception as e:
+            logging.debug(f"Probe socket error for {path}: {e}")
+            return False
+        finally:
+            if test_sock is not None:
                 try:
                     test_sock.close()
                 except Exception as e:
                     logging.debug(f"Error closing probe socket: {e}")
-        except Exception as e:
-            logging.debug(f"Probe socket error for {path}: {e}")
-            return True
 
     @classmethod
     def cleanup_stale_sockets(cls):
         """
-        Audits and unlinks stale socket files in /tmp/mpv_sockets, /dev/shm, IPC_DIR_LINUX, and /tmp.
+        Audits and unlinks stale socket files ONLY in our application's own IPC directory.
+        Never scans /tmp or other hosts' sockets (PY-M1).
         """
         if platform.system() == "Windows":
             return
         
         import stat
-        candidate_dirs = ["/tmp/mpv_sockets", "/dev/shm", IPC_DIR_LINUX, "/tmp"]
-        for cdir in candidate_dirs:
-            if not cdir or not os.path.isdir(cdir) or not os.access(cdir, os.R_OK | os.W_OK):
-                continue
-            try:
-                for entry in os.listdir(cdir):
-                    if entry.startswith("mpv-socket-") or entry.startswith("mpv_socket_") or entry.startswith("mpv_socket"):
-                        full_path = os.path.join(cdir, entry)
-                        try:
-                            st = os.stat(full_path)
-                            if stat.S_ISSOCK(st.st_mode) and cls._is_socket_stale(full_path):
-                                os.unlink(full_path)
-                                logging.info(f"Unlinked stale IPC socket: {full_path}")
-                        except OSError as err:
-                            logging.debug(f"Failed to inspect/unlink socket {full_path}: {err}")
-            except Exception as e:
-                logging.debug(f"Error scanning directory {cdir} for stale sockets: {e}")
+        cdir = IPC_DIR_LINUX
+        if not cdir or not os.path.isdir(cdir) or not os.access(cdir, os.R_OK | os.W_OK):
+            return
+        try:
+            for entry in os.listdir(cdir):
+                if entry.startswith("mpv-socket-") or entry.startswith("mpv_socket_") or entry.startswith("mpv_socket"):
+                    full_path = os.path.join(cdir, entry)
+                    try:
+                        st = os.stat(full_path)
+                        if stat.S_ISSOCK(st.st_mode) and cls._is_socket_stale(full_path):
+                            os.unlink(full_path)
+                            logging.info(f"Unlinked stale IPC socket: {full_path}")
+                    except OSError as err:
+                        logging.debug(f"Failed to inspect/unlink socket {full_path}: {err}")
+        except Exception as e:
+            logging.debug(f"Error scanning IPC directory {cdir} for stale sockets: {e}")
 
     def close(self, unlink_socket=None):
         """

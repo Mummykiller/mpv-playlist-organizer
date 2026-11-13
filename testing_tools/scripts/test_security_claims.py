@@ -203,6 +203,20 @@ class TestSecurityClaims(BaseTestCase):
         self.assertNotIn("external-downloader", sanitized_danger)
         self.assertNotIn("output", sanitized_danger)
 
+        # PY-H5: Dangerous flags (proxy, ffmpeg-location, js-runtimes, remote-components, alias, update, print, no-check-certificate) stripped by default
+        untrusted_payload_opts = "format=best,proxy=http://evil.com,ffmpeg-location=/bin/sh,js-runtimes=node:/bin/sh,remote-components=all,alias=evil,update=true,print=traffic,no-check-certificate="
+        sanitized_untrusted = security.sanitize_ytdlp_options(untrusted_payload_opts, allow_settings_flags=False)
+        self.assertEqual(sanitized_untrusted, "format=best")
+        for flag in ["proxy", "ffmpeg-location", "js-runtimes", "remote-components", "alias", "update", "print", "no-check-certificate"]:
+            self.assertNotIn(flag, sanitized_untrusted)
+
+        # Settings-only flags preserved when allow_settings_flags=True
+        settings_opts = "remote-components=ejs:github,js-runtimes=node,ffmpeg-location=/usr/bin/ffmpeg"
+        sanitized_settings = security.sanitize_ytdlp_options(settings_opts, allow_settings_flags=True)
+        self.assertIn("remote-components=ejs:github", sanitized_settings)
+        self.assertIn("js-runtimes=node", sanitized_settings)
+        self.assertIn("ffmpeg-location=/usr/bin/ffmpeg", sanitized_settings)
+
         # Injection attempts inside allowed flag values must be neutralized
         injected_opts = 'user-agent=Mozilla; rm -rf / | evil & `calc`,limit-rate=500K\n\r"quoted"'
         sanitized_injected = security.sanitize_ytdlp_options(injected_opts)
@@ -377,6 +391,8 @@ class TestSecurityClaims(BaseTestCase):
         self.assertTrue(security.is_safe_executable_path("ffmpeg", "ffmpeg_path"))
 
         # Injection characters
+        self.assertNotIn('(', security.FORBIDDEN_PATH_CHARS)
+        self.assertNotIn(')', security.FORBIDDEN_PATH_CHARS)
         self.assertFalse(security.is_safe_executable_path("mpv; rm -rf /", "mpv_path"))
         self.assertFalse(security.is_safe_executable_path("mpv$(whoami)", "mpv_path"))
         self.assertFalse(security.is_safe_executable_path("mpv`id`", "mpv_path"))
@@ -398,19 +414,24 @@ class TestSecurityClaims(BaseTestCase):
 
     def test_settings_allowlist_enforcement(self):
         """Claim 3.4: Enforces strict key and path validation in set_settings."""
-        # Unapproved key injection must be rejected
-        res = file_io.set_settings({"malicious_injected_key": "evil_payload", "ytdl_quality": "1080"})
-        self.assertTrue(res.get("success"))
+        original_data_dir = file_io.DATA_DIR
+        file_io.initialize_paths(self.test_dir)
+        try:
+            # Unapproved key injection must be rejected
+            res = file_io.set_settings({"malicious_injected_key": "evil_payload", "ytdl_quality": "1080"})
+            self.assertTrue(res.get("success"))
 
-        saved_settings = file_io.get_settings()
-        self.assertNotIn("malicious_injected_key", saved_settings)
-        self.assertEqual(saved_settings.get("ytdl_quality"), "1080")
+            saved_settings = file_io.get_settings()
+            self.assertNotIn("malicious_injected_key", saved_settings)
+            self.assertEqual(saved_settings.get("ytdl_quality"), "1080")
 
-        # Unsafe binary path injection must be rejected
-        res = file_io.set_settings({"mpv_path": "/bin/sh; rm -rf /"})
-        self.assertTrue(res.get("success"))
-        saved_settings = file_io.get_settings()
-        self.assertNotEqual(saved_settings.get("mpv_path"), "/bin/sh; rm -rf /")
+            # Unsafe binary path injection must be rejected
+            res = file_io.set_settings({"mpv_path": "/bin/sh; rm -rf /"})
+            self.assertTrue(res.get("success"))
+            saved_settings = file_io.get_settings()
+            self.assertNotEqual(saved_settings.get("mpv_path"), "/bin/sh; rm -rf /")
+        finally:
+            file_io.initialize_paths(original_data_dir)
 
     def test_shell_free_terminal_execution(self):
         """Claim 5.3: Terminal execution uses direct process argv without sh -c or shell wrapping."""

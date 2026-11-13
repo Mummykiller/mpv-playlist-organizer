@@ -24,7 +24,7 @@ To prevent Denial of Service (DoS) via memory exhaustion and buffer overflows, i
 | **String Length** | N/A | 100 KB | General payload strings (e.g., data exports). |
 | **Playlist Items** | 5,000 items | 10,000 items | Maximum items per folder/shard. |
 | **Folder Name** | 100 chars | 128 chars | Folder names. |
-| **IPC Message** | N/A | 5 MB | Max size of a single JSON native messaging message. |
+| **IPC Message** | N/A | 5 MB in, ≤900 KB out | Max size of JSON native messaging (Chrome terminates hosts over 1 MiB outbound). |
 
 > **Defense in Depth:** JavaScript (`utils/security.module.js`) enforces tighter limits before transmitting requests. Python (`utils/security.py`) enforces its own limits upon receipt as an independent barrier.
 
@@ -70,7 +70,7 @@ To prevent the Native Host and extension from being leveraged as an internal int
 5. **Environment Variable Whitelisting (`get_mpv_popen_kwargs`):**
    - Subprocesses run with sanitized environments, stripping untrusted environment variables.
 6. **Tool Flag Allowlists:**
-   - **`yt-dlp` Flag Allowlist (`YTDLP_SAFE_FLAGS_ALLOWLIST`):** Only vetted flags (e.g. `--cookies`, `--user-agent`, `--format`, `--sub-lang`) are permitted. Dangerous execution flags like `--exec`, `--output`, or `--config-location` are strictly rejected.
+   - **`yt-dlp` Flag Allowlist (`YTDLP_SAFE_FLAGS_ALLOWLIST` & `YTDLP_SETTINGS_ONLY_FLAGS`):** Only vetted flags (e.g. `cookies`, `user-agent`, `format`, `sub-lang`) are permitted on untrusted item payloads (`sanitize_ytdlp_options(..., allow_settings_flags=False)`). Settings-only flags (`proxy`, `ffmpeg-location`, `js-runtimes`, `remote-components`, `alias`, `update`, `print`, `no-check-certificate`, `geo-verification-proxy`) are only permitted from trusted settings (`allow_settings_flags=True`). Dangerous execution flags like `--exec`, `--output`, or `--config-location` are strictly rejected.
    - **`MPV` Safe Flags Allowlist (`SAFE_MPV_FLAGS_ALLOWLIST`):** Only safe player flags are permitted from UI inputs.
 
 ---
@@ -131,3 +131,24 @@ Runs on application startup and exit to clean up transient artifacts:
 - Removes stale IPC domain sockets and lock files from dead processes.
 - Cleans temporary M3U/M3U8 files older than 72 hours.
 - Removes volatile cookie files in `/dev/shm`.
+
+
+---
+
+## 6. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+
+> [!NOTE]
+> **Resolved Audit Findings (PY-H2, PY-H5):** The outbound message guard is enforced at ≤ 900 KB in `native_host.py` (`MAX_OUTBOUND_MESSAGE_SIZE`). Dangerous yt-dlp flags (`proxy`, `ffmpeg-location`, `js-runtimes`, `remote-components`, `alias`, `update`, `print`, `no-check-certificate`) are strictly restricted to trusted settings (`YTDLP_SETTINGS_ONLY_FLAGS`) and stripped from untrusted item payloads by default (`sanitize_ytdlp_options(..., allow_settings_flags=False)`).
+
+Rules for any change touching security-sensitive code:
+
+1. **Item-supplied vs. settings-supplied options.** Options that arrive in an item payload (`ytdl_raw_options`, anything from the browser) may only use a minimal safe subset. Flags that change what is executed, where traffic goes, or what is downloaded and run (`proxy`, `ffmpeg-location`, `js-runtimes`, `remote-components`, `exec`, `alias`, `update`) are **settings-only**, and path-like values must pass `is_safe_executable_path`.
+2. **Allowlist changes need a test.** Every key added to a flag, settings or protocol allowlist requires a test proving that an item-supplied dangerous value is rejected.
+3. **Fail closed.** Missing token, unresolved hostname, empty Host header, or unverifiable PID means *deny*, never "skip the check". Never write `if token:` around an auth check.
+4. **Local HTTP servers** must: bind `127.0.0.1` (use that literal in URLs, not `localhost`), require a token, validate the `Host` header, be threaded with socket timeouts, and prefer a random port (`0`).
+5. **Temp and shared paths.** Never use fixed world-writable paths (`/tmp/<name>_<pid>.flag`, `/dev/shm/<fixed-dir>`). Use per-process `mkdtemp` or the private 0700 dir, open with `O_NOFOLLOW`, verify ownership and mode, and write secrets with mode 0600 *at creation* (`os.open(..., 0o600)`), not chmod afterwards.
+6. **Never signal a PID you have not verified.** Before `kill`, confirm identity (matching IPC `pid`, `/proc/<pid>/cmdline`, or stored process start time). PIDs get reused.
+7. **Path-character blacklists** must not reject legitimate paths (`(`, `)` appear in `Program Files (x86)`). Because we never use a shell, validate by existence, executability and base name instead.
+8. **Never leak raw `str(e)` with paths** into UI-bound responses; run it through `mask_path`.
+9. **Cap untrusted text** forwarded to logs (`log_browser_error` message/stack ≤ a few KB).
+10. **Validate batch fields too.** URL validation must cover `url`, `urlItem`, `urlItems`, and `urls`. A new payload field is a new bypass until it is validated. In JS, `isValidUrl` must return `false` (not a prefix match) when `new URL` throws.

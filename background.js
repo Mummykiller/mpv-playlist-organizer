@@ -2,8 +2,8 @@
 // --- Core Module Imports ---
 
 import {
-	_syncToNativeHostFile,
 	debouncedSyncToNativeHostFile,
+	flushPendingSync,
 } from "./background/core_services.js";
 import { createHandler } from "./background/handler_factory.js";
 import * as dependency_anilist_handlers from "./background/handlers/dependency_anilist.js";
@@ -20,60 +20,89 @@ import { storage } from "./background/storage_instance.js";
 import { updateContextMenus } from "./utils/contextMenu.js";
 import { getActiveTab } from "./utils/commUtils.module.js";
 import { logger } from "./utils/SystemLogger.module.js";
-import { addNativeListener } from "./utils/nativeConnection.module.js";
+import { addNativeListener, setLogBroadcaster } from "./utils/nativeConnection.module.js";
 import { nativeLink } from "./utils/nativeLink.js";
 import * as playlistManager from "./utils/playlistManager.js";
+import { isValidUrl } from "./utils/security.module.js";
+
+setLogBroadcaster(broadcastLog);
 
 // --- Shared State ---
 let nativeHostStatus = { status: "unknown", lastCheck: 0, info: null };
 let autoAddActive = false;
-let autoAddTimer = null;
+const AUTO_ADD_ALARM_NAME = "auto-add-inactivity";
 
-// HAIL MARY RECOVERY: Check if we just restarted due to an injection failure
-chrome.storage.local.get("hail_mary_pending", (data) => {
-	try {
-		if (data?.hail_mary_pending) {
-			setTimeout(() => {
-				broadcastLog({ 
-					text: "[System]: Extension was automatically restarted to recover from a blocked or unresponsive on-page controller.", 
-					type: "info"
-				});
-				chrome.storage.local.remove("hail_mary_pending");
-			}, 1000); // Small delay to ensure UIs are ready to receive the log
-		}
-	} catch (e) {
-		logger.debug(`[Background] hail_mary_pending check failed: ${e.message}`);
+// Helper to access session storage with local fallback (preserves state across MV3 worker terminations)
+const getSessionStorage = () => {
+	if (typeof chrome !== "undefined" && chrome?.storage?.session) {
+		return chrome.storage.session;
 	}
-});
+	return chrome.storage.local;
+};
 
-const startAutoAddTimer = async () => {
-	if (autoAddTimer) clearTimeout(autoAddTimer);
-	const data = await storage.get();
-	const timeout = (data.settings.uiPreferences.global.autoAddInactivityTimeout || 30) * 1000;
-	const autoOff = data.settings.uiPreferences.global.autoAddAutoOff !== false;
-
-	if (autoOff) {
-		autoAddTimer = setTimeout(() => {
-			if (autoAddActive) {
-				autoAddActive = false;
-				broadcastToTabs({ action: "auto_add_state_changed", active: false });
-				broadcastLog({ text: "[Auto-Add]: Disabled due to inactivity.", type: "info" });
-			}
-		}, timeout);
+const setAutoAddActive = async (val) => {
+	autoAddActive = Boolean(val);
+	try {
+		await getSessionStorage().set({ autoAddActive });
+	} catch (e) {
+		logger.debug(`[Background] Failed to persist autoAddActive: ${e?.message}`);
 	}
 };
 
 const autoAddCooldowns = new Map();
 
-const handleAutoAdd = async (url, tab) => {
-	if (!autoAddActive || !url) return;
-	
-	// URL-level cooldown to prevent "500 windows" if a page spams the same stream
-	const now = Date.now();
-	if (autoAddCooldowns.has(url) && now - autoAddCooldowns.get(url) < 5000) {
-		return;
+const persistAutoAddCooldowns = () => {
+	try {
+		const now = Date.now();
+		for (const [k, ts] of autoAddCooldowns.entries()) {
+			if (typeof ts !== "number" || now - ts >= 5000) {
+				autoAddCooldowns.delete(k);
+			}
+		}
+		getSessionStorage()
+			.set({ autoAddCooldowns: Object.fromEntries(autoAddCooldowns) })
+			.catch(() => {});
+	} catch (e) {
+		logger.debug(`[Background] Failed to persist autoAddCooldowns: ${e?.message}`);
 	}
-	autoAddCooldowns.set(url, now);
+};
+
+// Rehydrate autoAddActive & autoAddCooldowns on worker initialization
+const autoAddInitPromise = (async () => {
+	try {
+		const res = await getSessionStorage().get(["autoAddActive", "autoAddCooldowns"]);
+		if (res && typeof res.autoAddActive === "boolean") {
+			autoAddActive = res.autoAddActive;
+		}
+		if (res?.autoAddCooldowns && typeof res.autoAddCooldowns === "object") {
+			const now = Date.now();
+			for (const [url, ts] of Object.entries(res.autoAddCooldowns)) {
+				if (typeof ts === "number" && now - ts < 5000 && !autoAddCooldowns.has(url)) {
+					autoAddCooldowns.set(url, ts);
+				}
+			}
+		}
+	} catch (e) {
+		logger.debug(`[Background] Failed to restore autoAdd state: ${e?.message}`);
+	}
+})();
+
+const startAutoAddTimer = async () => {
+	await chrome.alarms.clear(AUTO_ADD_ALARM_NAME);
+	const data = await storage.get();
+	const timeoutSeconds = data.settings.uiPreferences.global.autoAddInactivityTimeout || 30;
+	const autoOff = data.settings.uiPreferences.global.autoAddAutoOff !== false;
+
+	if (autoOff) {
+		chrome.alarms.create(AUTO_ADD_ALARM_NAME, {
+			when: Date.now() + timeoutSeconds * 1000,
+		});
+	}
+};
+
+const handleAutoAdd = async (url, tab) => {
+	await autoAddInitPromise;
+	if (!autoAddActive || !url) return;
 
 	// 1. CAPTURE SNAPSHOT IMMEDIATELY (Lock-on to the current page state)
 	const snapshot = {
@@ -82,11 +111,19 @@ const handleAutoAdd = async (url, tab) => {
 		tabId: tab?.id
 	};
 
-	startAutoAddTimer();
-	
 	const data = await storage.get();
-	const folderId = data.settings.lastUsedFolderId;
+	const folderId = data?.settings?.lastUsedFolderId;
 	if (!folderId) return;
+
+	// URL-level cooldown to prevent "500 windows" if a page spams the same stream
+	const now = Date.now();
+	if (autoAddCooldowns.has(url) && now - autoAddCooldowns.get(url) < 5000) {
+		return;
+	}
+	autoAddCooldowns.set(url, now);
+	persistAutoAddCooldowns();
+
+	startAutoAddTimer();
 
 	// 2. Add IMMEDIATELY with the snapshot title
 	const initialScrape = { url, title: snapshot.title, isProvisional: true };
@@ -157,9 +194,11 @@ self.addEventListener("unhandledrejection", (event) => {
 // --- Main Message Listener ---
 const actionHandlers = {
 	log_browser_error: async (request) => {
-		const context = request.context || "Browser";
-		const message = request.message || request.error || "Unknown error";
-		const stack = request.stack || "";
+		const MAX_LOG_LEN = 4096;
+		const context = String(request.context || "Browser").slice(0, 256);
+		const rawMessage = request.message || request.error || "Unknown error";
+		const message = String(rawMessage).slice(0, MAX_LOG_LEN);
+		const stack = String(request.stack || "").slice(0, MAX_LOG_LEN);
 		logger.error(`[${context}] ${message}`, { persist: false, stack });
 		try {
 			await nativeLink.call("log_browser_error", {
@@ -192,7 +231,7 @@ const actionHandlers = {
 	switch_playlist: ui_state_handlers.handleSwitchPlaylist,
 	get_last_folder_id: createHandler(async ({ data }) => {
 		return {
-			folderId: data.settings.lastUsedFolderId || Object.keys(data.folders)[0],
+			folderId: data?.settings?.lastUsedFolderId || Object.keys(data?.folders || {})[0] || null,
 		};
 	}),
 	set_ui_preferences: ui_state_handlers.handleSetUiPreferences,
@@ -200,7 +239,8 @@ const actionHandlers = {
 	get_default_automatic_flags: ui_state_handlers.handleGetDefaultAutomaticFlags,
 	set_minimized_state: ui_state_handlers.handleSetMinimizedState,
 	toggle_auto_add: async (request) => {
-		autoAddActive = !autoAddActive;
+		await autoAddInitPromise;
+		await setAutoAddActive(!autoAddActive);
 		if (autoAddActive) {
 			startAutoAddTimer();
 			broadcastLog({ text: "[Auto-Add]: Enabled. Watching for streams...", type: "info" });
@@ -219,18 +259,28 @@ const actionHandlers = {
 				logger.warn(`[Auto-Add] Retroactive check failed: ${e.message}`, { data: e });
 			}
 		} else {
-			if (autoAddTimer) clearTimeout(autoAddTimer);
+			await chrome.alarms.clear(AUTO_ADD_ALARM_NAME);
 			broadcastLog({ text: "[Auto-Add]: Disabled.", type: "info" });
 		}
 		broadcastToTabs({ action: "auto_add_state_changed", active: autoAddActive });
 		return { success: true, active: autoAddActive };
 	},
-	get_auto_add_state: () => ({ success: true, active: autoAddActive }),
+	get_auto_add_state: async () => {
+		try {
+			const res = await getSessionStorage().get("autoAddActive");
+			if (res && typeof res.autoAddActive === "boolean") {
+				autoAddActive = res.autoAddActive;
+			}
+		} catch (e) {
+			logger.debug(`[Background] Failed to read autoAddActive from session: ${e?.message}`);
+		}
+		return { success: true, active: autoAddActive };
+	},
 	report_detected_url: (request, sender) => {
 		const tabId = sender.tab?.id;
 		if (tabId) {
 			m3u8_scanner_handlers.handleUpdateDetectedUrlForTab(tabId, request.url);
-			if (autoAddActive && request.url) {
+			if (request.url) {
 				handleAutoAdd(request.url, sender.tab);
 			}
 		}
@@ -320,6 +370,20 @@ addNativeListener("log", (data) => {
 });
 
 const activeTasks = new Map();
+const activeTasksInitPromise = (async () => {
+	try {
+		const res = await chrome.storage.local.get("mpv_active_tasks");
+		if (Array.isArray(res?.mpv_active_tasks)) {
+			for (const t of res.mpv_active_tasks) {
+				if (t?.id) {
+					activeTasks.set(t.id, t);
+				}
+			}
+		}
+	} catch (e) {
+		logger.debug(`[Background] Failed to restore activeTasks: ${e?.message}`);
+	}
+})();
 
 addNativeListener("update_item_title", (data) => {
 	try {
@@ -331,6 +395,7 @@ addNativeListener("update_item_title", (data) => {
 
 addNativeListener("task_update", async (data) => {
 	try {
+		await activeTasksInitPromise;
 		const { task, removed, taskId, task_id } = data;
 		const id = taskId || task_id || task?.id;
 		if (!id) return;
@@ -350,6 +415,7 @@ addNativeListener("task_update", async (data) => {
 });
 
 m3u8_scanner_handlers.setDetectionCallback(async (url, tabId) => {
+	await autoAddInitPromise;
 	if (autoAddActive) {
 		try {
 			const tab = await chrome.tabs.get(tabId);
@@ -382,8 +448,18 @@ async function performNativeHostHeartbeat() {
 	}
 }
 
+const METADATA_SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000;
+
 async function syncMetadataCache() {
 	try {
+		const now = Date.now();
+		const { lastMetadataSyncAt } = await chrome.storage.local.get("lastMetadataSyncAt");
+		if (typeof lastMetadataSyncAt === "number" && now - lastMetadataSyncAt < METADATA_SYNC_MIN_INTERVAL_MS) {
+			logger.debug("[BG] Skipping metadata cache sync (throttled).");
+			return;
+		}
+		await chrome.storage.local.set({ lastMetadataSyncAt: now });
+
 		const shardsResult = await nativeLink.getMetadataCache();
 		if (shardsResult?.success && shardsResult.shards) {
 			logger.info(`[BG] Syncing ${shardsResult.shards.length} metadata shards...`);
@@ -400,10 +476,20 @@ async function syncMetadataCache() {
 	}
 }
 
-function startNativeHostHeartbeat() {
+async function startNativeHostHeartbeat() {
 	performNativeHostHeartbeat();
-	chrome.alarms.create("native-host-heartbeat", { periodInMinutes: 5 });
-	chrome.alarms.create("metadata-cache-sync", { periodInMinutes: 30 });
+	try {
+		const heartbeatAlarm = await chrome.alarms.get("native-host-heartbeat");
+		if (!heartbeatAlarm) {
+			chrome.alarms.create("native-host-heartbeat", { periodInMinutes: 5 });
+		}
+		const metadataAlarm = await chrome.alarms.get("metadata-cache-sync");
+		if (!metadataAlarm) {
+			chrome.alarms.create("metadata-cache-sync", { periodInMinutes: 30 });
+		}
+	} catch (e) {
+		logger.debug(`[Background] Failed to ensure heartbeat alarms: ${e?.message}`);
+	}
 }
 
 startNativeHostHeartbeat();
@@ -411,8 +497,11 @@ startNativeHostHeartbeat();
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 	if (sender.id && sender.id !== chrome.runtime.id) return false;
 	if (request.log && !request.action) return;
+	if (!request?.action || !Object.hasOwn(actionHandlers, request.action)) {
+		return false;
+	}
 	const handler = actionHandlers[request.action];
-	if (handler) {
+	if (typeof handler === "function") {
 		(async () => {
 			try {
 				const response = await handler(request, sender);
@@ -458,7 +547,16 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 		} else if (alarm.name === "metadata-cache-sync") {
 			syncMetadataCache().catch((e) => logger.debug(`[Background] Alarm metadata sync failed: ${e.message}`));
 		} else if (alarm.name === "sync-to-native-host") {
-			_syncToNativeHostFile();
+			flushPendingSync().catch((e) => logger.debug(`[Background] Sync alarm failed: ${e.message}`));
+		} else if (alarm.name === AUTO_ADD_ALARM_NAME) {
+			(async () => {
+				await autoAddInitPromise;
+				if (autoAddActive) {
+					await setAutoAddActive(false);
+					broadcastToTabs({ action: "auto_add_state_changed", active: false });
+					broadcastLog({ text: "[Auto-Add]: Disabled due to inactivity.", type: "info" });
+				}
+			})().catch((e) => logger.debug(`[Background] Auto-add inactivity alarm failed: ${e.message}`));
 		}
 	} catch (e) {
 		logger.error(`[Background] onAlarm failed: ${e.message}`, { persist: true, stack: e.stack });
@@ -468,8 +566,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 	try {
 		const { menuItemId, linkUrl, srcUrl, pageUrl } = info;
-		const urlToAdd = linkUrl || srcUrl || pageUrl;
-		if (!urlToAdd) return;
+		const targetUrl = linkUrl || srcUrl || pageUrl;
+		if (!targetUrl || !isValidUrl(targetUrl)) {
+			logger.warn(`[Background] Rejected unsafe/invalid context menu URL: ${String(targetUrl || "").slice(0, 128)}`);
+			return;
+		}
 
 		const getFolderId = async () => {
 			if (menuItemId.startsWith("add-to-folder-"))
@@ -488,15 +589,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 			) {
 				playlistManager.handleAddFromContextMenu(
 					folderId,
-					urlToAdd,
+					targetUrl,
 					"YouTube Playlist",
 					tab,
 				);
 			} else {
 				playlistManager.handleAddFromContextMenu(
 					folderId,
-					urlToAdd,
-					tab.title || urlToAdd,
+					targetUrl,
+					tab?.title || targetUrl,
 					tab,
 				);
 			}
@@ -515,8 +616,7 @@ function isScriptableUrl(urlStr) {
 		}
 		if (
 			parsed.hostname === "chromewebstore.google.com" ||
-			parsed.hostname === "chrome.google.com" ||
-			parsed.pathname.includes("/webstore")
+			(parsed.hostname === "chrome.google.com" && parsed.pathname.startsWith("/webstore"))
 		) {
 			return false;
 		}
@@ -533,7 +633,7 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 		return;
 	}
 
-	logger.info(`[Background] injectIntoTab ENTRY: Tab ${tabId} (Attempt ${attempt})`, { persist: true });
+	logger.debug(`[Background] injectIntoTab ENTRY: Tab ${tabId} (Attempt ${attempt})`, { persist: false });
 
 	// 1. Fetch fresh tab data
 	const tab = await chrome.tabs.get(tabId).catch((err) => {
@@ -541,12 +641,17 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 		return null;
 	});
 	if (!tab) {
-		logger.info(`[Background] injectIntoTab: Tab ${tabId} no longer exists. Skipping.`, { persist: true });
+		logger.debug(`[Background] injectIntoTab: Tab ${tabId} no longer exists. Skipping.`, { persist: false });
+		return;
+	}
+
+	if (tab.status !== "complete") {
+		logger.debug(`[Background] injectIntoTab: Tab ${tabId} status is '${tab.status}' (not complete). Skipping.`, { persist: false });
 		return;
 	}
 
 	if (!tab.url) {
-		logger.info(`[Background] injectIntoTab: Tab ${tabId} has no URL. (Attempt ${attempt}). Skipping.`, { persist: true });
+		logger.debug(`[Background] injectIntoTab: Tab ${tabId} has no URL. (Attempt ${attempt}). Skipping.`, { persist: false });
 		return;
 	}
 
@@ -573,7 +678,7 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 					url.hostname === domain || url.hostname.endsWith("." + domain),
 			)
 		) {
-			logger.info(`[Background] Skipping injection for restricted domain: ${url.hostname}`, { persist: true });
+			logger.debug(`[Background] Skipping injection for restricted domain: ${url.hostname}`, { persist: false });
 			return;
 		}
 
@@ -588,7 +693,7 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 				});
 
 			if (isAlive) {
-				logger.info(`[Background] Tab ${tab.id} already has a responsive script. Syncing...`, { persist: true });
+				logger.debug(`[Background] Tab ${tab.id} already has a responsive script. Syncing...`, { persist: false });
 				let origin = null;
 				try {
 					origin = new URL(tab.url).origin;
@@ -603,7 +708,7 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 			}
 		}
 
-		logger.info(`[Background] Injecting content script into tab ${tab.id} (Attempt ${attempt}/${MAX_ATTEMPTS})...`, { persist: true });
+		logger.debug(`[Background] Injecting content script into tab ${tab.id} (Attempt ${attempt}/${MAX_ATTEMPTS})...`, { persist: false });
 
 		// 3. Cleanup & Inject
 		await chrome.scripting
@@ -645,11 +750,13 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 			logger.warn(`[Background] Injection Verification FAILED for tab ${tab.id}. Retrying in ${RETRY_DELAY/1000}s...`, { persist: true });
 			setTimeout(() => injectIntoTab(tabId, attempt + 1), RETRY_DELAY);
 		} else if (!confirmedAlive && attempt === MAX_ATTEMPTS) {
-			logger.error(`[Background] ALL injection attempts failed for tab ${tab.id}. Triggering Hail Mary reload...`, { persist: true });
-			await chrome.storage.local.set({ hail_mary_pending: true });
-			chrome.runtime.reload();
+			logger.error(`[Background] ALL injection attempts failed for tab ${tab.id}. Content script could not be verified.`, { persist: true });
+			broadcastLog({
+				text: `[System]: Failed to connect to page controller on tab ${tab.id} after ${MAX_ATTEMPTS} attempts. Please refresh the tab.`,
+				type: "error",
+			});
 		} else if (confirmedAlive) {
-			logger.info(`[Background] Content script successfully injected and verified for tab ${tab.id} (Attempt ${attempt}).`, { persist: true });
+			logger.debug(`[Background] Content script successfully injected and verified for tab ${tab.id} (Attempt ${attempt}).`, { persist: false });
 		}
 	} catch (err) {
 		const errorMsg = err.message || "Unknown error";
@@ -659,7 +766,7 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 			errorMsg.includes("The extensions gallery cannot be scripted");
 
 		if (isPermissionError) {
-			logger.info(`[Background] Skipping injection for tab ${tabId} (${errorMsg}).`);
+			logger.debug(`[Background] Skipping injection for tab ${tabId} (${errorMsg}).`, { persist: false });
 			return;
 		}
 
@@ -668,6 +775,10 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 			setTimeout(() => injectIntoTab(tabId, attempt + 1), RETRY_DELAY);
 		} else {
 			logger.error(`[Background] Fatal injection error after ${MAX_ATTEMPTS} attempts for tab ${tabId}: ${errorMsg}`, { persist: true });
+			broadcastLog({
+				text: `[System]: Content script injection failed for tab ${tabId}: ${errorMsg}`,
+				type: "error",
+			});
 		}
 	}
 }
@@ -690,17 +801,15 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 		const tab = await chrome.tabs.get(activeInfo.tabId);
 		await injectIntoTab(tab);
 
-		// Proactive broadcast: Even if the script is already there,
-		// tell it to refresh its view of the global playback state.
+		// Proactive broadcast: Ensure the newly activated tab catches up on global state.
 		const data = await storage.get();
 		const currentStatus = await playback_handlers.handleIsMpvRunning().catch((err) => {
 			logger.debug(`[Background] handleIsMpvRunning failed: ${err?.message}`);
 			return { isRunning: false };
 		});
 		
-		if (currentStatus?.isRunning) {
-			await broadcastPlaylistState(currentStatus.folderId);
-		}
+		const targetFolderId = currentStatus?.folderId || data?.settings?.lastUsedFolderId || Object.keys(data?.folders || {})[0];
+		await broadcastPlaylistState(targetFolderId);
 	} catch (e) {
 		logger.warn(`[Background] tabs.onActivated handler failed: ${e.message}`);
 	}

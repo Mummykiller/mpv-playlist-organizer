@@ -175,3 +175,30 @@ The Background Service Worker coordinates UI updates across all active browser t
   - Run `python3 installer.py` to register the native messaging host JSON manifest in Chrome's native messaging directory (`~/.config/google-chrome/NativeMessagingHosts/com.mpv_playlist_organizer.handler.json`).
 - **Silent Parameter Drops:**
   - If a parameter passed from JS disappears before reaching Python handler logic, check whether the key was included in the dataclass inside `utils/native_link/models.py`. Keys not declared in the model are dropped during `translator.py` instantiation.
+
+
+---
+
+## 8. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+
+### MV3 service worker rules
+The service worker is killed after about 30s idle. **Any in-memory variable is a cache, not state.**
+1. State that must survive (Auto-Add on/off, pending clears, queued appends, scanner promises) goes in `chrome.storage.session` or `.local`, and is rehydrated on worker start.
+2. Use `chrome.alarms` for anything longer than a few seconds. `setTimeout` is only for sub-second debouncing.
+3. Create alarms in `onInstalled`/`onStartup`, or guard with `alarms.get`. Never unconditionally at module top level. Throttle expensive wake-up work (metadata sync) by stored timestamp.
+4. Every state toggle that the popup displays must be readable back from persisted state.
+
+### Native call rules (`nativeConnection.module.js`)
+1. Every `callNativeHost` request has a timeout (default about 30s) that deletes its `requestPromises` entry and rejects. The connect handshake has its own timeout.
+2. `dispatchNativeEvent` wraps **each** listener in try/catch. One bad listener must not starve the rest.
+3. Do not keep cross-message closure state (`lastRestoredIsPaused`). Put it on the event.
+4. Utility modules must not import from `background/`. Inject callbacks through setters (as `logger.setNativeSender` does).
+
+### Message size and framing (Python → browser)
+1. `send_message` must check the encoded size (limit about 900 KB, Chrome's hard limit is 1 MiB). If exceeded, return a failure or paged result with the same `request_id`. Never silently swallow the send error.
+2. Large payloads (`restore_session` playlists, enriched items, AniList caches) must be paged or referenced by id.
+3. **CLI mode must never use the native-messaging writer.** Inject a text/no-op sender based on `is_browser`, so no binary frames reach a terminal.
+4. Handlers must be importable and unit-testable. Do not define them inside `main()`.
+
+### Broadcast rules
+`broadcastToTabs` only reaches active tabs, so on `tabs.onActivated` always send a state refresh. Do not rely on event delivery alone.

@@ -36,10 +36,16 @@ class BaseTestCase(unittest.TestCase):
 
     def tearDown(self):
         logger.shutdown()
-        # Small delay to ensure files are released
-        time.sleep(0.1)
         if os.path.exists(self.test_dir):
-            shutil.rmtree(self.test_dir)
+            for attempt in range(3):
+                try:
+                    shutil.rmtree(self.test_dir)
+                    break
+                except OSError as e:
+                    if attempt == 2:
+                        logging.warning(f"Failed to remove temp test_dir {self.test_dir}: {e}")
+                    else:
+                        time.sleep(0.05)
         
         # Reset logging for next test
         root = logging.getLogger()

@@ -142,3 +142,18 @@ To guarantee local viewing history is never corrupted or cleared by remote netwo
 - **"File lock acquisition timeout":** A previous process crashed while holding a `.lock` file without recording a valid PID. Inspect `data/*.lock` files and verify process IDs.
 - **Missing Setting Value / Undefined in UI:** Check whether the setting is declared in `_getDefaultData()` in `utils/storageManager.js`. If missing, newly installed extensions or clean profiles will not have the key initialized.
 - **Test Failure in `test_settings_synchronization`:** You added a setting in JS or Python without mirroring it in the other environment. Compare `file_io.py:get_settings()` with `utils/storageManager.js:_getDefaultData()`.
+
+
+---
+
+## 7. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+
+1. **No unlocked read-modify-write.** Any `get_*` followed by `save_*` on the same index or shard must happen inside one lock scope. Add and use `update_shard(folder_id, fn)`-style helpers instead of separate get/save calls. Lock order is always INDEX → shard.
+2. **Prefer OS locks.** PID-file locks have stale-detection races and PID-reuse false positives. Prefer `fcntl.flock` (POSIX) / `msvcrt.locking` (Windows), which the OS releases on process death. If the lock falls back to thread-only (EROFS/EACCES), log it loudly.
+3. **Never overwrite user data on a read failure.** Distinguish *missing* (write defaults) from *unreadable/corrupt* (keep the file, use `.bak`, surface an error). `get_settings()` must not write on read, and should cache by mtime.
+4. **Destructive pruning needs guards.** `save_library_batch` (non-incremental) must refuse an empty or far-smaller-than-index payload, and should move removed shards to a `trash/` dir with a timed purge, not delete them.
+5. **Back up only valid files.** Validate the current file before copying it over `.bak`. fsync the directory after `os.replace`.
+6. **Snapshot-and-clear must be restorable.** If a commit fails (lock timeout, disk error), merge the snapshot back into the in-memory cache. Never drop resume times or watched flags on error.
+7. **Shared mutable state needs one lock.** Sets and dicts touched by the tracking thread, the IPC reader thread, and callbacks (`played_item_ids`, `threshold_met_ids`, caches) are guarded by `self.lock`. Copy lists on entry instead of aliasing another component's list.
+8. **Session identity.** Waiter and watcher threads capture a session generation token (or PID) at start. `clear()` ignores callers whose token is stale, and `manual_quit` is captured at waiter start.
+9. **Service-worker memory is not storage:** see the MV3 rules in `bridge-and-protocol`.

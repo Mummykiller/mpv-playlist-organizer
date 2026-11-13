@@ -135,3 +135,30 @@ python3 testing_tools/run_suite.py --verbose
 # Watch mode (automatically re-runs suite on file modification):
 python3 testing_tools/run_suite.py --watch
 ```
+
+
+---
+
+## 6. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+
+### Every bug fix and hardening change ships with a regression test
+Write the test first and confirm it fails without the fix. Prefer these patterns:
+
+| Risk area | Required test style |
+| :--- | :--- |
+| Native host framing | Subprocess test sending oversized (>1 MiB reply), truncated, and malformed frames |
+| `FileLock` / atomic writes | Multi-process contention test, stale and live holder cases, kill mid-write |
+| IPC | Fake mpv server on a unix socket: full backlog, slow reply, dead peer, PID reuse |
+| Local HTTP server | Missing token → 403, wrong `Host` → 403, concurrent slow client does not block |
+| Security allowlists | An item-supplied dangerous value (`proxy=`, `exec`) is rejected |
+| Service worker | Node + mocked `chrome.*`: simulate worker restart and assert state rehydrates |
+| `nativeConnection` | Timeout, disconnect, throwing listener |
+| Session races | Old waiter thread calling `clear()` after a new `start()` |
+
+### Harness rules
+1. `ruff` is a declared dependency and a **hard failure** if missing. Never silently skip a linter.
+2. The AST gate must also flag comment-only `catch {}` in JS and `except Exception: pass` without a log. A comment is not handling.
+3. Tests must not mutate global logger state without restoring it. Use fixtures with teardown.
+4. `verify_changes.py` and tests must not leave background processes behind.
+5. Release packaging (`create_release.py`) excludes `*.log`, `native_host_crash.log` and local `data/`.
+6. Add a test asserting that `skills/*.md` claims about allowlists and limits match the code (e.g. a flag the skill calls "rejected" is actually rejected), so that docs and code cannot drift silently.

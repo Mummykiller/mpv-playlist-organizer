@@ -6,6 +6,8 @@ import shutil
 import re
 import platform
 import logging
+import tempfile
+import threading
 import file_io
 import uuid
 from . import security
@@ -40,34 +42,55 @@ def is_safe_url(url):
 
 class VolatileCookieManager:
     """Manages cookie extraction to volatile memory (RAM) to avoid disk writes."""
+    _volatile_dir = None
+    _lock = threading.Lock()
     
-    @staticmethod
-    def get_volatile_dir():
-        """Returns a path to a RAM-backed directory if available."""
-        # Linux: /dev/shm is standard for shared memory (RAM)
-        if platform.system() == "Linux" and os.path.exists("/dev/shm"):
-            base_dir = "/dev/shm"
-        else:
-            # Fallback for Windows/Other: Standard temp dir
-            base_dir = file_io.TEMP_DIR
-            
-        cookie_dir = os.path.join(base_dir, "mpv_organizer_cookies")
-        os.makedirs(cookie_dir, mode=0o700, exist_ok=True)
-        if platform.system() != "Windows":
-            try:
-                os.chmod(cookie_dir, 0o700)
-            except OSError as e:
-                logging.debug(f"Could not chmod volatile cookie directory {cookie_dir}: {e}")
-        return cookie_dir
+    @classmethod
+    def get_volatile_dir(cls):
+        """Returns a path to a per-process/session RAM-backed directory with 0700 permissions (PY-M2)."""
+        with cls._lock:
+            if cls._volatile_dir and os.path.isdir(cls._volatile_dir):
+                return cls._volatile_dir
 
-    @staticmethod
-    def cleanup_volatile_dir():
-        """Securely removes the volatile cookie directory."""
-        v_dir = VolatileCookieManager.get_volatile_dir()
-        if os.path.exists(v_dir):
+            base_dir = None
+            if platform.system() == "Linux" and os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK):
+                base_dir = "/dev/shm"
+            else:
+                base_dir = file_io.TEMP_DIR
+                os.makedirs(base_dir, exist_ok=True)
+                
+            cookie_dir = tempfile.mkdtemp(prefix=f"mpv_cookies_{os.getpid()}_", dir=base_dir)
+            if platform.system() != "Windows":
+                try:
+                    os.chmod(cookie_dir, 0o700)
+                except OSError as e:
+                    logging.debug(f"Could not chmod volatile cookie directory {cookie_dir}: {e}")
+                try:
+                    st = os.stat(cookie_dir)
+                    if hasattr(os, "getuid") and st.st_uid != os.getuid():
+                        raise OSError(f"Cookie directory {cookie_dir} is not owned by current user")
+                except OSError as e:
+                    logging.error(f"Ownership check failed for cookie dir {cookie_dir}: {e}")
+                    raise
+
+            cls._volatile_dir = cookie_dir
+            return cls._volatile_dir
+
+    @classmethod
+    def cleanup_volatile_dir(cls):
+        """Securely removes this process's volatile cookie directory."""
+        with cls._lock:
+            v_dir = cls._volatile_dir
+            cls._volatile_dir = None
+
+        if v_dir and os.path.exists(v_dir):
             try:
-                import shutil
-                shutil.rmtree(v_dir, ignore_errors=True)
+                if platform.system() != "Windows" and hasattr(os, "getuid"):
+                    st = os.stat(v_dir)
+                    if st.st_uid == os.getuid():
+                        shutil.rmtree(v_dir, ignore_errors=True)
+                else:
+                    shutil.rmtree(v_dir, ignore_errors=True)
                 logging.info(f"Cleaned up volatile cookie directory: {v_dir}")
             except Exception as e:
                 logging.warning(f"Failed to cleanup volatile cookies: {e}")

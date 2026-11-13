@@ -113,94 +113,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 							}
 						}
 
-						const itemDiv = document.createElement("div");
-						itemDiv.className = "list-item";
-						
-						if (item.watched) {
-							itemDiv.classList.add("item-watched");
-						}
-						
-						const isCurrent = item.currentlyPlaying || (lastPlayedId && item.id === lastPlayedId);
-						if (highlightEnabled && isCurrent) {
-							itemDiv.classList.add(
-								isFolderActive ? "active-item" : "last-played-item",
-							);
-						}
-						itemDiv.draggable = true;
-						itemDiv.title = item.url;
-						itemDiv.dataset.url = item.url;
-						itemDiv.dataset.title = item.title;
-						itemDiv.dataset.id = item.id || "";
-
-						// ... (rest of rendering logic remains the same)
-						// 1. Copy URL Button
-						if (this.controller.state.state.settings.showCopyTitleButton) {
-							const copyBtn = document.createElement("button");
-							copyBtn.className = "btn-copy-item";
-							copyBtn.dataset.url = item.url;
-							copyBtn.title = "Copy URL";
-							copyBtn.innerHTML =
-								'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-							itemDiv.appendChild(copyBtn);
-						}
-
-						const indexSpan = document.createElement("span");
-						indexSpan.className = "url-index";
-						indexSpan.textContent = `${index + 1}.`;
-						itemDiv.appendChild(indexSpan);
-
-						const isYouTube = item.url.includes("youtube.com/") || item.url.includes("youtu.be/");
-
-						if (item.watched && !isYouTube) {
-							const check = document.createElement("span");
-							check.className = "watched-checkmark index-checkmark";
-							check.innerHTML = "✔";
-							itemDiv.appendChild(check);
-						}
-
-						const urlSpan = document.createElement("span");
-						urlSpan.className = "url-text";
-						this._formatTitle(urlSpan, item);
-
-						// --- Watched Status Checkbox ---
-						if (
-							showWatchedGUI &&
-							(item.url.includes("youtube.com/") ||
-								item.url.includes("youtu.be/"))
-						) {
-							const watchedCheckbox = document.createElement("input");
-							watchedCheckbox.type = "checkbox";
-							watchedCheckbox.className = "item-watched-checkbox";
-							watchedCheckbox.checked = !!item.markedAsWatched;
-							watchedCheckbox.title = watchedCheckbox.checked
-								? "Already marked as watched"
-								: "Click to mark as watched on YouTube";
-
-							watchedCheckbox.addEventListener("change", (e) => {
-								e.stopPropagation();
-								this.controller.handleWatchedToggle(
-									item.id,
-									watchedCheckbox.checked,
-								);
-							});
-							itemDiv.appendChild(watchedCheckbox);
-
-							if (item.watched) {
-								const check = document.createElement("span");
-								check.className = "watched-checkmark checkbox-checkmark";
-								check.innerHTML = "✔";
-								itemDiv.appendChild(check);
-							}
-						}
-
-						itemDiv.appendChild(urlSpan);
-
-						const removeBtn = document.createElement("button");
-						removeBtn.className = "btn-remove-item";
-						removeBtn.dataset.index = index;
-						removeBtn.title = "Remove Item";
-						removeBtn.textContent = "×";
-						itemDiv.appendChild(removeBtn);
+						const itemDiv = MPV.domUtils.createPlaylistItemElement(item, index, {
+							highlightEnabled,
+							lastPlayedId,
+							isActive: isFolderActive,
+							showCopyButton: !!this.controller.state.state.settings.showCopyTitleButton,
+							showWatchedGui: showWatchedGUI,
+							setUrlTitle: true,
+							checkboxBeforeTitle: true,
+							onWatchedToggle: (id, checked) => {
+								this.controller.handleWatchedToggle(id, checked);
+							},
+						});
 
 						fragment.appendChild(itemDiv);
 					});

@@ -314,9 +314,20 @@ class PlaybackHandler(BaseHandler):
         if hasattr(self.mpv_session, 'remove_items_live'):
             return self.mpv_session.remove_items_live(request.item_ids)
         canonical_id = self.file_io._get_canonical_folder_id(request.folder_id) if request.folder_id else self.mpv_session.owner_folder_id
+        failed_ids = []
         for item_id in request.item_ids:
-            self.mpv_session.remove(item_id, canonical_id)
-        return native_link.success(message=f"Removed {len(request.item_ids)} items from live session.")
+            res = self.mpv_session.remove(item_id, canonical_id)
+            if isinstance(res, dict) and res.get("success") is False:
+                failed_ids.append(item_id)
+            elif res is False:
+                failed_ids.append(item_id)
+        if len(failed_ids) == len(request.item_ids):
+            return native_link.failure(f"Failed to remove items from live session: {failed_ids}")
+        removed_count = len(request.item_ids) - len(failed_ids)
+        return native_link.success(
+            message=f"Removed {removed_count} item(s) from live session.",
+            failed_ids=failed_ids
+        )
 
     @command('reorder_live')
     def handle_reorder_live(self, request: native_link.LiveUpdateRequest):
@@ -330,7 +341,12 @@ class PlaybackHandler(BaseHandler):
         if not request.folder_id:
             return native_link.failure("Missing folder_id.")
         canonical_id = self.file_io._get_canonical_folder_id(request.folder_id)
-        return self.mpv_session.clear_live(canonical_id)
+        result = self.mpv_session.clear_live(canonical_id)
+        if isinstance(result, dict):
+            return result
+        if result is False:
+            return native_link.failure("Failed to clear live playlist.")
+        return native_link.success() if result else native_link.failure("Failed to clear live playlist.")
 
     @command('close_mpv')
     def handle_close_mpv(self, request: native_link.LiveUpdateRequest):

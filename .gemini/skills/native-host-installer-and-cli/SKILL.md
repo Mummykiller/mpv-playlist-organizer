@@ -106,7 +106,7 @@ set PYTHONDONTWRITEBYTECODE=1
   Resolves folder items, prepares the MPV launch command, starts playback, blocks until player exit, and gracefully handles `KeyboardInterrupt`.
 
 ### Framing Bypass
-When invoked from the command line, `cli.handle_cli()` returns `True`, preventing `native_host.py` from entering the binary 32-bit length-prefixed Native Messaging loop.
+When invoked from the command line, `native_host.py` switches the active bridge sender to `send_message_cli` (via `set_active_sender`) and `cli.handle_cli()` returns `True`, preventing `native_host.py` from entering the binary 32-bit length-prefixed Native Messaging loop or emitting binary frames to terminal stdout.
 
 ---
 
@@ -131,3 +131,21 @@ Browsers and desktop environments often launch native hosts with a stripped `PAT
 - ❌ **Registering Chrome-only manifests on Linux:** Fails for users on Brave, Vivaldi, Chromium, or Edge. Always register across all detected browser config directories.
 - ❌ **Hardcoding python interpreter path on Windows:** Always probe `sys.executable` and distinguish between `python.exe` (CLI) and `pythonw.exe` (GUI / background).
 - ❌ **Leaving `allowed_origins` empty or wild-carded:** Chrome rejects Native Messaging manifests that lack an exact extension ID in `allowed_origins`.
+
+
+---
+
+## 6. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+
+> [!NOTE]
+> **Resolved Audit Findings (PY-H1, PY-L4, PY-L5):** CLI mode now injects a text logger / no-op sender (`send_message_cli`), completely bypassing binary length-prefixed framing on terminal stdout. Extension ID is validated against `^[a-p]{32}$` in `installer_logic.py` and `installer_cli.py`. Wrapper scripts quote executable and script paths via `shlex.quote`. All Firefox manifest references have been removed.
+
+1. **Validate the extension ID** against `^[a-p]{32}$` before writing manifests.
+2. **Quote paths in generated wrappers** (`shlex.quote` for `.sh`, proper quoting for `.bat`). Never embed raw `sys.executable` or script paths.
+3. **Importing installer modules must have no side effects** (no data-dir creation at import time).
+4. **Do not let the installer dirty tracked files.** `run_native_host.sh` is regenerated, so either gitignore the generated copy or generate it elsewhere.
+5. **Document supported browsers.** Chromium-family only. Firefox needs `allowed_extensions` and a different manifest.
+6. **Degrade gracefully on read-only data dirs.** `logger.initialize` must fall back to temp or stderr-only logging instead of crashing (see `native_host_crash.log`).
+7. **Pin the mpv path after install.** Don't search the project dir or Python dir before PATH, and don't prepend them to PATH.
+8. **Centralize** `PYTHONDONTWRITEBYTECODE` and the host version string in one place.
+9. Windows uninstall removes the fallback registry key independently of Chrome's key.

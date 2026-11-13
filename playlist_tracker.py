@@ -49,6 +49,7 @@ class PlaylistTracker:
         self._stop_event = threading.Event()
         self.current_id = None
         self.last_played_id = None
+        self.pending_last_played_id = None
         self.last_commit_time = time.time()
         self.commit_interval = 10 # NEW: Faster commit interval (10s)
         self.last_mark_try_time = {} # NEW: Cooldown for retries per item ID
@@ -77,13 +78,19 @@ class PlaylistTracker:
 
         self.is_tracking = False
         self._stop_event.set()
-        logging.info(f"[PY][Tracker] Playlist tracker stopped for folder '{self.folder_id}'. Played item IDs: {self.played_item_ids}")
         
-        # Capture stats before joining
+        # Capture stats before joining under lock (PY-M14)
+        with self.lock:
+            played_ids = list(self.played_item_ids)
+            watched_ids = list(self.threshold_met_ids)
+            session_ids = list(self.session_item_ids)
+
+        logging.info(f"[PY][Tracker] Playlist tracker stopped for folder '{self.folder_id}'. Played item IDs: {played_ids}")
+        
         stats = {
-            "played_ids": list(self.played_item_ids),
-            "watched_ids": list(self.threshold_met_ids),
-            "session_ids": list(self.session_item_ids)
+            "played_ids": played_ids,
+            "watched_ids": watched_ids,
+            "session_ids": session_ids
         }
 
         if self.tracking_thread:
@@ -124,8 +131,8 @@ class PlaylistTracker:
     def update_playlist_order(self, new_playlist):
         """Updates the internal playlist order to match the live session."""
         with self.lock:
-            self.playlist = new_playlist
-            for item in new_playlist:
+            self.playlist = list(new_playlist) if new_playlist else []
+            for item in self.playlist:
                 item_id = item.get('id')
                 if item_id and item_id not in self.session_item_ids:
                     self.session_item_ids.append(item_id)
@@ -227,10 +234,13 @@ class PlaylistTracker:
                             # 1. If we were playing something else, do a FINAL save for it
                             # ONLY if it wasn't just cleared by the item_natural_completion logic
                             if self.current_id and self.current_id != -1 and self.current_id != "-1" and current_time > 1:
-                                if self.current_id not in self.watched_this_session:
+                                with self.lock:
+                                    not_handled = self.current_id not in self.watched_this_session
+                                if not_handled:
                                     logging.info(f"[PY][Tracker] Saving final position for old item {self.current_id}: {int(current_time)}s")
                                     self._update_resume_time(self.current_id, current_time)
-                                    self.played_item_ids.add(self.current_id)
+                                    with self.lock:
+                                        self.played_item_ids.add(self.current_id)
                                 else:
                                     logging.debug(f"[PY][Tracker] Skipping final save for {self.current_id} (already handled by completion).")
 
@@ -291,50 +301,9 @@ class PlaylistTracker:
                         self._update_playback_status()
 
                     elif prop_name == 'time-pos':
-                        if self.current_id and self.current_id != -1 and self.current_id != "-1" and data is not None:
-                            # Ignore negative or invalid timestamps
-                            if data < 0:
-                                continue
-                            
-                            # Update session duration
-                            if self.last_time_pos is not None:
-                                delta = data - self.last_time_pos
-                                # Only count positive progress (no seeks/backwards) up to 2s jump
-                                if 0 < delta < 2:
-                                    self.current_session_duration += delta
-                            
-                            self.last_time_pos = data
-                            current_time = data
-
-                            # 0. Commit 'pending' last_played_id after 2 seconds of playback
-                            if self.pending_last_played_id == self.current_id and self.current_session_duration >= 2:
-                                logging.info(f"[PY][Tracker] Playback confirmed for {self.current_id}. Committing last_played_id to disk.")
-                                self._update_last_played(self.current_id)
-                                self.pending_last_played_id = None
-                                self._commit_to_disk()
-
-                            # 1. Check for mark-as-watched threshold (30s of SESSION playback)
-                            if self.current_session_duration >= 30 and self.current_id not in self.threshold_met_ids:
-                                self.threshold_met_ids.add(self.current_id)
-                                logging.info(f"[PY][Tracker] Threshold reached (30s) for {self.current_id}. Attempting to mark as watched...")
-                                self._remote_log(f"AdaptiveHeaders: Watch threshold (30s) reached for current video.")
-                                if self.ipc_manager and self.ipc_manager.is_connected():
-                                    self.ipc_manager.send({"command": ["show-text", "YouTube: Watch threshold reached", 2000]})
-                                
-                                self._check_mark_watched(self.current_id)
-                            elif self.current_session_duration >= 30:
-                                # Already met threshold, but maybe check_mark_watched needs a retry (handled inside)
-                                self._check_mark_watched(self.current_id)
-
-                            # 2. Throttled periodic save (Every 5s of video time)
-                            if int(current_time) > 0 and int(current_time) % 5 == 0:
-                                self._update_resume_time(self.current_id, current_time)
-                                
-                                # Periodically commit to disk every 10s
-                                now = time.time()
-                                if now - self.last_disk_save_time >= 10:
-                                    self._commit_to_disk()
-                                    self.last_disk_save_time = now
+                        new_time = self._on_time_pos(data)
+                        if new_time is not None:
+                            current_time = new_time
 
                 elif event.get('event') == 'end-file':
                     reason = event.get('reason')
@@ -359,7 +328,8 @@ class PlaylistTracker:
                         if target_id_for_eof:
                             # We mark as played and reset resume, but we NO LONGER force mark-as-watched here.
                             # Lua will send the explicit 'item_natural_completion_by_id' signal.
-                            self.played_item_ids.add(target_id_for_eof)
+                            with self.lock:
+                                self.played_item_ids.add(target_id_for_eof)
                             self._update_resume_time(target_id_for_eof, 0)
 
                             # --- Early Clear Hint Logic ---
@@ -409,8 +379,9 @@ class PlaylistTracker:
             
             # Critical: Add to watched_this_session IMMEDIATELY to block any late 
             # time-pos updates from trying to save or mark it again.
-            self.watched_this_session.add(target_id)
-            self.played_item_ids.add(target_id)
+            with self.lock:
+                self.watched_this_session.add(target_id)
+                self.played_item_ids.add(target_id)
             
             # Reset its disk state to 0 so even if a sync happens, it's clean
             self._update_resume_time(target_id, 0)
@@ -448,8 +419,9 @@ class PlaylistTracker:
                 
                 # Critical: Add to watched_this_session IMMEDIATELY to block any late 
                 # time-pos updates from trying to save or mark it again.
-                self.watched_this_session.add(target_id)
-                self.played_item_ids.add(target_id)
+                with self.lock:
+                    self.watched_this_session.add(target_id)
+                    self.played_item_ids.add(target_id)
                 
                 # Reset its disk state to 0 so even if a sync happens, it's clean
                 self._update_resume_time(target_id, 0)
@@ -482,6 +454,62 @@ class PlaylistTracker:
             "folder_id": self.folder_id,
             "item_id": item_id
         })
+
+    def _on_time_pos(self, data):
+        """Handles a 'time-pos' property change event and returns the updated current_time, or None if ignored."""
+        if not (self.current_id and self.current_id != -1 and self.current_id != "-1" and data is not None):
+            return None
+
+        # Ignore negative or invalid timestamps
+        if data < 0:
+            return None
+
+        # Update session duration
+        if self.last_time_pos is not None:
+            delta = data - self.last_time_pos
+            # Only count positive progress (no seeks/backwards) up to 2s jump
+            if 0 < delta < 2:
+                self.current_session_duration += delta
+
+        self.last_time_pos = data
+        current_time = data
+
+        # 0. Commit 'pending' last_played_id after 2 seconds of playback
+        if self.pending_last_played_id == self.current_id and self.current_session_duration >= 2:
+            logging.info(f"[PY][Tracker] Playback confirmed for {self.current_id}. Committing last_played_id to disk.")
+            self._update_last_played(self.current_id)
+            self.pending_last_played_id = None
+            self._commit_to_disk()
+
+        # 1. Check for mark-as-watched threshold (30s of SESSION playback)
+        with self.lock:
+            not_in_threshold = self.current_id not in self.threshold_met_ids
+        if self.current_session_duration >= 30 and not_in_threshold:
+            with self.lock:
+                self.threshold_met_ids.add(self.current_id)
+            logging.info(f"[PY][Tracker] Threshold reached (30s) for {self.current_id}. Attempting to mark as watched...")
+            self._remote_log(f"AdaptiveHeaders: Watch threshold (30s) reached for current video.")
+            if self.ipc_manager and self.ipc_manager.is_connected():
+                self.ipc_manager.send({"command": ["show-text", "YouTube: Watch threshold reached", 2000]})
+
+            self._check_mark_watched(self.current_id)
+        elif self.current_session_duration >= 30:
+            # Already met threshold, but maybe check_mark_watched needs a retry (handled inside)
+            self._check_mark_watched(self.current_id)
+
+        # 2. Throttled periodic save (Only once per 5s integer bucket - PY-M13)
+        time_bucket = int(current_time)
+        if time_bucket > 0 and time_bucket % 5 == 0 and time_bucket != getattr(self, '_last_resume_save_bucket', None):
+            self._last_resume_save_bucket = time_bucket
+            self._update_resume_time(self.current_id, current_time)
+
+            # Periodically commit to disk every 10s
+            now = time.time()
+            if now - self.last_disk_save_time >= 10:
+                self._commit_to_disk()
+                self.last_disk_save_time = now
+
+        return current_time
 
     def _update_resume_time(self, item_id, resume_time):
         """Notifies extension and queues resume_time for throttled disk commit."""
@@ -529,23 +557,25 @@ class PlaylistTracker:
     def _notify_quitting(self):
         """Performs final disk commit and dispatches mpv_quitting message with full context."""
         self._commit_to_disk()
+        with self.lock:
+            played_ids = list(self.played_item_ids)
+            watched_ids = list(self.threshold_met_ids)
+            session_ids = list(self.session_item_ids)
         self.send_message({
             "action": "mpv_quitting",
             "folder_id": self.folder_id,
             "is_natural_completion": self.is_naturally_completed,
-            "played_ids": list(self.played_item_ids),
-            "watched_ids": list(self.threshold_met_ids),
-            "session_ids": list(self.session_item_ids)
+            "played_ids": played_ids,
+            "watched_ids": watched_ids,
+            "session_ids": session_ids
         })
         self.is_tracking = False
 
     def _commit_to_disk(self):
-        """Performs a single read-modify-write to the playlist shard with all cached changes."""
+        """Performs an atomic read-modify-write to the playlist shard with all cached changes (PY-M5, PY-M6)."""
         self.last_commit_time = time.time()
         
         # 1. Thread-Safe Snapshot and Clear
-        # We capture a local copy and clear the shared caches immediately to prevent race conditions 
-        # where updates are lost during the disk write (which can be slow on Windows/Slow HDDs).
         with self.lock:
             if not self.folder_id or (not self.resume_cache and not self.watched_status_cache and not self.watched_cache and not self.dirty_last_played_id):
                 return
@@ -563,52 +593,71 @@ class PlaylistTracker:
             self.watched_cache.clear()
             self.dirty_last_played_id = None
 
+        commit_success = False
         try:
             logging.debug(f"[PY][Tracker] Committing throttled updates to disk for folder '{self.folder_id}'...")
             
-            # 2. Update Index Metadata if last_played_id changed
-            if last_played_snap:
-                index = self.file_io.get_index()
-                if self.folder_id in index:
-                    index[self.folder_id]["last_played_id"] = last_played_snap
-                    self.file_io.save_index(index)
-            
-            # 3. Update Playlist Shard
-            playlist = self.file_io.get_playlist_shard(self.folder_id)
-            if playlist:
+            def shard_updater(playlist, index_entry):
                 changed = False
-                for item in playlist:
-                    item_id = item.get("id")
-                    
-                    # Mutually Exclusive 'currently_playing' (only mark once confirmed after 2s threshold)
-                    if confirmed_id:
-                        is_current = (item_id == confirmed_id)
-                        if item.get("currently_playing") != is_current:
-                            item["currently_playing"] = is_current
-                            item["last_modified"] = int(time.time() * 1000)
-                            changed = True
-                    
-                    # Sync from Snapshots
-                    if item_id in res_snap:
-                        item["resume_time"] = res_snap[item_id]
-                        item["last_modified"] = int(time.time() * 1000)
+                if last_played_snap and index_entry is not None:
+                    if index_entry.get("last_played_id") != last_played_snap:
+                        index_entry["last_played_id"] = last_played_snap
                         changed = True
 
-                    if item_id in stat_snap:
-                        item["marked_as_watched"] = stat_snap[item_id]
-                        item["last_modified"] = int(time.time() * 1000)
-                        changed = True
-                    
-                    if item_id in watch_snap:
-                        item["watched"] = watch_snap[item_id]
-                        item["last_modified"] = int(time.time() * 1000)
-                        changed = True
-                
-                if changed:
-                    self.file_io.save_playlist_shard(self.folder_id, playlist, update_index=False)
-                    logging.info(f"[PY][Tracker] Throttled shard commit complete for '{self.folder_id}'.")
+                if playlist:
+                    for item in playlist:
+                        item_id = item.get("id")
+                        
+                        # Mutually Exclusive 'currently_playing'
+                        if confirmed_id:
+                            is_current = (item_id == confirmed_id)
+                            if item.get("currently_playing") != is_current:
+                                item["currently_playing"] = is_current
+                                item["last_modified"] = int(time.time() * 1000)
+                                changed = True
+                        
+                        # Sync from Snapshots
+                        if item_id in res_snap:
+                            item["resume_time"] = res_snap[item_id]
+                            item["last_modified"] = int(time.time() * 1000)
+                            changed = True
+
+                        if item_id in stat_snap:
+                            item["marked_as_watched"] = stat_snap[item_id]
+                            item["last_modified"] = int(time.time() * 1000)
+                            changed = True
+                        
+                        if item_id in watch_snap:
+                            item["watched"] = watch_snap[item_id]
+                            item["last_modified"] = int(time.time() * 1000)
+                            changed = True
+
+                return True if changed else None
+
+            # Atomically update shard and index while holding locks (INDEX -> Shard order)
+            commit_success = self.file_io.update_shard(self.folder_id, shard_updater, update_index=False)
+            if commit_success:
+                logging.info(f"[PY][Tracker] Throttled shard commit complete for '{self.folder_id}'.")
+            else:
+                logging.warning(f"[PY][Tracker] Shard update returned False for '{self.folder_id}'. Restoring snapshot cache.")
         except Exception as e:
             logging.error(f"[PY][Tracker] Throttled disk commit failed: {e}")
+            commit_success = False
+        finally:
+            if not commit_success:
+                # PY-M6: Restore snapshots back into memory so we never lose progress on disk failure
+                with self.lock:
+                    for k, v in res_snap.items():
+                        if k not in self.resume_cache:
+                            self.resume_cache[k] = v
+                    for k, v in stat_snap.items():
+                        if k not in self.watched_status_cache:
+                            self.watched_status_cache[k] = v
+                    for k, v in watch_snap.items():
+                        if k not in self.watched_cache:
+                            self.watched_cache[k] = v
+                    if last_played_snap and not self.dirty_last_played_id:
+                        self.dirty_last_played_id = last_played_snap
 
     def _update_marked_as_watched(self, item_id, marked_status=None, watched_status=None, persist=True):
         """Notifies extension and queues status for disk commit. Supports partial updates."""
@@ -631,10 +680,11 @@ class PlaylistTracker:
 
             # 2. Queue for throttled commit
             if persist and self.folder_id:
-                if marked_status is not None:
-                    self.watched_status_cache[item_id] = marked_status
-                if watched_status is not None:
-                    self.watched_cache[item_id] = watched_status
+                with self.lock:
+                    if marked_status is not None:
+                        self.watched_status_cache[item_id] = marked_status
+                    if watched_status is not None:
+                        self.watched_cache[item_id] = watched_status
 
             # 3. Notify the extension
             msg = {
@@ -653,8 +703,9 @@ class PlaylistTracker:
 
     def _check_mark_watched(self, item_id):
         """Checks if the item should be marked as watched on YouTube and triggers the call if so."""
-        if item_id in self.watched_this_session:
-            return
+        with self.lock:
+            if item_id in self.watched_this_session:
+                return
 
         # 0. Cooldown check: Don't spam retries every few milliseconds
         now = time.time()
@@ -718,7 +769,8 @@ class PlaylistTracker:
         if not is_yt:
             # Non-YouTube is fully handled by the local mark above.
             # We do NOT set 'marked_as_watched' for local files/direct streams.
-            self.watched_this_session.add(item_id)
+            with self.lock:
+                self.watched_this_session.add(item_id)
             return
 
         # YouTube-Specific authentication and sync logic
@@ -742,10 +794,10 @@ class PlaylistTracker:
             # Check if we are ready for the API call
             if has_cookies and has_url:
                 # Check if already in progress to avoid double-triggers
-                if item_id in self.watched_this_session:
-                    return
-                    
-                self.watched_this_session.add(item_id)
+                with self.lock:
+                    if item_id in self.watched_this_session:
+                        return
+                    self.watched_this_session.add(item_id)
                 
                 cookies = target_item['cookies_file']
                 headers = target_item.get('headers', {})
@@ -768,8 +820,9 @@ class PlaylistTracker:
                     else:
                         self.send_message({"log": {"text": f"[Tracker]: Failed to mark YouTube video as watched: {msg}", "type": "error"}})
                         # Remove from session set on failure to allow retry later in this session (respecting cooldown)
-                        if item_id in self.watched_this_session:
-                            self.watched_this_session.remove(item_id)
+                        with self.lock:
+                            if item_id in self.watched_this_session:
+                                self.watched_this_session.remove(item_id)
 
                     # Update MPV Feedback (Only if still connected)
                     if self.ipc_manager and self.ipc_manager.is_connected():
@@ -792,7 +845,8 @@ class PlaylistTracker:
                 pass
         else:
             # YouTube video but already marked or disabled
-            self.watched_this_session.add(item_id)
+            with self.lock:
+                self.watched_this_session.add(item_id)
             
             # Note: We don't flood the OSD/Log for temporary skips (missing cookies/url) 
             # because they might resolve themselves in a few seconds.
@@ -806,15 +860,19 @@ class PlaylistTracker:
             is_paused = self.ipc_manager.get_property("pause", timeout=0.2, default=False)
             is_idle = self.ipc_manager.get_property("idle-active", timeout=0.2, default=False)
             
-            # Send status update back to Python Host
+            # Send status update back to Python Host under lock (PY-M14)
+            with self.lock:
+                watched_ids = list(self.threshold_met_ids)
+                session_ids = list(self.session_item_ids)
+
             self.send_message({
                 "action": "playback_status_changed",
                 "folder_id": self.folder_id,
                 "is_paused": is_paused,
                 "is_idle": is_idle,
                 "last_played_id": self.current_id,
-                "watched_ids": list(self.threshold_met_ids),
-                "session_ids": list(self.session_item_ids)
+                "watched_ids": watched_ids,
+                "session_ids": session_ids
             })
         except Exception as e:
             logging.debug(f"[PY][Tracker] Failed to update playback status: {e}")

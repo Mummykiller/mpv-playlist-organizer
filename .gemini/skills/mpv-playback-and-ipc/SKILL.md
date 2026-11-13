@@ -141,3 +141,18 @@ Tracks playback completion and cleanly notifies the Python backend:
   - On Windows, verify that backslashes in `--script-opts=mpv_organizer-handshake=<path>` were converted to forward slashes. Backslashes can be corrupted by shell escaping.
 - **Zombie IPC Sockets:**
   - If MPV crashes hard, stale socket files may remain in `/dev/shm` or temp directories. `native_host.py` registers cleanup handlers in `cleanup_ipc_socket()` and startup sweeps in `utils/janitor.py`.
+
+
+---
+
+## Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+
+1. **Stale-socket detection:** only `ConnectionRefusedError` / `FileNotFoundError` mean stale. A timeout means *busy*, not dead, so never unlink on timeout. Clean up only inside the app's own IPC dir, never scan `/tmp` or other hosts' sockets.
+2. **Process identity before kill:** trust a saved PID only after IPC returns the same `pid` (or `/proc/<pid>/cmdline` matches mpv plus our socket). Persist process start time in `session.json`.
+3. **Restore failure must reset state** (`pid`, `ipc_path`, `owner_folder_id`, IPC manager) and keep `session.json` unless the process is truly gone.
+4. **Never hold `sync_lock` across slow IPC loops.** Batch `set_url_options` / `playlist-move` with `expect_response=False`, or run them off-lock. IPC reads must have a timeout on every platform (Windows pipes included).
+5. **Index mapping:** after prepend or reorder, re-send index-keyed metadata *after* the moves, never before.
+6. **Per-item options must not leak globally.** Hot-swap that sets global mpv properties must restore them or be scoped per item.
+7. **Use the shared bounded `EnrichmentService` executor**, never a new `ThreadPoolExecutor` per call.
+8. **Cookie dirs are per-session** (`mkdtemp`, owned, 0700). Cleanup deletes only this session's files, never a shared fixed directory.
+9. **Check IPC results** for `playlist-move` and `set_property`. Partial failure must be logged.

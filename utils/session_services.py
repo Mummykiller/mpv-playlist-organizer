@@ -187,14 +187,45 @@ class EnrichmentService(ItemProcessor):
 
         self.submit(task)
 
+def _safe_read_flag_file(flag_file):
+    """Safely reads a natural completion flag file using O_NOFOLLOW and capped length (PY-M3)."""
+    if not os.path.exists(flag_file):
+        return None
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = -1
+    content = None
+    try:
+        fd = os.open(flag_file, flags)
+        with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+            fd = -1 # fdopen takes ownership of fd
+            content = f.read(256).strip()
+    except (OSError, UnicodeDecodeError) as e:
+        logging.debug(f"Failed to safely read completion flag {flag_file}: {e}")
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError as ce:
+                logging.debug(f"Error closing flag file descriptor: {ce}")
+    try:
+        if os.path.exists(flag_file):
+            os.remove(flag_file)
+    except OSError as e:
+        logging.debug(f"Failed to remove completion flag {flag_file}: {e}")
+    return content
+
 class LauncherService:
     def __init__(self, mpv_session):
         self.session = mpv_session
 
     def start_restored_process_watcher(self, pid, ipc_path, folder_id):
         """Starts a background thread to poll for the exit of a restored (orphaned) process."""
+        waiter_gen = getattr(self.session, 'session_generation', 0)
+
         def watcher():
-            logging.info(f"Restored Process Watcher: Monitoring PID {pid} for folder '{folder_id}'.")
+            logging.info(f"Restored Process Watcher: Monitoring PID {pid} for folder '{folder_id}' (gen {waiter_gen}).")
             while True:
                 time.sleep(1.0)
                 if not ipc_utils.is_pid_running(pid):
@@ -202,40 +233,39 @@ class LauncherService:
                     
                     return_code = -1 
                     exit_reason = None
-                    if ipc_path:
-                        # Check multiple flag locations for robustness
-                        flag_candidates = [
-                            os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{pid}.flag'),
-                            os.path.join(os.path.dirname(ipc_path), f'mpv_natural_completion_{pid}.flag'),
-                            os.path.join("/tmp", f'mpv_natural_completion_{pid}.flag')
-                        ]
-                        
-                        for flag_file in flag_candidates:
-                            if os.path.exists(flag_file):
-                                if getattr(self.session, 'manual_quit', False):
-                                    logging.info("Restored Watcher: Natural completion flag found, but manual_quit is TRUE. Ignoring flag.")
-                                else:
-                                    try:
-                                        with open(flag_file, 'r', encoding='utf-8') as f:
-                                            exit_reason = f.read().strip()
-                                    except (OSError, UnicodeDecodeError) as e:
-                                        logging.debug(f"Failed to read natural completion flag {flag_file}: {e}")
-                                        exit_reason = "completed"
-                                    logging.info(f"Restored Watcher: Natural completion flag FOUND (Reason: {exit_reason}). Overriding return code to 99.")
-                                    return_code = 99
-                                try:
-                                    os.remove(flag_file)
-                                except OSError as e:
-                                    logging.debug(f"Failed to remove completion flag {flag_file}: {e}")
-                                break
+                    is_manual = getattr(self.session, 'manual_quit', False) or getattr(self.session, 'is_closing', False)
 
-                    self.session.send_message({
-            "action": "mpv_exited", 
-            "folder_id": folder_id, 
-            "return_code": return_code, 
-            "reason": exit_reason
-        })
-                    self.session.clear(mpv_return_code=return_code)
+                    if not is_manual:
+                        flag_file = os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{pid}.flag')
+                        content = _safe_read_flag_file(flag_file)
+                        if content is not None:
+                            exit_reason = content or "completed"
+                            logging.info(f"Restored Watcher: Natural completion flag FOUND (Reason: {exit_reason}). Overriding return code to 99.")
+                            return_code = 99
+                    else:
+                        logging.info("Restored Watcher: manual_quit is TRUE. Ignoring natural completion flag.")
+                        exit_reason = "manual_quit"
+
+                    stats = self.session.clear(mpv_return_code=return_code, session_generation=waiter_gen)
+
+                    with self.session.sync_lock:
+                        already_dispatched = waiter_gen in getattr(self.session, 'dispatched_exit_generations', set())
+                        if not already_dispatched and waiter_gen == getattr(self.session, 'session_generation', 0):
+                            self.session.dispatched_exit_generations.add(waiter_gen)
+                            should_send = True
+                        else:
+                            should_send = False
+
+                    if should_send:
+                        self.session.send_message({
+                            "action": "mpv_exited", 
+                            "folder_id": folder_id, 
+                            "return_code": return_code, 
+                            "reason": exit_reason,
+                            "played_ids": stats.get("played_ids", []), 
+                            "watched_ids": stats.get("watched_ids", []),
+                            "session_ids": stats.get("session_ids", [])
+                        })
                     break
                 
                 if not self.session.is_alive or self.session.pid != pid:
@@ -429,6 +459,8 @@ class LauncherService:
 
     def _start_exit_watcher(self, process, folder_id):
         """Helper to start the process waiter thread."""
+        waiter_gen = getattr(self.session, 'session_generation', 0)
+
         def process_waiter(proc, f_id):
             initial_pid = proc.pid
             actual_pid = getattr(self.session, 'pid', None)
@@ -451,37 +483,36 @@ class LauncherService:
                 self.start_restored_process_watcher(actual_pid, self.session.ipc_path, f_id)
                 return
 
-            for pid in pids:
-                flag_candidates = [
-                    os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{pid}.flag'),
-                    os.path.join("/tmp", f'mpv_natural_completion_{pid}.flag')
-                ]
-                if self.session.ipc_path: flag_candidates.append(os.path.join(os.path.dirname(self.session.ipc_path), f'mpv_natural_completion_{pid}.flag'))
-
-                for flag_file in flag_candidates:
-                    if os.path.exists(flag_file):
-                        if not getattr(self.session, 'manual_quit', False):
-                            try:
-                                with open(flag_file, 'r', encoding='utf-8') as f:
-                                    exit_reason = f.read().strip()
-                            except (OSError, UnicodeDecodeError) as e:
-                                logging.debug(f"Failed to read natural completion flag {flag_file}: {e}")
-                                exit_reason = "completed"
-                            return_code = 99
-                        try:
-                            os.remove(flag_file)
-                        except OSError as e:
-                            logging.debug(f"Failed to remove completion flag {flag_file}: {e}")
+            is_manual = getattr(self.session, 'manual_quit', False) or getattr(self.session, 'is_closing', False)
+            if not is_manual:
+                for p in pids:
+                    flag_file = os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{p}.flag')
+                    content = _safe_read_flag_file(flag_file)
+                    if content is not None:
+                        exit_reason = content or "completed"
+                        return_code = 99
                         break
-                if exit_reason: break
+            else:
+                logging.info(f"Process waiter: manual_quit is TRUE for PID {initial_pid}. Ignoring completion flag.")
+                exit_reason = "manual_quit"
 
-            stats = self.session.clear(mpv_return_code=return_code)
-            self.session.send_message({
-                "action": "mpv_exited", "folder_id": f_id, "return_code": return_code, "reason": exit_reason,
-                "played_ids": stats.get("played_ids", []), 
-                "watched_ids": stats.get("watched_ids", []),
-                "session_ids": stats.get("session_ids", [])
-            })
+            stats = self.session.clear(mpv_return_code=return_code, session_generation=waiter_gen)
+
+            with self.session.sync_lock:
+                already_dispatched = waiter_gen in getattr(self.session, 'dispatched_exit_generations', set())
+                if not already_dispatched and waiter_gen == getattr(self.session, 'session_generation', 0):
+                    self.session.dispatched_exit_generations.add(waiter_gen)
+                    should_send = True
+                else:
+                    should_send = False
+
+            if should_send:
+                self.session.send_message({
+                    "action": "mpv_exited", "folder_id": f_id, "return_code": return_code, "reason": exit_reason,
+                    "played_ids": stats.get("played_ids", []), 
+                    "watched_ids": stats.get("watched_ids", []),
+                    "session_ids": stats.get("session_ids", [])
+                })
 
         threading.Thread(target=process_waiter, args=(process, folder_id), daemon=True).start()
 
@@ -540,32 +571,33 @@ class LauncherService:
                     was_killed = True
         elif pid:
             # Reconnected session (no proc object)
-            logging.info(f"Reconnected session: Attempting to close via PID {pid}")
-            try:
-                if platform.system() == "Windows":
-                    # On Windows, we use taskkill to be thorough
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], 
-                                 capture_output=True, check=False)
-                else:
-                    # Unix: try SIGTERM then SIGKILL
-                    os.kill(pid, signal.SIGTERM)
-                    # Poll for a moment
-                    for _ in range(10):
-                        time.sleep(0.1)
-                        if not ipc_utils.is_pid_running(pid):
+            # PY-H3: Verify that PID actually belongs to MPV before sending signals
+            if not ipc_utils.verify_mpv_process(pid, ipc_path=ipc_path):
+                logging.warning(f"[PY][Session] Refusing to kill unverified PID {pid}: process is not mpv or does not match session.")
+                was_killed = True # Process is not our MPV session; do not send kill signals
+            else:
+                logging.info(f"Reconnected session: Attempting to close verified MPV PID {pid}")
+                try:
+                    if platform.system() == "Windows":
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], 
+                                     capture_output=True, check=False)
+                    else:
+                        os.kill(pid, signal.SIGTERM)
+                        for _ in range(10):
+                            time.sleep(0.1)
+                            if not ipc_utils.is_pid_running(pid):
+                                was_killed = True
+                                break
+                        
+                        if not was_killed:
+                            os.kill(pid, signal.SIGKILL)
                             was_killed = True
-                            break
                     
-                    if not was_killed:
-                        os.kill(pid, signal.SIGKILL)
+                    if not was_killed and not ipc_utils.is_pid_running(pid):
                         was_killed = True
-                
-                # Check if it actually died (final verification)
-                if not was_killed and not ipc_utils.is_pid_running(pid):
+                except OSError as e:
+                    logging.debug(f"Process {pid} already dead or could not signal: {e}")
                     was_killed = True
-            except OSError as e:
-                logging.debug(f"Process {pid} already dead or could not signal: {e}")
-                was_killed = True # Process already gone
 
         # Clean up enrichment thread pool executor on session termination
         if hasattr(self.session, 'enricher') and self.session.enricher:
@@ -575,11 +607,10 @@ class LauncherService:
                 logging.debug(f"Error shutting down enricher executor: {e}")
 
         if was_killed:
-            self.session.clear(mpv_return_code=0)
+            self.session.clear(mpv_return_code=0, session_generation=getattr(self.session, 'session_generation', None))
             return {"success": True, "message": "MPV session closed."}
         else:
-            # Even if we couldn't verify death, we clear our state if PID is gone
             if not ipc_utils.is_pid_running(pid):
-                self.session.clear(mpv_return_code=0)
+                self.session.clear(mpv_return_code=0, session_generation=getattr(self.session, 'session_generation', None))
                 return {"success": True, "message": "MPV session cleared (already dead)."}
             return {"success": False, "error": "Failed to close MPV session."}
