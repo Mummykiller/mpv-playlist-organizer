@@ -38,6 +38,9 @@
 				"utils/Draggable.js",
 				"utils/Resizable.js",
 				"utils/janitor.js",
+				"utils/ControllerTimers.js",
+				"utils/ControllerActions.js",
+				"utils/ControllerView.js",
 				"utils/MpvController.js",
 				"content.js"
 			],
@@ -47,7 +50,8 @@
 	"web_accessible_resources": [
 		{
 			"resources": ["shared.css", "content.css", "images/*"],
-			"matches": ["*://*/*", "<all_urls>"]
+			"matches": ["<all_urls>"],
+			"use_dynamic_url": true
 		}
 	],
 	"action": {
@@ -67,11 +71,5 @@
 	},
 	"content_security_policy": {
 		"extension_pages": "script-src 'self'; object-src 'none'"
-	},
-	"browser_specific_settings": {
-		"gecko": {
-			"id": "mpv-handler@shinku.com",
-			"strict_min_version": "109.0"
-		}
 	}
 }

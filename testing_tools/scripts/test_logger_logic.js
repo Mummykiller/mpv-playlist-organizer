@@ -11,7 +11,8 @@ global.navigator = { userAgent: "NodeJS-Test", platform: "Linux" };
 global.window = { MPV_INTERNAL: {} };
 
 // Mock 'console' to capture logs without cluttering terminal
-const originalConsole = { ...console };
+const savedConsole = global.console;
+const originalConsole = { ...savedConsole };
 let capturedLogs = [];
 global.console = {
     ...originalConsole,
@@ -214,8 +215,14 @@ async function runTests() {
     originalConsole.log("\nALL SYSTEM LOGGER TESTS PASSED! 🛡️");
 }
 
-runTests().catch(err => {
-    originalConsole.error("\nTEST FAILED! ❌");
-    originalConsole.error(err);
-    process.exit(1);
-});
+(async () => {
+    try {
+        await runTests();
+    } catch (err) {
+        originalConsole.error("\nTEST FAILED! ❌");
+        originalConsole.error(err);
+        process.exit(1);
+    } finally {
+        global.console = savedConsole;
+    }
+})();

@@ -42,7 +42,11 @@ function createControllerEnv(url) {
                     addListener: (l) => { globalListeners.add(l); }
                 }
             },
-            tabs: {
+            alarms: {
+        create: () => {},
+        clear: () => Promise.resolve(true)
+    },
+    tabs: {
                 query: (q, cb) => cb([{ id: 1 }])
             }
         }
@@ -76,11 +80,31 @@ global.chrome = {
             },
             set: (data, cb) => {
                 if (typeof cb === 'function') cb();
-                const changes = {};                for (const key in data) {
+                const changes = {};
+                for (const key in data) {
                     changes[key] = { newValue: data[key] };
                 }
                 globalListeners.forEach(l => l(changes, "local"));
+                return Promise.resolve();
+            },
+            remove: (keys, cb) => {
+                if (typeof cb === 'function') cb();
+                return Promise.resolve();
             }
+        }
+    },
+    alarms: {
+        create: () => {},
+        clear: () => Promise.resolve(true)
+    },
+    tabs: {
+        query: (q, cb) => {
+            if (typeof cb === 'function') cb([]);
+            return Promise.resolve([]);
+        },
+        sendMessage: (id, msg, cb) => {
+            if (typeof cb === 'function') cb();
+            return Promise.resolve();
         }
     },
     runtime: {
@@ -105,17 +129,26 @@ const MPV = global.window.MPV_INTERNAL = {};
 // Mock required internal utilities
 MPV.domUtils = {
     formatTitle: (span, item) => { span.textContent = item.title; },
-    updateItemDelta: (div, delta) => { if (delta.watched) div.classList.add("item-watched"); }
+    updateItemDelta: (div, delta) => { if (delta.watched) div.classList.add("item-watched"); },
+    createPlaylistItemElement: (item) => {
+        const div = document.createElement("div");
+        div.className = "list-item";
+        div.dataset.id = item.id;
+        div.textContent = item.title || item.url || "";
+        return div;
+    }
 };
 
 // Load required scripts
 require("../../utils/commUtils.js");
 require("../../utils/PlaybackStateManager.js");
 require("../../utils/PlaylistUI.js");
+require("../../utils/ControllerTimers.js");
 
 MPV.playbackStateManager = global.window.MPV_INTERNAL.playbackStateManager;
 
 async function testUiSync() {
+    globalListeners.clear();
     console.log("🚀 Starting UI Sync Test (Popup <-> ContentScript)...");
 
     const popupEnv = createControllerEnv("chrome-extension://id/popup.html");
@@ -216,6 +249,9 @@ async function testUiSync() {
     assert.strictEqual(popupItems.length, 1, "Popup should have hidden the removed item.");
     assert.strictEqual(popupItems[0].dataset.id, "item-1");
     console.log("  ✅ Popup synced with ContentScript removal.");
+
+    // Clear storage listeners registered for Steps 1-3 before moving on
+    globalListeners.clear();
 
     // --- Step 5: Play/Pause vs Queue Visual State Transitions ---
     console.log("Step 4: Testing Play/Pause <-> Queue state transitions...");
@@ -354,137 +390,146 @@ async function testUiSync() {
     global.document = popupEnv.document;
     global.window = popupEnv.window;
 
-    optionsManager.saveAllPreferences();
-    await new Promise(r => setTimeout(r, 20));
+    try {
+        optionsManager.saveAllPreferences();
+        await new Promise(r => setTimeout(r, 20));
 
-    assert.ok(savedPreferences, "saveAllPreferences should dispatch preferences");
-    assert.strictEqual(savedPreferences.launchGeometry, "custom");
-    assert.strictEqual(savedPreferences.customGeometryWidth, "1920");
-    assert.strictEqual(savedPreferences.customGeometryHeight, "1080");
-    assert.strictEqual(savedPreferences.mpvDecoder, "auto");
-    assert.strictEqual(savedPreferences.forceTerminal, true);
-    assert.strictEqual(savedPreferences.showPlayNewButton, false);
-    assert.strictEqual(savedPreferences.clearScope, "current");
-    assert.strictEqual(savedPreferences.ytMarkWatched, true);
-    assert.strictEqual(savedPreferences.confirmClearPlaylist, true);
-    // Number transform
-    assert.strictEqual(savedPreferences.streamScannerTimeout, 75);
-    // Flags parsing
-    assert.deepStrictEqual(savedPreferences.customMpvFlags, [
-        { flag: "--fs", enabled: true },
-        { flag: "--volume=50", enabled: false }
-    ]);
-    assert.deepStrictEqual(savedPreferences.automaticMpvFlags, [
-        { flag: "--hwdec=auto", description: "Hardware Decoding", enabled: true }
-    ]);
+        assert.ok(savedPreferences, "saveAllPreferences should dispatch preferences");
+        assert.strictEqual(savedPreferences.launchGeometry, "custom");
+        assert.strictEqual(savedPreferences.customGeometryWidth, "1920");
+        assert.strictEqual(savedPreferences.customGeometryHeight, "1080");
+        assert.strictEqual(savedPreferences.mpvDecoder, "auto");
+        assert.strictEqual(savedPreferences.forceTerminal, true);
+        assert.strictEqual(savedPreferences.showPlayNewButton, false);
+        assert.strictEqual(savedPreferences.clearScope, "current");
+        assert.strictEqual(savedPreferences.ytMarkWatched, true);
+        assert.strictEqual(savedPreferences.confirmClearPlaylist, true);
+        // Number transform
+        assert.strictEqual(savedPreferences.streamScannerTimeout, 75);
+        // Flags parsing
+        assert.deepStrictEqual(savedPreferences.customMpvFlags, [
+            { flag: "--fs", enabled: true },
+            { flag: "--volume=50", enabled: false }
+        ]);
+        assert.deepStrictEqual(savedPreferences.automaticMpvFlags, [
+            { flag: "--hwdec=auto", description: "Hardware Decoding", enabled: true }
+        ]);
 
-    // Fallback: invalid timeout resets to 60
-    popupEnv.document.getElementById("scanner-timeout-input").value = "invalid-not-a-number";
-    optionsManager.saveAllPreferences();
-    await new Promise(r => setTimeout(r, 20));
-    assert.strictEqual(savedPreferences.streamScannerTimeout, 60, "Invalid timeout should fallback to 60");
+        // Fallback: invalid timeout resets to 60
+        popupEnv.document.getElementById("scanner-timeout-input").value = "invalid-not-a-number";
+        optionsManager.saveAllPreferences();
+        await new Promise(r => setTimeout(r, 20));
+        assert.strictEqual(savedPreferences.streamScannerTimeout, 60, "Invalid timeout should fallback to 60");
 
-    console.log("  ✅ Settings schema validation and transform verified.");
+        console.log("  ✅ Settings schema validation and transform verified.");
 
-    // --- Step 7: Favorites Filtering Behavior ---
-    console.log("Step 7: Testing Favorites Filtering Behavior...");
-    const favsContainer = popupEnv.document.createElement("div");
-    favsContainer.id = "test-favorites-root";
-    favsContainer.innerHTML = `
-        <div id="settings-sections-wrapper">
-            <div class="cat-tab-btn" data-category="favorites"><span class="fav-tab-label">Favorites</span></div>
-            <div class="cat-tab-btn" data-category="all">All</div>
-            <div class="cat-tab-btn" data-category="playback">Playback</div>
-            <div class="cat-tab-btn" data-category="network">Network</div>
-            <div id="favorites-empty-notice" style="display: none;">No favorites found.</div>
+        // --- Step 7: Favorites Filtering Behavior ---
+        console.log("Step 7: Testing Favorites Filtering Behavior...");
+        const favsContainer = popupEnv.document.createElement("div");
+        favsContainer.id = "test-favorites-root";
+        favsContainer.innerHTML = `
+            <div id="settings-sections-wrapper">
+                <div class="cat-tab-btn" data-category="favorites"><span class="fav-tab-label">Favorites</span></div>
+                <div class="cat-tab-btn" data-category="all">All</div>
+                <div class="cat-tab-btn" data-category="playback">Playback</div>
+                <div class="cat-tab-btn" data-category="network">Network</div>
+                <div id="favorites-empty-notice" style="display: none;">No favorites found.</div>
 
-            <details class="settings-section" data-category="playback" id="section-playback">
-                <summary class="settings-group-header">Playback</summary>
-                <div class="control-group" id="grp-geom">
-                    <label class="settings-label">Launch Geometry</label>
-                    <select id="fav-test-geom"></select>
-                </div>
-                <div class="control-group" id="custom-geometry-container" style="display: none;">
-                    <input id="fav-custom-w" />
-                </div>
-                <div class="control-group" id="grp-terminal">
-                    <label class="settings-label">Force Terminal</label>
-                    <input type="checkbox" id="fav-test-terminal" />
-                </div>
-            </details>
+                <details class="settings-section" data-category="playback" id="section-playback">
+                    <summary class="settings-group-header">Playback</summary>
+                    <div class="control-group" id="grp-geom">
+                        <label class="settings-label">Launch Geometry</label>
+                        <select id="fav-test-geom"></select>
+                    </div>
+                    <div class="control-group" id="custom-geometry-container" style="display: none;">
+                        <input id="fav-custom-w" />
+                    </div>
+                    <div class="control-group" id="grp-terminal">
+                        <label class="settings-label">Force Terminal</label>
+                        <input type="checkbox" id="fav-test-terminal" />
+                    </div>
+                </details>
 
-            <details class="settings-section" data-category="network" id="section-network">
-                <summary class="settings-group-header">Network</summary>
-                <div class="control-group" id="grp-cookies">
-                    <label class="settings-label">Cookies</label>
-                    <input type="checkbox" id="fav-test-cookies" />
-                </div>
-            </details>
-        </div>
-    `;
-    popupEnv.document.body.appendChild(favsContainer);
+                <details class="settings-section" data-category="network" id="section-network">
+                    <summary class="settings-group-header">Network</summary>
+                    <div class="control-group" id="grp-cookies">
+                        <label class="settings-label">Cookies</label>
+                        <input type="checkbox" id="fav-test-cookies" />
+                    </div>
+                </details>
+            </div>
+        `;
+        popupEnv.document.body.appendChild(favsContainer);
 
-    optionsManager.favoriteSettings = new Set();
-    optionsManager._initializeFavoriteButtons();
+        optionsManager.favoriteSettings = new Set();
+        optionsManager._initializeFavoriteButtons();
 
-    // Verify star buttons were added to regular control groups but NOT to custom-geometry-container
-    const starBtns = popupEnv.document.querySelectorAll("#test-favorites-root .btn-fav-setting");
-    assert.strictEqual(starBtns.length, 3, "Should inject star buttons for 3 control groups");
-    assert.strictEqual(popupEnv.document.querySelector("#custom-geometry-container .btn-fav-setting"), null, "custom-geometry-container must not have star button");
+        // Verify star buttons were added to regular control groups but NOT to custom-geometry-container
+        const starBtns = popupEnv.document.querySelectorAll("#test-favorites-root .btn-fav-setting");
+        assert.strictEqual(starBtns.length, 3, "Should inject star buttons for 3 control groups");
+        assert.strictEqual(popupEnv.document.querySelector("#custom-geometry-container .btn-fav-setting"), null, "custom-geometry-container must not have star button");
 
-    // Toggle favorite on 'grp-geom'
-    const geomId = optionsManager._getSettingIdentifier(popupEnv.document.getElementById("grp-geom"));
-    assert.strictEqual(geomId, "fav-test-geom");
-    optionsManager._toggleFavorite(geomId);
+        // Toggle favorite on 'grp-geom'
+        const geomId = optionsManager._getSettingIdentifier(popupEnv.document.getElementById("grp-geom"));
+        assert.strictEqual(geomId, "fav-test-geom");
+        optionsManager._toggleFavorite(geomId);
 
-    assert.ok(optionsManager.favoriteSettings.has("fav-test-geom"));
-    assert.strictEqual(optionsManager.favoriteSettings.size, 1);
+        assert.ok(optionsManager.favoriteSettings.has("fav-test-geom"));
+        assert.strictEqual(optionsManager.favoriteSettings.size, 1);
 
-    // Verify Star button and group CSS classes
-    const geomStar = popupEnv.document.querySelector('#grp-geom .btn-fav-setting');
-    assert.ok(geomStar.classList.contains("is-favorite"), "Star button should have is-favorite class");
-    assert.ok(popupEnv.document.getElementById("grp-geom").classList.contains("is-favorite-setting"), "Group should have is-favorite-setting class");
+        // Verify Star button and group CSS classes
+        const geomStar = popupEnv.document.querySelector('#grp-geom .btn-fav-setting');
+        assert.ok(geomStar.classList.contains("is-favorite"), "Star button should have is-favorite class");
+        assert.ok(popupEnv.document.getElementById("grp-geom").classList.contains("is-favorite-setting"), "Group should have is-favorite-setting class");
 
-    // Verify Tab label
-    const favTabLabel = popupEnv.document.querySelector('.cat-tab-btn[data-category="favorites"] .fav-tab-label');
-    assert.strictEqual(favTabLabel.textContent, "Favorites (1)");
+        // Verify Tab label
+        const favTabLabel = popupEnv.document.querySelector('.cat-tab-btn[data-category="favorites"] .fav-tab-label');
+        assert.strictEqual(favTabLabel.textContent, "Favorites (1)");
 
-    // Apply "favorites" filter
-    optionsManager.applyCategoryFilter("favorites");
-    const secPlayback = popupEnv.document.getElementById("section-playback");
-    const secNetwork = popupEnv.document.getElementById("section-network");
-    const emptyNotice = popupEnv.document.getElementById("favorites-empty-notice");
+        // Apply "favorites" filter
+        optionsManager.applyCategoryFilter("favorites");
+        const secPlayback = popupEnv.document.getElementById("section-playback");
+        const secNetwork = popupEnv.document.getElementById("section-network");
+        const emptyNotice = popupEnv.document.getElementById("favorites-empty-notice");
 
-    assert.strictEqual(secPlayback.style.display, "block", "Section with favorite should be visible");
-    assert.strictEqual(popupEnv.document.getElementById("grp-geom").style.display, "", "Favorited item should be visible");
-    assert.strictEqual(popupEnv.document.getElementById("grp-terminal").style.display, "none", "Non-favorited item should be hidden");
-    assert.strictEqual(secNetwork.style.display, "none", "Section without favorites should be hidden");
-    assert.strictEqual(emptyNotice.style.display, "none", "Empty notice should be hidden when favorites exist");
+        assert.strictEqual(secPlayback.style.display, "block", "Section with favorite should be visible");
+        assert.strictEqual(popupEnv.document.getElementById("grp-geom").style.display, "", "Favorited item should be visible");
+        assert.strictEqual(popupEnv.document.getElementById("grp-terminal").style.display, "none", "Non-favorited item should be hidden");
+        assert.strictEqual(secNetwork.style.display, "none", "Section without favorites should be hidden");
+        assert.strictEqual(emptyNotice.style.display, "none", "Empty notice should be hidden when favorites exist");
 
-    // Toggle favorite OFF -> Empty State
-    optionsManager._toggleFavorite(geomId);
-    assert.strictEqual(optionsManager.favoriteSettings.size, 0);
-    assert.strictEqual(favTabLabel.textContent, "Favorites");
-    assert.strictEqual(secPlayback.style.display, "none", "Playback section hidden when no favorites");
-    assert.strictEqual(emptyNotice.style.display, "flex", "Empty notice visible when no favorites in favorites view");
+        // Toggle favorite OFF -> Empty State
+        optionsManager._toggleFavorite(geomId);
+        assert.strictEqual(optionsManager.favoriteSettings.size, 0);
+        assert.strictEqual(favTabLabel.textContent, "Favorites");
+        assert.strictEqual(secPlayback.style.display, "none", "Playback section hidden when no favorites");
+        assert.strictEqual(emptyNotice.style.display, "flex", "Empty notice visible when no favorites in favorites view");
 
-    // Switch back to "all" category
-    optionsManager.applyCategoryFilter("all");
-    assert.strictEqual(secPlayback.style.display, "block");
-    assert.strictEqual(secNetwork.style.display, "block");
-    assert.strictEqual(popupEnv.document.getElementById("grp-terminal").style.display, "");
-    assert.strictEqual(emptyNotice.style.display, "none");
-
-    // Restore globals
-    global.document = savedDoc;
-    global.window = savedWin;
+        // Switch back to "all" category
+        optionsManager.applyCategoryFilter("all");
+        assert.strictEqual(secPlayback.style.display, "block");
+        assert.strictEqual(secNetwork.style.display, "block");
+        assert.strictEqual(popupEnv.document.getElementById("grp-terminal").style.display, "");
+        assert.strictEqual(emptyNotice.style.display, "none");
+    } finally {
+        // Restore globals even if an assertion fails
+        global.document = savedDoc;
+        global.window = savedWin;
+    }
     console.log("  ✅ Favorites filtering and state updates verified.");
 
     // --- Step 8: Folder Ordering Logic ---
-    console.log("Step 8: Verifying Folder Ordering Logic & State Operations...");
-    const { sanitizeString } = global.window.MPV_INTERNAL;
+    console.log("Step 8: Verifying Folder Ordering Logic & State Operations (real folder_management handlers)...");
+    const {
+        handleCreateFolder,
+        handleGetAllFolderIds,
+        handleRemoveFolder,
+        handleRenameFolder,
+        handleSetFolderOrder
+    } = await import("../../background/handlers/folder_management.js");
+    const { storage: bgStorage } = await import("../../background/storage_instance.js");
 
-    // Simulate Background Storage Data State
+    // Simulate Background Storage Data State backed by real handler calls
     const mockStorageData = {
         folders: {
             "Default": { playlist: [] },
@@ -495,95 +540,61 @@ async function testUiSync() {
         settings: { lastUsedFolderId: "Default" }
     };
 
-    // Operation 1: Create Folder with Sanitization
-    const createFolder = (rawName) => {
-        let folderId = sanitizeString(rawName, true);
-        if (!folderId) return { success: false, error: "Invalid name." };
-        if (mockStorageData.folders[folderId]) return { success: false, error: "Already exists." };
-        mockStorageData.folders[folderId] = { playlist: [] };
-        if (!mockStorageData.folderOrder) mockStorageData.folderOrder = Object.keys(mockStorageData.folders);
-        if (!mockStorageData.folderOrder.includes(folderId)) mockStorageData.folderOrder.push(folderId);
-        mockStorageData.settings.lastUsedFolderId = folderId;
-        return { success: true, folderId };
+    const origBgGet = bgStorage.get.bind(bgStorage);
+    const origBgSet = bgStorage.set.bind(bgStorage);
+    bgStorage.get = async () => mockStorageData;
+    bgStorage.set = async (updated) => {
+        Object.assign(mockStorageData, updated);
     };
 
-    const res1 = createFolder("  Podcasts Shows?  ");
-    assert.strictEqual(res1.success, true);
-    assert.strictEqual(res1.folderId, "Podcasts Shows");
-    assert.deepStrictEqual(mockStorageData.folderOrder, ["Default", "Anime", "Music", "Podcasts Shows"]);
-    assert.strictEqual(mockStorageData.settings.lastUsedFolderId, "Podcasts Shows");
+    try {
+        // Operation 1: Create Folder with Sanitization via real handleCreateFolder
+        const res1 = await handleCreateFolder({ folderId: "  Podcasts Shows?  " });
+        assert.strictEqual(res1.success, true);
+        assert.strictEqual(res1.folderId, "Podcasts Shows");
+        assert.deepStrictEqual(mockStorageData.folderOrder, ["Default", "Anime", "Music", "Podcasts Shows"]);
+        assert.strictEqual(mockStorageData.settings.lastUsedFolderId, "Podcasts Shows");
 
-    // Duplicate create rejected
-    const resDup = createFolder("Podcasts Shows");
-    assert.strictEqual(resDup.success, false);
+        // Duplicate create rejected
+        const resDup = await handleCreateFolder({ folderId: "Podcasts Shows" });
+        assert.strictEqual(resDup.success, false);
 
-    // Operation 2: Rename Folder (Preserving Index In-Place)
-    const renameFolder = (oldId, newRawName) => {
-        const newId = sanitizeString(newRawName, true);
-        if (!newId || !mockStorageData.folders[oldId] || mockStorageData.folders[newId]) {
-            return { success: false };
-        }
-        mockStorageData.folders[newId] = mockStorageData.folders[oldId];
-        delete mockStorageData.folders[oldId];
-        const index = mockStorageData.folderOrder.indexOf(oldId);
-        if (index !== -1) mockStorageData.folderOrder[index] = newId;
-        if (mockStorageData.settings.lastUsedFolderId === oldId) {
-            mockStorageData.settings.lastUsedFolderId = newId;
-        }
-        return { success: true, folderId: newId };
-    };
+        // Operation 2: Rename Folder (Preserving Index In-Place) via real handleRenameFolder
+        const resRename = await handleRenameFolder({ oldFolderId: "Anime", newFolderId: "Animated Series" });
+        assert.strictEqual(resRename.success, true);
+        // Index 1 MUST remain index 1
+        assert.deepStrictEqual(mockStorageData.folderOrder, ["Default", "Animated Series", "Music", "Podcasts Shows"]);
 
-    const resRename = renameFolder("Anime", "Animated Series");
-    assert.strictEqual(resRename.success, true);
-    // Index 1 MUST remain index 1
-    assert.deepStrictEqual(mockStorageData.folderOrder, ["Default", "Animated Series", "Music", "Podcasts Shows"]);
+        // Operation 3: Reorder Folders (Custom Order) via real handleSetFolderOrder
+        const resOrder = await handleSetFolderOrder({ order: ["Podcasts Shows", "Music", "Animated Series", "Default"] });
+        assert.strictEqual(resOrder.success, true);
+        assert.deepStrictEqual(mockStorageData.folderOrder, ["Podcasts Shows", "Music", "Animated Series", "Default"]);
 
-    // Operation 3: Reorder Folders (Custom Order)
-    const setFolderOrder = (newOrder) => {
-        mockStorageData.folderOrder = newOrder;
-        return { success: true };
-    };
-    setFolderOrder(["Podcasts Shows", "Music", "Animated Series", "Default"]);
-    assert.deepStrictEqual(mockStorageData.folderOrder, ["Podcasts Shows", "Music", "Animated Series", "Default"]);
+        // Operation 4: Cyclic Playlist Navigation using handleGetAllFolderIds
+        const switchPlaylist = async () => {
+            const { folderIds, lastUsedFolderId } = await handleGetAllFolderIds({});
+            const current = lastUsedFolderId || folderIds[0];
+            const idx = folderIds.indexOf(current);
+            const next = folderIds[(idx + 1) % folderIds.length];
+            mockStorageData.settings.lastUsedFolderId = next;
+            return next;
+        };
 
-    // Operation 4: Cyclic Playlist Navigation
-    const switchPlaylist = () => {
-        const order = mockStorageData.folderOrder;
-        const current = mockStorageData.settings.lastUsedFolderId || order[0];
-        const idx = order.indexOf(current);
-        const next = order[(idx + 1) % order.length];
-        mockStorageData.settings.lastUsedFolderId = next;
-        return next;
-    };
+        mockStorageData.settings.lastUsedFolderId = "Podcasts Shows"; // index 0
+        assert.strictEqual(await switchPlaylist(), "Music");               // index 1
+        assert.strictEqual(await switchPlaylist(), "Animated Series");      // index 2
+        assert.strictEqual(await switchPlaylist(), "Default");              // index 3
+        assert.strictEqual(await switchPlaylist(), "Podcasts Shows");       // wraps to 0
 
-    mockStorageData.settings.lastUsedFolderId = "Podcasts Shows"; // index 0
-    assert.strictEqual(switchPlaylist(), "Music");               // index 1
-    assert.strictEqual(switchPlaylist(), "Animated Series");      // index 2
-    assert.strictEqual(switchPlaylist(), "Default");              // index 3
-    assert.strictEqual(switchPlaylist(), "Podcasts Shows");       // wraps to 0
-
-    // Operation 5: Remove Folder (Order Pruning & Fallback)
-    const removeFolder = (folderId) => {
-        if (!mockStorageData.folders[folderId]) return { success: false };
-        const wasActive = mockStorageData.settings.lastUsedFolderId === folderId;
-        delete mockStorageData.folders[folderId];
-        mockStorageData.folderOrder = mockStorageData.folderOrder.filter(id => id !== folderId);
-        if (Object.keys(mockStorageData.folders).length === 0) {
-            const defaultId = "Playlist 1";
-            mockStorageData.folders[defaultId] = { playlist: [] };
-            mockStorageData.folderOrder = [defaultId];
-            mockStorageData.settings.lastUsedFolderId = defaultId;
-        } else if (wasActive) {
-            mockStorageData.settings.lastUsedFolderId = mockStorageData.folderOrder[0];
-        }
-        return { success: true, newFolderId: mockStorageData.settings.lastUsedFolderId };
-    };
-
-    // Remove active folder "Podcasts Shows"
-    const resRemActive = removeFolder("Podcasts Shows");
-    assert.strictEqual(resRemActive.success, true);
-    assert.deepStrictEqual(mockStorageData.folderOrder, ["Music", "Animated Series", "Default"]);
-    assert.strictEqual(mockStorageData.settings.lastUsedFolderId, "Music", "Active folder switch to first in order");
+        // Operation 5: Remove Folder (Order Pruning & Fallback) via real handleRemoveFolder
+        const resRemActive = await handleRemoveFolder({ folderId: "Podcasts Shows" });
+        assert.strictEqual(resRemActive.success, true);
+        assert.deepStrictEqual(mockStorageData.folderOrder, ["Music", "Animated Series", "Default"]);
+        assert.strictEqual(mockStorageData.settings.lastUsedFolderId, "Music", "Active folder switch to first in order");
+    } finally {
+        bgStorage.get = origBgGet;
+        bgStorage.set = origBgSet;
+    }
 
     // Operation 6: Storage Janitor Reconciliation
     const { StorageManager } = await import("../../utils/storageManager.js");
@@ -666,6 +677,87 @@ async function testUiSync() {
 
     console.log("  ✅ UI preference and minimized state isolation verified.");
 
+    // Operation 8: MpvController Timer & Watchdog Teardown Regression Test
+    console.log("Testing MpvController Timer & Watchdog Teardown...");
+    const origSetInterval = global.setInterval;
+    const origClearInterval = global.clearInterval;
+    const origSetTimeout = global.setTimeout;
+    const origClearTimeout = global.clearTimeout;
+
+    const activeIntervals = new Set();
+    const activeTimeouts = new Set();
+
+    global.setInterval = (fn, ms, ...args) => {
+        const id = origSetInterval(fn, ms, ...args);
+        activeIntervals.add(id);
+        return id;
+    };
+    global.clearInterval = (id) => {
+        activeIntervals.delete(id);
+        return origClearInterval(id);
+    };
+    global.setTimeout = (fn, ms, ...args) => {
+        const id = origSetTimeout(fn, ms, ...args);
+        activeTimeouts.add(id);
+        return id;
+    };
+    global.clearTimeout = (id) => {
+        activeTimeouts.delete(id);
+        return origClearTimeout(id);
+    };
+
+    try {
+        const mockTimerController = {
+            isTearingDown: false,
+            heartbeatInterval: null,
+            visualWatchdogInterval: null,
+            suppressedByWatchdog: false,
+            preFullscreenPosition: null,
+            state: { state: {} },
+            ui: { controllerHost: null },
+            bridge: { send: () => Promise.resolve({ success: true }) },
+            _safeWrap: (fn) => fn,
+            _syncUiToState: () => {},
+            teardown() {
+                this.isTearingDown = true;
+                this.timers.destroy();
+            },
+            destroy() {
+                this.teardown();
+            }
+        };
+        const timers = new MPV.ControllerTimers(mockTimerController);
+        mockTimerController.timers = timers;
+
+        timers.startHeartbeat(10000);
+        timers.startVisualWatchdog(10000);
+        timers.scheduleTimeout(() => {}, 10000);
+
+        assert.strictEqual(activeIntervals.size, 2, "Heartbeat and visual watchdog intervals should be active");
+        assert.strictEqual(activeTimeouts.size, 1, "Scheduled timeout should be active");
+        assert.ok(mockTimerController.heartbeatInterval !== null, "Controller heartbeatInterval should be set");
+        assert.ok(mockTimerController.visualWatchdogInterval !== null, "Controller visualWatchdogInterval should be set");
+
+        mockTimerController.destroy();
+
+        assert.strictEqual(activeIntervals.size, 0, "All intervals must be cleared on destroy()");
+        assert.strictEqual(activeTimeouts.size, 0, "All timeouts must be cleared on destroy()");
+        assert.strictEqual(timers.heartbeatInterval, null, "timers.heartbeatInterval must be null after destroy()");
+        assert.strictEqual(timers.visualWatchdogInterval, null, "timers.visualWatchdogInterval must be null after destroy()");
+        assert.strictEqual(mockTimerController.heartbeatInterval, null, "controller.heartbeatInterval must be null after destroy()");
+        assert.strictEqual(mockTimerController.visualWatchdogInterval, null, "controller.visualWatchdogInterval must be null after destroy()");
+
+        // Idempotency check
+        timers.destroy();
+        assert.strictEqual(activeIntervals.size, 0);
+    } finally {
+        global.setInterval = origSetInterval;
+        global.clearInterval = origClearInterval;
+        global.setTimeout = origSetTimeout;
+        global.clearTimeout = origClearTimeout;
+    }
+    console.log("  ✅ MpvController timer/watchdog teardown verified without leaks.");
+
     console.log("\n✨ UI SYNC TEST PASSED! ✨");
 }
 
@@ -676,5 +768,7 @@ async function testUiSync() {
         console.error("\n❌ TEST FAILED!");
         console.error(err);
         process.exit(1);
+    } finally {
+        globalListeners.clear();
     }
 })();

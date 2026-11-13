@@ -9,6 +9,59 @@ const m3u8DetectionPromises = {};
 const _detectedUrlsState = {};
 let _onDetectionCallback = null;
 
+const SCANNER_STATE_KEY = "m3u8_scanner_state";
+
+const getSessionStorage = () => {
+	if (typeof chrome !== "undefined" && chrome?.storage?.session) {
+		return chrome.storage.session;
+	}
+	return chrome?.storage?.local || null;
+};
+
+function persistScannerState() {
+	try {
+		const store = getSessionStorage();
+		if (!store) return;
+		store
+			.set({
+				[SCANNER_STATE_KEY]: {
+					detectedUrlsState: { ..._detectedUrlsState },
+					lastDetectedUrls: { ...lastDetectedUrls },
+				},
+			})
+			.catch(() => {});
+	} catch (e) {
+		console.debug("[Scanner] Failed to persist state:", e?.message || e);
+	}
+}
+
+export const scannerInitPromise = (async () => {
+	try {
+		const store = getSessionStorage();
+		if (!store) return;
+		const res = await store.get(SCANNER_STATE_KEY);
+		const saved = res?.[SCANNER_STATE_KEY];
+		if (!saved || typeof saved !== "object") return;
+
+		if (saved.detectedUrlsState && typeof saved.detectedUrlsState === "object") {
+			for (const [tabId, url] of Object.entries(saved.detectedUrlsState)) {
+				if (!(tabId in _detectedUrlsState) && typeof url === "string") {
+					_detectedUrlsState[tabId] = url;
+				}
+			}
+		}
+		if (saved.lastDetectedUrls && typeof saved.lastDetectedUrls === "object") {
+			for (const [tabId, entry] of Object.entries(saved.lastDetectedUrls)) {
+				if (!(tabId in lastDetectedUrls) && entry && typeof entry.url === "string") {
+					lastDetectedUrls[tabId] = entry;
+				}
+			}
+		}
+	} catch (e) {
+		console.debug("[Scanner] Failed to rehydrate state:", e?.message || e);
+	}
+})();
+
 export function setDetectionCallback(cb) {
 	_onDetectionCallback = cb;
 }
@@ -16,6 +69,7 @@ export function setDetectionCallback(cb) {
 function clearDetectedUrl(tabId) {
 	delete lastDetectedUrls[tabId];
 	delete _detectedUrlsState[tabId];
+	persistScannerState();
 	broadcastToTabs({
 		action: "detected_url_changed",
 		tabId: tabId,
@@ -28,9 +82,16 @@ function setupListeners() {
 	if (!chrome?.webRequest?.onBeforeRequest) return;
 	chrome.webRequest.onBeforeRequest.addListener(
 		(details) => {
-			const urlLower = details.url.toLowerCase();
-			const isM3u8 = urlLower.includes(".m3u8");
-			const isMp4 = urlLower.includes(".mp4");
+			if (typeof details.tabId !== "number" || details.tabId < 0) return;
+
+			let pathname = "";
+			try {
+				pathname = new URL(details.url).pathname.toLowerCase();
+			} catch {
+				pathname = (details.url || "").split(/[?#]/)[0].toLowerCase();
+			}
+			const isM3u8 = pathname.endsWith(".m3u8");
+			const isMp4 = pathname.endsWith(".mp4");
 
 			if (!isM3u8 && !isMp4) return;
 
@@ -58,11 +119,6 @@ function setupListeners() {
 
 			const detectedUrl = details.url;
 			const typeLabel = isM3u8 ? "M3U8" : "MP4";
-			
-			broadcastLog({
-				text: `[Scanner]: Detected ${typeLabel} stream: ${detectedUrl}`,
-				type: "info",
-			});
 
 			const now = Date.now();
 			const lastData = lastDetectedUrls[details.tabId];
@@ -75,7 +131,13 @@ function setupListeners() {
 			}
 			lastDetectedUrls[details.tabId] = { url: detectedUrl, timestamp: now };
 
+			broadcastLog({
+				text: `[Scanner]: Detected ${typeLabel} stream: ${detectedUrl}`,
+				type: "info",
+			});
+
 			_detectedUrlsState[details.tabId] = detectedUrl;
+			persistScannerState();
 			
 			if (_onDetectionCallback) {
 				_onDetectionCallback(detectedUrl, details.tabId);
@@ -101,6 +163,7 @@ function setupListeners() {
 	chrome.tabs.onRemoved.addListener((tabId) => {
 		delete _detectedUrlsState[tabId];
 		delete lastDetectedUrls[tabId];
+		persistScannerState();
 		if (m3u8DetectionPromises[tabId]) {
 			m3u8DetectionPromises[tabId].reject(new Error("Tab closed."));
 		}
@@ -167,6 +230,7 @@ async function _createScannerWindow(url) {
  * @returns {Promise<string>} A promise that resolves with the detected stream URL.
  */
 async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
+	await scannerInitPromise;
 	// Refinement 1: Check if already detected during the tab's loading phase
 	if (_detectedUrlsState[tabId]) {
 		return _detectedUrlsState[tabId];
@@ -306,7 +370,7 @@ async function _focusOriginalTab(originalTab) {
 			}
 		}
 	} catch (e) {
-		// Silently ignore if anything fails during focus restoration
+		console.debug("[Scanner] Focus restoration failed:", e?.message || e);
 	}
 }
 
@@ -400,4 +464,5 @@ export function handleUpdateDetectedUrlForTab(tabId, url) {
 	} else {
 		delete _detectedUrlsState[tabId];
 	}
+	persistScannerState();
 }

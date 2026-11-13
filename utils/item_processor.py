@@ -90,7 +90,7 @@ class ItemProcessor:
                 item['headers'] = {**headers, **item['headers']}
 
         if ytdl_opts:
-            item['ytdl_raw_options'] = self.file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), ytdl_opts)
+            item['ytdl_raw_options'] = self.file_io.merge_ytdlp_options(item.get('ytdl_raw_options'), ytdl_opts, allow_settings_flags=False)
 
         item['use_ytdl_mpv'] = use_ytdl
         item['is_youtube'] = is_yt

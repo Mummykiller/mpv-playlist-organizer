@@ -5,6 +5,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import re
+import shlex
 import services
 import file_io
 
@@ -24,6 +26,17 @@ INSTALL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = file_io.DATA_DIR
 CONFIG_FILE = file_io.CONFIG_FILE
 
+EXTENSION_ID_PATTERN = re.compile(r"^[a-p]{32}$")
+
+def validate_extension_id(extension_id: str) -> str:
+    """Validates Chrome extension ID (must be exactly 32 lowercase letters a-p)."""
+    if not extension_id or not isinstance(extension_id, str):
+        raise ValueError("Extension ID is required.")
+    cleaned_id = extension_id.strip()
+    if not EXTENSION_ID_PATTERN.match(cleaned_id):
+        raise ValueError(f"Invalid Extension ID '{cleaned_id}'. Must be exactly 32 lowercase letters (a-p).")
+    return cleaned_id
+
 def _generate_user_agent(browser_name, os_name):
     """Generates a plausible User-Agent string based on browser and OS."""
     base_ua = "Mozilla/5.0 ({os_part}; K) AppleWebKit/537.36 (KHTML, like Gecko)"
@@ -40,7 +53,6 @@ def _generate_user_agent(browser_name, os_name):
         "chrome": "Chrome/120.0.0.0",
         "chromium": "Chrome/120.0.0.0",
         "edge": "Edg/120.0.0.0",
-        "firefox": "Firefox/120.0",
         "vivaldi": "Vivaldi/6.5.3206.50",
         "opera": "Opera/100.0.0.0"
     }
@@ -271,6 +283,7 @@ class WindowsLogic(InstallerLogic):
         return mapping.get(browser_name.lower())
 
     def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
+        extension_id = validate_extension_id(extension_id)
         self.log("Detected Windows OS.")
         mpv_path = shutil.which('mpv.exe')
         if not mpv_path:
@@ -406,6 +419,7 @@ class UnixLogic(InstallerLogic):
         raise NotImplementedError
 
     def install(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
+        extension_id = validate_extension_id(extension_id)
         self.log(f"Detected {platform.system()} OS.")
         mpv_path = shutil.which('mpv') or "mpv"
         os.makedirs(file_io.DATA_DIR, exist_ok=True)
@@ -434,8 +448,9 @@ class UnixLogic(InstallerLogic):
         os.chmod(script_path, 0o755)
 
         wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.sh")
+        quoted_py = shlex.quote(sys.executable)
         with open(wrapper_path, 'w') as f:
-            f.write(f"#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\n\n\"{sys.executable}\" \"$(dirname \"$0\")/{SCRIPT_NAME}\" \"$@\"")
+            f.write(f'#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\n\nexec {quoted_py} "$(dirname "$0")/{SCRIPT_NAME}" "$@"\n')
         os.chmod(wrapper_path, 0o755)
 
         manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
@@ -464,7 +479,6 @@ class UnixLogic(InstallerLogic):
                     logging.debug(f"[INSTALLER] Could not remove symlink {symlink_path}: {e}")
         for f in [
             os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json"),
-            os.path.join(DATA_DIR, f"{HOST_NAME}.json"),
             os.path.join(INSTALL_DIR, "run_native_host.sh"),
             os.path.join(INSTALL_DIR, "mpv-cli"),
         ]:
@@ -474,8 +488,10 @@ class UnixLogic(InstallerLogic):
     def install_cli(self):
         script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
         wrapper_path = os.path.join(INSTALL_DIR, "mpv-cli")
+        quoted_py = shlex.quote(sys.executable)
+        quoted_script = shlex.quote(script_path)
         with open(wrapper_path, 'w') as f:
-            f.write(f"#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\n\"{sys.executable}\" \"{script_path}\" \"$@\"\n")
+            f.write(f'#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\n\nexec {quoted_py} {quoted_script} "$@"\n')
         os.chmod(wrapper_path, 0o755)
 
     def add_to_path(self):

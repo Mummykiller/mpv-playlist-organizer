@@ -7,6 +7,7 @@ import sys
 import re
 from dataclasses import dataclass
 from utils import security
+from utils.file_lock import FileLock
 
 # Prevent __pycache__ generation
 sys.dont_write_bytecode = True
@@ -14,193 +15,6 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
 import time
 import threading
-
-# --- Concurrency & Locking ---
-
-class FileLock:
-    """
-    A robust cross-process file locking mechanism using a .lock file.
-    Includes per-path thread-level synchronization and stale lock detection.
-    """
-    _locks = {}
-    _global_lock = threading.Lock()
-    _held_locks = threading.local()
-
-    def __init__(self, filepath, timeout=5.0, delay=0.05):
-        # Normalize path for the lock dictionary key (case-insensitive on Windows)
-        self.filepath = os.path.abspath(filepath)
-        self.lock_key = self.filepath
-        if platform.system() == "Windows":
-             self.lock_key = self.lock_key.lower()
-             
-        self.lockfile = f"{self.filepath}.lock"
-        self.timeout = timeout
-        self.delay = delay
-        self.is_file_locked = False
-        
-        # Get or create a thread-level RLock for this specific path
-        with FileLock._global_lock:
-            if self.lock_key not in FileLock._locks:
-                FileLock._locks[self.lock_key] = threading.RLock()
-            self.thread_lock = FileLock._locks[self.lock_key]
-
-    def _is_pid_running(self, pid):
-        """Checks if a process ID is currently running on the system."""
-        if pid <= 0:
-            return False
-        try:
-            if platform.system() == "Windows":
-                import ctypes
-                # PROCESS_QUERY_LIMITED_INFORMATION (0x1000) is enough to check existence.
-                h_process = ctypes.windll.kernel32.OpenProcess(0x1000, 0, pid)
-                if h_process:
-                    # Check if it's a zombie process (still exists but has exited)
-                    exit_code = ctypes.c_ulong()
-                    # STILL_ACTIVE = 259
-                    if ctypes.windll.kernel32.GetExitCodeProcess(h_process, ctypes.byref(exit_code)):
-                        is_active = (exit_code.value == 259)
-                        ctypes.windll.kernel32.CloseHandle(h_process)
-                        return is_active
-                    ctypes.windll.kernel32.CloseHandle(h_process)
-                    return True # Fallback to existence if exit code fails
-                # ERROR_ACCESS_DENIED (5) means it exists but we can't open it (likely protected/system)
-                return ctypes.windll.kernel32.GetLastError() == 5
-            else:
-                os.kill(pid, 0)
-                return True
-        except (OSError, ImportError):
-            return False
-
-    def _remove_lock_file(self):
-        """Attempts to remove the lock file with a robust retry loop (needed on Windows/AV)."""
-        if not os.path.exists(self.lockfile):
-            return True
-            
-        # Aggressive retry loop: Anti-Virus often holds a handle for 100-500ms
-        for i in range(10): # 1 second total
-            try:
-                os.remove(self.lockfile)
-                return True
-            except (OSError, PermissionError):
-                if i < 9:
-                    time.sleep(0.1)
-        return False
-
-    def __enter__(self):
-        # 1. Acquire thread-level RLock (prevents internal process contention)
-        if not self.thread_lock.acquire(timeout=self.timeout):
-            raise RuntimeError(f"Could not acquire thread lock for {self.filepath} after {self.timeout}s")
-        
-        # Initialize thread-local storage for recursion counting
-        if not hasattr(FileLock._held_locks, 'counters'):
-            FileLock._held_locks.counters = {}
-        
-        count = FileLock._held_locks.counters.get(self.lock_key, 0)
-        if count > 0:
-            # Recursion: already held by this thread
-            FileLock._held_locks.counters[self.lock_key] = count + 1
-            return self
-
-        # 2. Acquire cross-process file lock
-        start_time = time.time()
-        my_pid = str(os.getpid())
-        
-        while time.time() - start_time < self.timeout:
-            try:
-                # Attempt atomic creation of lock file
-                fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-                try:
-                    os.write(fd, my_pid.encode())
-                finally:
-                    os.close(fd)
-                
-                self.is_file_locked = True
-                FileLock._held_locks.counters[self.lock_key] = 1
-                return self
-            except OSError as err:
-                # If lock directory doesn't exist, try creating it
-                lock_dir = os.path.dirname(self.lockfile)
-                if lock_dir and not os.path.exists(lock_dir):
-                    try:
-                        os.makedirs(lock_dir, exist_ok=True)
-                        continue
-                    except OSError:
-                        # Cannot create lock directory (e.g. read-only filesystem or mock environment).
-                        # In this case, degrade gracefully to in-memory threading lock.
-                        logging.warning(f"[PY][IO] Lock directory {lock_dir} cannot be created: {err}. Falling back to thread lock.")
-                        self.is_file_locked = False
-                        FileLock._held_locks.counters[self.lock_key] = 1
-                        return self
-
-                if getattr(err, 'errno', None) in (30, 13) and not os.path.exists(self.lockfile):
-                    # Read-only filesystem (EROFS = 30) or Permission denied (EACCES = 13)
-                    logging.warning(f"[PY][IO] Filesystem for {self.lockfile} is not writable: {err}. Falling back to thread lock.")
-                    self.is_file_locked = False
-                    FileLock._held_locks.counters[self.lock_key] = 1
-                    return self
-
-                # Lock file exists. Check if it is stale.
-                try:
-                    if os.path.exists(self.lockfile):
-                        # Use a small retry for reading in case AV is scanning it
-                        content = None
-                        for _ in range(3):
-                            try:
-                                with open(self.lockfile, 'r') as f:
-                                    content = f.read().strip()
-                                break
-                            except (OSError, PermissionError):
-                                time.sleep(0.05)
-
-                        if content:
-                            locked_pid = int(content)
-                            # Check if PID matches current process OR is dead
-                            if locked_pid == int(my_pid) or not self._is_pid_running(locked_pid):
-                                logging.warning(f"[PY][IO] Removing stale lock for {self.filepath} (PID {locked_pid} {'matches current' if locked_pid == int(my_pid) else 'dead'})")
-                                if self._remove_lock_file():
-                                    time.sleep(self.delay)
-                                    continue
-                        elif content == "":
-                            # Empty lock file
-                            try:
-                                if time.time() - os.path.getmtime(self.lockfile) > 1.0:
-                                    logging.warning(f"[PY][IO] Removing stale empty lock file for {self.filepath}")
-                                    if self._remove_lock_file():
-                                        time.sleep(self.delay)
-                                        continue
-                            except OSError as e:
-                                logging.debug(f"[PY][IO] Could not check mtime for empty lock file {self.lockfile}: {e}")
-                except Exception as e:
-                    logging.debug(f"[PY][IO] Error checking lock staleness: {e}")
-                
-                # Still locked, wait and retry
-                time.sleep(self.delay)
-        
-        # Failed to acquire lock within timeout
-        self.thread_lock.release()
-        holder_pid = "unknown"
-        try:
-             with open(self.lockfile, 'r') as f:
-                holder_pid = f.read().strip()
-        except (OSError, UnicodeDecodeError) as e:
-            logging.debug(f"[PY][IO] Could not read lock holder PID from {self.lockfile}: {e}")
-        raise RuntimeError(f"Could not acquire lock for {self.filepath} after {self.timeout}s. Held by PID: {holder_pid}")
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        try:
-            count = FileLock._held_locks.counters.get(self.lock_key, 0)
-            if count > 1:
-                FileLock._held_locks.counters[self.lock_key] = count - 1
-            else:
-                # Final release for this thread
-                if self.is_file_locked:
-                    # We hold the thread-level lock, so no other thread in our process 
-                    # could have modified this file. We can safely remove it.
-                    self._remove_lock_file()
-                    self.is_file_locked = False
-                FileLock._held_locks.counters[self.lock_key] = 0
-        finally:
-            self.thread_lock.release()
 
 # --- Path Definitions ---
 
@@ -311,7 +125,23 @@ def initialize_paths(new_data_dir=None):
     except OSError as e:
         logging.warning(f"[PY][IO] Failed to create playlists directory at {PLAYLISTS_DIR}: {e}")
 
+    # Reset in-memory settings cache when paths are re-initialized
+    global _settings_cache, _settings_mtime, _settings_cache_file
+    try:
+        with _settings_lock:
+            _settings_cache = None
+            _settings_mtime = None
+            _settings_cache_file = None
+    except NameError as e:
+        logging.debug(f"[PY][IO] Settings lock not initialized yet: {e}")
+
     return paths
+
+# Settings caching (PY-M8)
+_settings_cache = None
+_settings_mtime = None
+_settings_cache_file = None
+_settings_lock = threading.Lock()
 
 # Initialize paths once on module load
 initialize_paths()
@@ -434,6 +264,55 @@ def save_playlist_shard(folder_id, playlist, update_index=True):
             
     return success
 
+def update_shard(folder_id, update_fn, update_index=False):
+    """
+    Atomically performs a read-modify-write on a shard and optionally the index,
+    holding the file locks throughout the entire operation in INDEX -> Shard order (PY-M5).
+
+    update_fn is called as: update_fn(playlist, index_entry)
+    where playlist is a list of items and index_entry is the dict metadata from index.json.
+    If update_fn returns False, the update is cancelled and no files are written.
+    If update_fn returns True (or a list/dict), changes are committed atomically.
+    Returns True on success, False on failure.
+    """
+    index = get_index()
+    canonical_id = _get_canonical_folder_id(folder_id, index)
+    shard_path = _get_safe_shard_path(canonical_id)
+    if not shard_path:
+        return False
+
+    with FileLock(INDEX_FILE):
+        current_index = _safe_json_load(INDEX_FILE) or {}
+        canonical_id = _get_canonical_folder_id(folder_id, current_index)
+        shard_path = _get_safe_shard_path(canonical_id)
+        if not shard_path:
+            return False
+        index_entry = current_index.get(canonical_id)
+
+        with FileLock(shard_path):
+            current_shard = _safe_json_load(shard_path) or {}
+            playlist = current_shard.get("playlist", [])
+
+            try:
+                res = update_fn(playlist, index_entry)
+            except Exception as e:
+                logging.error(f"[PY][IO] update_shard callback failed for '{folder_id}': {e}")
+                return False
+
+            if res is False:
+                return False
+            if res is None:
+                return True
+
+            if isinstance(res, list):
+                playlist = res
+
+            success = _atomic_json_dump({"playlist": playlist}, shard_path)
+            if success and update_index and index_entry is not None:
+                index_entry["item_count"] = len(playlist)
+                _atomic_json_dump(current_index, INDEX_FILE)
+            return success
+
 def validate_safe_path(path, allow_user_content=False):
     """
     Validates that a path is safe for usage in flags (configuration/scripts).
@@ -478,6 +357,17 @@ def _merge_playlists(existing_playlist, new_playlist):
     
     return merged_playlist
 
+def _move_orphan_to_trash(base_path, trash_dir, timestamp):
+    """Moves an orphaned shard and its .bak/.lock sidecars into trash_dir with a timestamp suffix."""
+    for path_to_clean in (base_path, f"{base_path}.bak", f"{base_path}.lock"):
+        if os.path.exists(path_to_clean):
+            try:
+                os.makedirs(trash_dir, exist_ok=True)
+                dest = os.path.join(trash_dir, f"{os.path.basename(path_to_clean)}.{timestamp}")
+                shutil.move(path_to_clean, dest)
+            except OSError as e:
+                logging.debug(f"[PY][IO] Could not move orphaned shard file {path_to_clean} to trash: {e}")
+
 def save_library_batch(folders_to_save, is_incremental=False):
     """
     Saves multiple folders (shards + index) atomically with merge support.
@@ -500,12 +390,11 @@ def save_library_batch(folders_to_save, is_incremental=False):
             kept_canonical_ids.add(canonical_id)
             new_playlist = content.get("playlist", [])
             
-            # 1. Load existing for merge
-            existing_playlist = get_playlist_shard(canonical_id)
-            merged_playlist = _merge_playlists(existing_playlist, new_playlist)
-            
-            # 2. Save Shard
+            # 1. Load existing for merge and 2. Save Shard under a single FileLock
             with FileLock(shard_path):
+                existing_data = _safe_json_load(shard_path)
+                existing_playlist = existing_data.get("playlist", []) if isinstance(existing_data, dict) else []
+                merged_playlist = _merge_playlists(existing_playlist, new_playlist)
                 _atomic_json_dump({"playlist": merged_playlist}, shard_path)
             
             # 3. Update Index Metadata
@@ -516,36 +405,31 @@ def save_library_batch(folders_to_save, is_incremental=False):
             }
         
         if not is_incremental:
-            removed_ids = [fid for fid in list(index.keys()) if fid not in kept_canonical_ids]
-            for fid in removed_ids:
-                del index[fid]
-                orphan_shard = _get_safe_shard_path(fid)
-                if orphan_shard:
-                    for path_to_clean in (orphan_shard, f"{orphan_shard}.bak", f"{orphan_shard}.lock"):
-                        if os.path.exists(path_to_clean):
-                            try:
-                                os.remove(path_to_clean)
-                            except OSError as e:
-                                logging.debug(f"[PY][IO] Could not remove orphaned shard file {path_to_clean}: {e}")
+            if not folders_to_save and index:
+                logging.warning("[PY][IO] save_library_batch received empty folders payload while index is non-empty; refusing to prune shards.")
+            else:
+                trash_dir = os.path.join(PLAYLISTS_DIR, "trash")
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                removed_ids = [fid for fid in list(index.keys()) if fid not in kept_canonical_ids]
+                for fid in removed_ids:
+                    del index[fid]
+                    orphan_shard = _get_safe_shard_path(fid)
+                    if orphan_shard:
+                        _move_orphan_to_trash(orphan_shard, trash_dir, timestamp)
 
-            if os.path.isdir(PLAYLISTS_DIR):
-                valid_filenames = {
-                    os.path.basename(p)
-                    for p in (_get_safe_shard_path(fid) for fid in kept_canonical_ids)
-                    if p
-                }
-                try:
-                    for fname in os.listdir(PLAYLISTS_DIR):
-                        if fname.endswith(".json") and fname not in valid_filenames:
-                            orphan_path = os.path.join(PLAYLISTS_DIR, fname)
-                            for p_clean in (orphan_path, f"{orphan_path}.bak", f"{orphan_path}.lock"):
-                                if os.path.exists(p_clean):
-                                    try:
-                                        os.remove(p_clean)
-                                    except OSError as e:
-                                        logging.debug(f"[PY][IO] Could not remove untracked shard {p_clean}: {e}")
-                except OSError as e:
-                    logging.debug(f"[PY][IO] Error scanning PLAYLISTS_DIR for orphans: {e}")
+                if os.path.isdir(PLAYLISTS_DIR):
+                    valid_filenames = {
+                        os.path.basename(p)
+                        for p in (_get_safe_shard_path(fid) for fid in kept_canonical_ids)
+                        if p
+                    }
+                    try:
+                        for fname in os.listdir(PLAYLISTS_DIR):
+                            if fname.endswith(".json") and fname not in valid_filenames:
+                                orphan_path = os.path.join(PLAYLISTS_DIR, fname)
+                                _move_orphan_to_trash(orphan_path, trash_dir, timestamp)
+                    except OSError as e:
+                        logging.debug(f"[PY][IO] Error scanning PLAYLISTS_DIR for orphans: {e}")
 
         # Finalize Index
         return _atomic_json_dump(index, INDEX_FILE)
@@ -558,7 +442,9 @@ def _atomic_json_dump(data, filepath):
     bak_file = f"{filepath}.bak"
     
     try:
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        dirname = os.path.dirname(filepath)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
         
         # 1. Write to temporary file
         with open(tmp_file, 'w', encoding='utf-8') as f:
@@ -566,9 +452,19 @@ def _atomic_json_dump(data, filepath):
             f.flush()
             os.fsync(f.fileno()) # Force write to disk
             
-        # 2. Create backup of existing file if it exists
+        # 2. Create backup of existing file only if it exists and is valid JSON
         if os.path.exists(filepath):
-            shutil.copy2(filepath, bak_file)
+            is_valid_existing = False
+            try:
+                with open(filepath, 'r', encoding='utf-8') as existing_f:
+                    existing_content = existing_f.read()
+                    if existing_content.strip():
+                        json.loads(existing_content)
+                        is_valid_existing = True
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError) as val_err:
+                logging.warning(f"[PY][IO] Existing file {filepath} is corrupt or unreadable ({val_err}); preserving existing .bak.")
+            if is_valid_existing:
+                shutil.copy2(filepath, bak_file)
             
         # 3. Atomic swap
         os.replace(tmp_file, filepath)
@@ -670,14 +566,14 @@ def is_youtube_url(url):
         return False
     return "youtube.com/" in url or "youtu.be/" in url
 
-def sanitize_ytdlp_options(options_str):
+def sanitize_ytdlp_options(options_str, allow_settings_flags=False):
     """
     Sanitizes a comma-separated string of yt-dlp options (key=value).
     Delegates to utils.security.
     """
-    return security.sanitize_ytdlp_options(options_str)
+    return security.sanitize_ytdlp_options(options_str, allow_settings_flags=allow_settings_flags)
 
-def merge_ytdlp_options(*args):
+def merge_ytdlp_options(*args, allow_settings_flags=False):
     """Merges multiple ytdl-raw-options strings into one, deduplicating keys. Handles escaped commas."""
     merged_map = {}
     for options_str in args:
@@ -703,7 +599,7 @@ def merge_ytdlp_options(*args):
             final_parts.append(f"{k}={v}")
     
     merged_str = ",".join(final_parts)
-    return sanitize_ytdlp_options(merged_str)
+    return sanitize_ytdlp_options(merged_str, allow_settings_flags=allow_settings_flags)
 
 def get_all_folders_from_file():
     """
@@ -839,7 +735,8 @@ def list_import_files():
         return {"success": False, "error": error_msg}
 
 def get_settings():
-    """Reads settings from config.json, providing default values for new keys."""
+    """Reads settings from config.json, providing default values for new keys (PY-M8)."""
+    global _settings_cache, _settings_mtime, _settings_cache_file
     default_settings = {
         "os_platform": platform.system(),
         "mpv_path": None, # Will be filled by installer or found in PATH
@@ -891,14 +788,33 @@ def get_settings():
         "clear_on_item_finish": False
     }
 
+    # Fast path: check in-memory cache if mtime is unchanged
+    with _settings_lock:
+        if _settings_cache is not None and _settings_cache_file == CONFIG_FILE:
+            try:
+                if os.path.exists(CONFIG_FILE):
+                    current_mtime = os.path.getmtime(CONFIG_FILE)
+                    if current_mtime == _settings_mtime:
+                        return dict(_settings_cache)
+            except OSError as e:
+                logging.debug(f"[PY][IO] mtime check failed for {CONFIG_FILE}: {e}")
+
     with FileLock(CONFIG_FILE):
-        current_settings = _safe_json_load(CONFIG_FILE)
-        
-        # If settings were corrupted or missing, we save the defaults to initialize the file.
-        if not current_settings:
+        file_exists = os.path.exists(CONFIG_FILE)
+        bak_exists = os.path.exists(f"{CONFIG_FILE}.bak")
+
+        if not file_exists and not bak_exists:
+            # Truly missing: initialize with default settings
             logging.info(f"[PY][IO] Initializing {CONFIG_FILE} with default settings.")
             _atomic_json_dump(default_settings, CONFIG_FILE)
             current_settings = default_settings
+        else:
+            current_settings = _safe_json_load(CONFIG_FILE)
+            if current_settings is None:
+                # File exists on disk but could not be parsed / read error.
+                # DO NOT overwrite user config with defaults (PY-M8).
+                logging.warning(f"[PY][IO] {CONFIG_FILE} exists but could not be parsed; preserving file on disk and using defaults/cache.")
+                current_settings = {}
 
     # Merge current settings with defaults, prioritizing current_settings
     settings = {**default_settings, **current_settings}
@@ -924,6 +840,19 @@ def get_settings():
             settings["mpv_path"] = found_in_path
         else:
             settings["mpv_path"] = mpv_default_name
+
+    # Update in-memory cache
+    with _settings_lock:
+        _settings_cache = dict(settings)
+        _settings_cache_file = CONFIG_FILE
+        try:
+            if os.path.exists(CONFIG_FILE):
+                _settings_mtime = os.path.getmtime(CONFIG_FILE)
+            else:
+                _settings_mtime = None
+        except OSError as e:
+            logging.debug(f"[PY][IO] Could not get mtime for settings cache: {e}")
+            _settings_mtime = None
 
     return settings
 
@@ -994,6 +923,14 @@ def set_settings(settings_dict):
 
             if _atomic_json_dump(merged_settings, CONFIG_FILE):
                 logging.info(f"[PY][IO] Settings successfully written to {CONFIG_FILE}.")
+                with _settings_lock:
+                    _settings_cache = dict(merged_settings)
+                    _settings_cache_file = CONFIG_FILE
+                    try:
+                        _settings_mtime = os.path.getmtime(CONFIG_FILE)
+                    except OSError as me:
+                        logging.debug(f"[PY][IO] Could not update mtime after settings write: {me}")
+                        _settings_mtime = None
                 return {"success": True, "message": "Settings saved."}
             else:
                 return {"success": False, "error": "Atomic write for settings failed."}

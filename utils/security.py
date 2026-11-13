@@ -156,7 +156,8 @@ def parse_obscured_ip(host: str):
 
     return None
 
-# --- yt-dlp Safe Flags Allowlist ---
+# --- yt-dlp Flags Allowlist ---
+# Flags permitted in untrusted item payloads (ytdl_raw_options)
 YTDLP_SAFE_FLAGS_ALLOWLIST = {
     'cookies', 'cookies-from-browser', 'user-agent', 'referer', 'add-header',
     'format', 'f', 'concurrent-fragments', 'N', 'limit-rate', 'r', 'retries', 'R',
@@ -166,15 +167,22 @@ YTDLP_SAFE_FLAGS_ALLOWLIST = {
     'min-filesize', 'max-filesize', 'date', 'datebefore', 'dateafter',
     'min-views', 'max-views', 'min-downloads', 'max-downloads', 'min-likes',
     'max-likes', 'min-dislikes', 'max-dislikes', 'match-title', 'reject-title',
-    'id', 'I', 'proxy', 'socket-timeout', 'source-address', 'force-ipv4', '4',
-    'force-ipv6', '6', 'geo-verification-proxy', 'geo-bypass',
+    'id', 'I', 'socket-timeout', 'source-address', 'force-ipv4', '4',
+    'force-ipv6', '6', 'geo-bypass',
     'geo-bypass-country', 'geo-bypass-ip-block', 'flat-playlist',
     'no-flat-playlist', 'live-from-start', 'wait-for-video', 'no-wait-for-video',
-    'ignore-config', 'no-ignore-config', 'compat-options', 'alias', 'print',
-    'no-warnings', 'dump-user-agent', 'version', 'update', 'verbose', 'v',
-    'quiet', 'q', 'no-check-certificate', 'prefer-insecure', 'ffmpeg-location',
-    'remote-components', 'js-runtimes'
+    'ignore-config', 'no-ignore-config', 'compat-options',
+    'no-warnings', 'dump-user-agent', 'version', 'verbose', 'v',
+    'quiet', 'q', 'prefer-insecure'
 }
+
+# Dangerous flags restricted to trusted settings only (never accepted from item payloads)
+YTDLP_SETTINGS_ONLY_FLAGS = {
+    'proxy', 'ffmpeg-location', 'js-runtimes', 'remote-components', 'alias',
+    'update', 'print', 'no-check-certificate', 'geo-verification-proxy'
+}
+
+YTDLP_ALL_ALLOWED_FLAGS = YTDLP_SAFE_FLAGS_ALLOWLIST | YTDLP_SETTINGS_ONLY_FLAGS
 
 # --- MPV Safe Flags Allowlist ---
 SAFE_MPV_FLAGS_ALLOWLIST = {
@@ -321,7 +329,7 @@ APPROVED_BINARY_NAMES = {
     }
 }
 
-FORBIDDEN_PATH_CHARS = set(';&|`$\n\r<>()"\'')
+FORBIDDEN_PATH_CHARS = set(';&|`$\n\r<>"\'')
 
 def is_safe_executable_path(path: str, setting_key: str = None) -> bool:
     """
@@ -435,11 +443,17 @@ def sanitize_string(s, is_filename=False, is_url=False):
             
     return s.strip()
 
-def sanitize_ytdlp_options(options_str):
-    """Enforces a strict allowlist of yt-dlp flags."""
+def sanitize_ytdlp_options(options_str, allow_settings_flags=False):
+    """
+    Enforces an allowlist of yt-dlp flags.
+    By default (allow_settings_flags=False), dangerous flags (proxy, ffmpeg-location,
+    js-runtimes, remote-components, alias, update, print, no-check-certificate)
+    are stripped from untrusted item payloads.
+    """
     if not options_str or not isinstance(options_str, str):
         return ""
 
+    allowed_set = YTDLP_ALL_ALLOWED_FLAGS if allow_settings_flags else YTDLP_SAFE_FLAGS_ALLOWLIST
     safe_options = []
     parts = re.split(r'(?<!\\),', options_str)
     
@@ -451,13 +465,13 @@ def sanitize_ytdlp_options(options_str):
         key, value = part.split('=', 1)
         clean_key = key.strip().lower().lstrip('-')
         
-        if clean_key in YTDLP_SAFE_FLAGS_ALLOWLIST:
+        if clean_key in allowed_set:
             # Sanitize value to prevent shell injection or option breaking
             # We strip characters that could be used to chain commands or break out of strings
             clean_value = value.replace('"', '').replace("'", "").replace(';', '').replace('&', '').replace('|', '').replace('`', '').replace('\n', '').replace('\r', '')
             safe_options.append(f"{key.strip()}={clean_value}")
         else:
-            logging.warning(f"Security: Removed unsafe yt-dlp flag '{clean_key}'")
+            logging.warning(f"Security: Removed unsafe or disallowed yt-dlp flag '{clean_key}'")
         
     return ",".join(safe_options)
 

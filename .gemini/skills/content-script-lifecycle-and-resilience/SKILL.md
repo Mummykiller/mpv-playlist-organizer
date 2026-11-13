@@ -3,7 +3,7 @@ name: content-script-lifecycle-and-resilience
 description: >-
   Governs in-page content script injection, multi-frame isolation, SPA navigation tracking,
   and failure recovery mechanisms. Load this skill whenever modifying `content.js`,
-  `background.js` (injection routines, tab activation listeners, Hail Mary recovery),
+  `background.js` (injection routines, tab activation listeners),
   `utils/NavigationObserver.js`, `utils/ContentState.js`, `utils/janitor.js`, or debugging
   content script injection failures, duplicate overlays, and orphaned controller hosts.
 ---
@@ -63,7 +63,7 @@ Dynamic injection into existing tabs during extension startup, reload, or tab sw
 │ • executeScript with manifest.content_scripts[0].js                     │
 │ • Sleep 200ms -> Verification ping                                      │
 │ • If unresponsive -> Retry up to 3 times (2000ms delay)                 │
-│ • If 3 attempts fail -> Trigger "Hail Mary" runtime reload              │
+│ • If 3 attempts fail -> Log error & notify user (No reload)               │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -73,30 +73,26 @@ Dynamic injection into existing tabs during extension startup, reload, or tab sw
 
 ---
 
-## 3. "Hail Mary" Recovery Loop
+## 3. Failure Recovery Policy (Hail Mary Removed)
 
-If a content script fails injection across all 3 attempts (e.g. browser tab is in an unresponsive, wedged state):
+Previously, injection failures triggered an automatic `chrome.runtime.reload()` ("Hail Mary"). This pattern has been **completely removed** because reloading the extension terminates active native messaging connections, destroys in-memory worker state, and can cause reload loops during page loads or bfcache restores.
 
-1. **Set Pending State:**
+Under the current architecture:
+1. **Logged Failure:**
+   When verification fails after 3 attempts, `background.js` logs a persisted error:
    ```javascript
-   await chrome.storage.local.set({ hail_mary_pending: true });
-   chrome.runtime.reload();
+   logger.error(`[Background] ALL injection attempts failed for tab ${tab.id}. Content script could not be verified.`, { persist: true });
    ```
-2. **Post-Reload Detection:**
-   On background worker boot, `background.js` checks `hail_mary_pending`:
+2. **User Notification:**
+   A user-facing notification is broadcast via `broadcastLog` without restarting the extension:
    ```javascript
-   chrome.storage.local.get("hail_mary_pending", (data) => {
-       if (data.hail_mary_pending) {
-           setTimeout(() => {
-               broadcastLog({
-                   text: "[System]: Extension was automatically restarted to recover from a blocked or unresponsive on-page controller.",
-                   type: "info"
-               });
-               chrome.storage.local.remove("hail_mary_pending");
-           }, 1000);
-       }
+   broadcastLog({
+       text: `[System]: Failed to connect to page controller on tab ${tab.id} after ${MAX_ATTEMPTS} attempts. Please refresh the tab.`,
+       type: "error"
    });
    ```
+3. **No Global Side Effects:**
+   The failure is isolated to the affected tab; other tabs and background services continue running uninterrupted.
 
 ---
 
@@ -143,3 +139,20 @@ try {
 - ❌ **Injecting into sub-frames:** Allowing `MpvController` to initialize in iframes leads to recursive overlay rendering and crashed player embeds.
 - ❌ **Skipping the ping check:** Always ping first on Attempt 1. Re-executing scripts over a live controller destroys active user text inputs and drag positions.
 - ❌ **Hardcoding the script list in `background.js`:** Always derive content script paths directly from `chrome.runtime.getManifest().content_scripts[0].js`.
+
+
+---
+
+## 7. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+
+> [!IMPORTANT]
+> The historical "Hail Mary" `chrome.runtime.reload()` recovery pattern has been completely removed. It was a known hazard that killed the native port and all in-memory state. Self-healing must never escalate to a global side effect (such as an extension reload). Never call `chrome.runtime.reload()`.
+
+1. **One injection mechanism.** `manifest.json` `content_scripts` is primary. `injectIntoTab` is only a recovery path after an extension reload/update. Do not add a second always-on injection path.
+2. **Never tear down live UI on a failed ping** while the tab is still `loading`. Wait for `complete`, or skip.
+3. **Injection logging is `debug`**, with only failures at `warn`/`error` and persisted. Never `persist: true` on routine activation logs.
+4. **Cooldowns on any self-healing loop:** per-tab, bounded attempts, and a global minimum interval. Self-heal must never escalate to a global side effect (extension reload).
+5. **Content-script initialization flags** (`window.mpvControllerInitialized`) must be reset only by an explicit `destroy()`, never by the injection cleanup itself.
+6. **Intervals/observers must have a `destroy()` path** (`MpvController` heartbeat and watchdog included). New `setInterval` requires a matching clear in the teardown test.
+7. **Dispatch maps** (`actionHandlers`) use `Object.hasOwn` or a `Map`. Plain `obj[action]` lets `"constructor"`/`"__proto__"` through.
+8. **Dynamic `innerHTML`:** any interpolated value that originates from a page title, URL, or external API (AniList) must go through `textContent` or an escape helper. Static templates only.

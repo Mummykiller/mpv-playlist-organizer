@@ -37,25 +37,43 @@ export const BLOCKED_HOSTNAMES = [
 /**
  * Validates that a URL strictly uses web protocols (http:, https:).
  * Enforces security limits and rejects local schemes.
+ * Supports batch arrays of strings or URL item objects.
  */
 export function isValidWebUrl(urlString) {
-	if (!urlString || typeof urlString !== "string") return false;
+	if (!urlString) return false;
+	if (Array.isArray(urlString)) {
+		if (urlString.length === 0) return true;
+		return urlString.every((item) => {
+			const u = typeof item === "string" ? item : (item && typeof item === "object" ? item.url : null);
+			return typeof u === "string" && isValidWebUrl(u);
+		});
+	}
+	if (typeof urlString !== "string") return false;
 	if (urlString.length > SECURITY_LIMITS.MAX_URL_LENGTH) return false;
 
 	try {
 		const url = new URL(urlString);
 		return ALLOWED_WEB_PROTOCOLS.includes(url.protocol);
 	} catch (e) {
-		return ALLOWED_WEB_PROTOCOLS.some((p) => urlString.toLowerCase().startsWith(p));
+		return false;
 	}
 }
 
 /**
  * Validates a URL against protocol allowlists and length limits.
+ * Supports batch arrays of strings or URL item objects.
  * Optional options: { webOnly: boolean } or a boolean flag.
  */
 export function isValidUrl(urlString, options = {}) {
-	if (!urlString || typeof urlString !== "string") return false;
+	if (!urlString) return false;
+	if (Array.isArray(urlString)) {
+		if (urlString.length === 0) return true;
+		return urlString.every((item) => {
+			const u = typeof item === "string" ? item : (item && typeof item === "object" ? item.url : null);
+			return typeof u === "string" && isValidUrl(u, options);
+		});
+	}
+	if (typeof urlString !== "string") return false;
 	if (urlString.length > SECURITY_LIMITS.MAX_URL_LENGTH) return false;
 
 	const webOnly = typeof options === "boolean" ? options : Boolean(options?.webOnly);
@@ -65,18 +83,37 @@ export function isValidUrl(urlString, options = {}) {
 		const url = new URL(urlString);
 		return protocols.includes(url.protocol);
 	} catch (e) {
-		return protocols.some((p) => urlString.toLowerCase().startsWith(p));
+		return false;
 	}
+}
+
+/**
+ * Validates a batch array of URLs or URL item objects.
+ * @param {Array<string|object>} items - Array of URLs or item objects with a `url` property.
+ * @param {object} [options] - Optional validation options.
+ * @returns {boolean}
+ */
+export function areValidUrls(items, options = {}) {
+	return isValidUrl(items, options);
 }
 
 /**
  * Validates a URL against SSRF attacks (private networks, cloud metadata, loopback)
  * and malicious protocol smuggling.
- * @param {string} urlString - URL to test.
+ * Supports batch arrays of strings or URL item objects.
+ * @param {string|Array<string|object>} urlString - URL or batch array to test.
  * @param {object} [options] - Configuration { allowLocal: boolean, webOnly: boolean }.
  * @returns {boolean}
  */
 export function isSafeUrl(urlString, options = {}) {
+	if (!urlString) return false;
+	if (Array.isArray(urlString)) {
+		if (urlString.length === 0) return true;
+		return urlString.every((item) => {
+			const u = typeof item === "string" ? item : (item && typeof item === "object" ? item.url : null);
+			return typeof u === "string" && isSafeUrl(u, options);
+		});
+	}
 	const allowLocal = Boolean(options.allowLocal);
 	const webOnly = Boolean(options.webOnly);
 

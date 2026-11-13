@@ -107,3 +107,29 @@ When all verification steps pass and the task is complete, deliver a clean, non-
 * **How It Works for You:** [How to see it in action or how it improves the daily experience]
 * **Quality & Stability:** [Confirmed all automated tests and safety checks passed 100% green]
 ```
+
+
+---
+
+## 5. Audit-Driven Review Checklist (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+
+Before dispatching or accepting any worker output, check the change against these recurring failure classes. Inject the relevant ones into the subagent prompt.
+
+| Failure class | Question to ask |
+| :--- | :--- |
+| Service-worker amnesia | Does this keep state in a JS variable or `setTimeout` that must survive 30s idle? |
+| Unbounded waits | Does every native/IPC/lock call have a timeout, and does the timeout clean up its map entry? |
+| Message size | Can any host→browser reply exceed ~900 KB? |
+| Fail-open security | Is any check skipped when a token/hostname/PID/env var is missing? |
+| Untrusted payload reach | Can item/browser-supplied options reach flags, paths, or executables? |
+| Unlocked read-modify-write | Is a get followed by a save without one lock scope? |
+| Stale thread/session | Can an old waiter or watcher mutate a newer session? |
+| Global side effects from self-heal | Does a retry loop escalate to reload, kill, or delete? |
+| Docs drift | Did the change make a SKILL.md claim false? Update the skill in the same change. |
+
+Rules:
+1. **Fixes ship with a regression test** (see `testing-and-test-authoring` section 6). No test, no merge.
+2. **Skill files are part of the deliverable.** If a change alters an invariant, limit, or allowlist, update the matching skill in the same task, and never leave a skill documenting a known-bad pattern without a warning.
+3. **Large-file rule:** do not add features to `MpvController.js`, `popup.js`, `settings.js`, or `MpvSessionManager` without first extracting the touched concern into its own module.
+4. **Do not skip warnings from the gate.** A skipped linter counts as a failure.
+5. **Reviewer reports are verified before action.** Items marked "verify" in `CODE_REVIEW.md` must be confirmed by reading the code or reproducing, before fixing.

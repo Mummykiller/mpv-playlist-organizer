@@ -95,16 +95,23 @@ log("Option clear_on_item_finish: " .. (clear_on_item_finish and "yes" or "no"))
 
 -- Ensure the directory exists before writing
 local function ensure_dir(path)
-    -- Remove trailing slash and strip shell metacharacters for directory creation safety
-    local dir = path:gsub("[/\\]$", ""):gsub('["`$;&|<>()\n\r\t]', "")
+    if not path or path == "" then return end
+    local dir = path:gsub("[/\\]$", "")
     if dir == "" then return end
-    local is_windows = package.config:sub(1,1) == "\\"
-    
-    if is_windows then
-        os.execute('mkdir "' .. dir .. '" >nul 2>nul')
-    else
-        os.execute('mkdir -p "' .. dir .. '" >/dev/null 2>&1')
+    if utils.file_info(dir) then
+        return
     end
+    local is_windows = package.config:sub(1,1) == "\\"
+    local args = is_windows
+        and { "cmd", "/c", "mkdir", dir }
+        or { "mkdir", "-p", dir }
+    mp.command_native({
+        name = "subprocess",
+        playback_only = false,
+        capture_stdout = true,
+        capture_stderr = true,
+        args = args,
+    })
 end
 
 local function write_completion_flag(reason)

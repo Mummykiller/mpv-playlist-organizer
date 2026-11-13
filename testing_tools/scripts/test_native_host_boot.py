@@ -50,6 +50,8 @@ class TestNativeHostBoot(BaseTestCase):
     def spawn_host(self, working_dir: str):
         """Spawns the native host process and tracks it for clean shutdown."""
         env = os.environ.copy()
+        env["XDG_DATA_HOME"] = working_dir
+        env["HOME"] = working_dir
         script_path = os.path.join(PROJECT_ROOT, "native_host.py")
         
         proc = subprocess.Popen(
@@ -157,7 +159,10 @@ class TestNativeHostBoot(BaseTestCase):
         proc.stdin.close()
 
         exit_code = proc.wait(timeout=3.0)
+        stderr = proc.stderr.read().decode('utf-8', errors='replace')
         self.assertIsNotNone(exit_code, "Host must terminate on truncated header EOF")
+        self.assertGreaterEqual(exit_code, 0, f"Host crashed with signal {-exit_code}: {stderr}")
+        self.assertNotIn("Traceback", stderr, f"Unexpected Python traceback on truncated header: {stderr}")
 
     def test_host_handles_invalid_json(self):
         """Verifies that malformed JSON doesn't necessarily crash the host."""
@@ -170,8 +175,10 @@ class TestNativeHostBoot(BaseTestCase):
         
         time.sleep(0.5)
         if proc.poll() is not None:
-            stderr = proc.stderr.read().decode('utf-8')
+            stderr = proc.stderr.read().decode('utf-8', errors='replace')
             logging.info(f"Host exited on malformed JSON. Stderr: {stderr}")
+            self.assertGreaterEqual(proc.returncode, 0, f"Host crashed with signal {-proc.returncode}: {stderr}")
+            self.assertNotIn("Traceback", stderr, f"Unexpected Python traceback on malformed JSON: {stderr}")
         else:
             # Still running? Send a valid ping to verify host recovered
             req_id = "recovery-ping"
@@ -303,6 +310,64 @@ class TestNativeHostBoot(BaseTestCase):
         
         error = response.get('error', '')
         self.assertNotIn("Unknown command", error)
+
+    def test_importable_build_handler_registry_dispatch(self):
+        """Verifies native_host can be imported and build_handler_registry dispatches ping without main()."""
+        if PROJECT_ROOT not in sys.path:
+            sys.path.insert(0, PROJECT_ROOT)
+        import native_host
+        from utils import native_link
+
+        registry = native_host.build_handler_registry()
+        ping_handler = registry.get_handler("ping")
+        self.assertIsNotNone(ping_handler, "ping handler must be registered by build_handler_registry()")
+
+        req = native_link.translate({"action": "ping", "request_id": "unit-ping-1"})
+        resp = ping_handler(req)
+        self.assertTrue(resp.get("success"))
+        self.assertEqual(resp.get("status"), "online")
+        self.assertEqual(resp.get("version"), native_host.HOST_VERSION)
+        self.assertIn("pythonVersion", resp)
+        self.assertIn("platform", resp)
+
+    def test_control_actions_routing_and_executors(self):
+        """Verifies CONTROL_ACTIONS routing and dedicated control_executor / worker_executor."""
+        import inspect
+        if PROJECT_ROOT not in sys.path:
+            sys.path.insert(0, PROJECT_ROOT)
+        import native_host
+
+        expected_control = {
+            "ping",
+            "close_mpv",
+            "restore_session",
+            "get_playback_status",
+            "is_mpv_running",
+            "log_event",
+            "log_browser_error",
+        }
+        self.assertTrue(expected_control.issubset(native_host.CONTROL_ACTIONS))
+
+        ctrl_sentinel = object()
+        work_sentinel = object()
+        for action in expected_control:
+            self.assertIs(
+                native_host.select_executor(action, ctrl_sentinel, work_sentinel),
+                ctrl_sentinel,
+                f"Action '{action}' should route to control_executor",
+            )
+        for heavy_action in ("play", "start", "import_from_file", "ytdlp", None):
+            self.assertIs(
+                native_host.select_executor(heavy_action, ctrl_sentinel, work_sentinel),
+                work_sentinel,
+                f"Action '{heavy_action}' should route to worker_executor",
+            )
+
+        main_src = inspect.getsource(native_host.main)
+        self.assertIn("control_executor", main_src)
+        self.assertIn("worker_executor", main_src)
+        self.assertIn("NHControl", main_src)
+        self.assertIn("NHWorker", main_src)
 
 if __name__ == '__main__':
     unittest.main()

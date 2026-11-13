@@ -136,15 +136,12 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
                     logging.info("AniList Cache: Today expired by timer.")
                 if is_expired_by_release:
                     send_message_func({"log": {"text": "[AniList]: New episode aired. Refreshing...", "type": "info"}})
-                full_cache = {}
-                offsets = {}
-                day_cache = None
             else:
                 logging.info(f"AniList Cache: Offset {days} expired by timer.")
-                offsets.pop(day_key, None)
-                full_cache["offsets"] = offsets
-                anilist_cache._save_cache(full_cache)
-                day_cache = None
+            offsets.pop(day_key, None)
+            full_cache["offsets"] = offsets
+            anilist_cache._save_cache(full_cache)
+            day_cache = None
 
     if not force_refresh and day_cache:
         if day_key != "0" or not is_today_expired:

@@ -2,12 +2,30 @@
 window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 (() => {
 	const MPV = window.MPV_INTERNAL;
-	const broadcastLog = window.MPV_INTERNAL.broadcastLog;
-	const security = window.MPV_SECURITY;
+	const isValidUrl = window.MPV_SECURITY.isValidUrl;
+	const isSafeUrl = window.MPV_SECURITY.isSafeUrl;
 	const normalizeKeys = window.MPV_INTERNAL.normalizeKeys;
 	const logger = window.MPV_INTERNAL.logger;
 
 	const NATIVE_HOST_NAME = "com.mpv_playlist_organizer.handler";
+
+	let logBroadcaster = null;
+
+	/**
+	 * Registers the log broadcaster callback used to forward native connection logs to UI tabs.
+	 * @param {Function|null} fn
+	 */
+	const setLogBroadcaster = MPV.setLogBroadcaster = function setLogBroadcaster(fn) {
+		logBroadcaster = typeof fn === "function" ? fn : null;
+	}
+
+	function emitLog(payload) {
+		try {
+			logBroadcaster?.(payload);
+		} catch (e) {
+			logger.debug(`[NativeConn] Log broadcaster failed: ${e?.message}`);
+		}
+	}
 
 	const ConnectionStatus = {
 		DISCONNECTED: "DISCONNECTED",
@@ -59,7 +77,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		if (eventListeners[action]) {
 			const normalizedData = normalizeKeys(data);
 			eventListeners[action].forEach((cb) => {
-				cb(normalizedData);
+				try {
+					cb(normalizedData);
+				} catch (e) {
+					console.error(`Error in native listener for ${action}:`, e);
+					logger.error(`Error in native listener for '${action}': ${e?.message || e}`, { persist: false, stack: e?.stack });
+				}
 			});
 		}
 	}
@@ -71,7 +94,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		if (connectionPromise) return connectionPromise;
 
 		connectionStatus = ConnectionStatus.CONNECTING;
-		broadcastLog({
+		emitLog({
 			text: `[Background]: Establishing connection to native host...`,
 			type: "info",
 		});
@@ -96,7 +119,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				console.error("Native host disconnected:", lastError);
 				logger.error(`Native host disconnected: ${friendlyError}`, { persist: false });
 
-				broadcastLog({
+				emitLog({
 					text: `[Background]: Fatal Connection Error: ${friendlyError}`,
 					type: "error",
 				});
@@ -158,16 +181,41 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 			});
 
-			broadcastLog({
+			emitLog({
 				text: `[Background]: Native port opened, awaiting session handshake...`,
 				type: "info",
 			});
 
 			const restoreRequestId = `internal_restore_${Date.now()}`;
+			const handshakeTimer = setTimeout(() => {
+				if (requestPromises[restoreRequestId]) {
+					delete requestPromises[restoreRequestId];
+					const err = new Error("Native host handshake timed out after 30s.");
+					emitLog({
+						text: `[Background]: Session restoration failed: ${err.message}`,
+						type: "error",
+					});
+					if (connectionStatus === ConnectionStatus.CONNECTING) {
+						connectionStatus = ConnectionStatus.DISCONNECTED;
+						connectionPromise = null;
+						if (nativePort) {
+							try {
+								nativePort.disconnect();
+							} catch (e) {
+								logger.debug(`[NativeConn] Error disconnecting timed-out port: ${e?.message}`);
+							}
+							nativePort = null;
+						}
+						reject(err);
+					}
+				}
+			}, 30000);
+
 			requestPromises[restoreRequestId] = {
 				resolve: (responseData) => {
+					clearTimeout(handshakeTimer);
 					connectionStatus = ConnectionStatus.CONNECTED;
-					broadcastLog({
+					emitLog({
 						text: `[Background]: Session restoration handshake completed.`,
 						type: "info",
 					});
@@ -184,7 +232,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					resolve();
 				},
 				reject: (err) => {
-					broadcastLog({
+					clearTimeout(handshakeTimer);
+					emitLog({
 						text: `[Background]: Session restoration failed: ${err.message}`,
 						type: "error",
 					});
@@ -201,6 +250,35 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		return connectionPromise;
 	}
 
+	const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+
+	/**
+	 * Validates URLs before sending to the native host:
+	 * - Enforces protocol allowlist & length via isValidUrl
+	 * - Enforces SSRF protection via isSafeUrl(..., { allowLocal: true }) for http:/https: targets
+	 * - Permits explicit local/stream schemes (file:, udp:, rtsp:, rtmp:, mms:) via isValidUrl
+	 */
+	function isAllowedNativeUrl(target) {
+		if (!target) return false;
+		if (Array.isArray(target)) {
+			if (target.length === 0) return true;
+			return target.every((item) => {
+				const u = typeof item === "string" ? item : (item && typeof item === "object" ? item.url : null);
+				return typeof u === "string" && isAllowedNativeUrl(u);
+			});
+		}
+		if (!isValidUrl(target)) return false;
+		try {
+			const protocol = new URL(target).protocol.toLowerCase();
+			if (protocol === "http:" || protocol === "https:") {
+				return isSafeUrl(target, { allowLocal: true });
+			}
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	/**
 	 * Sends a message to the native host, handling connection logic automatically.
 	 * @param {object} message - The message to send.
@@ -211,11 +289,23 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		try {
 			// --- Pre-Validation Security Gate ---
 			// Check for URLs in the message and validate them
-			if (message.url && !security.isValidUrl(message.url)) {
-				throw new Error(`Security Block: Unsafe URL protocol or length.`);
+			if (message.url && !isAllowedNativeUrl(message.url)) {
+				throw new Error(`Security Block: Unsafe URL protocol or target.`);
 			}
-			if (message.urlItem?.url && !security.isValidUrl(message.urlItem.url)) {
+			if (message.urlItem?.url && !isAllowedNativeUrl(message.urlItem.url)) {
 				throw new Error(`Security Block: Unsafe URL in item.`);
+			}
+			if (message.urls && !isAllowedNativeUrl(message.urls)) {
+				throw new Error(`Security Block: Unsafe URL in batch urls.`);
+			}
+			if (message.urlItems && !isAllowedNativeUrl(message.urlItems)) {
+				throw new Error(`Security Block: Unsafe URL in batch urlItems.`);
+			}
+			if (message.playlist && !isAllowedNativeUrl(message.playlist)) {
+				throw new Error(`Security Block: Unsafe URL in playlist.`);
+			}
+			if (message.m3uData?.type === "items" && Array.isArray(message.m3uData.value) && !isAllowedNativeUrl(message.m3uData.value)) {
+				throw new Error(`Security Block: Unsafe URL in m3uData items.`);
 			}
 
 			return await new Promise((resolve, reject) => {
@@ -225,12 +315,36 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 					// Wrap the execution in the logger context
 					await logger.runWithContext(requestId, async () => {
-						requestPromises[requestId] = { resolve, reject };
+						let timer = null;
+						const cleanup = () => {
+							if (timer) {
+								clearTimeout(timer);
+								timer = null;
+							}
+							delete requestPromises[requestId];
+						};
+
+						timer = setTimeout(() => {
+							cleanup();
+							reject(new Error(`Native host request timed out after ${DEFAULT_REQUEST_TIMEOUT_MS / 1000}s (${message.action || "unknown"}).`));
+						}, DEFAULT_REQUEST_TIMEOUT_MS);
+
+						requestPromises[requestId] = {
+							resolve: (data) => {
+								cleanup();
+								resolve(data);
+							},
+							reject: (err) => {
+								cleanup();
+								reject(err);
+							},
+						};
+
 						const messageToSend = { ...message, request_id: requestId };
 						try {
 							nativePort.postMessage(messageToSend);
 						} catch (e) {
-							delete requestPromises[requestId];
+							cleanup();
 							reject(new Error(`Failed to post message: ${e.message}`));
 						}
 					});
@@ -244,7 +358,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Avoid infinite loops if the logger itself triggers this
 			if (message.action !== "log_event") {
 				logger.error(errorMessage, { persist: false });
-				broadcastLog({ text: `[Background]: ${errorMessage}`, type: "error" });
+				emitLog({ text: `[Background]: ${errorMessage}`, type: "error" });
 			}
 
 			if (shouldThrow) throw error;

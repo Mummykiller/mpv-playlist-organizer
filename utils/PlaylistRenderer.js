@@ -86,129 +86,46 @@
         }
 
         _createItemNode(item, index, status) {
-            const div = document.createElement("div");
-            div.className = "list-item";
-            
-            const isWatched = item.markedAsWatched || item.watched;
-            if (isWatched) {
-                div.classList.add("item-watched");
-            }
-
-            div.draggable = true;
-            div.dataset.id = item.id;
-            div.dataset.url = item.url;
-            div.dataset.title = item.title;
-            div.dataset.index = index;
-
-            if (status.highlightEnabled && status.lastPlayedId && item.id === status.lastPlayedId) {
-                div.classList.add(status.isActive ? "active-item" : "last-played-item");
-            }
-
-            // Restore Double-Click to Copy Title
-            div.ondblclick = (e) => {
-                if (this.prefs.enableDblclickCopy) {
-                    navigator.clipboard.writeText(item.title)
-                        .then(() => {
+            const dom = MPV.domUtils || (typeof window !== "undefined" && window.MPV_INTERNAL?.domUtils);
+            return dom.createPlaylistItemElement(item, index, {
+                highlightEnabled: status.highlightEnabled,
+                lastPlayedId: status.lastPlayedId,
+                isActive: status.isActive,
+                showCopyButton: !!this.prefs.showCopyTitleButton,
+                showWatchedGui: !!this.prefs.showWatchedStatusGui,
+                setDatasetIndex: true,
+                onCopy: (url) => {
+                    if (this.callbacks.onCopy) this.callbacks.onCopy(url);
+                },
+                onWatchedToggle: (id, checked) => {
+                    if (this.callbacks.onWatchedToggle) this.callbacks.onWatchedToggle(id, checked);
+                },
+                onRemove: (idx, id, btn) => {
+                    const listItem = btn.closest(".list-item");
+                    let currentIndex = idx;
+                    if (listItem) {
+                        listItem.classList.add("removing");
+                        const items = this.container ? [...this.container.querySelectorAll(".list-item")] : [];
+                        const domIndex = items.indexOf(listItem);
+                        if (domIndex !== -1) {
+                            currentIndex = domIndex;
+                        } else if (listItem.dataset.index !== undefined) {
+                            const parsed = parseInt(listItem.dataset.index, 10);
+                            if (!isNaN(parsed)) currentIndex = parsed;
+                        }
+                    }
+                    if (this.callbacks.onRemove) this.callbacks.onRemove(currentIndex, id);
+                },
+                onDblClick: (clickedItem, div) => {
+                    if (this.prefs.enableDblclickCopy) {
+                        navigator.clipboard.writeText(clickedItem.title).then(() => {
                             if (this.callbacks.onLog) this.callbacks.onLog({ text: "Copied title to clipboard.", type: "info" });
                             div.classList.add("title-copied");
                             setTimeout(() => div.classList.remove("title-copied"), 1500);
                         });
-                }
-            };
-
-            if (this.prefs.showCopyTitleButton) {
-                div.appendChild(this._createIconButton("copy", item.url));
-            }
-
-            const indexSpan = document.createElement("span");
-            indexSpan.className = "url-index";
-            indexSpan.textContent = (index + 1) + ".";
-            div.appendChild(indexSpan);
-
-            const isYouTube = item.url.indexOf("youtube.com/") !== -1 || item.url.indexOf("youtu.be/") !== -1 || item.url.indexOf("youtube.com/shorts/") !== -1;
-
-            if (isWatched && !isYouTube) {
-                const check = document.createElement("span");
-                check.className = "watched-checkmark index-checkmark";
-                check.innerHTML = "✔";
-                div.appendChild(check);
-            }
-
-            const titleSpan = document.createElement("span");
-            titleSpan.className = "url-text";
-            this._formatTitle(titleSpan, item);
-            div.appendChild(titleSpan);
-
-            if (this.prefs.showWatchedStatusGui && isYouTube) {
-                div.appendChild(this._createWatchedCheckbox(item));
-                
-                if (item.watched) {
-                    const check = document.createElement("span");
-                    check.className = "watched-checkmark checkbox-checkmark";
-                    check.innerHTML = "✔";
-                    div.appendChild(check);
-                }
-            }
-
-            div.appendChild(this._createRemoveButton(index, item.id));
-
-            return div;
-        }
-
-        _createIconButton(type, value) {
-            const btn = document.createElement("button");
-            btn.className = "btn-" + type + "-item";
-            btn.title = type === "copy" ? "Copy URL" : type;
-            
-            if (type === "copy") {
-                btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-                btn.onclick = (e) => {
-                    e.stopPropagation();
-                    if (this.callbacks.onCopy) this.callbacks.onCopy(value);
-                };
-            }
-            return btn;
-        }
-
-        _createWatchedCheckbox(item) {
-            const input = document.createElement("input");
-            input.type = "checkbox";
-            input.className = "item-watched-checkbox";
-            input.checked = !!item.markedAsWatched;
-            input.title = input.checked ? "Already marked as watched" : "Click to mark as watched on YouTube";
-            
-            input.onclick = (e) => e.stopPropagation();
-            input.onchange = (e) => {
-                // When toggling manually, we update both for consistency
-                if (this.callbacks.onWatchedToggle) this.callbacks.onWatchedToggle(item.id, e.target.checked);
-            };
-            return input;
-        }
-
-        _createRemoveButton(index, id) {
-            const btn = document.createElement("button");
-            btn.className = "btn-remove-item";
-            btn.dataset.index = index;
-            btn.textContent = "×";
-            btn.title = "Remove Item";
-            btn.onclick = (e) => {
-                e.stopPropagation();
-                const listItem = btn.closest(".list-item");
-                let currentIndex = index;
-                if (listItem) {
-                    listItem.classList.add("removing");
-                    const items = this.container ? [...this.container.querySelectorAll(".list-item")] : [];
-                    const domIndex = items.indexOf(listItem);
-                    if (domIndex !== -1) {
-                        currentIndex = domIndex;
-                    } else if (listItem.dataset.index !== undefined) {
-                        const parsed = parseInt(listItem.dataset.index, 10);
-                        if (!isNaN(parsed)) currentIndex = parsed;
                     }
                 }
-                if (this.callbacks.onRemove) this.callbacks.onRemove(currentIndex, id);
-            };
-            return btn;
+            });
         }
 
         _formatTitle(span, item) {
