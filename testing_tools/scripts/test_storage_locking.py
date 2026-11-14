@@ -49,7 +49,11 @@ class TestStorageLocking(BaseTestCase):
                 self.assertTrue(os.path.exists(inner.lockfile))
             # Outer lock should still be held after inner exits
             self.assertTrue(os.path.exists(outer.lockfile))
-        self.assertFalse(os.path.exists(f"{target}.lock"))
+        self.assertFalse(outer.is_file_locked)
+        if platform.system() == "Windows":
+            self.assertFalse(os.path.exists(f"{target}.lock"))
+        else:
+            self.assertTrue(os.path.exists(f"{target}.lock"))
 
     def test_filelock_thread_contention_and_timeout(self):
         """FileLock serializes threads and raises RuntimeError on timeout."""

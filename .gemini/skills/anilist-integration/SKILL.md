@@ -37,7 +37,7 @@ The AniList integration provides live tracking of anime airing schedules and epi
 Backend management is handled by `AniListCache` in `utils/anilist_service.py`:
 
 - **Cache TTL:** 30 minutes (`CACHE_DURATION_S = 1800`). Fresh queries within 30 minutes are served directly from cache without network latency.
-- **Cache File:** Persisted on disk at `data/cache_anilist_releases.json`.
+- **Cache File:** Persisted on disk at `data/anilist_cache.json`.
 - **Force Refresh:** Triggered via `force_refresh=True` to bypass cache when the user explicitly clicks the refresh button.
 - **Ping Check:** Invoking `anilist_releases.py --ping` verifies network connectivity and API reachability without downloading large schedule payloads.
 

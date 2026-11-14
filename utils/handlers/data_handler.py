@@ -22,24 +22,29 @@ class DataHandler(BaseHandler):
         else:
             level = getattr(logging, level_name, logging.INFO)
         
+        msg = str(request.message or "")[:4096]
+        stack = str(getattr(request, 'stack', None) or "")[:4096]
+
         # If it's an error from the frontend/browser, route it to the dedicated browser_errors log
         if level in (logging.ERROR, logging.CRITICAL):
             browser_logger = logging.getLogger("browser_errors")
-            formatted = f"[{request.context}] {request.message}"
-            if getattr(request, 'stack', None):
-                formatted += f"\n  Stack: {request.stack}"
+            formatted = f"[{request.context}] {msg}"
+            if stack:
+                formatted += f"\n  Stack: {stack}"
             browser_logger.error(formatted)
 
         # Log it using the standard logger
-        logging.log(level, f"[JS-{request.context}] {request.message}")
+        logging.log(level, f"[JS-{request.context}] {msg}")
         return native_link.success()
 
     @command('log_browser_error')
     def handle_log_browser_error(self, request: native_link.LogBrowserErrorRequest):
         browser_logger = logging.getLogger("browser_errors")
-        formatted = f"[{request.context}] {request.message}"
-        if getattr(request, 'stack', None):
-            formatted += f"\n  Stack: {request.stack}"
+        msg = str(request.message or "")[:4096]
+        stack = str(getattr(request, 'stack', None) or "")[:4096]
+        formatted = f"[{request.context}] {msg}"
+        if stack:
+            formatted += f"\n  Stack: {stack}"
         browser_logger.error(formatted)
         return native_link.success()
 
@@ -48,12 +53,12 @@ class DataHandler(BaseHandler):
         # Flush logs to disk by restarting the listener
         from utils import logger as logger_module
         logger_module.shutdown()
-        logger_module.initialize(self.ctx.data_dir, self.ctx.script_dir)
+        resolved_dir = logger_module.initialize(self.ctx.data_dir, self.ctx.script_dir) or self.ctx.data_dir
         
         js_diagnostics = request.data or {}
         
         def read_tail(filename, kb=100):
-            path = os.path.join(self.ctx.data_dir, filename)
+            path = os.path.join(resolved_dir, filename)
             if not os.path.exists(path):
                 return f"[File not found: {filename}]"
             try:
@@ -197,18 +202,17 @@ class DataHandler(BaseHandler):
             return native_link.failure("No folder ID provided.")
         
         try:
-            # get_playlist_shard returns a LIST of items, not a dict
-            playlist = self.file_io.get_playlist_shard(folder_id)
-            
-            if not playlist:
-                return native_link.success({"playlist": []})
+            new_playlist = []
+            def _reorder_shard(playlist, _index_entry):
+                nonlocal new_playlist
+                if not playlist:
+                    new_playlist = []
+                    return None
+                reorderer = SmartReorder(threshold=0.85)
+                new_playlist = reorderer.organize(playlist)
+                return new_playlist
 
-            reorderer = SmartReorder(threshold=0.85)
-            new_playlist = reorderer.organize(playlist)
-            
-            # Save the new order to disk (expects folder_id and the playlist list)
-            self.file_io.save_playlist_shard(folder_id, new_playlist)
-            
+            self.file_io.update_shard(folder_id, _reorder_shard, update_index=True)
             return native_link.success({"playlist": new_playlist})
         except Exception as e:
             logging.error(f"Smart reorder failed: {e}")

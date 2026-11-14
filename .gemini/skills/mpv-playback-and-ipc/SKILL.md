@@ -23,12 +23,11 @@ The application orchestrates MPV playback in two primary operational modes:
 ### Mode A: Stream Resolution (YouTube, Twitch, Video Portals)
 
 - **Extractor:** Handled by `yt-dlp`. `utils/url_analyzer.py` detects platform compatibility.
-- **Volatile Cookie Extraction (`VolatileCookieManager`):**
-  - Browsers lock their SQLite cookie databases (e.g., Chrome `Cookies` file) while running.
-  - To bypass database locking without permissions collisions, `VolatileCookieManager` dumps temporary cookies directly into RAM-backed storage (`/dev/shm` on Linux, temporary directory on Windows/macOS).
-  - The extracted cookie file path is passed to MPV via `--cookies-file`.
-  - Stale cookie files are cleaned up upon session termination (`atexit`) and startup sweeps.
-- **Python Environment Isolation (`utils/session_services.py:get_scrubbed_env`):**
+- **Cookie Management & Volatile Cookie Extraction (`VolatileCookieManager`):**
+  - By default, direct browser cookie access (`--cookies-from-browser <browser>`) is passed to `yt-dlp` / MPV.
+  - For playlist expansion or when browser SQLite cookie databases are locked on disk, `VolatileCookieManager` creates a per-session volatile directory via `tempfile.mkdtemp(prefix=f"mpv_cookies_{os.getpid()}_", ...)` with `0o700` permissions (in `/dev/shm` on Linux or `TEMP_DIR` on Windows/macOS) and extracts cookies using an unlocked SQLite shadow copy (`--cookies-file`).
+  - Per-session volatile cookie directories are cleaned up upon session termination (`cleanup_volatile_dir` / `atexit`) and startup sweeps by the janitor.
+- **Python Environment Isolation (`utils/security.py:get_scrubbed_env`):**
   - Strips `PYTHONPATH`, `PYTHONHOME`, `PYTHONIOENCODING`, `PYTHONDONTWRITEBYTECODE`, and `PYTHONUNBUFFERED` from the subprocess environment.
   - Prevents the native host's Python runtime from contaminating standalone/frozen `yt-dlp` executables, eliminating "Failed to start embedded python interpreter" crashes on Windows.
 
@@ -88,7 +87,7 @@ Primary MPV sessions are controlled in real time over mpv's JSON-IPC interface u
 ### Socket Location & Permissions
 
 - **Linux / macOS:** Unix domain socket created in `/dev/shm` or `~/.mpv_playlist_organizer_ipc/` with strict `0600` permissions (owner read/write only).
-- **Windows:** Named pipe format: `\\.\pipe\mpv_ipc_<uuid>`.
+- **Windows:** Named pipe format: `\\.\pipe\mpv-playlist-organizer-ipc-<pid>`.
 
 ### The Event Reader Thread
 
@@ -105,15 +104,15 @@ Primary MPV sessions are controlled in real time over mpv's JSON-IPC interface u
 
 Manages transitions between high-security sources (e.g., swapping between YouTube and AnimePahe within the same MPV playlist):
 
-1. **Hook Priority (`priority 10`):**
-   - Configured with `mp.add_hook("on_load", 10, ...)`.
-   - Runs before MPV's built-in `ytdl-hook` (which runs at priority 15), ensuring headers and options are applied before stream extraction begins.
+1. **Hook Priority (`priority -100`):**
+   - Configured with `mp.add_hook("on_load", -100, ...)`.
+   - Runs well before MPV's built-in `ytdl-hook` (which runs at priority 15), ensuring headers and options are applied before stream extraction begins.
 2. **State Reset (Anti-Poisoning):**
    - MPV global properties persist across playlist items. If YouTube flags leak into an AnimePahe request, servers return `403 Forbidden`.
    - On every `on_load`, the script resets `user-agent` and `referrer` to baseline, clears `http-header-fields`, and resets `ytdl-raw-options`.
-3. **Dynamic Source Detection:**
+3. **Dynamic Source Detection & `force_sanitize_headers` (`services.py`):**
    - Detects YouTube URLs and sets `ytdl=yes`.
-   - Detects AnimePahe / Kwik (`owocdn.top`, `kwik.cx`) and auto-injects `Referer: https://kwik.cx/` and sets `ytdl=no`.
+   - Detects AnimePahe / Kwik (`owocdn.top`, `uwucdn.top`, `kwik.cx`) and auto-injects `Referer: https://kwik.cx/` and sets `ytdl=no` (backed on the Python side by `services.py:force_sanitize_headers`).
 4. **Hot Swap Manifest:**
    - Reads `user-data/hot-swap-options` synchronously during `on_load` when the user force-plays an item from the browser, avoiding race conditions with asynchronous IPC messages.
 
@@ -122,7 +121,7 @@ Manages transitions between high-security sources (e.g., swapping between YouTub
 Tracks playback completion and cleanly notifies the Python backend:
 
 1. **Completion Detection:** Listens to `end-file` events where `event.reason == "eof"`.
-2. **Completion Flag:** Immediately writes a completion flag file to `data/flags/completion_<folderId>_<itemId>.flag`.
+2. **Completion Flag:** Immediately writes a natural completion flag file (`mpv_natural_completion_<pid>.flag`) inside `user-data/flag-dir` (resolved from handshake `flag_dir` / `mp.get_opt("flag_dir")`).
 3. **Exit Code 99 (`MPV_PLAYLIST_COMPLETED_EXIT_CODE`):**
    - When the final item in the playlist queue reaches EOF naturally, the script waits 0.5s (to allow flag flushing) and executes:
      ```lua
@@ -135,7 +134,7 @@ Tracks playback completion and cleanly notifies the Python backend:
 ## 5. Playback Troubleshooting Checklist
 
 - **AnimePahe / Stream returns 403 Forbidden:**
-  - Verify that `adaptive_headers.lua` is loaded at hook priority 10.
+  - Verify that `adaptive_headers.lua` is loaded at hook priority `-100`.
   - Check whether a previous YouTube stream leaked `ytdl-raw-options`. The reset hook must clear `http-header-fields` on every file load.
 - **Handshake File Not Found by Lua:**
   - On Windows, verify that backslashes in `--script-opts=mpv_organizer-handshake=<path>` were converted to forward slashes. Backslashes can be corrupted by shell escaping.

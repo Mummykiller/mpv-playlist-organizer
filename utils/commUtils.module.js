@@ -130,21 +130,23 @@ export function normalizeYouTubeUrl(ytUrl) {
 	return ytUrl;
 }
 
+const NORMALIZE_WHITELIST = new Set(["request_id", "url", "m3u8", "mp4"]);
+const PRESERVE_MAP_KEYS = new Set(["customNames", "custom_names", "folders"]);
+
 /**
  * Recursively normalizes keys in an object from snake_case to camelCase.
- * Excludes whitelisted keys like 'request_id'.
+ * Excludes whitelisted keys like 'request_id', and preserves child dictionary
+ * keys verbatim under map containers in PRESERVE_MAP_KEYS.
  */
-export function normalizeKeys(data) {
+export function normalizeKeys(data, preserveChildKeys = false) {
 	if (!data || typeof data !== "object") return data;
 
 	if (Array.isArray(data)) {
-		return data.map(normalizeKeys);
+		return data.map((item) => normalizeKeys(item, false));
 	}
 
-	const WHITELIST = new Set(["request_id", "url", "m3u8", "mp4"]);
-
 	const snakeToCamel = (str) => {
-		if (WHITELIST.has(str)) return str;
+		if (NORMALIZE_WHITELIST.has(str)) return str;
 		return str.replace(/([-_][a-z])/g, (group) =>
 			group.toUpperCase().replace("-", "").replace("_", ""),
 		);
@@ -153,8 +155,11 @@ export function normalizeKeys(data) {
 	const normalized = {};
 	for (const key in data) {
 		if (Object.prototype.hasOwnProperty.call(data, key)) {
-			const camelKey = snakeToCamel(key);
-			normalized[camelKey] = normalizeKeys(data[key]);
+			const outKey = preserveChildKeys ? key : snakeToCamel(key);
+			const shouldPreserveGrandchildren =
+				!preserveChildKeys &&
+				(PRESERVE_MAP_KEYS.has(key) || PRESERVE_MAP_KEYS.has(outKey));
+			normalized[outKey] = normalizeKeys(data[key], shouldPreserveGrandchildren);
 		}
 	}
 	return normalized;

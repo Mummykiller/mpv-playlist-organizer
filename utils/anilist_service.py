@@ -5,6 +5,9 @@ import time
 import logging
 import subprocess
 from datetime import datetime
+import file_io
+from utils import security
+from utils.file_lock import FileLock
 
 # Prevent __pycache__ generation
 sys.dont_write_bytecode = True
@@ -14,10 +17,11 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 LAST_ANILIST_FRESH_LOG_TIME = 0
 
 class AniListCache:
-    def __init__(self, cache_file, script_dir, send_message_func):
+    def __init__(self, cache_file, script_dir, send_message_func, file_io_mod=None):
         self.cache_file = cache_file
         self.script_dir = script_dir
         self.send_message = send_message_func
+        self.file_io = file_io_mod or file_io
         self.CACHE_DURATION_S = 30 * 60 # 30 minutes
 
     def _fetch_from_anilist_script(self, is_ping, days=0):
@@ -29,8 +33,19 @@ class AniListCache:
                 script_args.append('--ping')
             if days != 0:
                 script_args.extend(['--days', str(days)])
-            result = subprocess.run(script_args, capture_output=True, text=True, check=True, encoding='utf-8')
+            result = subprocess.run(
+                script_args,
+                capture_output=True,
+                text=True,
+                check=True,
+                encoding='utf-8',
+                timeout=30,
+                env=security.get_scrubbed_env()
+            )
             return {"success": True, "output": result.stdout}
+        except subprocess.TimeoutExpired as e:
+            logging.error(f"Timeout running anilist_releases.py: {e}")
+            return {"success": False, "error": "Timeout fetching AniList releases."}
         except subprocess.CalledProcessError as e:
             logging.error(f"Error running anilist_releases.py: {e.stderr}")
             return {"success": False, "error": f"Error fetching AniList releases: {e.stderr}"}
@@ -43,8 +58,9 @@ class AniListCache:
         """Loads cache data from the cache file."""
         if os.path.exists(self.cache_file):
             try:
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                with FileLock(self.cache_file):
+                    with open(self.cache_file, 'r', encoding='utf-8') as f:
+                        return json.load(f)
             except (json.JSONDecodeError, IOError) as e:
                 logging.warning(f"Could not read {self.cache_file}: {e}. Will perform a full fetch.")
         return {}
@@ -52,10 +68,10 @@ class AniListCache:
     def _save_cache(self, cache_data):
         """Saves cache data to the cache file."""
         try:
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, indent=4)
-            logging.info(f"{self.cache_file} updated with new data.")
-        except (IOError) as e:
+            with FileLock(self.cache_file):
+                if self.file_io._atomic_json_dump(cache_data, self.cache_file):
+                    logging.info(f"{self.cache_file} updated with new data.")
+        except IOError as e:
             logging.error(f"Failed to write new {self.cache_file}: {e}")
 
 def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabled, days, cache_file, script_dir, send_message_func):
@@ -92,7 +108,10 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
         res = anilist_cache._fetch_from_anilist_script(is_ping=False, days=days)
         if res.get('success') and isinstance(res.get('output'), str):
             try:
-                res['output'] = json.loads(res['output'])
+                parsed = json.loads(res['output'])
+                if isinstance(parsed, dict):
+                    parsed.pop('raw_schedules_for_cache', None)
+                res['output'] = parsed
             except (json.JSONDecodeError, ValueError) as e:
                 logging.debug(f"[AniList] Output is not valid JSON: {e}")
         return res
@@ -109,11 +128,13 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
         if res['success']:
             try:
                 parsed_data = json.loads(res['output'])
+                raw_schedules = parsed_data.pop('raw_schedules_for_cache', []) if isinstance(parsed_data, dict) else []
                 offsets[str(target_days)] = {
                     "timestamp": now,
                     "data": parsed_data,
-                    "sorted_airing_ats": sorted([s['airingAt'] for s in parsed_data.get('raw_schedules_for_cache', [])])
+                    "sorted_airing_ats": sorted([s['airingAt'] for s in raw_schedules if isinstance(s, dict) and 'airingAt' in s])
                 }
+                res['output'] = parsed_data
                 if target_days == 0:
                     full_cache["today_timestamp"] = now
                 

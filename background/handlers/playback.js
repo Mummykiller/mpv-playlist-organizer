@@ -20,6 +20,15 @@ const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;
 const RESUME_TIME_WRITE_THROTTLE_MS = 10000;
 const resumeTimeThrottles = new Map();
 
+function getCanonicalFolderId(storageData, folderId) {
+	if (!folderId || !storageData?.folders) return folderId;
+	return (
+		Object.keys(storageData.folders).find(
+			(id) => id.toLowerCase() === folderId.toLowerCase(),
+		) || folderId
+	);
+}
+
 /**
  * Filters out the currently active item from a list of IDs to prevent 
  * accidental removal of the video the user is currently watching.
@@ -79,7 +88,7 @@ async function promptClearConfirmation(folderId, targetIds, folder, clearScope, 
 	}
 
 	const titles = resolveItemTitles(folder.playlist, targetIds);
-	const session = playbackManager.getSession(folderId);
+	const session = playbackManager.findSessionByFolderId(folderId) || playbackManager.getSession(folderId);
 	const pendingClear = {
 		folderId,
 		playedIds: targetIds,
@@ -220,19 +229,22 @@ export async function handleItemNaturalCompletion(data) {
 }
 
 export async function handleMpvQuitting(data) {
+	await playbackManager.initPromise;
 	const { folderId, isNaturalCompletion, playedIds, watchedIds, sessionIds } = data;
+	const storageData = folderId ? await storage.get() : null;
+	const actualFolderId = folderId ? getCanonicalFolderId(storageData, folderId) : folderId;
+
 	broadcastLog({
-		text: `[Background]: MPV shutdown sequence started for '${folderId}'.`,
+		text: `[Background]: MPV shutdown sequence started for '${actualFolderId}'.`,
 		type: "info",
 	});
 
-	broadcastPlaybackState(folderId, { isClosing: true, isRunning: true });
-	await broadcastPlaylistState(folderId, null, "render_playlist");
+	broadcastPlaybackState(actualFolderId, { isClosing: true, isRunning: true });
+	await broadcastPlaylistState(actualFolderId, null, "render_playlist");
 
 	// --- Early Clear/Confirm Logic ---
-	if (isNaturalCompletion && folderId) {
-		const storageData = await storage.get();
-		const folder = storageData.folders[folderId];
+	if (isNaturalCompletion && actualFolderId) {
+		const folder = storageData.folders?.[actualFolderId];
 		
 		if (!folder || !folder.playlist) return;
 
@@ -255,17 +267,17 @@ export async function handleMpvQuitting(data) {
 
 		if (clearMode !== "no") {
 			broadcastLog({
-				text: `[Background]: Completion detected for '${folderId}'. (Full: ${isFullFolderComplete}). Mode: ${clearMode}.`,
+				text: `[Background]: Completion detected for '${actualFolderId}'. (Full: ${isFullFolderComplete}). Mode: ${clearMode}.`,
 				type: "info",
 			});
-			playbackManager.earlyClearsInProgress.add(folderId);
+			playbackManager.earlyClearsInProgress.add(actualFolderId);
 
 			const finishedIds = getDirectionalFinishedIds(folder.playlist, playedIds || []);
 
 			if (clearMode === "yes") {
-				const mergedPlayedIds = await filterActiveItem(folderId, finishedIds);
+				const mergedPlayedIds = await filterActiveItem(actualFolderId, finishedIds);
 
-				await clearFolderPlaylist(folderId, {
+				await clearFolderPlaylist(actualFolderId, {
 					playedIds: mergedPlayedIds,
 					sessionIds,
 					scope: clearScope,
@@ -276,9 +288,9 @@ export async function handleMpvQuitting(data) {
 					.filter(id => existingIds.has(id));
 				
 				const ignoreId = finishedIds.length > 0 ? finishedIds[finishedIds.length - 1] : null;
-				const targetIds = await filterActiveItem(folderId, targetIdsRaw, ignoreId);
+				const targetIds = await filterActiveItem(actualFolderId, targetIdsRaw, ignoreId);
 
-				await promptClearConfirmation(folderId, targetIds, folder, clearScope, true);
+				await promptClearConfirmation(actualFolderId, targetIds, folder, clearScope, true);
 			}
 		}
 	}
@@ -432,9 +444,10 @@ export async function handleMpvExited(data) {
 async function clearFolderPlaylist(folderId, options = {}) {
 	const { playedIds, sessionIds, scope = "all" } = options;
 	const storageData = await storage.get();
+	const actualFolderId = getCanonicalFolderId(storageData, folderId);
 
-	if (storageData.folders[folderId]) {
-		const folder = storageData.folders[folderId];
+	if (storageData.folders?.[actualFolderId]) {
+		const folder = storageData.folders[actualFolderId];
 		const originalCount = folder.playlist.length;
 		let removedUrls = new Set();
 
@@ -476,7 +489,7 @@ async function clearFolderPlaylist(folderId, options = {}) {
 		const removedCount = originalCount - folder.playlist.length;
 		if (removedCount > 0) {
 			broadcastLog({
-				text: `[Background]: Removed ${removedCount} item(s) from '${folderId}' based on clear scope '${scope}'.`,
+				text: `[Background]: Removed ${removedCount} item(s) from '${actualFolderId}' based on clear scope '${scope}'.`,
 				type: "info",
 			});
 
@@ -485,7 +498,7 @@ async function clearFolderPlaylist(folderId, options = {}) {
 			// --- Local Live Removal (Mimic X-click) ---
 			// If the current folder is active in MPV, remove the items from the player too.
 			if (storageData.settings.uiPreferences.global.liveRemoval !== false && 
-				playbackCache && playbackCache.folderId === folderId && (playbackCache.isRunning || !playbackCache.isIdle)) {
+				playbackCache && playbackCache.folderId?.toLowerCase() === actualFolderId.toLowerCase() && (playbackCache.isRunning || !playbackCache.isIdle)) {
 				
 				// Re-identify IDs that were removed based on the original scope
 				let idsToRemoveLive = [];
@@ -497,7 +510,7 @@ async function clearFolderPlaylist(folderId, options = {}) {
 					for (const rId of idsToRemoveLive) {
 						try {
 							await nativeLink.call("remove_item_live", {
-								folderId: folderId,
+								folderId: actualFolderId,
 								itemId: rId,
 							});
 						} catch (e) {
@@ -513,7 +526,7 @@ async function clearFolderPlaylist(folderId, options = {}) {
 				const affectedFolders = new Set();
 				
 				for (const [fId, otherFolder] of Object.entries(storageData.folders)) {
-					if (fId === folderId) continue;
+					if (fId === actualFolderId) continue;
 
 					const itemsToRemoveFromThisFolder = otherFolder.playlist.filter(
 						(item) => removedUrls.has(normalizeYouTubeUrl(item.url))
@@ -528,7 +541,7 @@ async function clearFolderPlaylist(folderId, options = {}) {
 						// Handle live removal for synchronized folders if they are active
 						const { mpv_playback_cache: playbackCache } = await chrome.storage.local.get("mpv_playback_cache");
 						if (storageData.settings.uiPreferences.global.syncGlobalRemovalsLive === true && 
-							playbackCache && playbackCache.folderId === fId && (playbackCache.isRunning || !playbackCache.isIdle)) {
+							playbackCache && playbackCache.folderId?.toLowerCase() === fId.toLowerCase() && (playbackCache.isRunning || !playbackCache.isIdle)) {
 							for (const syncItem of itemsToRemoveFromThisFolder) {
 								nativeLink.call("remove_item_live", {
 									folderId: fId,
@@ -556,11 +569,11 @@ async function clearFolderPlaylist(folderId, options = {}) {
 			}
 
 			if (!globalSyncPerformed) {
-				await storage.set(storageData, folderId);
+				await storage.set(storageData, actualFolderId);
 			}
 			
 			debouncedSyncToNativeHostFile(null, true);
-			await broadcastPlaylistState(folderId, folder.playlist);
+			await broadcastPlaylistState(actualFolderId, folder.playlist);
 			return true;
 		}
 	}
@@ -648,12 +661,10 @@ async function checkAndConfirmFolderSwitch(targetFolderId) {
 			return true;
 
 		// If the target folder is already active in MPV, proceed.
-		if (statusResponse.folderId === targetFolderId) return true;
-
-		// Determine currently playing folder from native host or local state fallback
 		const currentFolderId = statusResponse.folderId;
+		if (currentFolderId && currentFolderId.toLowerCase() === targetFolderId?.toLowerCase()) return true;
 
-		if (currentFolderId && currentFolderId !== targetFolderId) {
+		if (currentFolderId && currentFolderId.toLowerCase() !== targetFolderId?.toLowerCase()) {
 			const data = await storage.get();
 			const shouldConfirm =
 				data.settings.uiPreferences.global.confirmFolderSwitch ?? true;
@@ -697,6 +708,7 @@ const _sendMessageAsync = (payload) =>
 	});
 
 async function _handlePlayLogic(context) {
+    await playbackManager.initPromise;
     const { request, folderId, data } = context;
     const { urlItem, playNewInstance } = request;
 
@@ -779,6 +791,7 @@ export const handlePlay = createHandler(_handlePlayLogic, {
     manualPersistence: true,
     broadcastPlaylist: true,
     onBefore: async ({ request, folderId }) => {
+        await playbackManager.initPromise;
         if (!request.playNewInstance && folderId) {
             const session = playbackManager.findSessionByFolderId(folderId);
             if (!session || !session.isPlaying) {
@@ -984,6 +997,7 @@ export async function handleUpdateItemResumeTime(data) {
 }
 
 export async function handlePlaybackStatusChanged(data) {
+	await playbackManager.initPromise;
 	const { folderId, isPaused, isIdle, sessionIds, watchedIds, lastPlayedId } = data;
 	if (!folderId) return;
 
@@ -1131,6 +1145,7 @@ export const handlePlayNewInstance = createHandler(async ({ request, folderId })
 });
 
 export const handleAppend = createHandler(async ({ request, folderId }) => {
+	await playbackManager.initPromise;
 	const { urlItem } = request;
 	if (!urlItem) return { success: false, error: "No URL item provided to append." };
 
@@ -1188,6 +1203,7 @@ export const handleCloseMpv = createHandler(async ({ folderId, request }) => {
 });
 
 export async function handleSessionRestored(request) {
+	await playbackManager.initPromise;
 	const result = request.wasStale !== undefined ? request : request.result;
 
 	if (!result || (result.wasStale === undefined && result.folderId === undefined)) {
@@ -1197,15 +1213,15 @@ export async function handleSessionRestored(request) {
 
 	if (result.wasStale) {
 		broadcastLog({ text: `[Background]: Detected stale MPV session for folder '${result.folderId}'.`, type: "info" });
-		handleMpvExited(result);
+		await handleMpvExited(result);
 	} else {
 		broadcastLog({ text: `[Background]: Re-establishing connection to active MPV session for folder '${result.folderId}'...`, type: "info" });
 
-		const session = playbackManager.getSession(result.folderId);
+		const session = playbackManager.findSessionByFolderId(result.folderId) || playbackManager.getSession(result.folderId);
 		session.queue = [];
 		session.isPlaying = true;
 		session.isProcessingQueue = false;
-		session.currentPlayingItem = { folderId: result.folderId, isLastInFolder: true };
+		session.currentPlayingItem = { folderId: session.folderId, isLastInFolder: true };
 		playbackManager.persistSessions();
 
 		const { mpv_playback_cache: storageCache } = await chrome.storage.local.get("mpv_playback_cache");
@@ -1231,40 +1247,36 @@ export async function handleSessionRestored(request) {
 		await chrome.storage.local.set({ mpv_playback_cache: cacheData });
 		playbackManager.syncCache = cacheData;
 
-		storage.get().then((storageData) => {
-			const rawFolderId = result.folderId;
-			const folderId =
-				Object.keys(storageData.folders || {}).find(
-					(id) => id.toLowerCase() === rawFolderId?.toLowerCase(),
-				) || rawFolderId;
-			const folder = storageData.folders[folderId];
+		const storageData = await storage.get();
+		const rawFolderId = result.folderId;
+		const folderId = getCanonicalFolderId(storageData, rawFolderId);
+		const folder = storageData.folders?.[folderId];
 
-			if (!folder) {
-				broadcastLog({ text: `[Background]: Restoration rejected. Folder '${folderId}' not found in browser storage.`, type: "warning" });
-				return;
-			}
+		if (!folder) {
+			broadcastLog({ text: `[Background]: Restoration rejected. Folder '${folderId}' not found in browser storage.`, type: "warning" });
+			return;
+		}
 
-			broadcastLog({ text: `Reconnected to mpv playlist (${folder.name || folderId})`, type: "info" });
+		broadcastLog({ text: `Reconnected to mpv playlist (${folder.name || folderId})`, type: "info" });
 
-			let needsSave = false;
-			if (result.lastPlayedId && result.lastPlayedId !== folder.lastPlayedId) {
-				folder.lastPlayedId = result.lastPlayedId;
-				needsSave = true;
-			}
+		let needsSave = false;
+		if (result.lastPlayedId && result.lastPlayedId !== folder.lastPlayedId) {
+			folder.lastPlayedId = result.lastPlayedId;
+			needsSave = true;
+		}
 
-			if (result.playlist && Array.isArray(result.playlist)) {
-				const diskPlaylistMap = new Map(result.playlist.map((item) => [item.id, item]));
-				folder.playlist.forEach((item) => {
-					const diskItem = diskPlaylistMap.get(item.id);
-					if (diskItem && diskItem.resumeTime !== undefined && item.resumeTime !== diskItem.resumeTime) {
-						item.resumeTime = diskItem.resumeTime;
-						needsSave = true;
-					}
-				});
-			}
+		if (result.playlist && Array.isArray(result.playlist)) {
+			const diskPlaylistMap = new Map(result.playlist.map((item) => [item.id, item]));
+			folder.playlist.forEach((item) => {
+				const diskItem = diskPlaylistMap.get(item.id);
+				if (diskItem && diskItem.resumeTime !== undefined && item.resumeTime !== diskItem.resumeTime) {
+					item.resumeTime = diskItem.resumeTime;
+					needsSave = true;
+				}
+			});
+		}
 
-			if (needsSave) storage.set(storageData, folderId);
-			broadcastPlaylistState(folderId, folder.playlist);
-		});
+		if (needsSave) await storage.set(storageData, folderId);
+		await broadcastPlaylistState(folderId, folder.playlist);
 	}
 }

@@ -118,9 +118,10 @@ def verify_mpv_process(pid, ipc_path=None):
                     cmd_bytes = f.read(4096)
                 if cmd_bytes:
                     cmd_str = cmd_bytes.decode("utf-8", errors="replace")
-                    args = cmd_str.split("\0")
+                    args = [a for a in cmd_str.split("\0") if a]
                     first_arg = os.path.basename(args[0]).lower() if args else ""
-                    is_mpv_bin = "mpv" in first_arg or any("mpv" in a.lower() for a in args[:2])
+                    second_arg = os.path.basename(args[1]).lower() if len(args) > 1 else ""
+                    is_mpv_bin = "mpv" in first_arg or "mpv" in second_arg
                     if is_mpv_bin:
                         if ipc_path:
                             ipc_basename = os.path.basename(ipc_path)
@@ -136,14 +137,21 @@ def verify_mpv_process(pid, ipc_path=None):
         import psutil
         p = psutil.Process(pid)
         name = p.name().lower()
-        if "mpv" in name:
+        cmdline_list = []
+        try:
+            cmdline_list = p.cmdline() or []
+        except Exception as e:
+            logging.debug(f"psutil cmdline inspection failed for PID {pid}: {e}")
+        first_base = os.path.basename(cmdline_list[0]).lower() if cmdline_list else ""
+        second_base = os.path.basename(cmdline_list[1]).lower() if len(cmdline_list) > 1 else ""
+        is_mpv_bin = "mpv" in name or "mpv" in first_base or "mpv" in second_base
+        if is_mpv_bin:
             if ipc_path:
-                try:
-                    cmdline = " ".join(p.cmdline())
-                    if os.path.basename(ipc_path) in cmdline or ipc_path in cmdline or "mpv" in cmdline:
+                if cmdline_list:
+                    cmdline = " ".join(cmdline_list)
+                    if os.path.basename(ipc_path) in cmdline or ipc_path in cmdline:
                         return True
-                except Exception as e:
-                    logging.debug(f"psutil cmdline inspection failed for PID {pid}: {e}")
+                else:
                     return True
             else:
                 return True

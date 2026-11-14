@@ -1,6 +1,9 @@
 # Remediation Plan
 
-Companion to [CODE_REVIEW.md](file:///home/shinku/Documents/mpv-playlist-organizer/CODE_REVIEW.md). Finding IDs (PY-H1, JS-M6 and so on) refer to that file. **No code has been changed yet.**
+Companion to [CODE_REVIEW.md](file:///home/shinku/Documents/mpv-playlist-organizer/CODE_REVIEW.md). Finding IDs (PY-H1, JS-M6 and so on) refer to that file.
+
+> **Status: COMPLETED & VERIFIED (Phases 0–5 Implemented)**
+> All findings across Phases 0–5, low-priority cleanups, regression tests, and documentation/skill synchronizations have been implemented and verified via `python3 verify_changes.py`.
 
 **Ground rules**
 - Edit `utils/*.module.js`, never the generated `utils/*.js`.
@@ -127,7 +130,7 @@ These make it less likely that agents reintroduce the same issues. Each is an ap
 | [lead-architect](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/lead-architect/SKILL.md) | A failure-class review checklist, "no test no merge", skills updated in the same change, a large-file extraction rule, and verifying reviewer findings before acting. |
 
 > [!NOTE]
-> The security and content-script skills describe some known-bad behavior (the permissive yt-dlp allowlist, "Hail Mary"). The new warnings flag these. After the code is fixed, rewrite those sections and remove the warnings.
+> The security, content-script, storage, playback/IPC, installer/CLI, and AniList skills have been updated and aligned with the remediated implementation.
 
 ## Suggested order and decision points
 

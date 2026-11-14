@@ -9,8 +9,10 @@
 			"utils/nativeConnection.js",
 			"utils/MpvInterface.js",
 			"utils/domUtils.js",
-			"utils/protocol_contract.json",
-			"node_modules/**"
+			"testing_tools/scripts/bridge_contract.js",
+			"node_modules/**",
+			"testing_tools/node_modules/**",
+			"mpv-playlist-organizer-release/**"
 		]
 	},
 	"formatter": {

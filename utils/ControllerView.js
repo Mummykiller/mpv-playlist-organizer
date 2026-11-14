@@ -839,9 +839,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		normalizeKeyCombo(e) {
 			const modifiers = [];
 			if (e.ctrlKey) modifiers.push("ctrl");
-			if (e.metaKey) modifiers.push("meta");
-			if (e.altKey) modifiers.push("alt");
 			if (e.shiftKey) modifiers.push("shift");
+			if (e.altKey) modifiers.push("alt");
+			if (e.metaKey) modifiers.push("meta");
 
 			let key = e.key.toLowerCase();
 			if (key === " ") key = "space";

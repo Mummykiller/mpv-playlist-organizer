@@ -1,5 +1,14 @@
 // background/storage_instance.js
 import { StorageManager } from "../utils/storageManager.js";
-import { broadcastLog } from "./messaging.js";
 
-export const storage = new StorageManager("mpv_organizer_data", broadcastLog);
+let _logBroadcaster = null;
+
+export function setStorageLogBroadcaster(fn) {
+	_logBroadcaster = typeof fn === "function" ? fn : null;
+}
+
+export const storage = new StorageManager("mpv_organizer_data", (logObj) => {
+	if (_logBroadcaster) {
+		return _logBroadcaster(logObj);
+	}
+});

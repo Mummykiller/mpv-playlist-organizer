@@ -32,12 +32,16 @@ def get_user_data_dir():
     target = os.path.join(base, app_name)
     try:
         os.makedirs(target, exist_ok=True)
+        if not os.access(target, os.W_OK):
+            raise OSError("Directory not writable")
         return target
     except OSError:
         import tempfile
         fallback = os.path.join(tempfile.gettempdir(), app_name)
         try:
             os.makedirs(fallback, exist_ok=True)
+            if not os.access(fallback, os.W_OK):
+                raise OSError("Fallback directory not writable")
             return fallback
         except OSError:
             return target
@@ -246,23 +250,32 @@ def get_playlist_shard(folder_id):
 
 def save_playlist_shard(folder_id, playlist, update_index=True):
     """Saves a specific playlist shard and optionally updates the index count."""
-    index = get_index()
-    canonical_id = _get_canonical_folder_id(folder_id, index)
-    shard_path = _get_safe_shard_path(canonical_id)
-    if not shard_path:
-        return False
-    
-    # 1. Save the Shard
-    with FileLock(shard_path):
-        success = _atomic_json_dump({"playlist": playlist}, shard_path)
-    
-    if success and update_index:
-        # 2. Update Index Metadata (Item Count)
-        if canonical_id in index:
+    if not update_index:
+        index = get_index()
+        canonical_id = _get_canonical_folder_id(folder_id, index)
+        shard_path = _get_safe_shard_path(canonical_id)
+        if not shard_path:
+            return False
+        with FileLock(shard_path):
+            return _atomic_json_dump({"playlist": playlist}, shard_path)
+
+    with FileLock(INDEX_FILE):
+        index = _safe_json_load(INDEX_FILE) or {}
+        canonical_id = _get_canonical_folder_id(folder_id, index)
+        shard_path = _get_safe_shard_path(canonical_id)
+        if not shard_path:
+            return False
+
+        # 1. Save the Shard (INDEX -> Shard lock order)
+        with FileLock(shard_path):
+            success = _atomic_json_dump({"playlist": playlist}, shard_path)
+
+        # 2. Update Index Metadata (Item Count) while still holding INDEX_FILE lock
+        if success and canonical_id in index:
             index[canonical_id]["item_count"] = len(playlist)
-            save_index(index)
-            
-    return success
+            _atomic_json_dump(index, INDEX_FILE)
+
+        return success
 
 def update_shard(folder_id, update_fn, update_index=False):
     """
@@ -530,7 +543,12 @@ def get_mpv_executable():
         elif os.path.exists(configured_mpv_path):
             return os.path.abspath(configured_mpv_path)
 
-    # 2. Search in common local locations relative to PROJECT_ROOT, SCRIPT_DIR and Python EXE
+    # 2. Prioritize System PATH
+    found_in_path = shutil.which(mpv_default_name)
+    if found_in_path:
+        return os.path.abspath(found_in_path)
+
+    # 3. Search in common local locations relative to PROJECT_ROOT, SCRIPT_DIR and Python EXE
     # PROJECT_ROOT is the parent of utils/
     # SCRIPT_DIR is the folder containing native_host.py
     search_dirs = [PROJECT_ROOT, SCRIPT_DIR, os.path.dirname(sys.executable)]
@@ -544,11 +562,6 @@ def get_mpv_executable():
         local_path = os.path.join(d, mpv_default_name)
         if os.path.exists(local_path):
             return os.path.abspath(local_path)
-
-    # 3. Prioritize System PATH
-    found_in_path = shutil.which(mpv_default_name)
-    if found_in_path:
-        return os.path.abspath(found_in_path)
 
     return mpv_default_name
 
@@ -581,15 +594,27 @@ def merge_ytdlp_options(*args, allow_settings_flags=False):
             continue
         # Split by comma NOT preceded by backslash
         parts = re.split(r'(?<!\\),', options_str)
+        last_key = None
         for part in parts:
             part = part.strip()
             if not part:
                 continue
             if '=' in part:
                 key, value = part.split('=', 1)
-                merged_map[key.strip().lower()] = value
+                clean_k = key.strip().lower()
+                merged_map[clean_k] = value
+                last_key = clean_k
             else:
-                merged_map[part.strip().lower()] = ""
+                clean_part = part.strip().lower().lstrip('-')
+                if (
+                    last_key in ('extractor-args', '--extractor-args')
+                    and last_key in merged_map
+                    and clean_part not in security.YTDLP_ALL_ALLOWED_FLAGS
+                ):
+                    merged_map[last_key] = f"{merged_map[last_key]}\\,{part}"
+                else:
+                    merged_map[part.strip().lower()] = ""
+                    last_key = part.strip().lower()
     
     final_parts = []
     for k, v in merged_map.items():

@@ -758,6 +758,16 @@ async function testUiSync() {
     }
     console.log("  ✅ MpvController timer/watchdog teardown verified without leaks.");
 
+    // Operation 9: Scanner Async Rehydration & Core Sync Failure Recovery
+    console.log("Testing Scanner Async Rehydration & Core Sync Failure Recovery...");
+    const { handleGetDetectedUrlForTab, handleUpdateDetectedUrlForTab } = await import("../../background/handlers/m3u8_scanner.js");
+    handleUpdateDetectedUrlForTab(777, "https://example.com/live.m3u8");
+    const detectedForTab = await handleGetDetectedUrlForTab(777);
+    assert.strictEqual(detectedForTab, "https://example.com/live.m3u8", "Async handleGetDetectedUrlForTab should resolve stored URL");
+    handleUpdateDetectedUrlForTab(777, null);
+    assert.strictEqual(await handleGetDetectedUrlForTab(777), null);
+    console.log("  ✅ Scanner async rehydration verified.");
+
     console.log("\n✨ UI SYNC TEST PASSED! ✨");
 }
 

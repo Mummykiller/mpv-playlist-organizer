@@ -67,10 +67,10 @@ To prevent the Native Host and extension from being leveraged as an internal int
    - Any path containing shell injection characters (`;`, `&`, `|`, `` ` ``, `$`, `\n`) is rejected immediately.
 4. **Settings Key Allowlist (`ALLOWED_SETTINGS_KEYS`):**
    - Configuration updates in `file_io.py:set_settings` are strictly filtered against the canonical allowlist to prevent prototype or arbitrary state pollution.
-5. **Environment Variable Whitelisting (`get_mpv_popen_kwargs`):**
-   - Subprocesses run with sanitized environments, stripping untrusted environment variables.
+5. **Environment Variable Whitelisting (`utils/security.py:get_scrubbed_env`):**
+   - Subprocesses run with sanitized environments via `utils/security.py:get_scrubbed_env`, stripping Python runtime contamination variables (`PYTHONPATH`, `PYTHONHOME`, etc.) and untrusted environment variables.
 6. **Tool Flag Allowlists:**
-   - **`yt-dlp` Flag Allowlist (`YTDLP_SAFE_FLAGS_ALLOWLIST` & `YTDLP_SETTINGS_ONLY_FLAGS`):** Only vetted flags (e.g. `cookies`, `user-agent`, `format`, `sub-lang`) are permitted on untrusted item payloads (`sanitize_ytdlp_options(..., allow_settings_flags=False)`). Settings-only flags (`proxy`, `ffmpeg-location`, `js-runtimes`, `remote-components`, `alias`, `update`, `print`, `no-check-certificate`, `geo-verification-proxy`) are only permitted from trusted settings (`allow_settings_flags=True`). Dangerous execution flags like `--exec`, `--output`, or `--config-location` are strictly rejected.
+   - **`yt-dlp` Flag Allowlist (`YTDLP_SAFE_FLAGS_ALLOWLIST` & `YTDLP_SETTINGS_ONLY_FLAGS`):** Only vetted item-level safe flags (e.g. `cookies`, `cookies-from-browser`, `user-agent`, `referer`, `add-header`, `format`, `extractor-args`) are permitted on untrusted item payloads (`sanitize_ytdlp_options(..., allow_settings_flags=False)`). Settings-only flags (`proxy`, `ffmpeg-location`, `js-runtimes`, `remote-components`, `compat-options`, `alias`, `update`, `print`, `no-check-certificate`, `geo-verification-proxy`) are only permitted from trusted settings (`allow_settings_flags=True`). Dangerous execution flags like `--exec`, `--output`, or `--config-location` are strictly rejected.
    - **`MPV` Safe Flags Allowlist (`SAFE_MPV_FLAGS_ALLOWLIST`):** Only safe player flags are permitted from UI inputs.
 
 ---
@@ -85,12 +85,12 @@ All file operations in `file_io.py` and backend handlers validate candidate path
   - `DATA_DIR` (Application configuration and playlists)
   - `SCRIPT_DIR` (Project source directory)
   - `TEMP_DIR` (Temporary playlists and handshakes)
-  - `XDG_RUNTIME_DIR` / `/dev/shm` (Linux RAM-backed IPC and volatile cookies)
-- Any path attempting to escape these sandboxes throws a `ValueError("Security: Path traversal attempted")`.
+  - `XDG_RUNTIME_DIR` / `/dev/shm` / `~/.mpv_playlist_organizer_ipc` (Linux RAM-backed IPC and volatile cookies)
+- Any path attempting to escape these sandboxes logs a security warning (`logging.warning("Security: Path outside sandbox: ...")`) and returns `None`.
 
 ### String & Filename Sanitization
 
-- **Filename Sanitization (`sanitize_filename`):** Strips path traversal delimiters and reserved characters: `/ \ : * ? " < > | $ ; & \`` and control characters.
+- **Filename Sanitization (`sanitize_string(..., is_filename=True)`):** Strips path traversal delimiters and reserved characters: `/ \ : * ? " < > | $ ; & \`` and control characters.
 - **M3U Injection Hardening (`sanitize_string`):** Metadata injected into M3U playlist lines (`#EXTINF`) strips `"`, `` ` ``, `$`, `\n`, `\r`, `\t`, and `,` to prevent shell injection or player option injection when MPV interprets the file.
 
 ---
@@ -105,12 +105,12 @@ The logging architecture correlates events across the Chrome Extension and Pytho
 - `SecurityFormatter` / `mask_path` automatically strips absolute user paths before writing to disk:
   - `/home/<username>` → `<HOME>`
   - `<project_root>/data` → `<DATA_DIR>`
-  - `<project_root>` → `<PROJECT_ROOT>`
+  - `<project_root>` → `<APP_DIR>`
 
 ### Request Correlation
 
 - User actions initiate a unique `request_id` in JavaScript.
-- `request_id` propagates through native messaging into Python `logger.runWithContext()`, attaching the ID to all log lines generated during request processing.
+- `request_id` propagates through native messaging into Python `logger.request_id_var.set(req_id)` (via `ContextVar`), attaching `[Req: <req_id>]` to all log lines generated during request processing.
 
 ### Cross-Environment Error Forwarding
 
@@ -123,7 +123,7 @@ Aggregates system health in a single JSON payload for debugging:
 1. Browser environment metadata (Chrome version, OS, extension version).
 2. Recent in-memory JavaScript breadcrumbs.
 3. System dependency status (`mpv`, `ffmpeg`, `yt-dlp`, `node` paths and versions).
-4. The tail (last 50 lines) of `native_host.log` and `ipc_events.log`.
+4. The last `100 KB` tail of `native_host.log`, `ipc_events.log`, and `browser_errors.log`.
 
 ### The Janitor (`utils/janitor.py`)
 

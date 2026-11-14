@@ -19,6 +19,7 @@ request_id_var: ContextVar[Optional[str]] = ContextVar("request_id", default=Non
 _log_queue = queue.Queue(-1)
 _listener: Optional[logging.handlers.QueueListener] = None
 _is_initialized = False
+_active_data_dir: Optional[str] = None
 _init_lock = threading.RLock()
 
 class ContextQueueHandler(logging.handlers.QueueHandler):
@@ -44,31 +45,35 @@ class SecurityFormatter(logging.Formatter):
     def format(self, record):
         # Store original message to avoid mutating it permanently if needed
         original_msg = record.msg
-        
-        # Apply path masking
-        if isinstance(record.msg, str):
-            record.msg = self.security.mask_path(record.msg, getattr(self, 'data_dir', None), getattr(self, 'script_dir', None))
 
         # Add Request ID if available (injected by ContextQueueHandler)
         req_id = getattr(record, 'request_id', None)
         if req_id:
             record.msg = f"[Req: {req_id}] {record.msg}"
 
-        result = super().format(record)
-        
-        # Restore original message for other handlers if any
-        record.msg = original_msg
-        return result
+        try:
+            formatted = super().format(record)
+        finally:
+            # Restore original message for other handlers if any
+            record.msg = original_msg
+
+        # Apply path masking on the formatted string so %s record.args are also masked
+        return self.security.mask_path(
+            formatted,
+            getattr(self, 'data_dir', None),
+            getattr(self, 'script_dir', None)
+        )
 
 def initialize(data_dir: str, script_dir: str = None, level=logging.DEBUG):
     """
     Initializes the non-blocking logging system.
     Degrades gracefully to stderr-only logging if data_dir is read-only or unwritable.
+    Returns the resolved writable data_dir.
     """
-    global _listener, _is_initialized
+    global _listener, _is_initialized, _active_data_dir
     with _init_lock:
         if _is_initialized:
-            return
+            return _active_data_dir or data_dir
 
         formatter = SecurityFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         formatter.data_dir = data_dir
@@ -78,10 +83,14 @@ def initialize(data_dir: str, script_dir: str = None, level=logging.DEBUG):
         try:
             try:
                 os.makedirs(data_dir, exist_ok=True)
+                if not os.access(data_dir, os.W_OK):
+                    raise OSError("Directory not writable")
             except OSError:
                 import tempfile
                 data_dir = os.path.join(tempfile.gettempdir(), "MPVPlaylistOrganizer")
                 os.makedirs(data_dir, exist_ok=True)
+                if not os.access(data_dir, os.W_OK):
+                    raise OSError("Directory not writable")
                 formatter.data_dir = data_dir
 
             main_log_file = os.path.join(data_dir, "native_host.log")
@@ -152,14 +161,16 @@ def initialize(data_dir: str, script_dir: str = None, level=logging.DEBUG):
         )
         _listener.start()
 
+        _active_data_dir = data_dir
         _is_initialized = True
         logging.info(f"Logging initialized. Data Dir: {data_dir}")
+        return data_dir
 
 def shutdown():
     """
     Ensures all logs are flushed before exit.
     """
-    global _listener, _is_initialized
+    global _listener, _is_initialized, _active_data_dir
     with _init_lock:
         if _listener:
             # Stop the listener first (it will flush the queue)
@@ -179,6 +190,7 @@ def shutdown():
             root.removeHandler(h)
         
         _is_initialized = False
+        _active_data_dir = None
 
 # --- Convenience API ---
 

@@ -13,7 +13,7 @@ Strict enforcement of input sizes prevents Denial of Service (DoS) via memory ex
 | **URL Length** | 2048 chars | 4096 chars | Maximum length for any URL. |
 | **String Length** | N/A | 100 KB | General payload strings (e.g., data export). |
 | **Playlist Items** | 5,000 | 10,000 | Maximum items per folder/shard. |
-| **IPC Message** | N/A | 5 MB | Total size of a single JSON IPC message. |
+| **IPC Message** | N/A | 5 MB in / 900 KB out (`MAX_OUTBOUND_MESSAGE_SIZE`) | Maximum size of a single JSON native messaging payload (5 MB inbound to Python; 900 KB outbound from host to browser). |
 
 **Action:** JS must enforce its stricter limits before sending data to the Native Host. Python must validate incoming payloads against its own limits as a second line of defense.
 
@@ -72,7 +72,10 @@ All JSON writes (folders, config, shards) MUST use the **Atomic Write Pattern**:
 
 ## 5. Playback & Process Isolation
 ### 5.1 yt-dlp Flag Whitelisting
-Only flags in the `YTDLP_SAFE_FLAGS_ALLOWLIST` are permitted. Dangerous flags like `--exec`, `--output`, or `--config-location` are strictly blocked.
+`yt-dlp` options are enforced using a two-tier allowlist in `utils/security.py`:
+- **`YTDLP_SAFE_FLAGS_ALLOWLIST` (Item-Level Safe Flags):** Flags permitted in untrusted item payloads (`ytdl_raw_options`, with `allow_settings_flags=False`), such as `cookies`, `cookies-from-browser`, `user-agent`, `referer`, `add-header`, `format`, `concurrent-fragments`, `extractor-args`, etc.
+- **`YTDLP_SETTINGS_ONLY_FLAGS` (Settings-Only Flags):** Flags restricted exclusively to trusted backend settings (`allow_settings_flags=True`), including `proxy`, `ffmpeg-location`, `js-runtimes`, `remote-components`, `compat-options`, `alias`, `update`, `print`, `no-check-certificate`, and `geo-verification-proxy`. These are stripped from item-level payloads.
+- Dangerous execution or file-write flags like `--exec`, `--output`, or `--config-location` are strictly blocked in all contexts.
 
 ### 5.2 Volatile Cookie Management
 - Cookies are extracted ONLY to RAM-backed storage (`/dev/shm` on Linux).
@@ -93,8 +96,9 @@ Only flags in the `YTDLP_SAFE_FLAGS_ALLOWLIST` are permitted. Dangerous flags li
 ## 6. Unified Logging & Diagnostics
 ### 6.1 Path Masking
 All loggers (JS and Python) must use `mask_path` to replace sensitive system paths with placeholders:
-- `/home/user` -> `<HOME>`
-- `App/Data/Dir` -> `<DATA_DIR>`
+- `/home/user` (`home_dir`) -> `<HOME>`
+- `script_dir` (Application root directory) -> `<APP_DIR>`
+- `data_dir` (App configuration & data directory) -> `<DATA_DIR>`
 
 ### 6.2 The Janitor
 A dedicated maintenance task that runs on startup and periodically to:

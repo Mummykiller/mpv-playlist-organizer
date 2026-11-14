@@ -78,7 +78,7 @@ export async function handleContentScriptInit(request, sender) {
 			}
 		}
 
-		const detectedUrl = m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId);
+		const detectedUrl = await m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId);
 
 		await chrome.tabs.sendMessage(tabId, {
 			action: "init_ui_state",
@@ -143,7 +143,7 @@ export const handleGetUiStateForTab = createHandler(async ({ request }) => {
 		state: {
 			minimized: finalPrefs.minimized ?? finalPrefs.mode === "minimized",
 			preferences: finalPrefs,
-			detectedUrl: m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId),
+			detectedUrl: await m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId),
 		},
 	};
 }, {
@@ -162,7 +162,7 @@ export async function handleReportPageUrl(request, sender) {
 
 		if (isWatchPage || isPlaylistPage) {
 			urlToReport = normalizeYouTubeUrl(urlToReport);
-			const currentState = m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId);
+			const currentState = await m3u8_scanner_handlers.handleGetDetectedUrlForTab(tabId);
 
 			if (currentState !== urlToReport && (!currentState || isYouTubeUrl(currentState))) {
 				m3u8_scanner_handlers.handleUpdateDetectedUrlForTab(tabId, urlToReport);

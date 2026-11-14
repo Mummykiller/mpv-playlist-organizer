@@ -171,7 +171,7 @@ YTDLP_SAFE_FLAGS_ALLOWLIST = {
     'force-ipv6', '6', 'geo-bypass',
     'geo-bypass-country', 'geo-bypass-ip-block', 'flat-playlist',
     'no-flat-playlist', 'live-from-start', 'wait-for-video', 'no-wait-for-video',
-    'ignore-config', 'no-ignore-config', 'compat-options',
+    'ignore-config', 'no-ignore-config', 'extractor-args',
     'no-warnings', 'dump-user-agent', 'version', 'verbose', 'v',
     'quiet', 'q', 'prefer-insecure'
 }
@@ -179,7 +179,8 @@ YTDLP_SAFE_FLAGS_ALLOWLIST = {
 # Dangerous flags restricted to trusted settings only (never accepted from item payloads)
 YTDLP_SETTINGS_ONLY_FLAGS = {
     'proxy', 'ffmpeg-location', 'js-runtimes', 'remote-components', 'alias',
-    'update', 'print', 'no-check-certificate', 'geo-verification-proxy'
+    'update', 'print', 'no-check-certificate', 'geo-verification-proxy',
+    'compat-options'
 }
 
 YTDLP_ALL_ALLOWED_FLAGS = YTDLP_SAFE_FLAGS_ALLOWLIST | YTDLP_SETTINGS_ONLY_FLAGS
@@ -196,7 +197,7 @@ SAFE_MPV_FLAGS_ALLOWLIST = {
     '--audio-channels', '--sub-visibility', '--sub-pos', '--sub-scale', '--sub-font',
     '--sub-font-size', '--no-audio', '--no-video', '--force-window', '--cursor-autohide',
     '--terminal', '--input-terminal', '--no-config', '--load-scripts', '--ytdl',
-    '--ytdl-format', '--ytdl-raw-options', '--user-agent', '--referrer', '--idle'
+    '--ytdl-format', '--user-agent', '--referrer', '--idle'
 }
 
 def is_safe_url(url, web_only=False):
@@ -230,7 +231,7 @@ def is_safe_url(url, web_only=False):
         if not hostname:
             if scheme == 'file':
                 return not web_only
-            return True
+            return False
 
         clean_host = hostname.strip("[]").lower()
         if "%" in clean_host:
@@ -447,8 +448,8 @@ def sanitize_ytdlp_options(options_str, allow_settings_flags=False):
     """
     Enforces an allowlist of yt-dlp flags.
     By default (allow_settings_flags=False), dangerous flags (proxy, ffmpeg-location,
-    js-runtimes, remote-components, alias, update, print, no-check-certificate)
-    are stripped from untrusted item payloads.
+    js-runtimes, remote-components, alias, update, print, no-check-certificate,
+    compat-options) are stripped from untrusted item payloads.
     """
     if not options_str or not isinstance(options_str, str):
         return ""
@@ -456,22 +457,54 @@ def sanitize_ytdlp_options(options_str, allow_settings_flags=False):
     allowed_set = YTDLP_ALL_ALLOWED_FLAGS if allow_settings_flags else YTDLP_SAFE_FLAGS_ALLOWLIST
     safe_options = []
     parts = re.split(r'(?<!\\),', options_str)
+    last_clean_key = None
     
     for part in parts:
         part = part.strip()
-        if not part or '=' not in part:
+        if not part:
+            continue
+        if '=' not in part:
+            if (
+                last_clean_key == 'extractor-args'
+                and safe_options
+                and part.lower().lstrip('-') not in YTDLP_ALL_ALLOWED_FLAGS
+            ):
+                clean_cont = (
+                    part.replace('"', '')
+                    .replace("'", "")
+                    .replace('&', '')
+                    .replace('|', '')
+                    .replace('`', '')
+                    .replace('\n', '')
+                    .replace('\r', '')
+                )
+                safe_options[-1] = f"{safe_options[-1]}\\,{clean_cont}"
+            else:
+                last_clean_key = None
             continue
         
         key, value = part.split('=', 1)
         clean_key = key.strip().lower().lstrip('-')
+        last_clean_key = clean_key
         
         if clean_key in allowed_set:
             # Sanitize value to prevent shell injection or option breaking
             # We strip characters that could be used to chain commands or break out of strings
-            clean_value = value.replace('"', '').replace("'", "").replace(';', '').replace('&', '').replace('|', '').replace('`', '').replace('\n', '').replace('\r', '')
+            clean_value = (
+                value.replace('"', '')
+                .replace("'", "")
+                .replace('&', '')
+                .replace('|', '')
+                .replace('`', '')
+                .replace('\n', '')
+                .replace('\r', '')
+            )
+            if clean_key != 'extractor-args':
+                clean_value = clean_value.replace(';', '')
             safe_options.append(f"{key.strip()}={clean_value}")
         else:
             logging.warning(f"Security: Removed unsafe or disallowed yt-dlp flag '{clean_key}'")
+            last_clean_key = None
         
     return ",".join(safe_options)
 
@@ -513,7 +546,7 @@ def validate_safe_path(path, data_dir, script_dir, temp_dir, allow_user_content=
         return None
 
 
-def validate_payload(data):
+def validate_payload(data, max_depth=32):
     """Validates the structure and size of incoming IPC messages."""
     if not isinstance(data, dict):
         return False, "Invalid payload type"
@@ -523,7 +556,9 @@ def validate_payload(data):
         return False, "Missing action"
 
     # Recursive size check
-    def check_size(obj):
+    def check_size(obj, depth=0, max_depth=max_depth):
+        if depth > max_depth:
+            return False
         if isinstance(obj, str):
             # Use MAX_STRING_LENGTH for general strings, but stay within total message limit
             if len(obj) > SECURITY_LIMITS['MAX_STRING_LENGTH']:
@@ -531,9 +566,9 @@ def validate_payload(data):
         if isinstance(obj, (list, dict)) and len(obj) > SECURITY_LIMITS['MAX_PLAYLIST_ITEMS']:
             return False
         if isinstance(obj, dict):
-            return all(check_size(k) and check_size(v) for k, v in obj.items())
+            return all(check_size(k, depth + 1, max_depth) and check_size(v, depth + 1, max_depth) for k, v in obj.items())
         if isinstance(obj, list):
-            return all(check_size(i) for i in obj)
+            return all(check_size(i, depth + 1, max_depth) for i in obj)
         return True
 
     if not check_size(data):
@@ -541,11 +576,19 @@ def validate_payload(data):
     
     return True, None
 
-def mask_path(text, data_dir, script_dir, home_dir=None):
+def mask_path(text, data_dir=None, script_dir=None, home_dir=None):
     """Masks system paths in logs/errors to prevent info leakage."""
     if not text or not isinstance(text, str):
         return text
-    
+
+    if data_dir is None or script_dir is None:
+        fio = sys.modules.get("file_io")
+        if fio is not None:
+            if data_dir is None:
+                data_dir = getattr(fio, "DATA_DIR", None)
+            if script_dir is None:
+                script_dir = getattr(fio, "SCRIPT_DIR", None)
+
     if home_dir is None:
         home_dir = os.path.expanduser("~")
     

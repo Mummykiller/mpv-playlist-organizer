@@ -454,7 +454,8 @@ export async function findM3u8InUrl(url, originalTab) {
 
 // Handler for the 'get_detected_url_for_tab' action, to be called from background.js
 
-export function handleGetDetectedUrlForTab(tabId) {
+export async function handleGetDetectedUrlForTab(tabId) {
+	await scannerInitPromise;
 	return _detectedUrlsState[tabId] || null;
 }
 

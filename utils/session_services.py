@@ -220,9 +220,9 @@ class LauncherService:
     def __init__(self, mpv_session):
         self.session = mpv_session
 
-    def start_restored_process_watcher(self, pid, ipc_path, folder_id):
+    def start_restored_process_watcher(self, pid, ipc_path, folder_id, session_generation=None):
         """Starts a background thread to poll for the exit of a restored (orphaned) process."""
-        waiter_gen = getattr(self.session, 'session_generation', 0)
+        waiter_gen = session_generation if session_generation is not None else getattr(self.session, 'session_generation', 0)
 
         def watcher():
             logging.info(f"Restored Process Watcher: Monitoring PID {pid} for folder '{folder_id}' (gen {waiter_gen}).")
@@ -233,7 +233,11 @@ class LauncherService:
                     
                     return_code = -1 
                     exit_reason = None
-                    is_manual = getattr(self.session, 'manual_quit', False) or getattr(self.session, 'is_closing', False)
+                    is_manual = (
+                        getattr(self.session, 'manual_quit', False)
+                        or getattr(self.session, 'is_closing', False)
+                        or waiter_gen != getattr(self.session, 'session_generation', 0)
+                    )
 
                     if not is_manual:
                         flag_file = os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{pid}.flag')
@@ -480,10 +484,15 @@ class LauncherService:
             pids = list(set(filter(None, [initial_pid, actual_pid])))
 
             if actual_pid and actual_pid != initial_pid and ipc_utils.is_pid_running(actual_pid):
-                self.start_restored_process_watcher(actual_pid, self.session.ipc_path, f_id)
+                if waiter_gen == getattr(self.session, 'session_generation', 0):
+                    self.start_restored_process_watcher(actual_pid, self.session.ipc_path, f_id, session_generation=waiter_gen)
                 return
 
-            is_manual = getattr(self.session, 'manual_quit', False) or getattr(self.session, 'is_closing', False)
+            is_manual = (
+                getattr(self.session, 'manual_quit', False)
+                or getattr(self.session, 'is_closing', False)
+                or waiter_gen != getattr(self.session, 'session_generation', 0)
+            )
             if not is_manual:
                 for p in pids:
                     flag_file = os.path.join(self.session.FLAG_DIR, f'mpv_natural_completion_{p}.flag')

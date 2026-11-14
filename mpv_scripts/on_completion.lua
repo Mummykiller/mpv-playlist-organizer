@@ -48,7 +48,15 @@ local function get_flag_dir()
         return opt_dir
     end
 
-    -- 2. Try script-opts passed from Python (legacy priority)
+    -- 2. Try user-data/flag-dir property or script-opts passed from Python
+    local prop_dir = mp.get_property("user-data/flag-dir")
+    if prop_dir and prop_dir ~= "" then
+        if not prop_dir:match("[/\\]$") then
+            prop_dir = prop_dir .. "/"
+        end
+        return prop_dir
+    end
+
     local script_name = mp.get_script_name()
     local opt_dir = mp.get_opt("flag_dir") or mp.get_opt(script_name .. "-flag_dir")
     
@@ -60,7 +68,7 @@ local function get_flag_dir()
         return opt_dir
     end
 
-    -- 2. Fallback to platform-specific guesses
+    -- 3. Fallback to platform-specific guesses
     local is_windows = package.config:sub(1,1) == "\\"
     if is_windows then
         local appdata = os.getenv('APPDATA')
@@ -80,7 +88,7 @@ local function get_flag_dir()
         end
     end
     
-    return "/tmp/mpv_playlist_organizer_flags/"
+    return nil
 end
 
 -- Read clear_on_item_finish preference
@@ -116,6 +124,10 @@ end
 
 local function write_completion_flag(reason)
     local flag_dir = get_flag_dir()
+    if not flag_dir or flag_dir == "" then
+        log("No flag_dir configured; skipping completion flag write.")
+        return false
+    end
     ensure_dir(flag_dir)
     
     local pid = utils.getpid()
@@ -131,15 +143,6 @@ local function write_completion_flag(reason)
         return true
     else
         log("Failed to write flag: " .. (err or "unknown error"))
-        -- Try a desperate fallback to /tmp if the main path failed
-        local fallback_path = "/tmp/mpv_natural_completion_" .. pid .. ".flag"
-        log("Trying fallback path: " .. fallback_path)
-        local f2, e2 = io.open(fallback_path, "w")
-        if f2 then
-            f2:write(reason or "completed_fallback")
-            f2:close()
-            return true
-        end
         return false
     end
 end

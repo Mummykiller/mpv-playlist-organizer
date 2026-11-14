@@ -60,9 +60,9 @@ Transitions between high-security video sources (e.g. YouTube and Animepahe) wit
 
 ### The Isolation Architecture
 
-1. **Hook Priority (`priority 10`):**
-   - Configured via `mp.add_hook("on_load", 10, ...)`.
-   - Runs before MPV's built-in `ytdl-hook` (`priority 15`), ensuring proper header assignment before stream extraction.
+1. **Hook Priority (`priority -100`):**
+   - Configured via `mp.add_hook("on_load", -100, ...)`.
+   - Runs well before MPV's built-in `ytdl-hook` (`priority 15`), ensuring proper header assignment before stream extraction.
 2. **State Reset (The Master Reset):**
    - On every file load, resets `user-agent` and `referrer` to default, clears `http-header-fields`, and resets `ytdl-raw-options`.
 3. **Dynamic Source Detection:**

@@ -126,6 +126,9 @@ local function apply_adaptive_settings()
                     if opts then
                         if opts.id then id_options[opts.id] = opts end
                         url_options[path] = opts
+                        if data.playlist_start_index ~= nil then
+                            indexed_options[tonumber(data.playlist_start_index)] = opts
+                        end
                         unmanaged_fallback_opts = opts -- Set global fallback
                         
                         -- NEW: Extract resume time from handshake to override MPV memory immediately
@@ -208,12 +211,11 @@ local function apply_adaptive_settings()
         set_property_if_diff("ytdl", initial_ytdl)
         set_property_if_diff("demuxer-lavf-o", initial_lavf_opts)
         
-        -- Reset metadata strictly (preserve session-level folder-id and is-unmanaged unless overridden in opts)
+        -- Reset metadata strictly (preserve session-level folder-id, project-root, and is-unmanaged unless overridden in opts)
         mp.set_property_native("user-data/original-url", nil)
         set_property_if_diff("user-data/is-youtube", "no")
         set_property_if_diff("user-data/marked-as-watched", "no")
         set_property_if_diff("user-data/cookies-browser", "")
-        set_property_if_diff("user-data/project-root", "")
         
         -- Reset Start Time to prevent leakage from previous file
         mp.set_property("start", "none")
@@ -238,11 +240,13 @@ local function apply_adaptive_settings()
     local item_id = mp.get_property("user-data/id")
     local stripped_path = path:gsub("[#&]mpv_organizer_id=[^#&]+", "")
     
-    -- Strictly use ID or URL. Fallback to unmanaged_fallback_opts ONLY for unmanaged instances.
+    -- Strictly use ID, URL, or playlist index. Fallback to unmanaged_fallback_opts ONLY for unmanaged instances.
     local is_unmanaged_session = (mp.get_property("user-data/is-unmanaged") == "yes")
+    local playlist_pos = current_index or mp.get_property_number("playlist-pos")
     local opts = (item_id and id_options[item_id]) or 
                  url_options[stripped_path] or 
                  url_options[path] or 
+                 (playlist_pos and indexed_options[playlist_pos]) or
                  (is_unmanaged_session and unmanaged_fallback_opts or nil)
 
     if not opts then
@@ -421,7 +425,7 @@ local function apply_adaptive_settings()
     end
 
     -- 9. Misc context
-    if opts.project_root then set_property_if_diff("user-data/project-root", opts.project_root) end
+    if opts.project_root and opts.project_root ~= "" then set_property_if_diff("user-data/project-root", opts.project_root) end
     if opts.folder_id then set_property_if_diff("user-data/folder-id", opts.folder_id) end
     if opts.is_unmanaged ~= nil then set_property_if_diff("user-data/is-unmanaged", opts.is_unmanaged and "yes" or "no") end
     if opts.cookies_browser then set_property_if_diff("user-data/cookies-browser", opts.cookies_browser) end

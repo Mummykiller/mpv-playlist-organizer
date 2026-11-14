@@ -62,15 +62,14 @@ To prevent performance degradation with large playlists, data is split into isol
 
 ### Cross-Process Concurrency with `FileLock`
 
-`file_io.py:FileLock` provides atomic, cross-process and thread-safe locking:
-1. **Thread Synchronization:** Acquires a per-normalized-path `threading.RLock()` to prevent thread contention within the same Python process.
-2. **File Lock:** Creates `<filepath>.lock` containing `PID,timestamp`.
-3. **Stale Lock Detection:**
-   - If the lock file exists, reads PID.
-   - On Windows: Uses `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` and checks if `GetExitCodeProcess` is `STILL_ACTIVE (259)`.
-   - On Linux/macOS: Uses `os.kill(pid, 0)`.
-   - If PID is dead, stale lock is safely removed.
-4. **Retry Loop:** Retries up to `timeout` seconds with 100ms intervals to overcome temporary file handles held by anti-virus scanners.
+`utils/file_lock.py:FileLock` (re-exported by `file_io.py`) provides atomic, cross-process and thread-safe locking:
+1. **Thread Synchronization & Re-Entrancy:** Acquires a per-normalized-path `threading.RLock()` and tracks thread-local recursion counts (`_held_locks.counters`) to prevent thread contention and allow re-entrant acquisition within the same Python thread.
+2. **OS-Level Advisory File Lock:** Opens `<filepath>.lock` (`0o600`) and acquires a kernel-managed advisory lock:
+   - **POSIX (Linux / macOS):** Uses `fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)` and verifies inode identity (`os.fstat(fd)` vs `os.stat(self.lockfile)`) to guard against concurrent unlinks.
+   - **Windows:** Uses `msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)`.
+   - Because OS-level locks are automatically released by the kernel if a holding process crashes or exits, stale locks are cleared without fragile PID-timestamp breaking races (the current holder's PID is written to the lockfile for diagnostic logging only).
+3. **Read-Only / Permission Fallback:** If the lock directory or filesystem is read-only (`EROFS` / `EACCES`), `FileLock` logs a warning and degrades gracefully to the in-process thread `RLock`.
+4. **Retry Loop:** Polls at `delay` (50ms) intervals up to `timeout` (5.0s default) before raising a `RuntimeError` reporting the holder PID.
 
 ### Atomic Write Pattern
 

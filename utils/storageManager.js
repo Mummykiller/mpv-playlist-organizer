@@ -1,5 +1,11 @@
 import { normalizeKeys } from "./commUtils.module.js";
 
+function generateUuid() {
+	return typeof crypto !== "undefined" && crypto.randomUUID
+		? crypto.randomUUID()
+		: Math.random().toString(36).slice(2);
+}
+
 /**
  * Manages all data persistence and migration logic for the extension.
  * Uses a granular 'Bucket' system to improve performance and memory usage.
@@ -160,9 +166,6 @@ export class StorageManager {
 	}
 
 	async set(data, folderId = null) {
-		// Update cache immediately
-		this._cache = data;
-
 		this.writeQueue = this.writeQueue.then(async () => {
 			try {
 				// 0. Change-Aware Optimization: Get existing data to compare
@@ -177,7 +180,10 @@ export class StorageManager {
 					const folderChanged = JSON.stringify(data.folders[folderId]) !== JSON.stringify(existing[folderKey]);
 					const settingsChanged = JSON.stringify(data.settings) !== JSON.stringify(existing.mpv_settings);
 
-					if (!folderChanged && !settingsChanged) return;
+					if (!folderChanged && !settingsChanged) {
+						this._cache = data;
+						return;
+					}
 
 					const update = {};
 					if (folderChanged) update[folderKey] = data.folders[folderId];
@@ -191,6 +197,7 @@ export class StorageManager {
 					}
 
 					await chrome.storage.local.set(update);
+					this._cache = data;
 				} else {
 					// Full validation and save
 					this._validateData(data);
@@ -204,6 +211,7 @@ export class StorageManager {
 						update[`mpv_folder_data_${fid}`] = fData;
 					}
 					await chrome.storage.local.set(update);
+					this._cache = data;
 
 					const orphanedKeys = prevIndex
 						.filter((fid) => !Object.prototype.hasOwnProperty.call(data.folders, fid))
@@ -235,11 +243,7 @@ export class StorageManager {
 			const item = folder.playlist[i];
 			if (!item.url)
 				throw new Error(`Item at index ${i} in '${id}' missing URL`);
-			if (!item.id)
-				item.id =
-					typeof crypto !== "undefined" && crypto.randomUUID
-						? crypto.randomUUID()
-						: Math.random().toString(36).slice(2);
+			if (!item.id) item.id = generateUuid();
 		}
 	}
 
@@ -422,7 +426,7 @@ export class StorageManager {
 			folder.playlist.forEach((item, index) => {
 				if (!item.url)
 					throw new Error(`Item at index ${index} in '${id}' missing URL`);
-				if (!item.id) item.id = crypto.randomUUID(); // Auto-fix missing IDs
+				if (!item.id) item.id = generateUuid(); // Auto-fix missing IDs
 			});
 		}
 	}

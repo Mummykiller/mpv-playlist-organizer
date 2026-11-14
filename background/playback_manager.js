@@ -211,6 +211,9 @@ export class PlaybackManager {
 					if (!session.isPlaying && saved.isPlaying) {
 						session.isPlaying = true;
 					}
+					if (session.queue.length > 0 && !session.isProcessingQueue) {
+						session.processQueue();
+					}
 				}
 			}
 

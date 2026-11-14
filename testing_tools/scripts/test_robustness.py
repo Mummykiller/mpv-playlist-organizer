@@ -1,5 +1,6 @@
 import os
 import sys
+import platform
 import unittest
 import json
 import time
@@ -584,7 +585,11 @@ class TestRobustness(BaseTestCase):
             self.assertEqual(holder, str(os.getpid()))
 
         # Lock should be released upon context exit
-        self.assertFalse(os.path.exists(lock_file))
+        self.assertFalse(lock.is_file_locked)
+        if platform.system() == "Windows":
+            self.assertFalse(os.path.exists(lock_file))
+        else:
+            self.assertTrue(os.path.exists(lock_file))
 
     def test_native_connection_backoff_and_reconnect(self):
         """Verifies reconnection logic, exponential backoff progression, and status transitions."""

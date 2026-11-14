@@ -390,9 +390,12 @@ export class OptionsManager {
 	updateAllPreferencesUI(prefs) {
 		const isCustom = prefs.launchGeometry === "custom";
 		const isUltra = prefs.performanceProfile === "ultra";
-		document.getElementById("ultra-options-container").style.display = isUltra
-			? "block"
-			: "none";
+		const ultraOptionsContainer = document.getElementById(
+			"ultra-options-container",
+		);
+		if (ultraOptionsContainer) {
+			ultraOptionsContainer.style.display = isUltra ? "block" : "none";
+		}
 
 		const videoSyncCheckbox = document.getElementById(
 			"enable-display-sync-checkbox",
@@ -416,13 +419,27 @@ export class OptionsManager {
 			}
 		});
 
-		document.getElementById("custom-geometry-container").style.display =
-			isCustom ? "flex" : "none";
+		const customGeometryContainer = document.getElementById(
+			"custom-geometry-container",
+		);
+		if (customGeometryContainer) {
+			customGeometryContainer.style.display = isCustom ? "flex" : "none";
+		}
 		const enableAnilist = prefs.enableAnilistIntegration ?? true;
-		document.getElementById("anilist-options-container").style.display =
-			enableAnilist ? "block" : "none";
-		document.getElementById("shared-anilist-section").style.display =
-			enableAnilist ? "block" : "none";
+		const anilistOptionsContainer = document.getElementById(
+			"anilist-options-container",
+		);
+		if (anilistOptionsContainer) {
+			anilistOptionsContainer.style.display = enableAnilist
+				? "block"
+				: "none";
+		}
+		const sharedAnilistSection = document.getElementById(
+			"shared-anilist-section",
+		);
+		if (sharedAnilistSection) {
+			sharedAnilistSection.style.display = enableAnilist ? "block" : "none";
+		}
 
 		const networkMasterToggle = document.getElementById(
 			"disable-network-overrides-checkbox",
@@ -571,6 +588,8 @@ export class OptionsManager {
 					};
 				},
 			);
+		} else {
+			preferences.automaticMpvFlags = [];
 		}
 
 		preferences.streamScannerTimeout =
@@ -601,8 +620,10 @@ export class OptionsManager {
 			"--anilist-image-height",
 			`${effectiveHeight}px`,
 		);
-		document.getElementById("anilist-image-size-current").textContent =
-			`${effectiveHeight}px`;
+		const anilistSizeEl = document.getElementById("anilist-image-size-current");
+		if (anilistSizeEl) {
+			anilistSizeEl.textContent = `${effectiveHeight}px`;
+		}
 	}
 
 	_updatePopupWidth(width) {
@@ -736,16 +757,26 @@ export class OptionsManager {
 		);
 		if (performanceProfileSelect) {
 			performanceProfileSelect.addEventListener("change", () => {
-				document.getElementById("ultra-options-container").style.display =
-					performanceProfileSelect.value === "ultra" ? "block" : "none";
+				const ultraContainer = document.getElementById(
+					"ultra-options-container",
+				);
+				if (ultraContainer) {
+					ultraContainer.style.display =
+						performanceProfileSelect.value === "ultra" ? "block" : "none";
+				}
 			});
 		}
 
 		const geometrySelect = document.getElementById("geometry-select");
 		if (geometrySelect) {
 			geometrySelect.addEventListener("change", () => {
-				document.getElementById("custom-geometry-container").style.display =
-					geometrySelect.value === "custom" ? "flex" : "none";
+				const customGeoContainer = document.getElementById(
+					"custom-geometry-container",
+				);
+				if (customGeoContainer) {
+					customGeoContainer.style.display =
+						geometrySelect.value === "custom" ? "flex" : "none";
+				}
 				this.debouncedSaveAllPreferences();
 			});
 		}
@@ -790,14 +821,19 @@ export class OptionsManager {
 		if (anilistEnableCheck) {
 			anilistEnableCheck.addEventListener("change", () => {
 				const isEnabled = anilistEnableCheck.checked;
-				document.getElementById("anilist-options-container").style.display =
-					isEnabled ? "block" : "none";
-				document.getElementById("shared-anilist-section").style.display =
-					isEnabled ? "block" : "none";
-				if (
-					isEnabled &&
-					document.getElementById("shared-anilist-section").open
-				) {
+				const anilistOptionsContainer = document.getElementById(
+					"anilist-options-container",
+				);
+				if (anilistOptionsContainer) {
+					anilistOptionsContainer.style.display = isEnabled ? "block" : "none";
+				}
+				const sharedAnilistSection = document.getElementById(
+					"shared-anilist-section",
+				);
+				if (sharedAnilistSection) {
+					sharedAnilistSection.style.display = isEnabled ? "block" : "none";
+				}
+				if (isEnabled && sharedAnilistSection?.open) {
 					this.fetchAniListReleases(true);
 				}
 			});
@@ -808,7 +844,7 @@ export class OptionsManager {
 		);
 		if (anilistCacheCheck) {
 			anilistCacheCheck.addEventListener("change", () => {
-				if (document.getElementById("shared-anilist-section").open) {
+				if (document.getElementById("shared-anilist-section")?.open) {
 					this.fetchAniListReleases(true);
 				}
 			});

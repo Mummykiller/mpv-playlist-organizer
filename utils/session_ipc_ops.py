@@ -190,10 +190,11 @@ def append_batch_internal(session, items, mode="append", folder_id=None, quiet=F
     session._remote_log(f"Session: Appending {len(items_to_add)} items to live playlist.")
 
     settings = file_io.get_settings()
-    for idx, item in enumerate(items_to_add):
-        target_idx = current_mpv_count + idx
-        lua_options, item_url = services.construct_lua_options(item, settings, session.SCRIPT_DIR, index=target_idx)
-        session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(target_idx)]}, expect_response=False)
+    if mode != "prepend":
+        for idx, item in enumerate(items_to_add):
+            target_idx = current_mpv_count + idx
+            lua_options, item_url = services.construct_lua_options(item, settings, session.SCRIPT_DIR, index=target_idx)
+            session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(target_idx)]}, expect_response=False)
 
     temp_path = os.path.join(session.TEMP_PLAYLISTS_DIR, f"batch_{uuid.uuid4().hex[:8]}.m3u")
     try:

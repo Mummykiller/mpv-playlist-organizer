@@ -119,7 +119,7 @@ class SystemLogger {
 		}
 
 		// 3. Persistence (Remote Logging)
-		if (meta.persist || level >= LogLevel.ERROR) {
+		if (meta.persist !== false && (meta.persist || level >= LogLevel.ERROR)) {
 			const stack = meta.stack || meta.data?.stack || (message instanceof Error ? message.stack : "") || "";
 			this._persist(levelName, formattedMsg, contextId, stack);
 		}
