@@ -64,10 +64,13 @@ def _get_emergency_log_path():
     path = os.path.join(base, app_name)
     try:
         os.makedirs(path, exist_ok=True)
+        if not os.access(path, os.W_OK):
+            raise OSError("Directory not writable")
         return os.path.join(path, "native_host_crash.log")
     except OSError as e:
         sys.stderr.write(f"Could not create emergency log directory {path}: {e}\n")
-        return "native_host_crash.log" # Current directory fallback
+        import tempfile
+        return os.path.join(tempfile.gettempdir(), "native_host_crash.log")
 
 # --- Failsafe Crash Handler ---
 FAILSAFE_LOG_PATH = _get_emergency_log_path()
@@ -98,14 +101,7 @@ try:
 
     def _configure_environment_paths():
         """Ensures standard OS and configured tool paths are present in PATH."""
-        current_path_list = os.environ.get("PATH", "").split(os.pathsep)
-
-        if SCRIPT_DIR not in current_path_list:
-            current_path_list.insert(0, SCRIPT_DIR)
-
-        py_dir = os.path.dirname(sys.executable)
-        if py_dir not in current_path_list:
-            current_path_list.insert(0, py_dir)
+        current_path_list = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
 
         if platform.system() == "Linux":
             extra_paths = [
@@ -117,6 +113,13 @@ try:
                 if p not in current_path_list:
                     current_path_list.insert(0, p)
 
+        if SCRIPT_DIR not in current_path_list:
+            current_path_list.append(SCRIPT_DIR)
+
+        py_dir = os.path.dirname(sys.executable)
+        if py_dir not in current_path_list:
+            current_path_list.append(py_dir)
+
         os.environ["PATH"] = os.pathsep.join(current_path_list)
 
         config = file_io.get_settings()
@@ -124,8 +127,8 @@ try:
             val = config.get(key)
             if val and os.path.exists(val):
                 dir_path = os.path.dirname(val)
-                if dir_path not in current_path_list:
-                    current_path_list.insert(0, dir_path)
+                if dir_path and dir_path not in current_path_list:
+                    current_path_list.append(dir_path)
 
         os.environ["PATH"] = os.pathsep.join(current_path_list)
 
@@ -169,6 +172,9 @@ try:
         raw_length = sys.stdin.buffer.read(4)
         if len(raw_length) == 0:
             logging.info("[PY][MAIN] Stdin closed (EOF). Exiting native host.")
+            sys.exit(0)
+        if len(raw_length) < 4:
+            logging.info(f"[PY][MAIN] Stdin truncated header ({len(raw_length)} bytes). Exiting native host.")
             sys.exit(0)
             
         message_length = struct.unpack('@I', raw_length)[0]
@@ -384,11 +390,17 @@ try:
 
     def initialize_runtime():
         """Initializes logging, PATH, janitor, session manager, handlers, and exit hooks."""
-        global metadata_cache, task_manager, mpv_session, handler_manager, _runtime_initialized
+        global metadata_cache, task_manager, mpv_session, handler_manager, _runtime_initialized, DATA_DIR, LOG_FILE, SESSION_FILE, ANILIST_CACHE_FILE, TEMP_PLAYLISTS_DIR
         with _runtime_lock:
             if _runtime_initialized:
                 return
-            logger.initialize(DATA_DIR, SCRIPT_DIR)
+            resolved_dir = logger.initialize(DATA_DIR, SCRIPT_DIR)
+            if resolved_dir:
+                DATA_DIR = resolved_dir
+                LOG_FILE = os.path.join(DATA_DIR, "native_host.log")
+                SESSION_FILE = os.path.join(DATA_DIR, "session.json")
+                ANILIST_CACHE_FILE = os.path.join(DATA_DIR, "anilist_cache.json")
+                TEMP_PLAYLISTS_DIR = os.path.join(DATA_DIR, "temp_playlists")
             logging.info(f"[PY][MAIN] Native host starting. Version: {HOST_VERSION}. Data Dir: {DATA_DIR}")
             _configure_environment_paths()
 
@@ -466,88 +478,94 @@ try:
         control_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="NHControl")
         worker_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="NHWorker")
 
-        if sys.stdin is None or sys.stdout is None:
-            logging.error("[PY][MAIN] Standard input/output is missing.")
-            sys.exit(1)
+        try:
+            if sys.stdin is None or sys.stdout is None:
+                logging.error("[PY][MAIN] Standard input/output is missing.")
+                sys.exit(1)
 
-        restore_lock = threading.Lock()
-        _restore_state = {"done_by_handler": False, "stale_result": None}
-        build_handler_registry(
-            mpv_session_inst=mpv_session,
-            handler_manager_inst=handler_manager,
-            restore_lock=restore_lock,
-            restore_state=_restore_state
-        )
+            restore_lock = threading.Lock()
+            _restore_state = {"done_by_handler": False, "stale_result": None}
+            build_handler_registry(
+                mpv_session_inst=mpv_session,
+                handler_manager_inst=handler_manager,
+                restore_lock=restore_lock,
+                restore_state=_restore_state
+            )
 
-        @logger.catch(ui_alert=True)
-        def task_wrapper(message):
-            req_id = message.get('request_id') if isinstance(message, dict) else None
-            token = logger.request_id_var.set(req_id)
+            @logger.catch(ui_alert=True)
+            def task_wrapper(message):
+                req_id = message.get('request_id') if isinstance(message, dict) else None
+                token = logger.request_id_var.set(req_id)
 
-            try:
-                is_valid, err_msg = security.validate_payload(message)
-                if not is_valid:
-                    logging.warning(f"[PY][SECURITY] Blocked malicious payload: {err_msg}")
-                    diagnostic_collector.add_error("SECURITY", err_msg)
-                    error_resp = native_link.failure(f"Security block: {err_msg}")
-                    if req_id is not None:
-                        error_resp['request_id'] = req_id
-                    send_message(error_resp)
-                    return
-
-                request = native_link.translate(message)
-                command_name = request.action
-                handler = HandlerRegistry.get_handler(command_name)
-
-                if handler:
-                    response = handler(request)
-                    if isinstance(response, dict) and response.get("success") is False and response.get("error"):
-                        diagnostic_collector.add_error(command_name, response.get("error"))
-                else:
-                    diagnostic_collector.add_error("DISPATCH", f"Unknown command: {command_name}")
-                    response = native_link.failure(f"Unknown command: {command_name}")
-
-                if response:
-                    if req_id is not None:
-                        response['request_id'] = req_id
-                    send_message(response)
-            except Exception as e:
-                diagnostic_collector.add_error(message.get("action", "TASK") if isinstance(message, dict) else "TASK", e)
-                if req_id is not None:
-                    send_message(native_link.failure(str(e), request_id=req_id))
-                raise
-            finally:
-                logger.request_id_var.reset(token)
-
-        def async_restore():
-            try:
-                with restore_lock:
-                    if _restore_state["done_by_handler"]:
+                try:
+                    is_valid, err_msg = security.validate_payload(message)
+                    if not is_valid:
+                        logging.warning(f"[PY][SECURITY] Blocked malicious payload: {err_msg}")
+                        diagnostic_collector.add_error("SECURITY", err_msg)
+                        error_resp = native_link.failure(f"Security block: {err_msg}")
+                        if req_id is not None:
+                            error_resp['request_id'] = req_id
+                        send_message(error_resp)
                         return
-                    restore_data = mpv_session.restore()
-                    if restore_data and restore_data.get("was_stale"):
-                        _restore_state["stale_result"] = restore_data
-                if restore_data:
-                    logging.info(f"[PY][MAIN] Automatic restoration successful for folder '{mpv_session.owner_folder_id}'.")
-                    time.sleep(0.5)
-                    current_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
-                    send_message(native_link.success(restore_data, action="session_restored", log_level=current_level))
-            except Exception as e:
-                logging.error(f"[PY][MAIN] Error during automatic session restoration: {e}")
-        
-        threading.Thread(target=async_restore, daemon=True).start()
 
-        while True:
-            try:
-                message = get_message()
-                action = message.get('action') if isinstance(message, dict) else None
-                logging.info(f"[PY][RECV] (ID: {message.get('request_id')}): {action}")
-                target_executor = select_executor(action, control_executor, worker_executor)
-                target_executor.submit(task_wrapper, message)
-            except Exception as e:
-                logging.error(f"[PY][MAIN] Error in main loop: {e}", exc_info=True)
-                if not sys.stdin or sys.stdin.closed:
-                    break
+                    request = native_link.translate(message)
+                    command_name = request.action
+                    handler = HandlerRegistry.get_handler(command_name)
+
+                    if handler:
+                        response = handler(request)
+                        if isinstance(response, dict) and response.get("success") is False and response.get("error"):
+                            diagnostic_collector.add_error(command_name, response.get("error"))
+                    else:
+                        diagnostic_collector.add_error("DISPATCH", f"Unknown command: {command_name}")
+                        response = native_link.failure(f"Unknown command: {command_name}")
+
+                    if response:
+                        if req_id is not None:
+                            response['request_id'] = req_id
+                        send_message(response)
+                except Exception as e:
+                    action_ctx = message.get("action", "TASK") if isinstance(message, dict) else "TASK"
+                    diagnostic_collector.add_error(action_ctx, e)
+                    masked_err = security.mask_path(str(e), DATA_DIR, SCRIPT_DIR, HOME_DIR)
+                    logging.error(f"[PY][TASK] Unhandled error in '{action_ctx}': {masked_err}", exc_info=True)
+                    if req_id is not None:
+                        send_message(native_link.failure(masked_err, request_id=req_id))
+                finally:
+                    logger.request_id_var.reset(token)
+
+            def async_restore():
+                try:
+                    with restore_lock:
+                        if _restore_state["done_by_handler"]:
+                            return
+                        restore_data = mpv_session.restore()
+                        if restore_data and restore_data.get("was_stale"):
+                            _restore_state["stale_result"] = restore_data
+                    if restore_data:
+                        logging.info(f"[PY][MAIN] Automatic restoration successful for folder '{mpv_session.owner_folder_id}'.")
+                        time.sleep(0.5)
+                        current_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
+                        send_message(native_link.success(restore_data, action="session_restored", log_level=current_level))
+                except Exception as e:
+                    logging.error(f"[PY][MAIN] Error during automatic session restoration: {e}")
+            
+            threading.Thread(target=async_restore, daemon=True).start()
+
+            while True:
+                try:
+                    message = get_message()
+                    action = message.get('action') if isinstance(message, dict) else None
+                    logging.info(f"[PY][RECV] (ID: {message.get('request_id')}): {action}")
+                    target_executor = select_executor(action, control_executor, worker_executor)
+                    target_executor.submit(task_wrapper, message)
+                except Exception as e:
+                    logging.error(f"[PY][MAIN] Error in main loop: {e}", exc_info=True)
+                    if not sys.stdin or sys.stdin.closed:
+                        break
+        finally:
+            control_executor.shutdown(wait=False, cancel_futures=True)
+            worker_executor.shutdown(wait=False, cancel_futures=True)
 
     if __name__ == '__main__':
         initialize_runtime()
@@ -603,13 +621,20 @@ try:
 
 except Exception as e:
     log_path_to_use = locals().get('LOG_FILE', FAILSAFE_LOG_PATH)
+    crash_entry = (
+        "---\n--- Native Host Crashed ---\n"
+        f"Timestamp: {datetime.now().isoformat()}\n"
+        f"Error: {str(e)}\n\n"
+        f"{traceback.format_exc()}"
+        "\n---------------------------\n\n"
+    )
     try:
-        with open(log_path_to_use, "a", encoding="utf-8") as f:
-            f.write("---\n--- Native Host Crashed ---\n")
-            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            f.write(f"Error: {str(e)}\n\n")
-            f.write(traceback.format_exc())
-            f.write("\n---------------------------\n\n")
+        try:
+            with open(log_path_to_use, "a", encoding="utf-8") as f:
+                f.write(crash_entry)
+        except OSError:
+            with open(FAILSAFE_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(crash_entry)
     except Exception as log_err:
         sys.stderr.write(f"Failed to write to crash log ({log_path_to_use}): {log_err}\n")
         sys.stderr.flush()

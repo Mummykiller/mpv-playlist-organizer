@@ -302,7 +302,7 @@ class MpvCommandBuilder:
         
         if "js-runtimes" not in existing_raw:
             node_path = self.settings.get("node_path")
-            if node_path and os.path.exists(node_path):
+            if node_path and os.path.exists(node_path) and security.is_safe_executable_path(node_path, "node_path"):
                 ytdl_opts_list.append(f"js-runtimes=node:{node_path}")
             else:
                 ytdl_opts_list.append("js-runtimes=node")
@@ -434,11 +434,12 @@ class MpvCommandBuilder:
             logging.error(f"CRITICAL: Command line length ({len(cmd_str)}) exceeds limit.")
             raise RuntimeError(f"Command too long for Windows.")
 
-        logging.info(f"Constructed MPV command: {cmd_str}")
+        redacted_cmd_str = re.sub(r'([?&]token=)[^&\s\'"]+', r'\1[REDACTED]', cmd_str)
+        logging.info(f"Constructed MPV command: {redacted_cmd_str}")
         try:
             p = os.path.join(file_io.DATA_DIR, "last_mpv_command.txt")
             with open(p, 'w', encoding='utf-8') as f:
-                f.write(f"Launch Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" + "="*60 + "\nQUOTED COMMAND:\n" + " ".join(_smart_quote(a) for a in full_command))
+                f.write(f"Launch Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" + "="*60 + "\nQUOTED COMMAND:\n" + redacted_cmd_str)
         except OSError as e:
             logging.debug(f"[MPV_CMD] Could not save last MPV command to file: {e}")
         return full_command, self.has_terminal_flag

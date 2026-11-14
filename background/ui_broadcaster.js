@@ -118,7 +118,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 		isIdle: !!mpv_playback_cache?.isIdle,
 		needsAppend: needsAppend,
 		health: mpv_playback_cache?.health || "ok",
-		lastPlayedId: lastPlayedId || mpv_playback_cache?.last_played_id || data.folders?.[actualFolderId]?.lastPlayedId,
+		lastPlayedId: lastPlayedId || mpv_playback_cache?.last_played_id || mpv_playback_cache?.lastPlayedId || data.folders?.[actualFolderId]?.lastPlayedId,
 		sessionIds: isActive ? (sessionIds?.length ? sessionIds : mpv_playback_cache?.sessionIds || []) : [],
 		completedIds: completedIds
 	};
@@ -138,9 +138,6 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 		sessionIds: pbState.sessionIds,
 		completedIds: completedIds,
 	});
-
-	// broadcastPlaybackState will further sync the state and notify tabs
-	await broadcastPlaybackState(actualFolderId, { needsAppend });
 }
 
 /**

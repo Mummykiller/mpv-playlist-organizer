@@ -176,10 +176,6 @@ class FileLock:
                         self._remove_lock_file()
                     else:
                         try:
-                            os.unlink(self.lockfile)
-                        except OSError as e:
-                            logging.debug(f"[PY][IO] Could not unlink lockfile {self.lockfile}: {e}")
-                        try:
                             fcntl.flock(fd, fcntl.LOCK_UN)
                         except OSError as e:
                             logging.debug(f"[PY][IO] Error unlocking {self.lockfile}: {e}")

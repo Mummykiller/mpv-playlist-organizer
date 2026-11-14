@@ -272,13 +272,17 @@ class PlaybackHandler(BaseHandler):
 
         # Update the local shard so that tracker and UI refreshes see the new data.
         # Use a Set to prevent duplicates if the shard already has these IDs.
-        playlist = self.file_io.get_playlist_shard(canonical_id)
-        existing_ids = {itm.get('id') for itm in playlist if itm.get('id')}
-        unique_new_items = [itm for itm in final_processed_items if itm.get('id') not in existing_ids]
-        
-        if unique_new_items:
+        unique_new_items = []
+        def _append_to_shard(playlist, _index_entry):
+            nonlocal unique_new_items
+            existing_ids = {itm.get('id') for itm in playlist if itm.get('id')}
+            unique_new_items = [itm for itm in final_processed_items if itm.get('id') not in existing_ids]
+            if not unique_new_items:
+                return None
             playlist.extend(unique_new_items)
-            self.file_io.save_playlist_shard(canonical_id, playlist)
+            return True
+
+        self.file_io.update_shard(canonical_id, _append_to_shard, update_index=True)
 
         # Pass to session manager which handles internal list synchronization
         res = self.mpv_session.append_batch(final_processed_items, folder_id=canonical_id)
@@ -376,66 +380,87 @@ class PlaybackHandler(BaseHandler):
 
     @command('is_mpv_running')
     def handle_is_mpv_running(self, request: native_link.LiveUpdateRequest):
-        is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
+        with self.mpv_session.sync_lock:
+            is_alive = self.mpv_session.is_alive
+            pid = self.mpv_session.pid
+            ipc_manager = self.mpv_session.ipc_manager
+            ipc_path = self.mpv_session.ipc_path
+            owner_folder_id = self.mpv_session.owner_folder_id
+
+        is_running = is_alive and pid is not None
         
         # 1. Fast PID check first
-        if is_running and not self.ipc_utils.is_pid_running(self.mpv_session.pid):
+        if is_running and not self.ipc_utils.is_pid_running(pid):
             is_running = False
 
         # 2. Socket check if PID seems alive
         if is_running:
-            if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
-                if self.mpv_session.ipc_manager.get_property("pid", timeout=0.3) is None:
+            if ipc_manager and ipc_manager.is_connected():
+                if ipc_manager.get_property("pid", timeout=0.3) is None:
                     is_running = False
             else:
-                is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
+                is_running = self.ipc_utils.is_process_alive(pid, ipc_path)
 
         if not is_running:
-            if self.mpv_session.pid or self.mpv_session.is_alive:
+            with self.mpv_session.sync_lock:
+                should_clear = bool(self.mpv_session.pid or self.mpv_session.is_alive)
+            if should_clear:
                 self.mpv_session.clear()
 
         return native_link.success({
             "is_running": is_running,
-            "folder_id": self.file_io._get_canonical_folder_id(self.mpv_session.owner_folder_id) if is_running else None
+            "folder_id": self.file_io._get_canonical_folder_id(owner_folder_id) if is_running else None
         })
 
     @command('get_playback_status')
     def handle_get_playback_status(self, request: native_link.LiveUpdateRequest):
-        is_running = self.mpv_session.is_alive and self.mpv_session.pid is not None
+        with self.mpv_session.sync_lock:
+            is_alive = self.mpv_session.is_alive
+            pid = self.mpv_session.pid
+            ipc_manager = self.mpv_session.ipc_manager
+            ipc_path = self.mpv_session.ipc_path
+            owner_folder_id = self.mpv_session.owner_folder_id
+            playlist_snapshot = list(self.mpv_session.playlist or [])
+            playlist_tracker = self.mpv_session.playlist_tracker
+            last_played_id_cache = getattr(self.mpv_session, 'last_played_id_cache', None)
+
+        is_running = is_alive and pid is not None
         
         # 1. Fast PID check
-        if is_running and not self.ipc_utils.is_pid_running(self.mpv_session.pid):
+        if is_running and not self.ipc_utils.is_pid_running(pid):
             is_running = False
 
         if is_running:
             # 2. Check responsiveness if needed
-            if not (self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected()):
-                is_running = self.ipc_utils.is_process_alive(self.mpv_session.pid, self.mpv_session.ipc_path)
+            if not (ipc_manager and ipc_manager.is_connected()):
+                is_running = self.ipc_utils.is_process_alive(pid, ipc_path)
 
         if not is_running:
-            if self.mpv_session.pid or self.mpv_session.is_alive:
+            with self.mpv_session.sync_lock:
+                should_clear = bool(self.mpv_session.pid or self.mpv_session.is_alive)
+            if should_clear:
                 self.mpv_session.clear()
             return native_link.success({"is_running": False, "is_paused": False})
         
         is_paused = self.mpv_session.get_pause_state()
         is_idle = self.mpv_session.get_idle_state()
-        session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
+        session_ids = [item.get('id') for item in playlist_snapshot if item.get('id')]
         
         if is_paused is None: is_paused = False
         if is_idle is None: is_idle = False
         
         last_played_id = None
-        if self.mpv_session.playlist_tracker:
-            last_played_id = getattr(self.mpv_session.playlist_tracker, 'last_played_id', None)
+        if playlist_tracker:
+            last_played_id = getattr(playlist_tracker, 'last_played_id', None)
         
         if not last_played_id:
-            last_played_id = getattr(self.mpv_session, 'last_played_id_cache', None)
+            last_played_id = last_played_id_cache
 
         return native_link.success({
             "is_running": True,
             "is_paused": is_paused,
             "is_idle": is_idle,
-            "folder_id": self.mpv_session.owner_folder_id,
+            "folder_id": owner_folder_id,
             "last_played_id": last_played_id,
             "session_ids": session_ids
         })

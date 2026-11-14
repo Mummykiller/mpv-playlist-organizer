@@ -39,37 +39,39 @@ flowchart TD
 
 ---
 
-## 2. In-Page Injection Pipeline (`background.js:injectIntoTab`)
+## 2. Ping-First Recovery Injection Pipeline (`background.js:injectIntoTab`)
 
-Dynamic injection into existing tabs during extension startup, reload, or tab switching follows a strict 4-stage guarded lifecycle:
+Declarative `content_scripts` in `manifest.json` serve as the primary injection mechanism for normal page navigations. Dynamic recovery injection via `injectIntoTab` (used on extension startup, reload, or tab activation) follows a strict 4-stage ping-first guarded lifecycle:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ 1. URL & Domain Validation                                              │
-│ • Skip restricted schemes: chrome://, about:, chrome.google.com/webstore│
+│ 1. Tab Readiness, URL & Domain Validation                               │
+│ • Require tab.status === "complete" (never tear down loading tabs)      │
+│ • Skip restricted schemes: chrome://, about:, Chrome Web Store          │
 │ • Skip domains configured in settings.uiPreferences.global.restrictedDom│
 ├─────────────────────────────────────────────────────────────────────────┤
-│ 2. Early Alive Check (Attempt 1 Only)                                   │
+│ 2. Early Alive Check (Attempt 1 Only — Ping-First Recovery)             │
 │ • Send ping: chrome.tabs.sendMessage(tab.id, { action: "ping" })        │
 │ • If responsive: Sync UI state via handleContentScriptInit and RETURN.  │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ 3. Pre-Injection DOM Sweep                                              │
-│ • executeScript purges lingering hosts from previous injections:        │
+│ 3. Pre-Injection Teardown & DOM Sweep                                   │
+│ • Call existing controller teardown() / destroy() if present, and purge │
+│   lingering hosts from previous injections:                             │
 │   #m3u8-controller-host, #m3u8-minimized-host, #anilist-panel-host,     │
 │   #mpv-organizer-host-styles                                            │
 │ • Resets window.mpvControllerInitialized = false                        │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ 4. Script Execution & Verification                                      │
+│ 4. Script Execution & Verification (No chrome.runtime.reload())         │
 │ • executeScript with manifest.content_scripts[0].js                     │
 │ • Sleep 200ms -> Verification ping                                      │
 │ • If unresponsive -> Retry up to 3 times (2000ms delay)                 │
-│ • If 3 attempts fail -> Log error & notify user (No reload)               │
+│ • If 3 attempts fail -> Log error & broadcast user notice (No reload)   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 > [!CAUTION]
-> **Never inject without the Pre-Injection DOM Sweep:**
-> Re-injecting scripts without purging previous host elements causes orphaned Shadow DOM containers, duplicated event listeners, and memory leaks.
+> **Never inject without the Pre-Injection Teardown & DOM Sweep:**
+> Re-injecting scripts without tearing down timers/observers and purging previous host elements causes orphaned Shadow DOM containers, duplicated event listeners, and memory leaks.
 
 ---
 

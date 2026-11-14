@@ -33,9 +33,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				onUpdate: (state) => this._syncUiToState(state),
 			});
 
-			this._initStorageObservation();
-			this._initTaskObservation();
-
 			this.nav = new MPV.NavigationObserver({
 				onNavigation: (url) => this._handleNavigation(url),
 				onMutation: () => this._handleDomMutation(),
@@ -63,7 +60,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.focusListener = null;
 			this.visibilityChangeListener = null;
 			this.messageListener = null;
-			this._initPlaybackSubscription();
 
 			// --- Message Dispatcher ---
 			this.actionMap = {
@@ -413,9 +409,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 				this.nav.isDestroyed = false;
 			}
-			if (!this._storageListener) this._initStorageObservation();
-			if (!this._taskListener) this._initTaskObservation();
-			if (!this.playbackUnsubscribe) this._initPlaybackSubscription();
+
+			// Setup message listener before awaiting get_ui_preferences so ping succeeds
+			if (this.messageListener) {
+				chrome.runtime.onMessage.removeListener(this.messageListener);
+			}
+			this.messageListener = (req, sender, send) =>
+				this.handleMessage(req, sender, send);
+			chrome.runtime.onMessage.addListener(this.messageListener);
 
 			const initialPrefs = await this.bridge.send("get_ui_preferences");
 			const restrictedDomains =
@@ -427,17 +428,16 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					currentHostname === domain || currentHostname.endsWith("." + domain),
 			);
 
-			if (isRestricted) return;
+			if (isRestricted) {
+				this.teardown();
+				return;
+			}
+
+			if (!this._storageListener) this._initStorageObservation();
+			if (!this._taskListener) this._initTaskObservation();
+			if (!this.playbackUnsubscribe) this._initPlaybackSubscription();
 
 			window.mpvControllerInitialized = true;
-
-			// Setup message listener
-			if (this.messageListener) {
-				chrome.runtime.onMessage.removeListener(this.messageListener);
-			}
-			this.messageListener = (req, sender, send) =>
-				this.handleMessage(req, sender, send);
-			chrome.runtime.onMessage.addListener(this.messageListener);
 
 			// 1. Prepare UI
 			this.ui.createAndInjectUi();
@@ -507,7 +507,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (this.isTearingDown) return;
 			const action =
 				request.action || (request.foldersChanged ? "foldersChanged" : null);
-			const handler = this.actionMap[action];
+			const handler = Object.hasOwn(this.actionMap, action) ? this.actionMap[action] : null;
 
 			if (handler) {
 				try {

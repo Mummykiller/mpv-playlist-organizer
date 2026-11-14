@@ -9,9 +9,7 @@ from utils import ipc_utils
 
 def start_health_watcher(session):
     """Starts a background thread to poll MPV health via IPC."""
-    with session.sync_lock:
-        watcher_gen = getattr(session, "session_generation", 0)
-        initial_folder = session.owner_folder_id
+    initial_folder = None
 
     def watcher(gen):
         logging.info(f"[PY][Health] Starting watcher for folder '{initial_folder}' (gen {gen}).")
@@ -63,11 +61,21 @@ def start_health_watcher(session):
             time.sleep(0.5)
         logging.info("[PY][Health] Watcher stopped.")
 
-    if session.health_watcher_thread and session.health_watcher_thread.is_alive():
-        return
+    with session.sync_lock:
+        watcher_gen = getattr(session, "session_generation", 0)
+        initial_folder = session.owner_folder_id
+        existing_thread = getattr(session, "health_watcher_thread", None)
+        if (
+            existing_thread
+            and existing_thread.is_alive()
+            and getattr(existing_thread, "_watcher_gen", None) == watcher_gen
+        ):
+            return
 
-    session.health_watcher_thread = threading.Thread(target=watcher, args=(watcher_gen,), daemon=True)
-    session.health_watcher_thread.start()
+        new_thread = threading.Thread(target=watcher, args=(watcher_gen,), daemon=True)
+        new_thread._watcher_gen = watcher_gen
+        session.health_watcher_thread = new_thread
+        new_thread.start()
 
 
 def persist_session_atomic(session):

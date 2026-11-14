@@ -1,5 +1,7 @@
-import { storage } from "./storage_instance.js";
+import { setStorageLogBroadcaster, storage } from "./storage_instance.js";
 import { logger } from "../utils/SystemLogger.module.js";
+
+setStorageLogBroadcaster(broadcastLog);
 
 /**
  * Broadcasts a message only to active tabs and the extension's internal contexts (like the popup).

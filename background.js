@@ -23,7 +23,7 @@ import { logger } from "./utils/SystemLogger.module.js";
 import { addNativeListener, setLogBroadcaster } from "./utils/nativeConnection.module.js";
 import { nativeLink } from "./utils/nativeLink.js";
 import * as playlistManager from "./utils/playlistManager.js";
-import { isValidUrl } from "./utils/security.module.js";
+import { isValidUrl, isValidWebUrl } from "./utils/security.module.js";
 
 setLogBroadcaster(broadcastLog);
 
@@ -51,7 +51,7 @@ const setAutoAddActive = async (val) => {
 
 const autoAddCooldowns = new Map();
 
-const persistAutoAddCooldowns = () => {
+const persistAutoAddState = () => {
 	try {
 		const now = Date.now();
 		for (const [k, ts] of autoAddCooldowns.entries()) {
@@ -60,17 +60,25 @@ const persistAutoAddCooldowns = () => {
 			}
 		}
 		getSessionStorage()
-			.set({ autoAddCooldowns: Object.fromEntries(autoAddCooldowns) })
+			.set({
+				autoAddActive,
+				autoAddCooldowns: Object.fromEntries(autoAddCooldowns),
+			})
 			.catch(() => {});
 	} catch (e) {
 		logger.debug(`[Background] Failed to persist autoAddCooldowns: ${e?.message}`);
 	}
 };
+const persistAutoAddCooldowns = persistAutoAddState;
 
-// Rehydrate autoAddActive & autoAddCooldowns on worker initialization
+// Rehydrate autoAddActive, autoAddCooldowns & nativeHostStatus on worker initialization
 const autoAddInitPromise = (async () => {
 	try {
-		const res = await getSessionStorage().get(["autoAddActive", "autoAddCooldowns"]);
+		const res = await getSessionStorage().get([
+			"autoAddActive",
+			"autoAddCooldowns",
+			"nativeHostStatus",
+		]);
 		if (res && typeof res.autoAddActive === "boolean") {
 			autoAddActive = res.autoAddActive;
 		}
@@ -81,6 +89,13 @@ const autoAddInitPromise = (async () => {
 					autoAddCooldowns.set(url, ts);
 				}
 			}
+		}
+		if (
+			res?.nativeHostStatus &&
+			typeof res.nativeHostStatus === "object" &&
+			nativeHostStatus.status === "unknown"
+		) {
+			nativeHostStatus = res.nativeHostStatus;
 		}
 	} catch (e) {
 		logger.debug(`[Background] Failed to restore autoAdd state: ${e?.message}`);
@@ -121,7 +136,7 @@ const handleAutoAdd = async (url, tab) => {
 		return;
 	}
 	autoAddCooldowns.set(url, now);
-	persistAutoAddCooldowns();
+	persistAutoAddState();
 
 	startAutoAddTimer();
 
@@ -148,22 +163,37 @@ const handleAutoAdd = async (url, tab) => {
 					snapshot.url,
 					snapshot.title // originTitle snapshot
 				);
+
+				const response = await addPromise;
+				if (!response?.success) {
+					autoAddCooldowns.delete(url);
+					persistAutoAddState();
+					return;
+				}
 				
-				if (finalDetails && finalDetails.title && !finalDetails.isProvisional) {
-					// We need the itemId from the addPromise to update it
-					const response = await addPromise;
-					if (response?.success && response.item?.id) {
-						playlistManager.handleUpdateItemTitle({
-							folderId,
-							itemId: response.item.id,
-							newTitle: finalDetails.title
-						});
-					}
+				if (finalDetails && finalDetails.title && !finalDetails.isProvisional && response.item?.id) {
+					await playlistManager.handleUpdateItemTitle({
+						folderId,
+						itemId: response.item.id,
+						newTitle: finalDetails.title
+					});
 				}
 			} catch (e) {
 				logger.warn(`[Auto-Add] Failed to watch for better title: ${e.message}`, { data: e });
 			}
 		})();
+	}
+
+	try {
+		const response = await addPromise;
+		if (!response?.success) {
+			autoAddCooldowns.delete(url);
+			persistAutoAddState();
+		}
+	} catch (e) {
+		autoAddCooldowns.delete(url);
+		persistAutoAddState();
+		logger.warn(`[Auto-Add] Failed to add item: ${e.message}`, { data: e });
 	}
 };
 
@@ -249,10 +279,10 @@ const actionHandlers = {
 			try {
 				const activeTab = await getActiveTab();
 				if (activeTab?.id) {
-					const detectedUrl = m3u8_scanner_handlers.handleGetDetectedUrlForTab(activeTab.id);
+					const detectedUrl = await m3u8_scanner_handlers.handleGetDetectedUrlForTab(activeTab.id);
 					if (detectedUrl) {
 						broadcastLog({ text: "[Auto-Add]: Processing existing stream detection...", type: "info" });
-						handleAutoAdd(detectedUrl, activeTab);
+						await handleAutoAdd(detectedUrl, activeTab);
 					}
 				}
 			} catch (e) {
@@ -276,12 +306,12 @@ const actionHandlers = {
 		}
 		return { success: true, active: autoAddActive };
 	},
-	report_detected_url: (request, sender) => {
+	report_detected_url: async (request, sender) => {
 		const tabId = sender.tab?.id;
 		if (tabId) {
 			m3u8_scanner_handlers.handleUpdateDetectedUrlForTab(tabId, request.url);
 			if (request.url) {
-				handleAutoAdd(request.url, sender.tab);
+				await handleAutoAdd(request.url, sender.tab);
 			}
 		}
 	},
@@ -289,7 +319,10 @@ const actionHandlers = {
 	force_refresh_dependencies: ui_state_handlers.handleForceRefreshDependencies,
 	open_popup: ui_state_handlers.handleOpenPopup,
 	heartbeat: ui_state_handlers.handleHeartbeat,
-	get_native_host_status: () => ({ success: true, ...nativeHostStatus }),
+	get_native_host_status: async () => {
+		await autoAddInitPromise;
+		return { success: true, ...nativeHostStatus };
+	},
 	// Folder Management
 	create_folder: folder_management_handlers.handleCreateFolder,
 	get_all_folder_ids: folder_management_handlers.handleGetAllFolderIds,
@@ -385,9 +418,9 @@ const activeTasksInitPromise = (async () => {
 	}
 })();
 
-addNativeListener("update_item_title", (data) => {
+addNativeListener("update_item_title", async (data) => {
 	try {
-		playlistManager.handleUpdateItemTitle(data);
+		await playlistManager.handleUpdateItemTitle(data);
 	} catch (e) {
 		logger.warn(`[Background] update_item_title listener failed: ${e.message}`);
 	}
@@ -419,15 +452,20 @@ m3u8_scanner_handlers.setDetectionCallback(async (url, tabId) => {
 	if (autoAddActive) {
 		try {
 			const tab = await chrome.tabs.get(tabId);
-			handleAutoAdd(url, tab);
+			await handleAutoAdd(url, tab);
 		} catch (e) {
 			logger.debug(`[Background] Failed to get tab for auto-add: ${e.message}`);
 		}
 	}
 });
 
+const NATIVE_HOST_HEARTBEAT_MIN_INTERVAL_MS = 30 * 1000;
+
 async function performNativeHostHeartbeat() {
 	try {
+		getSessionStorage()
+			.set({ lastNativeHostHeartbeatAt: Date.now() })
+			.catch(() => {});
 		const response = await nativeLink.ping();
 		if (response?.success) {
 			nativeHostStatus = {
@@ -445,6 +483,11 @@ async function performNativeHostHeartbeat() {
 		nativeHostStatus.status = "offline";
 		nativeHostStatus.lastCheck = Date.now();
 		logger.debug(`[Background] Native host heartbeat failed: ${e.message}`);
+	}
+	try {
+		await getSessionStorage().set({ nativeHostStatus });
+	} catch (e) {
+		logger.debug(`[Background] Failed to persist nativeHostStatus: ${e?.message}`);
 	}
 }
 
@@ -477,7 +520,23 @@ async function syncMetadataCache() {
 }
 
 async function startNativeHostHeartbeat() {
-	performNativeHostHeartbeat();
+	try {
+		const store = getSessionStorage();
+		const now = Date.now();
+		const { lastNativeHostHeartbeatAt } = await store.get("lastNativeHostHeartbeatAt");
+		if (
+			typeof lastNativeHostHeartbeatAt !== "number" ||
+			now - lastNativeHostHeartbeatAt >= NATIVE_HOST_HEARTBEAT_MIN_INTERVAL_MS
+		) {
+			await store.set({ lastNativeHostHeartbeatAt: now });
+			performNativeHostHeartbeat();
+		} else {
+			logger.debug("[BG] Skipping startup native host heartbeat (throttled).");
+		}
+	} catch (e) {
+		logger.debug(`[Background] Heartbeat throttle check failed: ${e?.message}`);
+		performNativeHostHeartbeat();
+	}
 	try {
 		const heartbeatAlarm = await chrome.alarms.get("native-host-heartbeat");
 		if (!heartbeatAlarm) {
@@ -504,6 +563,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 	if (typeof handler === "function") {
 		(async () => {
 			try {
+				await Promise.all([
+					autoAddInitPromise,
+					m3u8_scanner_handlers.scannerInitPromise,
+				]);
 				const response = await handler(request, sender);
 				if (response !== undefined) {
 					sendResponse(response);
@@ -512,7 +575,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 					sendResponse({ success: true });
 				}
 			} catch (e) {
-				logger.error(`[BG] Error handling action '${request.action}':`, e);
+				logger.error(`[BG] Error handling action '${request.action}': ${e.message}`, {
+					persist: false,
+					data: e,
+				});
 				broadcastLog({
 					text: `[Background] Error in ${request.action}: ${e.message}`,
 					type: "error",
@@ -530,11 +596,22 @@ chrome.runtime.onInstalled.addListener(async () => {
 		await storage.initialize();
 		await updateContextMenus(storage);
 		chrome.alarms.create("periodic-storage-janitor", { periodInMinutes: 10080 });
+		await reinjectContentScripts();
 		logger.info("[BG] MPV Handler extension installed and initialized.");
 	} catch (e) {
 		logger.error(`[Background] onInstalled failed: ${e.message}`, { persist: true, stack: e.stack });
 	}
 });
+
+if (chrome.runtime.onStartup?.addListener) {
+	chrome.runtime.onStartup.addListener(async () => {
+		try {
+			await reinjectContentScripts();
+		} catch (e) {
+			logger.error(`[Background] onStartup failed: ${e.message}`, { persist: true, stack: e.stack });
+		}
+	});
+}
 
 chrome.alarms.onAlarm.addListener((alarm) => {
 	try {
@@ -567,7 +644,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 	try {
 		const { menuItemId, linkUrl, srcUrl, pageUrl } = info;
 		const targetUrl = linkUrl || srcUrl || pageUrl;
-		if (!targetUrl || !isValidUrl(targetUrl)) {
+		if (!targetUrl || !isValidWebUrl(targetUrl)) {
 			logger.warn(`[Background] Rejected unsafe/invalid context menu URL: ${String(targetUrl || "").slice(0, 128)}`);
 			return;
 		}
@@ -587,14 +664,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 				menuItemId.startsWith("add-playlist-to-folder-") ||
 				menuItemId === "add-playlist-to-last-used"
 			) {
-				playlistManager.handleAddFromContextMenu(
+				await playlistManager.handleAddFromContextMenu(
 					folderId,
 					targetUrl,
 					"YouTube Playlist",
 					tab,
 				);
 			} else {
-				playlistManager.handleAddFromContextMenu(
+				await playlistManager.handleAddFromContextMenu(
 					folderId,
 					targetUrl,
 					tab?.title || targetUrl,
@@ -715,6 +792,12 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 			.executeScript({
 				target: { tabId: tab.id },
 				func: () => {
+					if (
+						window.mpvControllerInstance &&
+						typeof window.mpvControllerInstance.teardown === "function"
+					) {
+						window.mpvControllerInstance.teardown();
+					}
 					[
 						"m3u8-controller-host",
 						"m3u8-minimized-host",
@@ -798,8 +881,18 @@ async function reinjectContentScripts() {
 // Lazy injection: inject when a user actually switches to a tab
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
 	try {
+		await autoAddInitPromise;
 		const tab = await chrome.tabs.get(activeInfo.tabId);
 		await injectIntoTab(tab);
+
+		chrome.tabs
+			.sendMessage(activeInfo.tabId, {
+				action: "auto_add_state_changed",
+				active: autoAddActive,
+			})
+			.catch((err) => {
+				logger.debug(`[Background] Failed to sync auto_add_state_changed to tab ${activeInfo.tabId}: ${err?.message}`);
+			});
 
 		// Proactive broadcast: Ensure the newly activated tab catches up on global state.
 		const data = await storage.get();
@@ -814,5 +907,3 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 		logger.warn(`[Background] tabs.onActivated handler failed: ${e.message}`);
 	}
 });
-
-reinjectContentScripts();

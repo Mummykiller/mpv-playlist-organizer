@@ -203,19 +203,29 @@ class TestSecurityClaims(BaseTestCase):
         self.assertNotIn("external-downloader", sanitized_danger)
         self.assertNotIn("output", sanitized_danger)
 
-        # PY-H5: Dangerous flags (proxy, ffmpeg-location, js-runtimes, remote-components, alias, update, print, no-check-certificate) stripped by default
-        untrusted_payload_opts = "format=best,proxy=http://evil.com,ffmpeg-location=/bin/sh,js-runtimes=node:/bin/sh,remote-components=all,alias=evil,update=true,print=traffic,no-check-certificate="
+        # PY-H5: Dangerous flags (proxy, ffmpeg-location, js-runtimes, remote-components, alias, update, print, no-check-certificate, compat-options) stripped by default
+        untrusted_payload_opts = "format=best,proxy=http://evil.com,ffmpeg-location=/bin/sh,js-runtimes=node:/bin/sh,remote-components=all,alias=evil,update=true,print=traffic,no-check-certificate=,compat-options=all"
         sanitized_untrusted = security.sanitize_ytdlp_options(untrusted_payload_opts, allow_settings_flags=False)
         self.assertEqual(sanitized_untrusted, "format=best")
-        for flag in ["proxy", "ffmpeg-location", "js-runtimes", "remote-components", "alias", "update", "print", "no-check-certificate"]:
+        for flag in ["proxy", "ffmpeg-location", "js-runtimes", "remote-components", "alias", "update", "print", "no-check-certificate", "compat-options"]:
             self.assertNotIn(flag, sanitized_untrusted)
 
+        # extractor-args is preserved with semicolons and escaped commas
+        extractor_opts = r"extractor-args=generic:impersonate;youtube:player_client=android\,ios,format=best"
+        sanitized_extractor = security.sanitize_ytdlp_options(extractor_opts, allow_settings_flags=False)
+        self.assertIn(r"extractor-args=generic:impersonate;youtube:player_client=android\,ios", sanitized_extractor)
+        self.assertIn("format=best", sanitized_extractor)
+
+        merged_extractor = file_io.merge_ytdlp_options(extractor_opts, "ignore-config=", allow_settings_flags=False)
+        self.assertIn(r"extractor-args=generic:impersonate;youtube:player_client=android\,ios", merged_extractor)
+
         # Settings-only flags preserved when allow_settings_flags=True
-        settings_opts = "remote-components=ejs:github,js-runtimes=node,ffmpeg-location=/usr/bin/ffmpeg"
+        settings_opts = "remote-components=ejs:github,js-runtimes=node,ffmpeg-location=/usr/bin/ffmpeg,compat-options=2023"
         sanitized_settings = security.sanitize_ytdlp_options(settings_opts, allow_settings_flags=True)
         self.assertIn("remote-components=ejs:github", sanitized_settings)
         self.assertIn("js-runtimes=node", sanitized_settings)
         self.assertIn("ffmpeg-location=/usr/bin/ffmpeg", sanitized_settings)
+        self.assertIn("compat-options=2023", sanitized_settings)
 
         # Injection attempts inside allowed flag values must be neutralized
         injected_opts = 'user-agent=Mozilla; rm -rf / | evil & `calc`,limit-rate=500K\n\r"quoted"'
@@ -320,6 +330,14 @@ class TestSecurityClaims(BaseTestCase):
         # Item count exceeding limit (MAX_PLAYLIST_ITEMS = 10000)
         oversized_list = [{"id": f"item_{i}"} for i in range(security.SECURITY_LIMITS['MAX_PLAYLIST_ITEMS'] + 5)]
         valid, err = security.validate_payload({"action": "play_batch", "playlist": oversized_list})
+        self.assertFalse(valid)
+        self.assertIn("exceeds security limits", err)
+
+        # Recursion depth exceeding limit (max_depth = 32)
+        deep_obj = "leaf"
+        for _ in range(40):
+            deep_obj = {"nested": deep_obj}
+        valid, err = security.validate_payload({"action": "export_data", "data": deep_obj})
         self.assertFalse(valid)
         self.assertIn("exceeds security limits", err)
 

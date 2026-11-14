@@ -3,10 +3,12 @@ local utils = require 'mp.utils'
 -- Fallback Trackers
 local last_heartbeat = 0
 local session_duration = 0
+local last_sync_time = 0
 local last_time_pos = nil
 local playback_active = false
 local fallback_attempted = false
 local fallback_skip_notified = false
+local current_item_id = nil
 
 -- Dedicated debug log
 local function debug_log(msg)
@@ -94,8 +96,6 @@ local function run_fallback_sync(params)
     mp.command_native_async(cmd, function() end)
 end
 
-local current_item_id = nil
-
 mp.register_event("file-loaded", function()
     current_item_id = clean_value(mp.get_property("user-data/id"))
 end)
@@ -103,6 +103,7 @@ end)
 -- 1. On File Start: Update 'Last Played' highlight
 mp.register_event("start-file", function()
     session_duration = 0
+    last_sync_time = 0
     last_time_pos = nil
     playback_active = true
     fallback_attempted = false
@@ -123,7 +124,8 @@ mp.observe_property("time-pos", "number", function(name, val)
             session_duration = session_duration + delta
             
             -- Periodic Time Save (Every 10s)
-            if math.floor(session_duration) % 10 == 0 and math.floor(session_duration) ~= math.floor(session_duration - delta) then
+            if session_duration - last_sync_time >= 10 then
+                last_sync_time = session_duration
                 run_fallback_sync({time = val})
             end
 

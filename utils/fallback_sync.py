@@ -28,13 +28,16 @@ def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
 
     settings = file_io.get_settings()
     ytdlp_path = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
+    if not security.is_safe_executable_path(ytdlp_path, setting_key="ytdlp_path"):
+        logging.warning(f"[PY][Sync] Rejected unsafe yt-dlp executable path: {ytdlp_path}")
+        return False, "Unsafe or invalid yt-dlp executable path"
     
     logging.info(f"[PY][Sync] Marking watched using {ytdlp_path} for URL: {url}")
 
     cmd = [
         ytdlp_path, "--ignore-config", "--simulate", "--mark-watched",
         "--no-playlist", "--quiet", "--no-warnings",
-        "--ignore-no-formats-error", "--no-check-certificate"
+        "--ignore-no-formats-error"
     ]
 
     if os.path.exists(cookies_info):
@@ -92,11 +95,14 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
             logging.error(f"YouTube Mark-Watched Error: {mark_watched_error}")
 
     # 4. Atomic Read-Modify-Write
-    needs_shard_save = False
-    # Reload shard to get most up-to-date state before saving
-    playlist = file_io.get_playlist_shard(canonical_id)
-    
-    if playlist:
+    def _apply_sync(playlist, index_entry):
+        if not playlist and not update_last_played:
+            return None
+        needs_shard_save = False
+        if update_last_played and index_entry is not None:
+            index_entry["last_played_id"] = item_id
+            needs_shard_save = True
+            logging.info(f"Disk: Updated last played item to {item_id}.")
         for item in playlist:
             if item.get("id") == item_id:
                 # Update Watched Status
@@ -135,18 +141,9 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
                         needs_shard_save = True
                         logging.info(f"Disk: Updated resume time to {time_val}s.")
                 break
+        return True if needs_shard_save else None
 
-    # 5. Handle Saves
-    if needs_shard_save:
-        file_io.save_playlist_shard(canonical_id, playlist, update_index=False)
-
-    if update_last_played:
-        # get_index/save_index are already atomic in file_io.py
-        index = file_io.get_index()
-        if canonical_id in index:
-            index[canonical_id]["last_played_id"] = item_id
-            file_io.save_index(index)
-            logging.info(f"Disk: Updated last played item to {item_id}.")
+    file_io.update_shard(canonical_id, _apply_sync, update_index=bool(update_last_played))
 
     if mark_watched and not watched_success:
         return False, mark_watched_error or "Failed to mark YouTube video as watched."

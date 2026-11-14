@@ -10,7 +10,7 @@ import json
 import file_io
 import services
 from .installer_logic import (
-    HOST_NAME, get_logic_for_platform
+    HOST_NAME, get_logic_for_platform, validate_extension_id
 )
 
 MODERN_FONT = "Segoe UI"
@@ -231,9 +231,16 @@ class HostManagerApp:
         if not extension_id:
             messagebox.showerror("Error", "Extension ID cannot be empty.")
             return
-        if not re.match(r"^[a-p]{32}$", extension_id):
-            if not messagebox.askyesno("Warning", "Invalid ID format. Proceed anyway?"):
+        try:
+            valid_id = validate_extension_id(extension_id)
+            if not valid_id:
+                messagebox.showerror("Error", "Invalid Extension ID format. Must be 32 lowercase letters (a-p).")
                 return
+            if isinstance(valid_id, str):
+                extension_id = valid_id
+        except ValueError as e:
+            messagebox.showerror("Error", str(e))
+            return
         self.install_button.config(state=tk.DISABLED)
         threading.Thread(target=self._install_thread, args=(extension_id,)).start()
 

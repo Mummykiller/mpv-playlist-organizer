@@ -43,6 +43,8 @@ class PlaylistTracker:
         self.tracking_thread = None
         self.pending_threads = [] # Track async mark-watched threads
         self.is_tracking = False
+        self._quitting_notified = False
+        self._stopped = False
         self.clear_behavior = settings.get('playlist_clear_behavior', 'full_on_completion') # 'full_on_completion' or 'on_item_finish'
         self.is_naturally_completed = False
         self.lock = threading.Lock()
@@ -62,6 +64,8 @@ class PlaylistTracker:
         Starts tracking the playlist in a separate thread.
         """
         self.is_tracking = True
+        self._quitting_notified = False
+        self._stopped = False
         self._stop_event.clear()
         self._start_heartbeat()
         self.tracking_thread = threading.Thread(target=self._track)
@@ -73,9 +77,10 @@ class PlaylistTracker:
         """
         Stops tracking and returns stats about what was played.
         """
-        if not self.is_tracking:
+        if self._stopped or (not self.is_tracking and not self._quitting_notified):
             return {}
 
+        self._stopped = True
         self.is_tracking = False
         self._stop_event.set()
         
@@ -104,9 +109,11 @@ class PlaylistTracker:
 
         # Prune dead threads from the list, but don't join them.
         # They will finish their work in the background.
-        self.pending_threads = [t for t in self.pending_threads if t.is_alive()]
-        if self.pending_threads:
-            logging.info(f"[PY][Tracker] Leaving {len(self.pending_threads)} mark-watched threads to finish in background.")
+        with self.lock:
+            self.pending_threads = [t for t in self.pending_threads if t.is_alive()]
+            pending_count = len(self.pending_threads)
+        if pending_count:
+            logging.info(f"[PY][Tracker] Leaving {pending_count} mark-watched threads to finish in background.")
         
         return stats
 
@@ -556,6 +563,10 @@ class PlaylistTracker:
 
     def _notify_quitting(self):
         """Performs final disk commit and dispatches mpv_quitting message with full context."""
+        with self.lock:
+            if self._quitting_notified:
+                return
+            self._quitting_notified = True
         self._commit_to_disk()
         with self.lock:
             played_ids = list(self.played_item_ids)
@@ -570,6 +581,7 @@ class PlaylistTracker:
             "session_ids": session_ids
         })
         self.is_tracking = False
+        self._stop_event.set()
 
     def _commit_to_disk(self):
         """Performs an atomic read-modify-write to the playlist shard with all cached changes (PY-M5, PY-M6)."""
@@ -703,19 +715,18 @@ class PlaylistTracker:
 
     def _check_mark_watched(self, item_id):
         """Checks if the item should be marked as watched on YouTube and triggers the call if so."""
+        target_item = None
         with self.lock:
             if item_id in self.watched_this_session:
                 return
 
-        # 0. Cooldown check: Don't spam retries every few milliseconds
-        now = time.time()
-        last_try = self.last_mark_try_time.get(item_id, 0)
-        if now - last_try < 5.0: # 5 second cooldown
-            return
-        self.last_mark_try_time[item_id] = now
+            # 0. Cooldown check: Don't spam retries every few milliseconds
+            now = time.time()
+            last_try = self.last_mark_try_time.get(item_id, 0)
+            if now - last_try < 5.0: # 5 second cooldown
+                return
+            self.last_mark_try_time[item_id] = now
 
-        target_item = None
-        with self.lock:
             for item in self.playlist:
                 if item.get('id') == item_id:
                     target_item = item
@@ -834,12 +845,11 @@ class PlaylistTracker:
                             self.ipc_manager.send({"command": ["show-text", f"YouTube: Mark watched failed ({msg})", 3000]})
                             self._remote_log(f"AdaptiveHeaders: Mark watched failed for {title}: {msg}")
 
-                # Prune finished threads
-                self.pending_threads = [t for t in self.pending_threads if t.is_alive()]
-                
                 # Start and track the thread
                 thread = mark_video_as_watched_threaded(watch_url, cookies, user_agent=ua, folder_id=self.folder_id, item_id=item_id, on_done=on_done)
-                self.pending_threads.append(thread)
+                with self.lock:
+                    self.pending_threads = [t for t in self.pending_threads if t.is_alive()]
+                    self.pending_threads.append(thread)
             elif not has_cookies:
                 # Still waiting for cookies, retry on next check
                 pass

@@ -352,20 +352,24 @@ class WindowsLogic(InstallerLogic):
         native_manifest_path = os.path.normpath(manifest_path)
 
         for browser, (reg_path, _) in browsers.items():
-            # Register for specific browser AND fallback to Chrome for Brave/Vivaldi/etc
-            keys_to_register = [f"{reg_path}\\{HOST_NAME}"]
-            if browser != "Google Chrome":
-                 keys_to_register.append(f"SOFTWARE\\Google\\Chrome\\NativeMessagingHosts\\{HOST_NAME}")
+            full_key_path = f"{reg_path}\\{HOST_NAME}"
+            try:
+                # Key creation needs native path
+                normalized_key_path = full_key_path.replace("/", "\\")
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, normalized_key_path) as key:
+                    winreg.SetValue(key, '', winreg.REG_SZ, native_manifest_path)
+                self.log(f"Successfully registered for {browser} at {normalized_key_path}.")
+            except OSError as e:
+                self.log(f"Skipping {browser} registry path {full_key_path} (error: {e}).")
 
-            for full_key_path in keys_to_register:
-                try:
-                    # Key creation needs native path
-                    normalized_key_path = full_key_path.replace("/", "\\")
-                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, normalized_key_path) as key:
-                        winreg.SetValue(key, '', winreg.REG_SZ, native_manifest_path)
-                    self.log(f"Successfully registered for {browser} at {normalized_key_path}.")
-                except OSError as e:
-                    self.log(f"Skipping {browser} registry path {full_key_path} (error: {e}).")
+        if "Google Chrome" not in browsers:
+            fallback_key_path = f"SOFTWARE\\Google\\Chrome\\NativeMessagingHosts\\{HOST_NAME}"
+            try:
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, fallback_key_path) as key:
+                    winreg.SetValue(key, '', winreg.REG_SZ, native_manifest_path)
+                self.log(f"Successfully registered Chrome fallback at {fallback_key_path}.")
+            except OSError as e:
+                self.log(f"Skipping Chrome fallback registry path {fallback_key_path} (error: {e}).")
 
     def uninstall(self):
         self.log("Uninstalling for Windows...")

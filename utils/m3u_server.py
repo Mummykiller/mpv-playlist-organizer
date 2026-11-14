@@ -9,6 +9,7 @@ import secrets
 import queue
 from urllib.request import urlopen
 from urllib.error import URLError
+from . import security
 
 SERVER_PREFIX = "server_"
 SERVER_EXT = ".m3u"
@@ -46,7 +47,7 @@ class M3UServer:
                 logging.error(f"Playlist server script not found at {server_path}")
                 return None
 
-            server_env = os.environ.copy()
+            server_env = security.get_scrubbed_env()
             server_env["MPV_PLAYLIST_TOKEN"] = self.server_token
             try:
                 self.process = subprocess.Popen(

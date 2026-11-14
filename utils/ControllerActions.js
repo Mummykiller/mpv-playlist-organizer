@@ -326,7 +326,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				set_playlist_order: () => MPV.MpvInterface.setPlaylistOrder(folderId, data.data?.order || data.order || data),
 			};
 
-			if (interfaceMap[action]) {
+			if (Object.hasOwn(interfaceMap, action)) {
 				return interfaceMap[action]().then(response => {
 					if (response?.success && response.list) {
 						c.playlistUI?.render(

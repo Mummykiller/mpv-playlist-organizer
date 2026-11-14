@@ -397,7 +397,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         is_direct_vault = (".m3u8" in url.lower()) and ("owocdn" in url or "uwucdn" in url or VAULT_RE.search(url))
         
         # Anti-bot args for yt-dlp just in case it's used elsewhere (landing pages)
-        ytdl_args = "extractor-args=generic:impersonate;youtube:player_client=android,ios"
+        ytdl_args = r"extractor-args=generic:impersonate;youtube:player_client=android\,ios"
 
         return {
             "success": True,

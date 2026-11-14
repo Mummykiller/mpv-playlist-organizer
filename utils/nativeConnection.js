@@ -139,19 +139,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			nativePort.onDisconnect.addListener(onDisconnect);
 
-			let lastRestoredIsPaused;
-
 			nativePort.onMessage.addListener((response) => {
 				const { request_id, ...responseData } = response;
 				const normalizedResponse = normalizeKeys(responseData);
-
-				if (normalizedResponse.action === "session_restored") {
-					if (normalizedResponse.isPaused !== undefined) {
-						lastRestoredIsPaused = Boolean(normalizedResponse.isPaused);
-					} else if (lastRestoredIsPaused !== undefined) {
-						normalizedResponse.isPaused = lastRestoredIsPaused;
-					}
-				}
 
 				if (request_id && requestPromises[request_id]) {
 					if (normalizedResponse.log) {
@@ -233,6 +223,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				},
 				reject: (err) => {
 					clearTimeout(handshakeTimer);
+					connectionPromise = null;
+					connectionStatus = ConnectionStatus.DISCONNECTED;
 					emitLog({
 						text: `[Background]: Session restoration failed: ${err.message}`,
 						type: "error",

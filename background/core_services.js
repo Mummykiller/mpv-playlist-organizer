@@ -12,6 +12,7 @@ import { storage } from "./storage_instance.js";
 export { storage, broadcastLog, broadcastToTabs };
 
 const SYNC_STATE_KEY = "mpv_pending_sync_state";
+const SYNC_ALARM_NAME = "sync-to-native-host";
 
 let syncQueue = Promise.resolve();
 const pendingSyncFolders = new Set();
@@ -75,11 +76,20 @@ export const _syncToNativeHostFile = async (folderId = null) => {
 	} else {
 		pendingSyncFolders.delete(folderId);
 	}
-	persistPendingSyncState();
 	syncQueue = syncQueue.then(async () => {
 		try {
-			await nativeLink.syncToFile(folderId);
+			const res = await nativeLink.syncToFile(folderId);
+			if (res && res.success === false) {
+				throw new Error(res.error || "Sync failed");
+			}
+			await persistPendingSyncState();
 		} catch (e) {
+			if (folderId === null) {
+				pendingFullSync = true;
+			} else {
+				pendingSyncFolders.add(folderId);
+			}
+			await persistPendingSyncState();
 			console.error(`[CoreSync] ${e.message}`);
 			broadcastLog({
 				text: `[Background]: Sync failed: ${e.message}`,
@@ -101,10 +111,9 @@ export const debouncedSyncToNativeHostFile = (
 		} else {
 			pendingSyncFolders.delete(folderId);
 		}
-		persistPendingSyncState();
 		_syncToNativeHostFile(folderId);
 		if (!pendingFullSync && pendingSyncFolders.size === 0) {
-			chrome.alarms.clear("sync-to-native-host");
+			chrome.alarms.clear(SYNC_ALARM_NAME);
 		}
 	} else {
 		if (folderId === null) {
@@ -113,7 +122,7 @@ export const debouncedSyncToNativeHostFile = (
 			pendingSyncFolders.add(folderId);
 		}
 		persistPendingSyncState();
-		chrome.alarms.create("sync-to-native-host", { delayInMinutes: 1 });
+		chrome.alarms.create(SYNC_ALARM_NAME, { delayInMinutes: 1 });
 	}
 };
 
@@ -123,16 +132,11 @@ export const debouncedSyncToNativeHostFile = (
 export const flushPendingSync = async () => {
 	await syncInitPromise;
 	if (pendingFullSync) {
-		pendingFullSync = false;
-		pendingSyncFolders.clear();
-		await persistPendingSyncState();
 		return _syncToNativeHostFile(null);
 	}
 	if (pendingSyncFolders.size === 0) {
 		return;
 	}
 	const foldersToSync = Array.from(pendingSyncFolders);
-	pendingSyncFolders.clear();
-	await persistPendingSyncState();
 	return Promise.all(foldersToSync.map((id) => _syncToNativeHostFile(id)));
 };

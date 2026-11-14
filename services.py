@@ -212,7 +212,7 @@ def get_essential_ytdlp_flags(settings=None, bypass=False):
     
     # Handle JS Runtimes (Critical for YouTube)
     node_path = config.get("node_path")
-    if node_path and os.path.exists(node_path):
+    if node_path and os.path.exists(node_path) and security.is_safe_executable_path(node_path, "node_path"):
         flags_list.append(f"js-runtimes=node:{node_path}")
     else:
         flags_list.append("js-runtimes=node")
@@ -231,7 +231,7 @@ def get_essential_ytdlp_flags(settings=None, bypass=False):
             flags_list.append(f"buffer-size={buf_size}")
 
     ffmpeg_path = config.get("ffmpeg_path")
-    if ffmpeg_path and os.path.exists(ffmpeg_path):
+    if ffmpeg_path and os.path.exists(ffmpeg_path) and security.is_safe_executable_path(ffmpeg_path, "ffmpeg_path"):
         flags_list.append(f"ffmpeg-location={ffmpeg_path}")
     
     return ",".join(flags_list)

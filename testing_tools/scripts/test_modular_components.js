@@ -440,18 +440,67 @@ function testPageScraperWithInjection() {
 async function testMpvControllerInit() {
 	console.log("Testing MpvController Initialization...");
 	const controller = new MPV.MpvController();
-	
-	await controller.init();
-	
-	assert.ok(controller.bridge, "Bridge should be initialized");
-	assert.ok(controller.state, "State should be initialized");
-	
-	// Check if UI was actually injected into the real JSDOM document
-	const host = document.getElementById("m3u8-controller-host");
-	assert.ok(host, "UIManager should have injected the host element into JSDOM");
-	
-	controller.teardown();
-	console.log("  [OK] MpvController (Full Lifecycle)");
+
+	let registeredMessageListener = null;
+	const origOnMessage = global.chrome.runtime.onMessage;
+	global.chrome.runtime.onMessage = {
+		addListener: (fn) => { registeredMessageListener = fn; },
+		removeListener: (fn) => {
+			if (registeredMessageListener === fn) registeredMessageListener = null;
+		}
+	};
+
+	try {
+		// Verify ping works BEFORE get_ui_preferences resolves
+		let resolvePrefs = null;
+		mockRuntimeSendMessageHook = (payload, callback) => {
+			if (payload.action === "get_ui_preferences") {
+				resolvePrefs = () => callback({ success: true, preferences: {} });
+				return;
+			}
+			callback({ success: true, ...payload });
+		};
+
+		const initPromise = controller.init();
+		assert.strictEqual(typeof registeredMessageListener, "function", "messageListener must be registered before get_ui_preferences resolves");
+
+		let pingResponse = null;
+		registeredMessageListener({ action: "ping" }, {}, (res) => { pingResponse = res; });
+		assert.deepStrictEqual(pingResponse, { success: true }, "ping must succeed while get_ui_preferences is pending");
+
+		resolvePrefs();
+		mockRuntimeSendMessageHook = null;
+		await initPromise;
+
+		assert.ok(controller.bridge, "Bridge should be initialized");
+		assert.ok(controller.state, "State should be initialized");
+
+		// Verify Object.hasOwn guards on actionMap and interfaceMap
+		let protoResp = "untouched";
+		controller.handleMessage({ action: "toString" }, {}, (res) => { protoResp = res; });
+		assert.strictEqual(protoResp, "untouched", "handleMessage must ignore Object.prototype properties");
+
+		let sentViaBridge = null;
+		const origBridgeSend = controller.bridge.send.bind(controller.bridge);
+		controller.bridge.send = (action) => {
+			sentViaBridge = action;
+			return Promise.resolve({ success: true });
+		};
+		await controller.actions.sendCommandToBackground("toString", "Default");
+		assert.strictEqual(sentViaBridge, "toString", "sendCommandToBackground must not treat Object.prototype keys as interfaceMap actions");
+		controller.bridge.send = origBridgeSend;
+
+		// Check if UI was actually injected into the real JSDOM document
+		const host = document.getElementById("m3u8-controller-host");
+		assert.ok(host, "UIManager should have injected the host element into JSDOM");
+
+		controller.teardown();
+		assert.strictEqual(registeredMessageListener, null, "teardown() must remove messageListener");
+	} finally {
+		mockRuntimeSendMessageHook = null;
+		global.chrome.runtime.onMessage = origOnMessage;
+	}
+	console.log("  [OK] MpvController (Full Lifecycle & Ping Race)");
 }
 
 async function testDraggableComponent() {
@@ -675,6 +724,17 @@ async function testNativeConnection() {
 		assert.strictEqual(throwingCalled, true, "Throwing listener should have been invoked");
 		assert.ok(healthyPayload, "Healthy listener should still be invoked after throwing listener");
 		assert.strictEqual(healthyPayload.taskId, "task-42", "Event payload keys should be normalized");
+
+		// 5. session_restored does not leak stale isPaused across messages
+		const restoredPayloads = [];
+		MPV.addNativeListener("session_restored", (data) => {
+			restoredPayloads.push(data);
+		});
+		activePort.emitMessage({ action: "session_restored", is_paused: true });
+		activePort.emitMessage({ action: "session_restored" });
+		assert.strictEqual(restoredPayloads.length, 2);
+		assert.strictEqual(restoredPayloads[0].isPaused, true);
+		assert.strictEqual(restoredPayloads[1].isPaused, undefined, "session_restored must not carry over stale isPaused when omitted");
 	} finally {
 		console.error = origConsoleError;
 		global.chrome.runtime.connectNative = origConnectNative;
