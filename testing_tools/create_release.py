@@ -53,6 +53,7 @@ def create_release():
         subprocess.run(
             [sys.executable, os.path.join(root_dir, "testing_tools", "generate_js.py")],
             check=True,
+            cwd=root_dir,
             env=env,
         )
     except subprocess.CalledProcessError as e:
