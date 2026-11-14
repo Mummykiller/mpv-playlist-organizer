@@ -470,7 +470,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			send({ url, title });
 		}
 
-		async waitForAccurateDetails(url, timeoutMs = 3000, originPageUrl = null) {
+		async waitForAccurateDetails(url, timeoutMs = 1500, originPageUrl = null) {
 			const c = this.controller;
 			const currentUrl = window.location.href;
 
@@ -488,14 +488,25 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			return new Promise((resolve) => {
 				const startTime = Date.now();
+				const throttleMs = 100;
 				let observer = null;
+				let timeoutId = null;
+				let throttleTimer = null;
+				let lastCheckTime = 0;
+				let settled = false;
 
 				const finalize = () => {
+					if (settled) return;
+					settled = true;
 					if (observer) observer.disconnect();
+					if (timeoutId) clearTimeout(timeoutId);
+					if (throttleTimer) clearTimeout(throttleTimer);
 					resolve(c.pageScraper.scrapePageDetails(url));
 				};
 
-				observer = new MutationObserver(() => {
+				const checkDetails = () => {
+					if (settled) return;
+					lastCheckTime = Date.now();
 					const currentDetails = c.pageScraper.scrapePageDetails(url);
 
 					if (currentDetails.fingerprint !== startFingerprint) {
@@ -506,8 +517,25 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						return;
 					}
 
-					if (!currentDetails.isProvisional || Date.now() - startTime > timeoutMs) {
+					if (!currentDetails.isProvisional || Date.now() - startTime >= timeoutMs) {
 						finalize();
+					}
+				};
+
+				observer = new MutationObserver(() => {
+					if (settled) return;
+					const elapsed = Date.now() - lastCheckTime;
+					if (elapsed >= throttleMs) {
+						if (throttleTimer) {
+							clearTimeout(throttleTimer);
+							throttleTimer = null;
+						}
+						checkDetails();
+					} else if (!throttleTimer) {
+						throttleTimer = setTimeout(() => {
+							throttleTimer = null;
+							checkDetails();
+						}, throttleMs - elapsed);
 					}
 				});
 
@@ -517,7 +545,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					characterData: true,
 				});
 
-				setTimeout(finalize, timeoutMs);
+				timeoutId = setTimeout(finalize, timeoutMs);
 			});
 		}
 

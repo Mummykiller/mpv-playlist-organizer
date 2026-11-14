@@ -760,13 +760,92 @@ async function testUiSync() {
 
     // Operation 9: Scanner Async Rehydration & Core Sync Failure Recovery
     console.log("Testing Scanner Async Rehydration & Core Sync Failure Recovery...");
-    const { handleGetDetectedUrlForTab, handleUpdateDetectedUrlForTab } = await import("../../background/handlers/m3u8_scanner.js");
+    const {
+        handleGetDetectedUrlForTab,
+        handleUpdateDetectedUrlForTab,
+        _safeScrapeDetails,
+    } = await import("../../background/handlers/m3u8_scanner.js");
     handleUpdateDetectedUrlForTab(777, "https://example.com/live.m3u8");
     const detectedForTab = await handleGetDetectedUrlForTab(777);
     assert.strictEqual(detectedForTab, "https://example.com/live.m3u8", "Async handleGetDetectedUrlForTab should resolve stored URL");
     handleUpdateDetectedUrlForTab(777, null);
     assert.strictEqual(await handleGetDetectedUrlForTab(777), null);
     console.log("  ✅ Scanner async rehydration verified.");
+
+    // Operation 10: _safeScrapeDetails Fast-Path, Backoff & Snapshot Guard
+    console.log("Testing _safeScrapeDetails fast-path, backoff & snapshot guard...");
+    const origChrome = global.chrome;
+    try {
+        let sendCalls = [];
+        let mockTab = {
+            id: 888,
+            status: "loading",
+            url: "https://www.youtube.com/watch?v=abc",
+            title: "My Real Video - YouTube",
+        };
+        global.chrome = {
+            runtime: { lastError: null },
+            tabs: {
+                get: (tabId, cb) => cb(tabId === 888 ? mockTab : null),
+                sendMessage: async (tabId, msg) => {
+                    sendCalls.push({ tabId, msg });
+                    return { title: "Channel - My Real Video", url: msg.detectedUrl, isProvisional: false };
+                },
+            },
+        };
+
+        // 1. Immediate first attempt even when tab.status === "loading" and originTitle was provisional
+        const t0 = Date.now();
+        const fastRes = await _safeScrapeDetails(
+            888,
+            "https://cdn.example/stream.m3u8",
+            "YouTube",
+            "https://www.youtube.com/watch?v=abc",
+            "YouTube",
+        );
+        const elapsed = Date.now() - t0;
+        assert.strictEqual(fastRes.title, "Channel - My Real Video");
+        assert.strictEqual(sendCalls.length, 1);
+        assert.strictEqual(sendCalls[0].msg.timeoutMs, 1500);
+        assert.ok(elapsed < 400, `Expected fast-path without 1000ms sleep, took ${elapsed}ms`);
+
+        // 2. Snapshot guard aborts when tab.url !== originPageUrl
+        mockTab.url = "https://www.youtube.com/watch?v=other";
+        sendCalls = [];
+        const navRes = await _safeScrapeDetails(
+            888,
+            "https://cdn.example/stream.m3u8",
+            "Fallback",
+            "https://www.youtube.com/watch?v=abc",
+            "Old Title",
+        );
+        assert.strictEqual(navRes.isProvisional, true);
+        assert.strictEqual(sendCalls.length, 0);
+
+        // 3. Retry backoff on sendMessage throw (200ms -> 500ms)
+        mockTab.url = "https://www.youtube.com/watch?v=abc";
+        let attempt = 0;
+        global.chrome.tabs.sendMessage = async (tabId, msg) => {
+            attempt++;
+            if (attempt < 3) throw new Error("Receiving end does not exist");
+            return { title: "Recovered Title", url: msg.detectedUrl, isProvisional: false };
+        };
+        const retryStart = Date.now();
+        const retryRes = await _safeScrapeDetails(
+            888,
+            "https://cdn.example/stream.m3u8",
+            "Fallback",
+            "https://www.youtube.com/watch?v=abc",
+            "Loading...",
+        );
+        const retryElapsed = Date.now() - retryStart;
+        assert.strictEqual(retryRes.title, "Recovered Title");
+        assert.strictEqual(attempt, 3);
+        assert.ok(retryElapsed >= 600 && retryElapsed < 1400, `Expected ~700ms backoff, got ${retryElapsed}ms`);
+    } finally {
+        global.chrome = origChrome;
+    }
+    console.log("  ✅ _safeScrapeDetails fast-path, backoff & snapshot guard verified.");
 
     console.log("\n✨ UI SYNC TEST PASSED! ✨");
 }

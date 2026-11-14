@@ -269,10 +269,57 @@ async function _waitForM3u8Detection(tabId, timeoutInSeconds) {
 }
 
 /**
+ * Checks whether a tab title is provisional/loading (e.g., URL, hostname, or generic placeholder).
+ */
+export function isProvisionalTabTitle(title, url = null) {
+	if (!title || typeof title !== "string") return true;
+	const cleanTitle = title.replace(/^\(\d+\)\s*/, "").trim();
+	if (!cleanTitle || cleanTitle.length < 2 || !/[\p{L}\p{N}]/u.test(cleanTitle)) {
+		return true;
+	}
+
+	if (url && typeof url === "string") {
+		const cleanUrl = url.trim();
+		if (cleanTitle === cleanUrl) return true;
+		try {
+			const hostname = new URL(cleanUrl).hostname.replace(/^www\./, "").toLowerCase();
+			if (hostname && cleanTitle.toLowerCase() === hostname) return true;
+		} catch (e) {
+			console.debug("[Scanner] Ignoring malformed URL during provisional check:", e?.message || e);
+		}
+	}
+
+	const provisionalPatterns = [
+		/^loading\.{0,3}$/i,
+		/^connecting\.{0,3}$/i,
+		/^please wait\.{0,3}$/i,
+		/^untitled$/i,
+		/^youtube$/i,
+		/^animeheaven\.me$/i,
+		/^animepahe$/i,
+		/^gogoanime$/i,
+	];
+	return provisionalPatterns.some((p) => p.test(cleanTitle));
+}
+
+/**
  * Safely attempts to scrape details from a tab with retries and readiness checks.
  */
-export async function _safeScrapeDetails(tabId, detectedUrl, fallbackTitle, originPageUrl = null, originTitle = null) {
+export async function _safeScrapeDetails(
+	tabId,
+	detectedUrl,
+	fallbackTitle,
+	originPageUrl = null,
+	originTitle = null,
+	options = {},
+) {
 	const maxRetries = 2;
+	const retryDelays = [200, 500];
+	const timeoutMs =
+		typeof options?.timeoutMs === "number" && options.timeoutMs > 0
+			? options.timeoutMs
+			: 1500;
+
 	for (let i = 0; i <= maxRetries; i++) {
 		try {
 			// Verify tab exists and is ready
@@ -285,41 +332,45 @@ export async function _safeScrapeDetails(tabId, detectedUrl, fallbackTitle, orig
 
 			if (!tab) return { title: fallbackTitle, url: detectedUrl };
 
-			// Snapshot Guard: If the tab title has already changed significantly, 
-			// it means the user navigated away. Abort to prevent cross-page scraping.
-			if (originTitle && tab.title && tab.title !== originTitle) {
-				// Basic heuristic: check if the core title part changed (ignoring (1) notifications etc)
-				const cleanCurrent = tab.title.replace(/^\(\d+\)\s*/, "").trim();
-				const cleanOrigin = originTitle.replace(/^\(\d+\)\s*/, "").trim();
-				
-				if (cleanCurrent !== cleanOrigin) {
-					console.warn("[Scanner] Tab title changed before scrape. Aborting to prevent mismatch.", {
-						current: cleanCurrent,
-						origin: cleanOrigin
-					});
-					return { title: fallbackTitle, url: detectedUrl, isProvisional: true };
-				}
-			}
-
 			// If tab has already moved away from the original page URL, stop immediately
 			if (originPageUrl && tab.url !== originPageUrl) {
 				console.warn("[Scanner] Tab URL changed. Aborting.", {
 					current: tab.url,
-					origin: originPageUrl
+					origin: originPageUrl,
 				});
 				return { title: fallbackTitle, url: detectedUrl, isProvisional: true };
 			}
 
-			// If tab is still loading, wait briefly (only on first try)
-			if (i === 0 && tab.status === "loading") {
-				await new Promise((r) => setTimeout(r, 1000));
+			// Guard: Only enforce title mismatch when originPageUrl is unavailable and originTitle was already non-provisional,
+			// so loading/SPA title updates on the same URL are never aborted.
+			if (
+				!originPageUrl &&
+				originTitle &&
+				tab.title &&
+				tab.title !== originTitle &&
+				!isProvisionalTabTitle(originTitle, detectedUrl)
+			) {
+				const cleanCurrent = tab.title.replace(/^\(\d+\)\s*/, "").trim();
+				const cleanOrigin = originTitle.replace(/^\(\d+\)\s*/, "").trim();
+
+				if (cleanCurrent !== cleanOrigin) {
+					console.warn(
+						"[Scanner] Tab title changed before scrape. Aborting to prevent mismatch.",
+						{
+							current: cleanCurrent,
+							origin: cleanOrigin,
+						},
+					);
+					return { title: fallbackTitle, url: detectedUrl, isProvisional: true };
+				}
 			}
 
-			// Attempt message
+			// Attempt message immediately regardless of tab.status
 			const response = await chrome.tabs.sendMessage(tabId, {
 				action: "scrape_and_get_details",
 				detectedUrl: detectedUrl,
-				originPageUrl: originPageUrl
+				originPageUrl: originPageUrl,
+				timeoutMs: timeoutMs,
 			});
 
 			if (response && response.title) {
@@ -327,7 +378,7 @@ export async function _safeScrapeDetails(tabId, detectedUrl, fallbackTitle, orig
 			}
 		} catch (e) {
 			if (i < maxRetries) {
-				await new Promise((r) => setTimeout(r, 800)); // Wait before retry
+				await new Promise((r) => setTimeout(r, retryDelays[i] ?? 500));
 			}
 		}
 	}

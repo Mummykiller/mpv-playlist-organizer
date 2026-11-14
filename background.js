@@ -115,6 +115,85 @@ const startAutoAddTimer = async () => {
 	}
 };
 
+const watchTabTitleUpdateForAutoAdd = ({
+	tabId,
+	originUrl,
+	streamUrl,
+	folderId,
+	itemId,
+	ttlMs = 5000,
+}) => {
+	if (typeof chrome === "undefined" || !chrome.tabs?.onUpdated?.addListener || !itemId) {
+		return;
+	}
+
+	let cleanedUp = false;
+	let ttlTimer = null;
+
+	const cleanup = () => {
+		if (cleanedUp) return;
+		cleanedUp = true;
+		if (ttlTimer) {
+			clearTimeout(ttlTimer);
+			ttlTimer = null;
+		}
+		chrome.tabs.onUpdated.removeListener(onUpdated);
+		if (chrome.tabs.onRemoved?.removeListener) {
+			chrome.tabs.onRemoved.removeListener(onRemoved);
+		}
+	};
+
+	const onRemoved = (removedTabId) => {
+		if (removedTabId === tabId) cleanup();
+	};
+
+	const onUpdated = async (updatedTabId, changeInfo, updatedTab) => {
+		if (updatedTabId !== tabId) return;
+		const currentUrl = updatedTab?.url || changeInfo.url;
+		if (originUrl && currentUrl && currentUrl !== originUrl) {
+			cleanup();
+			return;
+		}
+		if (!changeInfo.title) return;
+
+		cleanup();
+		try {
+			const scraped = await m3u8_scanner_handlers._safeScrapeDetails(
+				tabId,
+				streamUrl,
+				changeInfo.title,
+				originUrl,
+				changeInfo.title,
+				{ timeoutMs: 1200 },
+			);
+			const nextTitle =
+				scraped?.title && !scraped.isProvisional
+					? scraped.title
+					: !m3u8_scanner_handlers.isProvisionalTabTitle(
+							changeInfo.title,
+							originUrl || streamUrl,
+						)
+						? changeInfo.title
+						: null;
+			if (nextTitle) {
+				await playlistManager.handleUpdateItemTitle({
+					folderId,
+					itemId,
+					newTitle: nextTitle,
+				});
+			}
+		} catch (e) {
+			logger.debug(`[Auto-Add] onUpdated title fast-path failed: ${e?.message || e}`);
+		}
+	};
+
+	chrome.tabs.onUpdated.addListener(onUpdated);
+	if (chrome.tabs.onRemoved?.addListener) {
+		chrome.tabs.onRemoved.addListener(onRemoved);
+	}
+	ttlTimer = setTimeout(cleanup, ttlMs);
+};
+
 const handleAutoAdd = async (url, tab) => {
 	await autoAddInitPromise;
 	if (!autoAddActive || !url) return;
@@ -161,7 +240,8 @@ const handleAutoAdd = async (url, tab) => {
 					url, 
 					snapshot.title,
 					snapshot.url,
-					snapshot.title // originTitle snapshot
+					snapshot.title, // originTitle snapshot
+					{ timeoutMs: 1500 }
 				);
 
 				const response = await addPromise;
@@ -176,6 +256,14 @@ const handleAutoAdd = async (url, tab) => {
 						folderId,
 						itemId: response.item.id,
 						newTitle: finalDetails.title
+					});
+				} else if (response.item?.id) {
+					watchTabTitleUpdateForAutoAdd({
+						tabId: snapshot.tabId,
+						originUrl: snapshot.url,
+						streamUrl: url,
+						folderId,
+						itemId: response.item.id,
 					});
 				}
 			} catch (e) {
@@ -310,9 +398,6 @@ const actionHandlers = {
 		const tabId = sender.tab?.id;
 		if (tabId) {
 			m3u8_scanner_handlers.handleUpdateDetectedUrlForTab(tabId, request.url);
-			if (request.url) {
-				await handleAutoAdd(request.url, sender.tab);
-			}
 		}
 	},
 	force_reload_settings: ui_state_handlers.handleForceReloadSettings,
