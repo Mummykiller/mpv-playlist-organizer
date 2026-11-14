@@ -293,8 +293,13 @@ def run_js_batch(verbose=False):
     # 4. Non-Interactive Static Linters (Executed without prompting when available)
     ruff_bin = shutil.which("ruff")
     if ruff_bin:
+        ruff_cmd = [ruff_bin, "check", "--no-fix"]
+        ruff_cfg = os.path.join(TESTING_TOOLS_DIR, "pyproject.toml")
+        if os.path.isfile(ruff_cfg):
+            ruff_cmd.extend(["--config", ruff_cfg])
+        ruff_cmd.append(".")
         ruff_res = subprocess.run(
-            [ruff_bin, "check", "--no-fix", "."],
+            ruff_cmd,
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
@@ -319,7 +324,13 @@ def run_js_batch(verbose=False):
             if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
                 biome_bin = candidate
                 break
-    biome_cmd = [biome_bin, "check", "."] if biome_bin else None
+    biome_cmd = None
+    if biome_bin:
+        biome_cmd = [biome_bin, "check"]
+        biome_cfg = os.path.join(TESTING_TOOLS_DIR, "biome.json")
+        if os.path.isfile(biome_cfg):
+            biome_cmd.extend(["--config-path", biome_cfg])
+        biome_cmd.append(".")
 
     if biome_cmd:
         biome_res = subprocess.run(
