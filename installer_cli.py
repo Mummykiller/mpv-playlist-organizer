@@ -31,7 +31,7 @@ class CommandLineApp:
             print(" 3. Run Diagnostics")
             print(" 4. Detect Extension ID")
             print(" 5. Install CLI Wrapper (mpv-cli)")
-            print(" 6. Add to PATH (Windows only)")
+            print(" 6. Add Folder to User PATH")
             print(" 0. Exit")
             
             choice = input("\nSelect an option: ").strip()
@@ -122,6 +122,7 @@ class CommandLineApp:
         browser = input("Which browser to test for cookie access? [brave]: ").strip().lower() or "brave"
         print(f"Starting diagnostics for '{browser}'...\n")
         report, has_error = self.logic.run_diagnostics(browser)
+        print("\n--- Diagnostics Report ---")
         print(report)
         if has_error:
             print("\n❌ Diagnostics failed. See issues above.")
@@ -151,15 +152,19 @@ class CommandLineApp:
 
     def perform_add_to_path(self):
         self._print_header("ADD TO PATH")
-        if platform.system() != "Windows":
-            print("This automated feature is Windows-only.")
-            print(f"Linux/Mac users: export PATH=\"$PATH:{INSTALL_DIR}\"")
-            return
-            
         try:
             result = self.logic.add_to_path()
             if result == "Success":
                 print("\n✅ SUCCESS: Directory added to user PATH.")
+            elif isinstance(result, dict) and result.get("status") == "manual":
+                print("\nManual PATH setup required:")
+                print(f"  Folder: {result.get('directory', INSTALL_DIR)}")
+                print(f"\n  Add permanently ({result.get('shell_rc', '~/.bashrc')}):")
+                print(f"    {result.get('persist_command', '')}")
+                print("\n  Apply to current session:")
+                print(f"    {result.get('session_command', '')}")
+            elif result:
+                print(f"\n{result}")
         except Exception as e:
             print(f"\n❌ ERROR: {e}")
 

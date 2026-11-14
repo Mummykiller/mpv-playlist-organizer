@@ -184,37 +184,58 @@ class InstallerLogic:
         """Runs diagnostics and returns (result_text, has_critical_error)."""
         results = []
         has_critical_error = False
+
+        self.log("Checking dependencies (yt-dlp, mpv, FFmpeg, Node.js)...")
         status = services.check_mpv_and_ytdlp_status(file_io.get_mpv_executable, lambda msg: None)
 
+        self.log("Checking yt-dlp...")
         if status['ytdlp']['found']:
             ver = status['ytdlp'].get('version', 'Unknown')
-            results.append(f"✅ yt-dlp found: {ver}")
+            msg = f"✅ yt-dlp found: {ver}"
+            results.append(msg)
+            self.log(msg)
         else:
-            results.append("❌ yt-dlp NOT found in PATH")
+            msg = "❌ yt-dlp NOT found in PATH"
+            results.append(msg)
+            self.log(msg)
             has_critical_error = True
 
+        self.log("Checking mpv...")
         if status['mpv']['found']:
-            results.append(f"✅ mpv found at: {status['mpv']['path']}")
+            msg = f"✅ mpv found at: {status['mpv']['path']}"
+            results.append(msg)
+            self.log(msg)
         else:
-            results.append("❌ mpv NOT found in PATH")
+            msg = "❌ mpv NOT found in PATH"
+            results.append(msg)
+            self.log(msg)
             has_critical_error = True
 
+        self.log("Checking FFmpeg...")
         if status['ffmpeg']['found']:
             ver = status['ffmpeg'].get('version', 'Found')
-            results.append(f"✅ FFmpeg: {ver} at {status['ffmpeg']['path']}")
+            msg = f"✅ FFmpeg: {ver} at {status['ffmpeg']['path']}"
+            results.append(msg)
+            self.log(msg)
         else:
             results.append("❌ FFmpeg NOT found")
             results.append("   (Required for 1440p/4K YouTube)")
+            self.log("❌ FFmpeg NOT found (Required for 1440p/4K YouTube)")
             has_critical_error = True
 
+        self.log("Checking Node.js...")
         if status['node']['found']:
             ver = status['node'].get('version', 'Found')
-            results.append(f"✅ Node.js: {ver} at {status['node']['path']}")
+            msg = f"✅ Node.js: {ver} at {status['node']['path']}"
+            results.append(msg)
+            self.log(msg)
         else:
             results.append("⚠️ Node.js NOT found")
             results.append("   (Recommended for 1440p+ YouTube)")
+            self.log("⚠️ Node.js NOT found (Recommended for 1440p+ YouTube)")
 
         if status['ytdlp']['found'] and browser:
+            self.log(f"Testing browser cookie extraction for '{browser}'...")
             try:
                 manual_path = self.manual_user_data_paths.get(browser.lower())
                 cmd = [status['ytdlp']['path'], "--cookies-from-browser", browser]
@@ -232,24 +253,32 @@ class InstallerLogic:
                 proc = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, timeout=20)
 
                 if proc.returncode == 0:
-                    results.append(f"✅ Cookie access successful for {browser}")
+                    msg = f"✅ Cookie access successful for {browser}"
+                    results.append(msg)
+                    self.log(msg)
                 else:
                     err = proc.stderr.strip()
                     msg = f"❌ Cookie access failed for {browser}"
                     if "lock" in err.lower() or "open" in err.lower():
                         msg += "\n   (Tip: Close the browser and try again)"
                     results.append(msg)
+                    self.log(f"❌ Cookie access failed for {browser}")
                     self.log(f"Cookie error: {err}")
                     has_critical_error = True
             except subprocess.TimeoutExpired:
                 results.append(f"❌ Cookie test timed out for {browser}.\n   (Tip: Check your network or browser profile.)")
+                self.log(f"❌ Cookie test timed out for {browser}.")
                 has_critical_error = True
             except Exception as e:
                 results.append(f"❌ Cookie test error: {e}")
+                self.log(f"❌ Cookie test error: {e}")
                 has_critical_error = True
         elif not browser:
-            results.append("⚠️ No browser selected for cookie test")
+            msg = "⚠️ No browser selected for cookie test"
+            results.append(msg)
+            self.log(msg)
 
+        self.log("Diagnostics complete.")
         return "\n".join(results), has_critical_error
 
 class WindowsLogic(InstallerLogic):
@@ -498,8 +527,35 @@ class UnixLogic(InstallerLogic):
             f.write(f'#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\n\nexec {quoted_py} {quoted_script} "$@"\n')
         os.chmod(wrapper_path, 0o755)
 
+    def _detect_unix_shell_rc(self):
+        shell_name = os.path.basename(os.environ.get("SHELL", "")).lower()
+        if "zsh" in shell_name:
+            return "~/.zshrc"
+        if "bash" in shell_name:
+            return "~/.bash_profile" if platform.system() == "Darwin" else "~/.bashrc"
+        if platform.system() == "Darwin":
+            return "~/.zshrc"
+        return "~/.bashrc"
+
     def add_to_path(self):
-        return "Manual"
+        quoted_dir = shlex.quote(INSTALL_DIR)
+        session_cmd = f'export PATH="$PATH:"{quoted_dir}'
+        rc_file = self._detect_unix_shell_rc()
+        persist_cmd = f"echo {shlex.quote(session_cmd)} >> {rc_file}"
+        full_cmd = f"{persist_cmd} && {session_cmd}"
+
+        self.log(f"Automatic PATH modification is not supported on {platform.system()}.")
+        self.log(f"Add permanently ({rc_file}): {persist_cmd}")
+        self.log(f"Apply to current session: {session_cmd}")
+
+        return {
+            "status": "manual",
+            "directory": INSTALL_DIR,
+            "shell_rc": rc_file,
+            "persist_command": persist_cmd,
+            "session_command": session_cmd,
+            "command": full_cmd,
+        }
 
 class MacOSLogic(UnixLogic):
     def get_browser_configs(self):

@@ -12,7 +12,7 @@ description: >-
 This skill defines the MPV launch modes, cookie management, command-line construction, bidirectional JSON-IPC pipe communication, temporary handshake files, and custom Lua script hooks.
 
 > [!NOTE]
-> For playback progress tracking, watch duration mathematics, health monitoring, and detached fallback synchronization, see the companion skill: [.gemini/skills/playback-tracking-and-fallback-sync/SKILL.md](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/playback-tracking-and-fallback-sync/SKILL.md).
+> For playback progress tracking, watch duration mathematics, health monitoring, and detached fallback synchronization, see the companion skill: [../playback-tracking-and-fallback-sync/SKILL.md](../playback-tracking-and-fallback-sync/SKILL.md).
 
 ---
 

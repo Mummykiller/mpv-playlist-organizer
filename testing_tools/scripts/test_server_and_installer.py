@@ -7,7 +7,7 @@ import struct
 import subprocess
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_test import BaseTestCase
@@ -183,6 +183,53 @@ class TestServerAndInstaller(BaseTestCase):
 
         self.assertIn(shlex.quote(fake_py), content)
         self.assertIn(shlex.quote(expected_script), content)
+
+    def test_unix_add_to_path_returns_and_logs_quoted_commands(self):
+        """UnixLogic.add_to_path returns structured manual instructions with safely quoted commands and logs them."""
+        special_dir = "/tmp/mpv's playlist dir/bin"
+        logs = []
+        logic = installer_logic.LinuxLogic(logs.append)
+        with patch.object(installer_logic, "INSTALL_DIR", special_dir), \
+             patch.dict(os.environ, {"SHELL": "/bin/zsh"}):
+            result = logic.add_to_path()
+
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["status"], "manual")
+        self.assertEqual(result["directory"], special_dir)
+        self.assertEqual(result["shell_rc"], "~/.zshrc")
+        expected_session = f'export PATH="$PATH:"{shlex.quote(special_dir)}'
+        self.assertEqual(result["session_command"], expected_session)
+        self.assertIn(shlex.quote(expected_session), result["persist_command"])
+        self.assertTrue(result["persist_command"].endswith(">> ~/.zshrc"))
+        self.assertTrue(any(expected_session in line for line in logs))
+        self.assertTrue(any("~/.zshrc" in line for line in logs))
+
+    def test_run_diagnostics_emits_step_by_step_progress_logs(self):
+        """InstallerLogic.run_diagnostics logs each dependency check and browser cookie test stage in real time."""
+        logs = []
+        logic = installer_logic.LinuxLogic(logs.append)
+        fake_status = {
+            "ytdlp": {"found": True, "path": "/usr/bin/yt-dlp", "version": "2026.01.01"},
+            "mpv": {"found": True, "path": "/usr/bin/mpv"},
+            "ffmpeg": {"found": True, "path": "/usr/bin/ffmpeg", "version": "7.0"},
+            "node": {"found": False, "path": None, "error": "not found"},
+        }
+        fake_proc = MagicMock(returncode=0, stderr="", stdout="")
+
+        with patch.object(installer_logic.services, "check_mpv_and_ytdlp_status", return_value=fake_status), \
+             patch.object(installer_logic.subprocess, "run", return_value=fake_proc):
+            report, has_err = logic.run_diagnostics("brave")
+
+        self.assertFalse(has_err)
+        self.assertIn("yt-dlp found: 2026.01.01", report)
+        self.assertIn("Cookie access successful for brave", report)
+        joined_logs = "\n".join(logs)
+        self.assertIn("Checking yt-dlp...", joined_logs)
+        self.assertIn("Checking mpv...", joined_logs)
+        self.assertIn("Checking FFmpeg...", joined_logs)
+        self.assertIn("Checking Node.js...", joined_logs)
+        self.assertIn("Testing browser cookie extraction for 'brave'...", joined_logs)
+        self.assertIn("Diagnostics complete.", joined_logs)
 
     # --- Docs-vs-code drift checks ---
 

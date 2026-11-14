@@ -1,6 +1,6 @@
 # Remediation Plan
 
-Companion to [CODE_REVIEW.md](file:///home/shinku/Documents/mpv-playlist-organizer/CODE_REVIEW.md). Finding IDs (PY-H1, JS-M6 and so on) refer to that file.
+Companion to [CODE_REVIEW.md](CODE_REVIEW.md). Finding IDs (PY-H1, JS-M6 and so on) refer to that file.
 
 > **Status: COMPLETED & VERIFIED (Phases 0–5 Implemented)**
 > All findings across Phases 0–5, low-priority cleanups, regression tests, and documentation/skill synchronizations have been implemented and verified via `python3 verify_changes.py`.
@@ -120,14 +120,14 @@ These make it less likely that agents reintroduce the same issues. Each is an ap
 
 | Skill | What was added |
 |-------|----------------|
-| [security-and-diagnostics](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/security-and-diagnostics/SKILL.md) | A warning about doc/code drift (the yt-dlp flags and the 5 MB vs. 1 MiB limit). Rules for settings-only dangerous flags, fail-closed checks, the local HTTP server, temp paths, PID verification, path blacklists, and batch-field URL validation. |
-| [content-script-lifecycle-and-resilience](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/content-script-lifecycle-and-resilience/SKILL.md) | A warning that "Hail Mary" is a hazard to remove, not a pattern to copy. Rules for a single injection mechanism, cool-downs, a `destroy()` for every timer, `Object.hasOwn` dispatch, and `innerHTML` with untrusted data. |
-| [bridge-and-protocol](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/bridge-and-protocol/SKILL.md) | MV3 service-worker rules, native-call timeout and listener rules, the 900 KB outbound limit, the CLI-sender rule, and tab-activation refresh. |
-| [storage-and-state-sync](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/storage-and-state-sync/SKILL.md) | Locked read-modify-write, OS locks, no overwrite on read failure, prune guards, restorable snapshots, a single lock for shared state, and session generation tokens. |
-| [mpv-playback-and-ipc](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/mpv-playback-and-ipc/SKILL.md) | Stale-socket rules, PID identity before kill, restore resets, no slow IPC under `sync_lock`, index mapping, and per-session cookie dirs. |
-| [testing-and-test-authoring](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/testing-and-test-authoring/SKILL.md) | A regression-test-per-fix requirement, a risk→test-style table, linter and AST gate hardening, and a docs-vs-code drift test. |
-| [native-host-installer-and-cli](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/native-host-installer-and-cli/SKILL.md) | A warning that the CLI "Framing Bypass" claim is wrong. Extension ID validation, path quoting, no import side effects, and a read-only data-dir fallback. |
-| [lead-architect](file:///home/shinku/Documents/mpv-playlist-organizer/.gemini/skills/lead-architect/SKILL.md) | A failure-class review checklist, "no test no merge", skills updated in the same change, a large-file extraction rule, and verifying reviewer findings before acting. |
+| [security-and-diagnostics](.gemini/skills/security-and-diagnostics/SKILL.md) | A warning about doc/code drift (the yt-dlp flags and the 5 MB vs. 1 MiB limit). Rules for settings-only dangerous flags, fail-closed checks, the local HTTP server, temp paths, PID verification, path blacklists, and batch-field URL validation. |
+| [content-script-lifecycle-and-resilience](.gemini/skills/content-script-lifecycle-and-resilience/SKILL.md) | A warning that "Hail Mary" is a hazard to remove, not a pattern to copy. Rules for a single injection mechanism, cool-downs, a `destroy()` for every timer, `Object.hasOwn` dispatch, and `innerHTML` with untrusted data. |
+| [bridge-and-protocol](.gemini/skills/bridge-and-protocol/SKILL.md) | MV3 service-worker rules, native-call timeout and listener rules, the 900 KB outbound limit, the CLI-sender rule, and tab-activation refresh. |
+| [storage-and-state-sync](.gemini/skills/storage-and-state-sync/SKILL.md) | Locked read-modify-write, OS locks, no overwrite on read failure, prune guards, restorable snapshots, a single lock for shared state, and session generation tokens. |
+| [mpv-playback-and-ipc](.gemini/skills/mpv-playback-and-ipc/SKILL.md) | Stale-socket rules, PID identity before kill, restore resets, no slow IPC under `sync_lock`, index mapping, and per-session cookie dirs. |
+| [testing-and-test-authoring](.gemini/skills/testing-and-test-authoring/SKILL.md) | A regression-test-per-fix requirement, a risk→test-style table, linter and AST gate hardening, and a docs-vs-code drift test. |
+| [native-host-installer-and-cli](.gemini/skills/native-host-installer-and-cli/SKILL.md) | A warning that the CLI "Framing Bypass" claim is wrong. Extension ID validation, path quoting, no import side effects, and a read-only data-dir fallback. |
+| [lead-architect](.gemini/skills/lead-architect/SKILL.md) | A failure-class review checklist, "no test no merge", skills updated in the same change, a large-file extraction rule, and verifying reviewer findings before acting. |
 
 > [!NOTE]
 > The security, content-script, storage, playback/IPC, installer/CLI, and AniList skills have been updated and aligned with the remediated implementation.
