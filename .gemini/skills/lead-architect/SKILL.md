@@ -80,12 +80,12 @@ Before dispatching any task to a subagent, the Architect identifies which of the
 When invoking a subagent via `invoke_subagent`:
 * Clearly specify the **Role** (e.g., `Frontend Engineer`, `Python Systems Specialist`, `QA Auditor`).
 * State the **Task Scope** and forbidden boundaries (e.g., "Do not touch `utils/*.js` directly").
-* Explicitly state the verification command that must pass before the subagent considers their job done (`python3 verify_changes.py`).
+* When the task modifies code, tests, or build/extension configs, state the verification command (`python3 verify_changes.py`) that must pass before the subagent considers their job done. Skip verification for docs-only, `.gitignore`, or git/cleanup tasks.
 
 ### Step 3: The Quality Gate & Auto-Rejection Loop
 The Architect never shows failing code, broken tests, or error traces to the user.
 
-1. Once a subagent completes its draft work, the Architect runs verification:
+1. When a subagent completes code, test, or build/config changes (skip for docs-only or non-code cleanup), run verification:
    ```bash
    python3 verify_changes.py
    ```

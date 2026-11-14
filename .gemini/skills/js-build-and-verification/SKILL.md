@@ -76,9 +76,10 @@ python3 verify_changes.py
   - After modifying `utils/*.module.js` or `background/` JavaScript files.
   - Before concluding a coding task to guarantee no test regressions or syntax breaks.
 - **DO NOT run `verify_changes.py`:**
-  - For non-code tasks such as deleting obsolete files or logs.
-  - For markdown documentation edits or skill authoring.
+  - For non-code tasks such as deleting obsolete files, logs, or updating `.gitignore`.
+  - For markdown documentation edits, skill authoring, or git-only operations (staging, committing, pushing).
   - For simple read-only inspections and code exploration.
+  - When a verification run already passed and no code, test, or build/extension config changed since.
 - **Build-Only Shortcut:**
   - If you only modified a `*.module.js` file and want to transpile without running the entire test suite, run:
     ```bash
