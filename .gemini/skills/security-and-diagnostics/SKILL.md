@@ -4,12 +4,15 @@ description: >-
   Governs input validation, SSRF protection, subprocess isolation, path sandboxing,
   sanitization, unified logging, and diagnostics. Load this skill whenever modifying
   `utils/security.py`, `utils/security.module.js`, `utils/logger.py`, `utils/SystemLogger.module.js`,
-  `SECURITY.md`, executing subprocesses, handling file paths, or modifying diagnostics reports.
+  `references/SECURITY.md`, executing subprocesses, handling file paths, or modifying diagnostics reports.
 ---
 
 # Security, Validation & Unified Diagnostics Architecture
 
 This skill defines the security boundaries, protocol validation, process execution isolation, path sandboxing, and unified logging pipelines enforced across the MPV Playlist Organizer.
+
+> [!NOTE]
+> For the full security specification, limits, and checklists, see [references/SECURITY.md](references/SECURITY.md).
 
 ---
 
