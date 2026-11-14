@@ -437,6 +437,96 @@ function testPageScraperWithInjection() {
 	console.log("  [OK] PageScraper (Real DOM Detection)");
 }
 
+function testPageScraperProvisionalTitles() {
+	console.log("Testing PageScraper.isTitleProvisional...");
+	const scraper = new MPV.PageScraper();
+	const url = "https://example.com/watch/1";
+
+	assert.strictEqual(scraper.isTitleProvisional("", url), true);
+	assert.strictEqual(scraper.isTitleProvisional(url, url), true);
+	assert.strictEqual(scraper.isTitleProvisional("Loading...", url), true);
+	assert.strictEqual(scraper.isTitleProvisional("YouTube", url), true);
+	assert.strictEqual(scraper.isTitleProvisional("...", url), true);
+	assert.strictEqual(scraper.isTitleProvisional("x", url), true);
+
+	// Legitimate short titles and structured h1 titles must NOT be provisional
+	assert.strictEqual(scraper.isTitleProvisional("Nana", url), false);
+	assert.strictEqual(scraper.isTitleProvisional("Up", url), false);
+	assert.strictEqual(scraper.isTitleProvisional("K-On", url), false);
+	assert.strictEqual(
+		scraper.isTitleProvisional("Ergo", url, { hasStructuredTitle: true }),
+		false,
+	);
+	console.log("  [OK] PageScraper.isTitleProvisional");
+}
+
+async function testWaitForAccurateDetailsThrottlingAndGuards() {
+	console.log("Testing ControllerView.waitForAccurateDetails throttling & guards...");
+	const scraper = new MPV.PageScraper();
+	let scrapeCalls = 0;
+	let mockDetails = { url: window.location.href, title: "Loading...", isProvisional: true, fingerprint: "fp-1" };
+	const view = new MPV.ControllerView({
+		pageScraper: {
+			scrapePageDetails: () => {
+				scrapeCalls++;
+				return { ...mockDetails };
+			},
+		},
+	});
+
+	// 1. originPageUrl mismatch aborts immediately
+	const mismatch = await view.waitForAccurateDetails(
+		window.location.href,
+		500,
+		"https://other-site.example/video",
+	);
+	assert.strictEqual(mismatch.isProvisional, true);
+	assert.strictEqual(scrapeCalls, 0);
+
+	// 2. Throttled MutationObserver coalesces rapid DOM mutations
+	const testRoot = document.createElement("div");
+	document.body.appendChild(testRoot);
+	const waitPromise = view.waitForAccurateDetails(window.location.href, 600, window.location.href);
+
+	// Burst of 10 rapid mutations within a few ms
+	for (let i = 0; i < 10; i++) {
+		const span = document.createElement("span");
+		span.textContent = `mut-${i}`;
+		testRoot.appendChild(span);
+	}
+	await new Promise((r) => setTimeout(r, 20));
+	const callsAfterBurst = scrapeCalls;
+	assert.ok(
+		callsAfterBurst <= 3,
+		`Expected throttled scrapePageDetails calls <= 3 after burst, got ${callsAfterBurst}`,
+	);
+
+	// Now simulate the real title appearing
+	mockDetails = { url: window.location.href, title: "Final Video Title", isProvisional: false, fingerprint: "fp-1" };
+	const finalSpan = document.createElement("span");
+	finalSpan.textContent = "final";
+	testRoot.appendChild(finalSpan);
+
+	const resolved = await waitPromise;
+	assert.strictEqual(resolved.title, "Final Video Title");
+	assert.strictEqual(resolved.isProvisional, false);
+
+	// 3. Static-URL SPA fingerprint change resolves immediately
+	mockDetails = { url: window.location.href, title: "Loading...", isProvisional: true, fingerprint: "ep-1" };
+	const fpPromise = view.waitForAccurateDetails(window.location.href, 600, window.location.href);
+	await new Promise((r) => setTimeout(r, 120));
+	mockDetails = { url: window.location.href, title: "Episode 2", isProvisional: true, fingerprint: "ep-2" };
+	const fpSpan = document.createElement("span");
+	fpSpan.textContent = "ep2";
+	testRoot.appendChild(fpSpan);
+	const fpResolved = await fpPromise;
+	assert.strictEqual(fpResolved.fingerprint, "ep-2");
+
+	testRoot.remove();
+	void scraper;
+	console.log("  [OK] ControllerView.waitForAccurateDetails throttling & guards");
+}
+
 async function testMpvControllerInit() {
 	console.log("Testing MpvController Initialization...");
 	const controller = new MPV.MpvController();
@@ -493,6 +583,52 @@ async function testMpvControllerInit() {
 		// Check if UI was actually injected into the real JSDOM document
 		const host = document.getElementById("m3u8-controller-host");
 		assert.ok(host, "UIManager should have injected the host element into JSDOM");
+
+		// Verify detected_url_changed updates state without echoing report_detected_url
+		const sentActions = [];
+		const origBridgeSend2 = controller.bridge.send.bind(controller.bridge);
+		controller.bridge.send = (action, ...rest) => {
+			sentActions.push(action);
+			return Promise.resolve({ success: true });
+		};
+		controller.tabId = 42;
+		registeredMessageListener(
+			{ action: "detected_url_changed", tabId: 42, url: "https://cdn.example/video.m3u8" },
+			{},
+			() => {},
+		);
+		assert.strictEqual(controller.state.state.detectedUrl, "https://cdn.example/video.m3u8");
+		assert.strictEqual(
+			sentActions.filter((a) => a === "report_detected_url").length,
+			0,
+			"detected_url_changed must not echo report_detected_url",
+		);
+		controller.bridge.send = origBridgeSend2;
+
+		// Verify scrape_and_get_details forwards timeoutMs (defaulting to 1500)
+		let passedTimeout = null;
+		const origWait = controller.waitForAccurateDetails.bind(controller);
+		controller.waitForAccurateDetails = async (url, timeoutMs) => {
+			passedTimeout = timeoutMs;
+			return { url, title: "T", isProvisional: false };
+		};
+		await new Promise((res) =>
+			registeredMessageListener(
+				{ action: "scrape_and_get_details", detectedUrl: "https://cdn.example/video.m3u8" },
+				{},
+				res,
+			),
+		);
+		assert.strictEqual(passedTimeout, 1500);
+		await new Promise((res) =>
+			registeredMessageListener(
+				{ action: "scrape_and_get_details", detectedUrl: "https://cdn.example/video.m3u8", timeoutMs: 1200 },
+				{},
+				res,
+			),
+		);
+		assert.strictEqual(passedTimeout, 1200);
+		controller.waitForAccurateDetails = origWait;
 
 		controller.teardown();
 		assert.strictEqual(registeredMessageListener, null, "teardown() must remove messageListener");
@@ -756,6 +892,8 @@ async function testNativeConnection() {
 		testContentState();
 		testPlaybackStateManager();
 		testPageScraperWithInjection();
+		testPageScraperProvisionalTitles();
+		await testWaitForAccurateDetailsThrottlingAndGuards();
 		await testMpvControllerInit();
 		await testDraggableComponent();
 		await testNativeConnection();

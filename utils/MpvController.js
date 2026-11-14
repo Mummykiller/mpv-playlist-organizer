@@ -121,11 +121,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 					if (req.url) {
 						this.state.update({ detectedUrl: req.url });
-						// Report to background so it's cached for the popup
-						this.bridge.send("report_detected_url", null, { url: req.url });
 					} else {
 						this.state.update({ detectedUrl: null });
-						this.bridge.send("report_detected_url", null, { url: null });
 					}
 					this.updateAddButtonState();
 				},
@@ -235,7 +232,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					// Prefer the URL passed in the request (from background scanner)
 					// otherwise fall back to local state or current location.
 					const url = req.detectedUrl || this.state.state.detectedUrl || window.location.href;
-					const details = await this.waitForAccurateDetails(url, 3000, req.originPageUrl);
+					const timeoutMs = typeof req.timeoutMs === "number" && req.timeoutMs > 0 ? req.timeoutMs : 1500;
+					const details = await this.waitForAccurateDetails(url, timeoutMs, req.originPageUrl);
 					send(details);
 				},
 			};
@@ -693,7 +691,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		_handleRightClickScrape(send) { return this.view.handleRightClickScrape(send); }
 
-		async waitForAccurateDetails(url, timeoutMs = 3000, originPageUrl = null) { return this.view.waitForAccurateDetails(url, timeoutMs, originPageUrl); }
+		async waitForAccurateDetails(url, timeoutMs = 1500, originPageUrl = null) { return this.view.waitForAccurateDetails(url, timeoutMs, originPageUrl); }
 
 		showStackedClearConfirmation(folderId, message, requestData) { return this.view.showStackedClearConfirmation(folderId, message, requestData); }
 

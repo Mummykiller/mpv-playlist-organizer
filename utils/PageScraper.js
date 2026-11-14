@@ -37,17 +37,22 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		 * Checks if a title is likely a provisional/fallback title (e.g., URL or "Loading...").
 		 * @param {string} title - The title to check.
 		 * @param {string} url - The URL to compare against.
+		 * @param {object} [options] - Optional hints about how the title was extracted.
+		 * @param {boolean} [options.hasStructuredTitle] - True if extracted from an h1, episode marker, or video title selector.
 		 * @returns {boolean}
 		 */
-		isTitleProvisional(title, url) {
+		isTitleProvisional(title, url, options = {}) {
 			if (!title || !url) return true;
 			const cleanTitle = title.trim();
 			const cleanUrl = url.trim();
 
-			// 1. Title is just the URL
+			// 1. Empty, single-char, or punctuation-only placeholder
+			if (cleanTitle.length < 2 || !/[\p{L}\p{N}]/u.test(cleanTitle)) return true;
+
+			// 2. Title is just the URL
 			if (cleanTitle === cleanUrl) return true;
 
-			// 2. Title is a known "loading" or generic placeholder
+			// 3. Title is a known "loading" or generic placeholder
 			const provisionalPatterns = [
 				/^loading\.{0,3}$/i,
 				/^connecting\.{0,3}$/i,
@@ -60,7 +65,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			];
 			if (provisionalPatterns.some((p) => p.test(cleanTitle))) return true;
 
-			// 3. Title is identical to the site name (Case-insensitive)
+			// 4. Title is identical to the site name (Case-insensitive)
 			try {
 				const hostname = window.location.hostname.replace(/^www\./, "");
 				if (cleanTitle.toLowerCase() === hostname.toLowerCase()) return true;
@@ -68,8 +73,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				console.debug("[PageScraper] Failed to check hostname for provisional title:", e);
 			}
 
-			// 4. Title is too short and looks like a site name (weak heuristic)
-			if (cleanTitle.length < 5 && !/\d/.test(cleanTitle)) return true;
+			// 5. Trust structured titles (h1 / episode / video selector) once placeholder/URL checks pass
+			if (options?.hasStructuredTitle) return false;
 
 			return false;
 		}
@@ -155,7 +160,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					return null;
 				};
 
-				let videoTitle = findFirst(titleSelectors) || document.title;
+				const extractedVideoTitle = findFirst(titleSelectors);
+				let videoTitle = extractedVideoTitle || document.title;
 				const channelName = findFirst(channelSelectors);
 
 				// Only strip leading notification counts in parentheses, e.g., "(1) Video Title"
@@ -168,7 +174,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				return {
 					url: resultUrl,
 					title: resultTitle,
-					isProvisional: this.isTitleProvisional(resultTitle, resultUrl),
+					isProvisional: this.isTitleProvisional(resultTitle, resultUrl, {
+						hasStructuredTitle: Boolean(extractedVideoTitle),
+					}),
 					fingerprint: fingerprint
 				};
 			}
@@ -299,7 +307,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			return {
 				url: sanitizedUrl,
 				title: sanitizedTitle,
-				isProvisional: this.isTitleProvisional(sanitizedTitle, sanitizedUrl),
+				isProvisional: this.isTitleProvisional(sanitizedTitle, sanitizedUrl, {
+					hasStructuredTitle: Boolean(mainPageTitle || episodePrefix),
+				}),
 				fingerprint: fingerprint
 			};
 		}
