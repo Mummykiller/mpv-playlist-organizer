@@ -141,12 +141,14 @@ class HostManagerApp:
 
         yt_bypass_label = ttk.Label(settings_frame, text="YouTube Account Integration:", font=("Segoe UI", 11, "bold"))
         yt_bypass_label.grid(row=2, column=0, sticky=tk.W, pady=4)
+        self.yt_bypass_label = yt_bypass_label
         self.enable_youtube_bypass_var = tk.BooleanVar(value=False)
         self.yt_bypass_checkbutton = ttk.Checkbutton(settings_frame, variable=self.enable_youtube_bypass_var)
         self.yt_bypass_checkbutton.grid(row=2, column=1, sticky=tk.W, padx=(10, 0))
 
         browser_label = ttk.Label(settings_frame, text="Browser for Analysis:", font=("Segoe UI", 11, "bold"))
         browser_label.grid(row=3, column=0, sticky=tk.W, pady=4)
+        self.browser_label = browser_label
         browser_input_frame = ttk.Frame(settings_frame)
         browser_input_frame.grid(row=3, column=1, sticky="ew", padx=(10, 0))
         browser_input_frame.columnconfigure(0, weight=1)
@@ -157,15 +159,7 @@ class HostManagerApp:
         self.diagnostics_btn = ttk.Button(browser_input_frame, text="Run Diagnostics", command=self.run_diagnostics)
         self.diagnostics_btn.grid(row=0, column=1, sticky=tk.E, padx=(5, 0))
 
-        def toggle_url_analysis_widgets():
-            state = tk.NORMAL if self.create_bypass_var.get() else tk.DISABLED
-            self.browser_combobox.config(state="readonly" if self.create_bypass_var.get() else "disabled")
-            self.diagnostics_btn.config(state=state)
-            self.yt_bypass_checkbutton.config(state=state)
-            browser_label.config(state=state)
-            yt_bypass_label.config(state=state)
-
-        self.bypass_checkbutton.config(command=toggle_url_analysis_widgets)
+        self.bypass_checkbutton.config(command=self._toggle_url_analysis_widgets)
 
         manifest_candidates = [
             os.path.join(file_io.DATA_DIR, f"{HOST_NAME}-chrome.json"),
@@ -187,7 +181,7 @@ class HostManagerApp:
         self.create_bypass_var.set(current_config.get("enable_url_analysis", False))
         self.enable_youtube_bypass_var.set(current_config.get("enable_youtube_analysis", False))
         self.browser_var.set(current_config.get("browser_for_url_analysis", "brave"))
-        toggle_url_analysis_widgets()
+        self._toggle_url_analysis_widgets()
 
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=10)
@@ -205,6 +199,13 @@ class HostManagerApp:
         path_button_frame.pack(fill=tk.X, pady=(0, 5))
         self.path_button = ttk.Button(path_button_frame, text="Add Folder to User PATH", command=self.run_add_to_path)
         self.path_button.pack(fill=tk.X, expand=True)
+
+        status_frame = ttk.Frame(main_frame)
+        status_frame.pack(fill=tk.X, pady=(5, 0))
+        self.status_var = tk.StringVar(value="")
+        self.status_label = ttk.Label(status_frame, textvariable=self.status_var, font=(MODERN_FONT, 9), foreground="#555555")
+        self.status_label.pack(side=tk.LEFT, anchor=tk.W)
+        self.progress_bar = ttk.Progressbar(status_frame, mode="indeterminate", length=160)
 
         ttk.Label(main_frame, text="Log Output:", font=(MODERN_FONT, 11, "bold")).pack(anchor=tk.W, pady=(10, 5))
         self.log_area = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, height=14, font=(MONO_FONT, 10), relief="flat", borderwidth=1)
@@ -252,8 +253,20 @@ class HostManagerApp:
     def run_install_cli(self):
         threading.Thread(target=self._install_cli_thread).start()
 
+    def _toggle_url_analysis_widgets(self):
+        enabled = self.create_bypass_var.get()
+        state = tk.NORMAL if enabled else tk.DISABLED
+        self.browser_combobox.config(state="readonly" if enabled else "disabled")
+        self.diagnostics_btn.config(state=state)
+        self.yt_bypass_checkbutton.config(state=state)
+        self.browser_label.config(state=state)
+        self.yt_bypass_label.config(state=state)
+
     def run_add_to_path(self):
-        threading.Thread(target=self._add_to_path_thread).start()
+        self.path_button.config(state=tk.DISABLED, text="Checking User PATH...")
+        self.status_var.set("Checking User PATH...")
+        self.log("Checking User PATH...")
+        threading.Thread(target=self._add_to_path_thread, daemon=True).start()
 
     def _check_dependencies_async(self):
         threading.Thread(target=self._check_dependencies_thread, daemon=True).start()
@@ -286,10 +299,41 @@ class HostManagerApp:
 
     def run_diagnostics(self):
         browser = self.browser_var.get()
+        self.diagnostics_btn.config(state=tk.DISABLED, text="Running Diagnostics...")
+        self.browser_combobox.config(state="disabled")
+        self.bypass_checkbutton.config(state=tk.DISABLED)
+        self.status_var.set(f"Running diagnostics for {browser or 'selected browser'}...")
+        self.progress_bar.pack(side=tk.RIGHT, padx=(10, 0))
+        self.progress_bar.start(10)
+        self.log(f"Running diagnostics for {browser or 'none'}...")
+
         def _test():
-            report, has_err = self.logic.run_diagnostics(browser)
-            title = "Diagnostics Failed" if has_err else "Diagnostics Passed"
-            self.root.after(0, lambda: messagebox.showinfo(title, report) if not has_err else messagebox.showerror(title, report))
+            report = ""
+            has_err = False
+            error_exc = None
+            try:
+                report, has_err = self.logic.run_diagnostics(browser)
+            except Exception as e:
+                error_exc = e
+                self.log(f"Diagnostics error: {e}")
+            finally:
+                def _finish():
+                    self.progress_bar.stop()
+                    self.progress_bar.pack_forget()
+                    self.status_var.set("")
+                    self.diagnostics_btn.config(text="Run Diagnostics")
+                    self.bypass_checkbutton.config(state=tk.NORMAL)
+                    self._toggle_url_analysis_widgets()
+                    if error_exc is not None:
+                        messagebox.showerror("Diagnostics Error", str(error_exc))
+                    else:
+                        title = "Diagnostics Failed" if has_err else "Diagnostics Passed"
+                        if has_err:
+                            messagebox.showerror(title, report)
+                        else:
+                            messagebox.showinfo(title, report)
+                self.root.after(0, _finish)
+
         threading.Thread(target=_test, daemon=True).start()
 
     def run_detect_id(self):
@@ -325,12 +369,76 @@ class HostManagerApp:
         except Exception as e:
             self.log(f"Error: {e}")
 
+    def _show_manual_path_dialog(self, path_info):
+        persist_cmd = path_info.get("persist_command", "")
+        session_cmd = path_info.get("session_command", "")
+        shell_rc = path_info.get("shell_rc", "~/.bashrc")
+        commands_text = "\n".join(cmd for cmd in (persist_cmd, session_cmd) if cmd)
+        if not commands_text:
+            commands_text = path_info.get("command", "")
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Manual PATH Setup")
+        dialog.geometry("620x300")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(
+            frame,
+            text=(
+                "Automatic PATH modification is only supported on Windows.\n"
+                f"Run the command(s) below in your terminal to add this folder to PATH ({shell_rc}):"
+            ),
+            wraplength=580,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, pady=(0, 10))
+
+        cmd_box = tk.Text(frame, height=4, wrap=tk.WORD, font=(MONO_FONT, 10), relief="solid", borderwidth=1)
+        cmd_box.insert("1.0", commands_text)
+        cmd_box.configure(state="disabled")
+        cmd_box.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        feedback_var = tk.StringVar(value="")
+        ttk.Label(frame, textvariable=feedback_var, foreground="#2e7d32", font=(MODERN_FONT, 9, "bold")).pack(anchor=tk.W, pady=(0, 8))
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X)
+
+        def copy_command():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(commands_text)
+            self.root.update()
+            feedback_var.set("Copied command(s) to clipboard!")
+
+        ttk.Button(btn_frame, text="Copy Command", command=copy_command).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="Close", command=dialog.destroy).pack(side=tk.RIGHT)
+
     def _add_to_path_thread(self):
+        result = None
+        error_exc = None
         try:
             result = self.logic.add_to_path()
-            if result == "Success":
-                self.log("Added to PATH!")
-            else:
-                self.log(result)
         except Exception as e:
+            error_exc = e
             self.log(f"Error: {e}")
+        finally:
+            def _finish():
+                self.path_button.config(state=tk.NORMAL, text="Add Folder to User PATH")
+                self.status_var.set("")
+                if error_exc is not None:
+                    messagebox.showerror("Error", str(error_exc))
+                    return
+                if result == "Success":
+                    self.log("Added to PATH!")
+                    messagebox.showinfo("PATH Updated", "Directory successfully added to user PATH.")
+                elif isinstance(result, dict) and result.get("status") == "manual":
+                    self._show_manual_path_dialog(result)
+                elif isinstance(result, str) and result.lower() == "manual":
+                    self._show_manual_path_dialog({"status": "manual", "command": ""})
+                else:
+                    self.log(str(result))
+                    messagebox.showinfo("User PATH", str(result))
+            self.root.after(0, _finish)

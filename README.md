@@ -134,8 +134,8 @@ The extension includes a powerful CLI wrapper for managing your media without op
 | `mpv-cli play "Watchlist"` | Launches MPV with the specified playlist |
 
 ### Setup
-1. Open `installer.py` and click **"Install CLI Wrapper"**.
-2. Click **"Add Folder to User PATH"** (Windows) or follow the manual instructions for `~/.bashrc` / `~/.zshrc` (Linux/macOS).
+1. Open `installer.py` (or `installer_cli.py`) and click **"Install CLI Wrapper"**.
+2. Click **"Add Folder to User PATH"** — on Windows this updates your user `PATH` automatically, and on Linux/macOS it displays a copyable shell command for your `~/.bashrc`, `~/.zshrc`, or `~/.bash_profile`.
 
 ---
 
@@ -176,9 +176,9 @@ graph LR
 <details>
 <summary><strong>🔍 Run Diagnostics</strong></summary>
 
-If you encounter issues, open `installer.py` and click **Run Diagnostics**. This verifies:
+If you encounter issues, open `installer.py` (or `installer_cli.py`) and click **Run Diagnostics**. This streams live progress while verifying:
 - ✅ MPV & yt-dlp installation/version
-- ✅ ffmpeg presence
+- ✅ FFmpeg & Node.js availability
 - ✅ Browser cookie access permissions
 
 </details>
