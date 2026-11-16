@@ -13,7 +13,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.minimizedShadowRoot = null;
 			this.anilistPanelHost = null;
 			this.anilistShadowRoot = null;
-			this.progressDashboard = null;
 
 			// Strict Invariant: Never initialize or render UI inside sub-frames/iframes
 			let isTopFrame = false;
@@ -78,15 +77,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 			}
 			return MPV._cachedStylesPromise;
-		}
-
-		getDomain() {
-			if (!chrome.runtime?.id) return null;
-			try {
-				return new URL(window.location.href).hostname;
-			} catch (e) {
-				return null;
-			}
 		}
 
 		createAndInjectUi() {

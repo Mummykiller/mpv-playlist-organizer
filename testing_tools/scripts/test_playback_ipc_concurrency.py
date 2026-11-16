@@ -313,5 +313,53 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
         external_list.append({"id": "c"})
         self.assertEqual(len(tracker.playlist), 2)
 
+    def test_hot_swap_item_primed_resume_time_only_when_positive(self):
+        """hot_swap_item only sets user-data/primed-resume-time when start_time > 0."""
+        from utils import session_ipc_ops
+
+        mock_session = MagicMock()
+        mock_session.SCRIPT_DIR = "/tmp/mpv_scripts"
+        mock_session.ipc_manager.is_connected.return_value = True
+        mock_session.ipc_manager.get_property.side_effect = [
+            [{"filename": "https://example.com/1"}],  # playlist
+            2,  # playlist-count
+        ]
+
+        # Case 1: resume_time == 0 -> must NOT send primed-resume-time
+        item_zero = {"id": "item2", "url": "https://example.com/2", "title": "Item 2", "resume_time": 0}
+        session_ipc_ops.hot_swap_item(
+            mock_session,
+            item_zero,
+            "Anime",
+            {"enable_precise_resume": True},
+            [item_zero],
+        )
+        primed_calls = [
+            c for c in mock_session.ipc_manager.send.call_args_list
+            if c[0] and c[0][0].get("command", [])[:2] == ["set_property", "user-data/primed-resume-time"]
+        ]
+        self.assertEqual(len(primed_calls), 0)
+
+        # Case 2: resume_time == 42.7 -> must send primed-resume-time "42"
+        mock_session.ipc_manager.send.reset_mock()
+        mock_session.ipc_manager.get_property.side_effect = [
+            [{"filename": "https://example.com/1"}],
+            2,
+        ]
+        item_pos = {"id": "item2", "url": "https://example.com/2", "title": "Item 2", "resume_time": 42.7}
+        session_ipc_ops.hot_swap_item(
+            mock_session,
+            item_pos,
+            "Anime",
+            {"enable_precise_resume": True},
+            [item_pos],
+        )
+        primed_calls = [
+            c for c in mock_session.ipc_manager.send.call_args_list
+            if c[0] and c[0][0].get("command", [])[:2] == ["set_property", "user-data/primed-resume-time"]
+        ]
+        self.assertEqual(len(primed_calls), 1)
+        self.assertEqual(primed_calls[0][0][0]["command"][2], "42")
+
 if __name__ == '__main__':
     unittest.main()

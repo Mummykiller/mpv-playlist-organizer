@@ -4,7 +4,7 @@ import platform
 import json
 import file_io
 from installer_src.installer_logic import (
-    HOST_NAME, INSTALL_DIR, get_logic_for_platform
+    HOST_NAME, INSTALL_DIR, get_logic_for_platform, validate_extension_id
 )
 
 class CommandLineApp:
@@ -73,13 +73,10 @@ class CommandLineApp:
         else:
             ext_id = input("Enter your Extension ID: ").strip()
             
-        if not ext_id:
-            print("Error: Extension ID is required.")
-            return
-
-        import re
-        if not re.match(r"^[a-p]{32}$", ext_id):
-            print(f"Error: Invalid Extension ID '{ext_id}'. Must be exactly 32 lowercase letters (a-p).")
+        try:
+            ext_id = validate_extension_id(ext_id)
+        except ValueError as e:
+            print(f"Error: {e}")
             return
 
         # 2. Settings

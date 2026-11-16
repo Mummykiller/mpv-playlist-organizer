@@ -10,7 +10,7 @@ import { nativeLink } from "../../utils/nativeLink.js";
 import { createHandler } from "../handler_factory.js";
 import { broadcastLog, broadcastToTabs } from "../messaging.js";
 import { storage } from "../storage_instance.js";
-import { broadcastPlaylistState, getVisualPlaybackState, isFolderActive } from "../ui_broadcaster.js";
+import { broadcastPlaylistState, getVisualPlaybackState } from "../ui_broadcaster.js";
 import { playbackManager } from "../playback_manager.js";
 import * as m3u8_scanner_handlers from "./m3u8_scanner.js";
 import * as playback_handlers from "./playback.js";
@@ -246,6 +246,43 @@ export const UI_ONLY_KEYS = [
 	"dependencyStatus",
 ];
 
+async function resolveTabDomain(request, sender) {
+	if (sender?.origin && (sender.origin.startsWith("http:") || sender.origin.startsWith("https:"))) {
+		try {
+			return new URL(sender.origin).hostname;
+		} catch (e) {
+			console.debug("[UiState] Invalid sender origin URL:", sender.origin, e);
+		}
+	}
+
+	if (sender?.tab?.url) {
+		try {
+			return new URL(sender.tab.url).hostname;
+		} catch (e) {
+			console.debug("[UiState] Invalid sender tab URL:", sender.tab.url, e);
+		}
+	}
+
+	if (sender?.url) {
+		try {
+			return new URL(sender.url).hostname;
+		} catch (e) {
+			console.debug("[UiState] Invalid sender URL:", sender.url, e);
+		}
+	}
+
+	if (request?.tabId) {
+		try {
+			const tab = await chrome.tabs.get(request.tabId);
+			if (tab?.url) return new URL(tab.url).hostname;
+		} catch (e) {
+			console.debug("[UiState] Failed to get tab URL for tabId:", request.tabId, e);
+		}
+	}
+
+	return null;
+}
+
 export const handleGetUiPreferences = createHandler(async ({ request, data, sender }) => {
 	const globalPrefs = { ...data.settings.uiPreferences.global };
 
@@ -278,39 +315,7 @@ export const handleGetUiPreferences = createHandler(async ({ request, data, send
 		}
 	}
 
-	let domain = null;
-	if (sender.origin && (sender.origin.startsWith("http:") || sender.origin.startsWith("https:"))) {
-		try {
-			domain = new URL(sender.origin).hostname;
-		} catch (e) {
-			console.debug("[UiState] Invalid sender origin URL:", sender.origin, e);
-		}
-	}
-
-	if (!domain && sender.tab?.url) {
-		try {
-			domain = new URL(sender.tab.url).hostname;
-		} catch (e) {
-			console.debug("[UiState] Invalid sender tab URL:", sender.tab.url, e);
-		}
-	}
-
-	if (!domain && sender.url) {
-		try {
-			domain = new URL(sender.url).hostname;
-		} catch (e) {
-			console.debug("[UiState] Invalid sender URL:", sender.url, e);
-		}
-	}
-
-	if (!domain && request.tabId) {
-		try {
-			const tab = await chrome.tabs.get(request.tabId);
-			if (tab?.url) domain = new URL(tab.url).hostname;
-		} catch (e) {
-			console.debug("[UiState] Failed to get tab URL for tabId:", request.tabId, e);
-		}
-	}
+	const domain = await resolveTabDomain(request, sender);
 
 	if (domain) {
 		const domains = data.settings.uiPreferences.domains || {};
@@ -333,40 +338,7 @@ export const handleGetUiPreferences = createHandler(async ({ request, data, send
 
 export const handleSetUiPreferences = createHandler(async ({ request, data, sender }) => {
 	const newPreferences = request.preferences || {};
-	let domain = null;
-
-	if (sender.origin && (sender.origin.startsWith("http:") || sender.origin.startsWith("https:"))) {
-		try {
-			domain = new URL(sender.origin).hostname;
-		} catch (e) {
-			console.debug("[UiState] Invalid sender origin URL in setUiPreferences:", sender.origin, e);
-		}
-	}
-
-	if (!domain && sender.tab?.url) {
-		try {
-			domain = new URL(sender.tab.url).hostname;
-		} catch (e) {
-			console.debug("[UiState] Invalid sender tab URL in setUiPreferences:", sender.tab.url, e);
-		}
-	}
-
-	if (!domain && sender.url) {
-		try {
-			domain = new URL(sender.url).hostname;
-		} catch (e) {
-			console.debug("[UiState] Invalid sender URL in setUiPreferences:", sender.url, e);
-		}
-	}
-
-	if (!domain && request.tabId) {
-		try {
-			const tab = await chrome.tabs.get(request.tabId);
-			if (tab?.url) domain = new URL(tab.url).hostname;
-		} catch (e) {
-			console.debug("[UiState] Failed to get tab URL for tabId in setUiPreferences:", request.tabId, e);
-		}
-	}
+	const domain = await resolveTabDomain(request, sender);
 
 	const domainPrefs = {};
 	const globalPrefs = {};

@@ -39,11 +39,4 @@ class SettingsHandler(BaseHandler):
 
     @command('get_default_automatic_flags')
     def handle_get_default_automatic_flags(self, request: native_link.BaseRequest):
-        return native_link.success({"flags": [
-            {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
-            {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
-            {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True},
-            {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
-            {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
-            {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
-        ]})
+        return native_link.success({"flags": [dict(f) for f in self.file_io.DEFAULT_AUTOMATIC_MPV_FLAGS]})

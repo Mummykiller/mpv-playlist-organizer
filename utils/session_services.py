@@ -5,8 +5,8 @@ import threading
 import time
 import uuid
 import platform
-import subprocess
 import signal
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from utils import ipc_utils, security
 import services

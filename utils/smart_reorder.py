@@ -11,7 +11,6 @@ class SmartReorder:
     SEASON_REGEX = re.compile(r'(?:Season\s*(\d+)|(?<![a-zA-Z0-9])S(\d+))', re.IGNORECASE)
     EXPLICIT_EPISODE_REGEX = re.compile(r'(?<![a-zA-Z])(?:e|ep\.?|episode)\s*(\d+(?:\.\d+)?)', re.IGNORECASE)
     STANDALONE_EPISODE_REGEX = re.compile(r'(?:^|[\s\-_.,|\[\]()])(\d+(?:\.\d+)?)(?=$|[\s\-_.,|\[\]()])')
-    EPISODE_REGEX = re.compile(r'(?:(?<![a-zA-Z])(?:e|ep\.?|episode)\s*(\d+(?:\.\d+)?)|(?:\s|^)(\d+(?:\.\d+)?)(?:\s|$))', re.IGNORECASE)
     
     def __init__(self, threshold=0.85):
         self.threshold = threshold

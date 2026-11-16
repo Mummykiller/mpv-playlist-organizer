@@ -1,15 +1,12 @@
 // background/core_services.js
 
 import { nativeLink } from "../utils/nativeLink.js";
-import { broadcastLog, broadcastToTabs } from "./messaging.js";
-import { storage } from "./storage_instance.js";
+import { broadcastLog } from "./messaging.js";
 
 /**
  * core_services.js
  * High-level orchestration services that might depend on both storage and native connection.
  */
-
-export { storage, broadcastLog, broadcastToTabs };
 
 const SYNC_STATE_KEY = "mpv_pending_sync_state";
 const SYNC_ALARM_NAME = "sync-to-native-host";
@@ -90,6 +87,9 @@ export const _syncToNativeHostFile = async (folderId = null) => {
 				pendingSyncFolders.add(folderId);
 			}
 			await persistPendingSyncState();
+			if (typeof chrome !== "undefined" && chrome?.alarms?.create) {
+				chrome.alarms.create(SYNC_ALARM_NAME, { delayInMinutes: 1 });
+			}
 			console.error(`[CoreSync] ${e.message}`);
 			broadcastLog({
 				text: `[Background]: Sync failed: ${e.message}`,
@@ -111,10 +111,11 @@ export const debouncedSyncToNativeHostFile = (
 		} else {
 			pendingSyncFolders.delete(folderId);
 		}
-		_syncToNativeHostFile(folderId);
-		if (!pendingFullSync && pendingSyncFolders.size === 0) {
-			chrome.alarms.clear(SYNC_ALARM_NAME);
-		}
+		_syncToNativeHostFile(folderId).then(() => {
+			if (!pendingFullSync && pendingSyncFolders.size === 0 && typeof chrome !== "undefined" && chrome?.alarms?.clear) {
+				chrome.alarms.clear(SYNC_ALARM_NAME);
+			}
+		});
 	} else {
 		if (folderId === null) {
 			pendingFullSync = true;

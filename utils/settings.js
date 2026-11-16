@@ -1034,14 +1034,6 @@ export class OptionsManager {
 		this.applyCategoryFilter(this.currentCategory);
 	}
 
-	async _handleForceRefreshDependencies(btn) {
-		return settingsDiagnostics.handleForceRefreshDependencies(this, btn);
-	}
-
-	async _handleSectionReload(btn) {
-		return settingsDiagnostics.handleSectionReload(this, btn);
-	}
-
 	_toggleAutomaticMpvFlag(element) {
 		settingsLists.toggleAutomaticMpvFlag(this, element);
 	}
@@ -1062,16 +1054,8 @@ export class OptionsManager {
 		settingsUi.toggleFavorite(this, id);
 	}
 
-	_updateFavoriteUI() {
-		settingsUi.updateFavoriteUI(this);
-	}
-
 	applyCategoryFilter(cat = "all") {
 		settingsUi.applyCategoryFilter(this, cat);
-	}
-
-	_getBufferingPresets() {
-		return settingsLists.getBufferingPresets();
 	}
 
 	_applyBufferingPreset(presetKey) {
@@ -1092,10 +1076,6 @@ export class OptionsManager {
 
 	_startRecording(btn, input) {
 		settingsUi.startRecording(this, btn, input);
-	}
-
-	_stopRecording() {
-		settingsUi.stopRecording(this);
 	}
 
 	async _resetAutomaticMpvFlags() {

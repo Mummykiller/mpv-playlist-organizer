@@ -690,10 +690,6 @@ export function createPlaybackManager(ctx) {
 					isSelectionModeActive = !isSelectionModeActive;
 					refreshQuickActionsBar();
 				};
-			} else {
-				btn.addEventListener("click", () => {
-					console.log(`Quick Action ${btn.textContent} clicked`);
-				});
 			}
 		});
 	}
@@ -707,9 +703,5 @@ export function createPlaybackManager(ctx) {
 		updateItemDelta,
 		updateNativeHostStatusUI,
 		bindPlaybackListeners,
-		getIsSelectionModeActive: () => isSelectionModeActive,
-		setIsSelectionModeActive: (val) => {
-			isSelectionModeActive = val;
-		},
 	};
 }

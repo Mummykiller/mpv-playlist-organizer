@@ -430,11 +430,6 @@ export function createFolderManager(ctx) {
 		toggleReorderMode,
 		addDragDropListeners,
 		bindFolderListeners,
-		getFolderToRename: () => folderToRename,
-		setFolderToRename: (val) => {
-			folderToRename = val;
-		},
-		isReorderModeActive: () => isReorderModeActive,
 		getDraggedItem: () => draggedItem,
 	};
 }

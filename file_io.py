@@ -16,6 +16,15 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 import time
 import threading
 
+DEFAULT_AUTOMATIC_MPV_FLAGS = [
+    {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
+    {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
+    {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True},
+    {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
+    {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
+    {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False},
+]
+
 # --- Path Definitions ---
 
 def get_user_data_dir():
@@ -94,7 +103,6 @@ except OSError as e:
     logging.warning(f"[PY][IO] Failed to create temp directory at {TEMP_DIR}: {e}")
 
 paths: PathConfig = None
-path_config: PathConfig = None
 
 def get_paths() -> PathConfig:
     """Returns the current structured PathConfig container."""
@@ -105,7 +113,7 @@ def get_paths() -> PathConfig:
 
 def initialize_paths(new_data_dir=None):
     """Updates all global paths based on DATA_DIR. Useful for testing."""
-    global DATA_DIR, FOLDERS_FILE, INDEX_FILE, PLAYLISTS_DIR, CONFIG_FILE, EXPORT_DIR, TEMP_DIR, paths, path_config
+    global DATA_DIR, FOLDERS_FILE, INDEX_FILE, PLAYLISTS_DIR, CONFIG_FILE, EXPORT_DIR, TEMP_DIR, paths
     if new_data_dir is not None:
         DATA_DIR = new_data_dir
 
@@ -115,7 +123,6 @@ def initialize_paths(new_data_dir=None):
         script_dir=SCRIPT_DIR,
         temp_dir=TEMP_DIR
     )
-    path_config = paths
 
     # Maintain backward compatibility for direct module global access
     FOLDERS_FILE = paths.folders_file
@@ -800,14 +807,7 @@ def get_settings():
         "enable_reconnect": True,
         "reconnect_delay": 4,
         "mpv_decoder": "auto",
-        "automatic_mpv_flags": [
-            {"flag": "--pause", "description": "Start MPV paused.", "enabled": False},
-            {"flag": "--terminal", "description": "Show a terminal window.", "enabled": False},
-            {"flag": "--save-position-on-quit", "description": "Remember playback position on exit.", "enabled": True},
-            {"flag": "--loop-playlist=inf", "description": "Loop the entire playlist indefinitely.", "enabled": False},
-            {"flag": "--ontop", "description": "Keep the player window on top of other windows.", "enabled": False},
-            {"flag": "--force-window=immediate", "description": "Open the window immediately when starting.", "enabled": False}
-        ],
+        "automatic_mpv_flags": [dict(f) for f in DEFAULT_AUTOMATIC_MPV_FLAGS],
         "live_removal": True,
         "enable_per_item_mark_watched": True,
         "clear_on_item_finish": False

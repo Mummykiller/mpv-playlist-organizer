@@ -159,9 +159,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (this.nativeSender) {
 				this.isPersisting = true;
 				// Fire and forget
-				this.nativeSender(payload).finally(() => {
-					this.isPersisting = false;
-				});
+				Promise.resolve(this.nativeSender(payload))
+					.catch(() => {})
+					.finally(() => {
+						this.isPersisting = false;
+					});
 			} else {
 				this.buffer.push(payload);
 				if (this.buffer.length > this.MAX_BUFFER) {

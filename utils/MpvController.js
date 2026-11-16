@@ -371,13 +371,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 			};
 			chrome.storage.onChanged.addListener(this._taskListener);
-
-			// Initial check
-			chrome.storage.local.get("mpv_active_tasks", (data) => {
-				if (data.mpv_active_tasks) {
-					this._updateTaskUI(data.mpv_active_tasks);
-				}
-			});
 		}
 
 		_updateTaskUI(tasks) { return this.view.updateTaskUI(tasks); }
@@ -550,14 +543,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.state.destroy();
 			this.nav.destroy();
 			this.timers?.destroy();
-			if (this.heartbeatInterval) {
-				clearInterval(this.heartbeatInterval);
-				this.heartbeatInterval = null;
-			}
-			if (this.visualWatchdogInterval) {
-				clearInterval(this.visualWatchdogInterval);
-				this.visualWatchdogInterval = null;
-			}
 			if (this.resizeListener) {
 				window.removeEventListener("resize", this.resizeListener);
 				this.resizeListener = null;
@@ -805,10 +790,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		_startVisualWatchdog() {
 			this.timers.startVisualWatchdog();
-		}
-
-		_checkVisibility() {
-			this.timers.checkVisibility();
 		}
 
 		checkContext() {

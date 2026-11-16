@@ -19,6 +19,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.attachOnOpen = true;
 			this.isEnabled = true;
 			this.currentOffset = 0;
+			this._fetchGeneration = 0;
 		}
 
 		updateDynamicStyles() {
@@ -202,15 +203,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 			}
 
+			const generation = ++this._fetchGeneration;
 			container.innerHTML = '<div class="loading-spinner"></div>';
 			try {
 				const releases = await MPV.AniListRenderer.fetchReleases(
 					forceRefresh,
 					daysOffset,
 				);
+				if (generation !== this._fetchGeneration) return;
 				if (this.controller.checkContext())
 					MPV.AniListRenderer.render(container, releases, daysOffset);
 			} catch (error) {
+				if (generation !== this._fetchGeneration) return;
 				container.innerHTML = "";
 				const errLi = document.createElement("li");
 				errLi.className = "anilist-error";
