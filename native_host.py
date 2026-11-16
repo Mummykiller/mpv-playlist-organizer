@@ -341,11 +341,6 @@ try:
             current_level = logging.getLevelName(logging.getLogger().getEffectiveLevel())
             return native_link.success(res, action="session_restored", log_level=current_level)
 
-        if handler_manager_inst is not None:
-            HandlerRegistry.bind_instance(handler_manager_inst.playback)
-            HandlerRegistry.bind_instance(handler_manager_inst.data)
-            HandlerRegistry.bind_instance(handler_manager_inst.settings)
-
         return HandlerRegistry
 
     def cleanup_ipc_socket(session_manager):
@@ -559,6 +554,9 @@ try:
                     logging.info(f"[PY][RECV] (ID: {message.get('request_id')}): {action}")
                     target_executor = select_executor(action, control_executor, worker_executor)
                     target_executor.submit(task_wrapper, message)
+                except EOFError:
+                    logging.info("[PY][MAIN] Native messaging stdin closed (EOF), exiting.")
+                    break
                 except Exception as e:
                     logging.error(f"[PY][MAIN] Error in main loop: {e}", exc_info=True)
                     if not sys.stdin or sys.stdin.closed:

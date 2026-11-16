@@ -449,7 +449,8 @@ def hot_swap_item(session, launch_item, folder_id, settings, url_items_list):
     if settings.get('enable_precise_resume', True):
         try:
             start_time = int(float(lua_options.get('resume_time') or 0))
-            session.ipc_manager.send({"command": ["set_property", "user-data/primed-resume-time", str(start_time)]})
+            if start_time > 0:
+                session.ipc_manager.send({"command": ["set_property", "user-data/primed-resume-time", str(start_time)]})
         except (ValueError, TypeError) as e:
             logging.debug(f"[PY][Session] Failed to parse primed resume time: {e}")
 

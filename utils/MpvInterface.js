@@ -30,11 +30,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			const isLaunching = pbState.isLaunching;
 			const needsAppend = pbState.needsAppend;
 
-			// IDENTITY CHECK: Avoid optimistic "Queue" label if the item is already in MPV
-			const isAlreadyInMpv = options.urlItem && pbState.sessionIds && Array.isArray(pbState.sessionIds) 
-				? pbState.sessionIds.includes(options.urlItem.id)
-				: false;
-
 			// Optimistic "Loading" state
 			const isToggle = isRunning && !isLaunching && !needsAppend && !options.playNewInstance && !options.urlItem;
 			if (!isToggle && !options.playNewInstance) {

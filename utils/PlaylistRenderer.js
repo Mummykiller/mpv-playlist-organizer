@@ -29,8 +29,6 @@
 
             const lastPlayedId = state.lastPlayedId;
             const isActive = state.isActive;
-            const isPaused = state.isPaused;
-            const needsAppend = state.needsAppend;
             
             const oldScrollTop = this.container.scrollTop;
             const oldHeight = this.container.scrollHeight;
@@ -122,17 +120,12 @@
                             if (this.callbacks.onLog) this.callbacks.onLog({ text: "Copied title to clipboard.", type: "info" });
                             div.classList.add("title-copied");
                             setTimeout(() => div.classList.remove("title-copied"), 1500);
+                        }).catch((err) => {
+                            MPV.logger?.debug?.(`[PlaylistRenderer] Clipboard write failed: ${err?.message || err}`);
                         });
                     }
                 }
             });
-        }
-
-        _formatTitle(span, item) {
-            const dom = MPV.domUtils || (typeof window !== "undefined" && window.MPV_INTERNAL?.domUtils);
-            if (dom?.formatTitle) {
-                dom.formatTitle(span, item);
-            }
         }
 
         /**

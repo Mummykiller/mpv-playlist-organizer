@@ -2,7 +2,6 @@
 // --- Core Module Imports ---
 
 import {
-	debouncedSyncToNativeHostFile,
 	flushPendingSync,
 } from "./background/core_services.js";
 import { createHandler } from "./background/handler_factory.js";
@@ -23,7 +22,7 @@ import { logger } from "./utils/SystemLogger.module.js";
 import { addNativeListener, setLogBroadcaster } from "./utils/nativeConnection.module.js";
 import { nativeLink } from "./utils/nativeLink.js";
 import * as playlistManager from "./utils/playlistManager.js";
-import { isValidUrl, isValidWebUrl } from "./utils/security.module.js";
+import { isValidWebUrl } from "./utils/security.module.js";
 
 setLogBroadcaster(broadcastLog);
 
@@ -69,7 +68,6 @@ const persistAutoAddState = () => {
 		logger.debug(`[Background] Failed to persist autoAddCooldowns: ${e?.message}`);
 	}
 };
-const persistAutoAddCooldowns = persistAutoAddState;
 
 // Rehydrate autoAddActive, autoAddCooldowns & nativeHostStatus on worker initialization
 const autoAddInitPromise = (async () => {
@@ -426,7 +424,6 @@ const actionHandlers = {
 		const playlist = folderId ? data.folders[folderId]?.playlist : null;
 		return getVisualPlaybackState(folderId, playlist);
 	},
-	update_item_resume_time: playback_handlers.handleUpdateItemResumeTime,
 	update_item_marked_as_watched:
 		playback_handlers.handleUpdateItemMarkedAsWatched,
 	play: playback_handlers.handlePlay,
@@ -472,8 +469,6 @@ const actionHandlers = {
 	},
 };
 
-actionHandlers["session_restored"] = playback_handlers.handleSessionRestored;
-
 // Centralized Python Log Listener
 addNativeListener("log", (data) => {
 	if (data.log) {
@@ -510,6 +505,8 @@ addNativeListener("update_item_title", async (data) => {
 		logger.warn(`[Background] update_item_title listener failed: ${e.message}`);
 	}
 });
+
+addNativeListener("ytdlp_update_check", dependency_anilist_handlers.handleYtdlpUpdateCheck);
 
 addNativeListener("task_update", async (data) => {
 	try {

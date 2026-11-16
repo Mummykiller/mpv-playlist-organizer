@@ -315,8 +315,6 @@ class PlaybackHandler(BaseHandler):
         logging.info(f"[PY][Handler] Received remove_items_live: folder_id='{request.folder_id}', item_ids={request.item_ids}")
         if not request.item_ids:
             return native_link.failure("Missing item_ids.")
-        if hasattr(self.mpv_session, 'remove_items_live'):
-            return self.mpv_session.remove_items_live(request.item_ids)
         canonical_id = self.file_io._get_canonical_folder_id(request.folder_id) if request.folder_id else self.mpv_session.owner_folder_id
         failed_ids = []
         for item_id in request.item_ids:

@@ -27,12 +27,8 @@ class NativeLink {
 		return callNativeHost({ action, ...data }, shouldThrow);
 	}
 
-	async send(action, data = {}, shouldThrow = false) {
-		return this.call(action, data, shouldThrow);
-	}
-
 	async cancelTask(taskId) {
-		return await this.send("cancel_task", { taskId });
+		return await this.call("cancel_task", { taskId });
 	}
 
 	// --- Heartbeat & Status ---
@@ -79,7 +75,7 @@ class NativeLink {
 			urlItem: this._injectItemSettings(item, globalPrefs),
 			folderId,
 			playlistStartId: options.playlistStartId,
-			...this._enrichPayload(globalPrefs, options),
+			...buildPlaybackSettingsPayload(globalPrefs, options),
 		};
 
 		if (isPlayNew && item) {
@@ -104,7 +100,7 @@ class NativeLink {
 			m3uData: m3uData,
 			folderId,
 			playlistStartId: options.playlistStartId,
-			...this._enrichPayload(globalPrefs, options),
+			...buildPlaybackSettingsPayload(globalPrefs, options),
 		};
 
 		if (isPlayNew && m3uData.type === "items") {
@@ -180,10 +176,6 @@ class NativeLink {
 		return this.call("get_default_automatic_flags");
 	}
 
-	async setMinimizedState(minimized) {
-		return this.call("set_minimized_state", { minimized });
-	}
-
 	// --- Dependency & External Services ---
 	async getAnilistReleases(params = {}) {
 		return this.call("get_anilist_releases", params);
@@ -191,10 +183,6 @@ class NativeLink {
 
 	async getMetadataCache(shard = null) {
 		return this.call("get_metadata_cache", { shard });
-	}
-
-	async checkYtdlpUpdate() {
-		return this.call("ytdlp_update_check");
 	}
 
 	async runYtdlpUpdate() {
@@ -219,13 +207,6 @@ class NativeLink {
 				otherSitesUseCookies: globalPrefs.otherSitesUseCookies ?? true,
 			},
 		};
-	}
-
-	/**
-	 * Enriches the payload with global preferences and caller overrides.
-	 */
-	_enrichPayload(globalPrefs, overrides = {}) {
-		return buildPlaybackSettingsPayload(globalPrefs, overrides);
 	}
 }
 

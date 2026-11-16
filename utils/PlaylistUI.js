@@ -163,7 +163,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// Reset classes to ensure mutual exclusivity
 			bar.className = "quick-actions-bar";
 
-			const labels = ["A", "⭐", "C", "⚡"];
+			const labels = ["A", "C", "⚡"];
 			labels.forEach((label, index) => {
 				const btn = document.createElement("button");
 				btn.className = "quick-action-btn";
@@ -245,13 +245,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						this.isLiveReorderModeActive = false;
 						this.isSelectionModeActive = !this.isSelectionModeActive;
 						this._refreshQuickActionsBar();
-					};
-				} else {
-					btn.textContent = label;
-					btn.title = label === "⭐" ? "Quick Action B" : "Placeholder " + label;
-					btn.onclick = (e) => {
-						e.stopPropagation();
-						console.log(`Quick Action ${label} clicked`);
 					};
 				}
 				bar.appendChild(btn);
@@ -378,9 +371,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 							folderId: this.folderSelect.value
 						});
 						this.isSelectionModeActive = false;
-						this.fullContainer?.classList.remove("selection-mode-active");
-						this.uiManager.shadowRoot?.querySelectorAll(".quick-action-btn.selection-mode-active").forEach(el => el.classList.remove("selection-mode-active"));
-						this.uiManager.shadowRoot?.getElementById("quick-actions-bar")?.classList.remove("selection-mode-active");
 						this._refreshQuickActionsBar();
 					}
 					return;
@@ -543,10 +533,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		_getDragAfterElement(container, y) {
 			return MPV.domUtils.getDragAfterElement(container, y);
-		}
-
-		_formatTitle(urlSpan, item) {
-			MPV.domUtils.formatTitle(urlSpan, item);
 		}
 
 		/**

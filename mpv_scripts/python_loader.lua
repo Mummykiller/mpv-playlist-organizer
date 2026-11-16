@@ -7,7 +7,6 @@ local last_sync_time = 0
 local last_time_pos = nil
 local playback_active = false
 local fallback_attempted = false
-local fallback_skip_notified = false
 local current_item_id = nil
 
 -- Dedicated debug log
@@ -107,7 +106,6 @@ mp.register_event("start-file", function()
     last_time_pos = nil
     playback_active = true
     fallback_attempted = false
-    fallback_skip_notified = false
     
     mp.add_timeout(0.2, function()
         run_fallback_sync({last_played = true})

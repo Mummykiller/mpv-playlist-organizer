@@ -493,12 +493,6 @@ button:disabled {
 	border: 1px solid var(--border-primary);
 }
 
-#mini-status-placeholder,
-#full-status-placeholder {
-	/* Reserve space for the status message to prevent layout shifts */
-	min-height: calc(1.2em + 8px);
-}
-
 /* --- Settings Header Toolbar --- */
 .settings-header-toolbar {
 	display: flex;
@@ -721,12 +715,6 @@ button:disabled {
 	margin: 12px 0;
 }
 
-.favorites-empty-state .empty-icon {
-	font-size: 26px;
-	margin-bottom: 8px;
-	opacity: 0.9;
-}
-
 .favorites-empty-state .empty-title {
 	font-weight: 600;
 	font-size: 14px;
@@ -802,14 +790,12 @@ button:disabled {
 	border-color: var(--accent-primary) !important;
 }
 
-.toggle-settings-btn .toggle-arrow,
-.toggle-settings-btn .toggle-settings-arrow {
+.toggle-settings-btn .toggle-arrow {
 	font-size: 10px;
 	transition: transform 0.2s ease;
 }
 
-.toggle-settings-btn.active .toggle-arrow,
-.toggle-settings-btn.active .toggle-settings-arrow {
+.toggle-settings-btn.active .toggle-arrow {
 	transform: rotate(180deg);
 }
 
@@ -1226,19 +1212,14 @@ button:disabled {
 	transition: all var(--transition-speed) ease;
 	list-style: none; /* Remove default marker */
 	display: flex;
-	justify-content: center; /* Center text */
-	align-items: center; /* This will be overridden by space-between if the refresh button is present */
+	justify-content: space-between;
+	align-items: center;
 	position: relative; /* For positioning the arrow */
 }
 
 .anilist-releases-section > summary:hover {
 	background-color: var(--bg-tertiary);
 	border-color: var(--accent-primary);
-}
-
-.anilist-releases-section > summary {
-	/* This ensures the title and refresh button are spaced out */
-	justify-content: space-between;
 }
 
 .anilist-releases-section > summary::-webkit-details-marker {
@@ -1362,25 +1343,6 @@ button:disabled {
 	height: 30px;
 	animation: spin 1s linear infinite;
 	margin: 20px auto;
-}
-
-/* --- Styles for AniList Release Item Details --- */
-.release-bottom-info {
-	display: flex;
-	flex-direction: column; /* Stack items vertically */
-	align-items: flex-start; /* Align items to the left */
-	gap: 2px; /* Reduce gap for stacked items */
-}
-
-.release-episode-info {
-	font-size: var(--anilist-info-font-size);
-	color: var(--text-secondary);
-}
-
-.release-airing-time {
-	font-size: var(--anilist-info-font-size);
-	font-weight: 600;
-	color: var(--accent-success);
 }
 
 @keyframes spin {

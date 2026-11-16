@@ -230,7 +230,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				isActive,
 				needsAppend: effectiveNeedsAppend
 			}) : {
-				isPlaying: !!isActive || (!!isActive && !!effectiveNeedsAppend),
+				isPlaying: !!isActive,
 				title: (isActive && effectiveNeedsAppend) ? "Queue to Playlist" : (isActive ? "Play/Pause Playlist" : "Play Playlist"),
 				stateKey: (isActive && effectiveNeedsAppend) ? "queue" : (isActive ? "pause" : "play")
 			};

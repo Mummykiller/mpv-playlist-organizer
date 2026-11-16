@@ -62,14 +62,6 @@ window.addEventListener("unhandledrejection", (event) => {
 		if (!MPV.MpvController) {
 			console.error("[MPV] Critical Error: MpvController class not found.");
 			MPV.logger?.error?.("[ContentScript] Critical Error: MpvController class not found on page.", { persist: true });
-			chrome.runtime?.sendMessage?.({
-				action: "log_browser_error",
-				context: "ContentScript",
-				message: "Critical Error: MpvController class not found on page.",
-				stack: ""
-			}).catch?.((err) => {
-				MPV.logger?.debug?.(`[ContentScript] Failed to send missing controller error: ${err?.message}`);
-			});
 			MPV.domUtils?.showNotificationBanner?.("MPV Playlist Organizer: Initialization failed (controller missing).", { isError: true });
 			return;
 		}
@@ -109,14 +101,6 @@ window.addEventListener("unhandledrejection", (event) => {
 			} catch (initErr) {
 				console.error("[MPV Content Script] controller.init() failed:", initErr);
 				MPV.logger?.error?.(`[ContentScript] controller.init() failed: ${initErr.message}`, { persist: true, stack: initErr.stack });
-				chrome.runtime?.sendMessage?.({
-					action: "log_browser_error",
-					context: "ContentScript",
-					message: `controller.init() failed: ${initErr.message}`,
-					stack: initErr.stack || ""
-				}).catch?.((sendErr) => {
-					MPV.logger?.debug?.(`[ContentScript] Failed to send init error to background: ${sendErr?.message}`);
-				});
 				MPV.domUtils?.showNotificationBanner?.("MPV Playlist Organizer: Initialization failed on this page.", { isError: true });
 			}
 		} else {
@@ -135,14 +119,6 @@ window.addEventListener("unhandledrejection", (event) => {
 		try {
 			const MPV = window.MPV_INTERNAL || {};
 			MPV.logger?.error?.(`[ContentScript] Init failed: ${e.message}`, { persist: true, stack: e.stack });
-			chrome.runtime?.sendMessage?.({
-				action: "log_browser_error",
-				context: "ContentScript",
-				message: `Init failed: ${e.message}`,
-				stack: e.stack || ""
-			}).catch?.((err) => {
-				MPV.logger?.debug?.(`[ContentScript] Failed to send init error to background: ${err?.message}`);
-			});
 			MPV.domUtils?.showNotificationBanner?.("MPV Playlist Organizer encountered an error initializing on this page.", { isError: true });
 		} catch (err) {
 			const MPV = window.MPV_INTERNAL;

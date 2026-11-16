@@ -135,10 +135,7 @@ export async function handlePlaybackHealthChanged(data) {
 	if (!folderId) return;
 
 	const storageData = await storage.get();
-	const actualFolderId =
-		Object.keys(storageData.folders || {}).find(
-			(id) => id.toLowerCase() === folderId.toLowerCase(),
-		) || folderId;
+	const actualFolderId = getCanonicalFolderId(storageData, folderId);
 
 	console.log(`[PlaybackHandler] Health changed for folder '${actualFolderId}': ${health}`);
 
@@ -165,12 +162,13 @@ export async function handleItemNaturalCompletion(data) {
 	if (!folderId || !itemId) return;
 
 	const storageData = await storage.get();
-	const folder = storageData.folders[folderId];
+	const actualFolderId = getCanonicalFolderId(storageData, folderId);
+	const folder = storageData.folders?.[actualFolderId];
 	if (!folder) return;
 
 	const item = folder.playlist.find(i => i.id === itemId);
 	if (!item) {
-		console.debug(`[Background]: Item ${itemId} finished but is no longer in playlist '${folderId}'. Ignoring.`);
+		console.debug(`[Background]: Item ${itemId} finished but is no longer in playlist '${actualFolderId}'. Ignoring.`);
 		return;
 	}
 
@@ -178,28 +176,28 @@ export async function handleItemNaturalCompletion(data) {
 	const clearMode = globalPrefs.clearOnCompletion || "no";
 	
 	if (globalPrefs.clearOnItemFinish && clearMode !== "no") {
-		const session = playbackManager.getSession(folderId);
+		const session = playbackManager.getSession(actualFolderId);
 		session.completedItemIds.add(itemId);
 		playbackManager.persistSessions();
 		
 		// Flag this folder so handleMpvExited knows a batch clear is already being managed
-		playbackManager.earlyClearsInProgress.add(folderId);
+		playbackManager.earlyClearsInProgress.add(actualFolderId.toLowerCase());
 
 		const itemTitle = item.title || item.url || itemId;
 
 		if (clearMode === "yes") {
 			// Mode: "yes" -> Clear immediately and silently
 			broadcastLog({
-				text: `[Background]: Item "${itemTitle}" finished. Auto-clearing from '${folderId}'.`,
+				text: `[Background]: Item "${itemTitle}" finished. Auto-clearing from '${actualFolderId}'.`,
 				type: "info",
 				itemId: itemId,
-				folderId: folderId
+				folderId: actualFolderId
 			});
 			
 			const allToClearRaw = getDirectionalFinishedIds(folder.playlist, itemId, session.watchedItemIds);
-			const allToClear = await filterActiveItem(folderId, allToClearRaw, itemId);
+			const allToClear = await filterActiveItem(actualFolderId, allToClearRaw, itemId);
 
-			await clearFolderPlaylist(folderId, {
+			await clearFolderPlaylist(actualFolderId, {
 				playedIds: allToClear,
 				scope: "played",
 			});
@@ -270,7 +268,7 @@ export async function handleMpvQuitting(data) {
 				text: `[Background]: Completion detected for '${actualFolderId}'. (Full: ${isFullFolderComplete}). Mode: ${clearMode}.`,
 				type: "info",
 			});
-			playbackManager.earlyClearsInProgress.add(actualFolderId);
+			playbackManager.earlyClearsInProgress.add(actualFolderId.toLowerCase());
 
 			const finishedIds = getDirectionalFinishedIds(folder.playlist, playedIds || []);
 
@@ -302,8 +300,9 @@ export async function handleMpvExited(data) {
 	if (!folderId) return;
 
 	// Check if this folder was already handled by the early quitting logic
-	const wasEarlyHandled = playbackManager.earlyClearsInProgress.has(folderId);
-	playbackManager.earlyClearsInProgress.delete(folderId); // Cleanup for next session
+	const normalizedFolderId = folderId.toLowerCase();
+	const wasEarlyHandled = playbackManager.earlyClearsInProgress.has(normalizedFolderId);
+	playbackManager.earlyClearsInProgress.delete(normalizedFolderId); // Cleanup for next session
 
 	const session = playbackManager.findSessionByFolderId(folderId);
 	if (session) {
@@ -354,10 +353,7 @@ export async function handleMpvExited(data) {
 	});
 
 	const storageData = await storage.get();
-	const actualFolderId =
-		Object.keys(storageData.folders || {}).find(
-			(id) => id.toLowerCase() === folderId.toLowerCase(),
-		) || folderId;
+	const actualFolderId = getCanonicalFolderId(storageData, folderId);
 	const folder = storageData.folders?.[actualFolderId];
 
 	if (folder && Array.isArray(folder.playlist)) {
@@ -539,7 +535,6 @@ async function clearFolderPlaylist(folderId, options = {}) {
 						affectedFolders.add(fId);
 
 						// Handle live removal for synchronized folders if they are active
-						const { mpv_playback_cache: playbackCache } = await chrome.storage.local.get("mpv_playback_cache");
 						if (storageData.settings.uiPreferences.global.syncGlobalRemovalsLive === true && 
 							playbackCache && playbackCache.folderId?.toLowerCase() === fId.toLowerCase() && (playbackCache.isRunning || !playbackCache.isIdle)) {
 							for (const syncItem of itemsToRemoveFromThisFolder) {
@@ -615,7 +610,6 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 		});
 
 		// Clear the staged list
-		const session = playbackManager.findSessionByFolderId(folderId);
 		if (session) {
 			const confirmedIds = new Set(filteredPlayedIds);
 			for (const id of session.completedItemIds) {
@@ -632,7 +626,6 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 		});
 
 		// RESTORE items to UI if cancelled
-		const session = playbackManager.findSessionByFolderId(folderId);
 		if (session) {
 			session.completedItemIds.clear();
 			session.pendingClear = null;
@@ -640,7 +633,7 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 			await broadcastPlaylistState(folderId);
 		}
 		// Critical: Remove from early clears so next completion isn't blocked
-		playbackManager.earlyClearsInProgress.delete(folderId);
+		playbackManager.earlyClearsInProgress.delete(folderId.toLowerCase());
 	}
 
 	return { success: true };
@@ -697,15 +690,6 @@ async function checkAndConfirmFolderSwitch(targetFolderId) {
 	}
 	return true;
 }
-
-// Internal helper for background-to-popup/tab messaging
-const _sendMessageAsync = (payload) =>
-	new Promise((resolve) => {
-		chrome.runtime.sendMessage(payload, (response) => {
-			if (chrome.runtime.lastError) resolve(null);
-			else resolve(response);
-		});
-	});
 
 async function _handlePlayLogic(context) {
     await playbackManager.initPromise;
@@ -858,10 +842,7 @@ async function _handlePlayM3ULogic(request, data) {
 
 		if (response.playlistItems && folderId) {
 			const freshData = await storage.get();
-			const actualFolderId =
-				Object.keys(freshData.folders || {}).find(
-					(id) => id.toLowerCase() === folderId.toLowerCase(),
-				) || folderId;
+			const actualFolderId = getCanonicalFolderId(freshData, folderId);
 			if (freshData.folders?.[actualFolderId]) {
 				broadcastLog({
 					text: `[Background]: Syncing Smart Resume reordering for folder '${actualFolderId}'.`,
@@ -925,9 +906,7 @@ export async function handleUpdateLastPlayed(data) {
 		const storageData = await storage.get();
 		
 		// Case-insensitive lookup for folder
-		const actualFolderId = Object.keys(storageData.folders).find(
-			(id) => id.toLowerCase() === folderId.toLowerCase()
-		) || folderId;
+		const actualFolderId = getCanonicalFolderId(storageData, folderId);
 
 		broadcastLog({
 			text: `[Background]: Tracker reported lastPlayedId update for folder '${actualFolderId}': ${itemId}`,
@@ -966,11 +945,9 @@ export async function handleUpdateItemResumeTime(data) {
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
 	const storageData = await storage.get();
-	const actualFolderId = Object.keys(storageData.folders).find(
-		(id) => id.toLowerCase() === folderId.toLowerCase()
-	);
+	const actualFolderId = getCanonicalFolderId(storageData, folderId);
 
-	if (actualFolderId && storageData.folders[actualFolderId]) {
+	if (actualFolderId && storageData.folders?.[actualFolderId]) {
 		const folder = storageData.folders[actualFolderId];
 		const item = folder.playlist.find(i => i.id === itemId);
 		
@@ -1002,10 +979,7 @@ export async function handlePlaybackStatusChanged(data) {
 	if (!folderId) return;
 
 	const storageData = await storage.get();
-	const actualFolderId =
-		Object.keys(storageData.folders || {}).find(
-			(id) => id.toLowerCase() === folderId.toLowerCase(),
-		) || folderId;
+	const actualFolderId = getCanonicalFolderId(storageData, folderId);
 
 	const cacheData = {
 		folderId: actualFolderId,
@@ -1054,12 +1028,7 @@ export async function handlePlaybackStatusChanged(data) {
 export const handleUpdateItemMarkedAsWatched = createHandler(async (context) => {
 	const { request, folderId, data } = context;
 	if (folderId && data?.folders) {
-		const actualFolderId = Object.keys(data.folders).find(
-			(id) => id.toLowerCase() === folderId.toLowerCase(),
-		);
-		if (actualFolderId) {
-			context.folderId = actualFolderId;
-		}
+		context.folderId = getCanonicalFolderId(data, folderId);
 	}
 	await handleUpdateItemMarkedAsWatchedInternal(request, { isNative: false });
 	return { success: true, folderId: context.folderId };
@@ -1079,11 +1048,9 @@ export async function handleUpdateItemMarkedAsWatchedInternal(data, options = {}
 	if (!folderId || !itemId || itemId === -1 || itemId === "-1") return;
 
 	const storageData = await storage.get();
-	const actualFolderId = Object.keys(storageData.folders).find(
-		(id) => id.toLowerCase() === folderId.toLowerCase()
-	);
+	const actualFolderId = getCanonicalFolderId(storageData, folderId);
 
-	if (actualFolderId && storageData.folders[actualFolderId]) {
+	if (actualFolderId && storageData.folders?.[actualFolderId]) {
 		const folder = storageData.folders[actualFolderId];
 		for (const item of folder.playlist) {
 			if (item.id === itemId) {

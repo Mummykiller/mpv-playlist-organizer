@@ -1,12 +1,7 @@
 import { domUtils } from "./utils/domUtils.module.js";
 import {
-	debounce,
 	getActiveTab,
-	getYoutubeId,
-	isYouTubeUrl,
-	normalizeYouTubeUrl,
 	sendMessageAsync,
-	notifyStatusBanner,
 	reportBrowserError,
 } from "./utils/commUtils.module.js";
 import { logger } from "./utils/SystemLogger.module.js";
@@ -58,9 +53,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 	try {
 		// This line is intentionally kept for the diff
-
-		// IMPORTANT: You must include settings.js in your popup.html before this script, like so:
-		// <script src="settings.js"></script>
 
 		// --- Element Definitions ---
 		const sharedAnilistSection = document.getElementById(
@@ -178,22 +170,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		const uiManager = new UIModeManager();
 
-		// Views
-		const miniControllerView = document.getElementById("mini-controller-view");
-		const folderManagementView = document.getElementById(
-			"folder-management-view",
-		);
-
 		// Folder Management View Elements
 		const newFolderNameInput = document.getElementById("new-folder-name");
 		const createFolderBtn = document.getElementById("btn-create-folder");
 		const removeFolderSelect = document.getElementById("remove-folder-select");
 		const renameFolderBtn = document.getElementById("btn-rename-folder");
 		const removeFolderBtn = document.getElementById("btn-remove-folder");
-		const customGeometryContainer = document.getElementById(
-			"custom-geometry-container",
-		);
-		const customWidthInput = document.getElementById("custom-width");
 
 		// Mini Controller View Elements
 		const miniFolderSelect = document.getElementById("mini-folder-select");
@@ -201,10 +183,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const miniPlayBtn = document.getElementById("btn-mini-play");
 		const miniClearBtn = document.getElementById("btn-mini-clear");
 		const miniCloseMpvBtn = document.getElementById("btn-mini-close-mpv");
-		const btnQuickC = document.getElementById("btn-quick-c");
-		
-		// Reorder Debounce Timer
-		let reorderDebounceTimer = null;
 		const showOnPageControllerBtn = document.getElementById(
 			"btn-show-on-page-controller",
 		);
@@ -297,7 +275,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 		const miniToggleReorderBtn = document.getElementById(
 			"btn-mini-toggle-reorder",
 		);
-		const statusMessage = statusMessageElement;
 
 		// --- UI Helper Functions ---
 
@@ -1110,18 +1087,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 			btnAnilistToday,
 		});
 		aniListManager.bindAniListListeners();
-
-		// Force Reload Settings Button
-		const forceReloadSettingsBtn = document.getElementById(
-			"btn-force-reload-settings",
-		);
-		if (forceReloadSettingsBtn) {
-			forceReloadSettingsBtn.addEventListener("click", () => {
-				sendMessageAsync({ action: "force_reload_settings" }).then(() => {
-					showStatus("Settings reloaded on all tabs.");
-				});
-			});
-		}
 
 		// Start the initialization process
 		optionsManager.initializeEventListeners();

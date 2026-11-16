@@ -94,11 +94,6 @@ mp.register_script_message("set_url_options", function(url, options_json, index)
     end
 end)
 
-mp.register_script_message("primed_resume_time", function(time)
-    primed_resume_time = tonumber(time)
-    debug_log("Primed resume time received: " .. tostring(primed_resume_time))
-end)
-
 local function safe_read_file(path)
     if utils.read_file then
         return utils.read_file(path)
