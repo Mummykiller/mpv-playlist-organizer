@@ -497,7 +497,7 @@ class PlaylistTracker:
             with self.lock:
                 self.threshold_met_ids.add(self.current_id)
             logging.info(f"[PY][Tracker] Threshold reached (30s) for {self.current_id}. Attempting to mark as watched...")
-            self._remote_log(f"AdaptiveHeaders: Watch threshold (30s) reached for current video.")
+            self._remote_log("AdaptiveHeaders: Watch threshold (30s) reached for current video.")
             if self.ipc_manager and self.ipc_manager.is_connected():
                 self.ipc_manager.send({"command": ["show-text", "YouTube: Watch threshold reached", 2000]})
 

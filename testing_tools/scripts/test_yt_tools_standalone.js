@@ -14,12 +14,10 @@ const ROOT = path.join(__dirname, "../..");
 const STANDALONE_DIR = path.join(ROOT, "yt-tools-standalone");
 
 function ensureStandaloneExported() {
-	if (!fs.existsSync(path.join(STANDALONE_DIR, "manifest.json"))) {
-		execFileSync("python3", [path.join(ROOT, "yt-tools/export_standalone.py")], {
-			cwd: ROOT,
-			stdio: "pipe",
-		});
-	}
+	execFileSync("python3", [path.join(ROOT, "yt-tools/export_standalone.py")], {
+		cwd: ROOT,
+		stdio: "pipe",
+	});
 }
 
 function createChromeMock(initialLocal = {}) {

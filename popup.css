@@ -1480,14 +1480,17 @@ button:disabled {
 }
 
 /* Networking Section Gray-out Effect */
-.settings-section-content.disabled-overlay {
+.settings-section-content.disabled-overlay,
+.settings-section-content .disabled-overlay {
 	opacity: 0.5;
 	pointer-events: none;
 	filter: grayscale(0.5);
 }
 
 .settings-section-content.disabled-overlay input,
-.settings-section-content.disabled-overlay select {
+.settings-section-content.disabled-overlay select,
+.settings-section-content .disabled-overlay input,
+.settings-section-content .disabled-overlay select {
 	background-color: #1a1a1a !important;
 }
 
@@ -1877,6 +1880,10 @@ button.btn-closing::after {
 	flex-direction: column;
 	gap: 12px;
 }
+
+/* ========================================================================
+   Shinku's YouTube Tools
+   ======================================================================== */
 
 .yt-tools-header {
 	display: flex;

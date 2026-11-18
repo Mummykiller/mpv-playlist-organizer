@@ -65,7 +65,7 @@ class PlaybackHandler(BaseHandler):
             raw_input = m3u_data['value']
         
         # Resolve to standard list of items
-        logging.info(f"[PY][Handler] Resolving input items...")
+        logging.info("[PY][Handler] Resolving input items...")
         items, is_expanded = self.item_processor.resolve_input_items(
             raw_input, None, (request.url_item or {}).get('headers')
         )
@@ -107,7 +107,7 @@ class PlaybackHandler(BaseHandler):
                         ))
 
                 if should_toggle_pause:
-                    logging.info(f"[PY][Handler] Toggling pause for active session.")
+                    logging.info("[PY][Handler] Toggling pause for active session.")
                     self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
                     session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
                     return native_link.success(
@@ -119,7 +119,7 @@ class PlaybackHandler(BaseHandler):
                     )
 
         # 3. Parallel Enrichment & Initial Launch
-        logging.info(f"[PY][Handler] Starting enrichment and launch payload construction...")
+        logging.info("[PY][Handler] Starting enrichment and launch payload construction...")
         self.mpv_session.launch_cancelled = False # Reset for new attempt
         launch_payload = items if len(items) > 1 else items[0]
         
@@ -134,7 +134,7 @@ class PlaybackHandler(BaseHandler):
 
         try:
             had_active_session = bool(self.mpv_session.is_alive or self.mpv_session.pid)
-            logging.info(f"[PY][Handler] Calling mpv_session.start (first pass)...")
+            logging.info("[PY][Handler] Calling mpv_session.start (first pass)...")
             first_call_result = self.mpv_session.start(
                 launch_payload, folder_id, settings, self.file_io,
                 geometry=request.geometry, custom_width=request.custom_width, 
@@ -147,7 +147,7 @@ class PlaybackHandler(BaseHandler):
             
             # --- CANCELLATION CHECK ---
             if getattr(self.mpv_session, 'launch_cancelled', False):
-                logging.info(f"[PY][Handler] Launch cancelled by user during Pass 1. Aborting Pass 2.")
+                logging.info("[PY][Handler] Launch cancelled by user during Pass 1. Aborting Pass 2.")
                 return native_link.failure("Launch cancelled")
 
             if not first_call_result["success"] or first_call_result.get("handled_directly") or self.mpv_session.is_alive:
@@ -160,13 +160,13 @@ class PlaybackHandler(BaseHandler):
             
             target_payload = enriched_url_items
             if enriched_m3u_content and (input_type == 'm3u' or len(enriched_url_items) > 1):
-                logging.info(f"[PY][Handler] Starting local M3U server for multi-item payload.")
+                logging.info("[PY][Handler] Starting local M3U server for multi-item payload.")
                 local_server_url = self.m3u_server.start(enriched_m3u_content)
                 if local_server_url:
                     target_payload = local_server_url
                     logging.info(f"[PY][Handler] Local M3U server started at {local_server_url}")
 
-            logging.info(f"[PY][Handler] Calling mpv_session.start (final pass)...")
+            logging.info("[PY][Handler] Calling mpv_session.start (final pass)...")
             return self.mpv_session.start(
                 target_payload, folder_id, settings, self.file_io,
                 geometry=request.geometry, custom_width=request.custom_width, 

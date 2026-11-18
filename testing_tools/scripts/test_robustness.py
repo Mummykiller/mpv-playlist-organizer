@@ -19,7 +19,6 @@ import services
 from playlist_tracker import PlaylistTracker
 from utils.handlers.playback_handler import PlaybackHandler
 from utils import native_link, security
-from utils.mpv_command_builder import MpvCommandBuilder
 
 class TestRobustness(BaseTestCase):
     """Verifies system-level robustness (Heartbeat, Normalization, Handshakes, Parameter Validation, Unmanaged Launch)."""
@@ -203,7 +202,10 @@ class TestRobustness(BaseTestCase):
                 "confirm_clear_playlist", "confirm_close_mpv", "confirm_play_new", "confirm_folder_switch",
                 "clear_on_completion", "clear_scope", "enable_dblclick_copy", "anilist_image_height", "popup_width",
                 "show_watched_status_gui", "show_minimized_stub", "one_click_add", "restricted_domains",
-                "kb_add_playlist", "kb_play_playlist", "kb_toggle_controller", "kb_switch_playlist", "kb_open_popup"
+                "kb_add_playlist", "kb_play_playlist", "kb_toggle_controller", "kb_switch_playlist", "kb_open_popup",
+                "force_terminal", "stream_scanner_timeout", "autofocus_new_folder", "show_copy_title_button",
+                "enable_anilist_integration", "disable_anilist_cache", "ytdlp_update_behavior",
+                "popup_width_locked", "scraper_filter_words",
             }
 
             missing_in_python = [
@@ -214,6 +216,27 @@ class TestRobustness(BaseTestCase):
                 missing_in_python,
                 [],
                 f"JS settings keys missing in Python file_io.py: {missing_in_python}"
+            )
+
+            settings_js_path = os.path.join(PROJECT_ROOT, "utils", "settings.js")
+            with open(settings_js_path, "r", encoding="utf-8") as sf:
+                settings_js = sf.read()
+            mapped_keys = re.findall(r'key:\s*"([a-zA-Z0-9_]+)"', settings_js)
+            self.assertGreater(len(mapped_keys), 0, "Expected preferenceMappings keys in utils/settings.js")
+            missing_defaults = [k for k in mapped_keys if k not in js_keys]
+            self.assertEqual(
+                missing_defaults,
+                [],
+                f"utils/settings.js preferenceMappings keys missing from storageManager.js defaults: {missing_defaults}"
+            )
+            missing_allowlist = [
+                camel_to_snake(k) for k in mapped_keys
+                if camel_to_snake(k) not in security.ALLOWED_SETTINGS_KEYS
+            ]
+            self.assertEqual(
+                missing_allowlist,
+                [],
+                f"utils/settings.js preferenceMappings keys missing from security.ALLOWED_SETTINGS_KEYS: {missing_allowlist}"
             )
         finally:
             file_io.initialize_paths(original_data_dir)

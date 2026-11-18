@@ -1,5 +1,4 @@
 import http.server
-import socketserver
 import logging
 import os
 import errno
@@ -53,7 +52,7 @@ class PlaylistHandler(http.server.BaseHTTPRequestHandler):
 
         if not secret_token:
             self.send_error(403, "Access denied: Server token not configured.")
-            logging.warning(f"[PY][SEC] Blocked request because MPV_PLAYLIST_TOKEN is not configured.")
+            logging.warning("[PY][SEC] Blocked request because MPV_PLAYLIST_TOKEN is not configured.")
             return
 
         if not provided_token or not hmac.compare_digest(str(provided_token), str(secret_token)):

@@ -220,7 +220,10 @@ class VolatileCookieManager:
             shutil.copy2(db_rel_path, shadow_db_path)
             
             settings = file_io.get_settings()
-            ytdlp_path = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
+            configured_ytdlp = settings.get("ytdlp_path")
+            if configured_ytdlp and not security.is_safe_executable_path(configured_ytdlp, "ytdlp_path"):
+                configured_ytdlp = None
+            ytdlp_path = configured_ytdlp or shutil.which("yt-dlp") or "yt-dlp"
             
             cmd = [
                 ytdlp_path,
@@ -292,7 +295,10 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
         
         # Layer 3: Hard Refresh via yt-dlp
         settings = file_io.get_settings()
-        ytdlp_path = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
+        configured_ytdlp = settings.get("ytdlp_path")
+        if configured_ytdlp and not security.is_safe_executable_path(configured_ytdlp, "ytdlp_path"):
+            configured_ytdlp = None
+        ytdlp_path = configured_ytdlp or shutil.which("yt-dlp") or "yt-dlp"
         
         cookie_cmd = [
             ytdlp_path,
@@ -364,7 +370,10 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
     effective_user_agent = user_agent_str if user_agent_str else "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     
     settings = file_io.get_settings()
-    ytdlp_bin = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
+    configured_ytdlp = settings.get("ytdlp_path")
+    if configured_ytdlp and not security.is_safe_executable_path(configured_ytdlp, "ytdlp_path"):
+        configured_ytdlp = None
+    ytdlp_bin = configured_ytdlp or shutil.which("yt-dlp") or "yt-dlp"
 
     is_yt_enabled = str(youtube_enabled).lower() == "true"
     is_yt_cookies_enabled = str(yt_use_cookies).lower() == "true"

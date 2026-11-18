@@ -256,6 +256,11 @@ export function createYouTubeToolsManager(ctx = {}) {
 			btn.setAttribute("aria-selected", String(isActive));
 		});
 
+		const setupBanner = document.getElementById("native-host-setup-banner");
+		if (setupBanner) {
+			setupBanner.classList.toggle("hidden-by-yt-tab", tab === "yt");
+		}
+
 		if (tab === "yt") {
 			if (typeof onHideMpvView === "function") {
 				onHideMpvView();

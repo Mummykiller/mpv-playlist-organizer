@@ -6,12 +6,12 @@ class SettingsOverrides:
     disable_network_overrides: Optional[bool] = None
     targeted_defaults: Optional[str] = None
     enable_cache: Optional[bool] = None
-    http_persistence: Optional[bool] = None
-    demuxer_max_bytes: Optional[int] = None
-    demuxer_max_back_bytes: Optional[int] = None
+    http_persistence: Optional[str] = None
+    demuxer_max_bytes: Optional[str] = None
+    demuxer_max_back_bytes: Optional[str] = None
     cache_secs: Optional[int] = None
     demuxer_readahead_secs: Optional[int] = None
-    stream_buffer_size: Optional[int] = None
+    stream_buffer_size: Optional[str] = None
     ytdlp_concurrent_fragments: Optional[int] = None
     enable_reconnect: Optional[bool] = None
     reconnect_delay: Optional[int] = None
@@ -22,7 +22,7 @@ class SettingsOverrides:
     ultra_video_sync: Optional[bool] = None
     enable_display_sync: Optional[bool] = None
     override_display_fps: Optional[str] = None
-    ultra_interpolation: Optional[bool] = None
+    ultra_interpolation: Optional[str] = None
     ultra_deband: Optional[bool] = None
     ultra_fbo: Optional[bool] = None
     enable_precise_resume: Optional[bool] = None
@@ -30,7 +30,7 @@ class SettingsOverrides:
     os_platform: Optional[str] = None
     ffmpeg_path: Optional[str] = None
     ytdlp_path: Optional[str] = None
-    clear_on_completion: Optional[bool] = None
+    clear_on_completion: Optional[str] = None
     clear_on_item_finish: Optional[bool] = None
 
     @classmethod

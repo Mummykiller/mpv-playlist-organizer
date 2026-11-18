@@ -212,17 +212,17 @@ export async function handleItemNaturalCompletion(data) {
 				text: `[Background]: Item "${itemTitle}" finished. Staging for batch clear.`,
 				type: "info",
 				itemId: itemId,
-				folderId: folderId
+				folderId: actualFolderId
 			});
 
 			// 1. Refresh UI to hide the completed items visually
-			await broadcastPlaylistState(folderId);
+			await broadcastPlaylistState(actualFolderId);
 
 			// 2. Trigger/update the stacked confirmation
 			const targetIdsRaw = getDirectionalFinishedIds(folder.playlist, Array.from(session.completedItemIds), session.watchedItemIds);
-			const targetList = await filterActiveItem(folderId, targetIdsRaw, itemId);
+			const targetList = await filterActiveItem(actualFolderId, targetIdsRaw, itemId);
 
-			await promptClearConfirmation(folderId, targetList, folder, "played", false);
+			await promptClearConfirmation(actualFolderId, targetList, folder, "played", false);
 		}
 	}
 }
@@ -695,6 +695,21 @@ async function checkAndConfirmFolderSwitch(targetFolderId) {
 	return true;
 }
 
+async function setLaunchingCache(folderId, playNewInstance) {
+	if (playNewInstance || !folderId) return;
+	const session = playbackManager.findSessionByFolderId(folderId);
+	if (!session || !session.isPlaying) {
+		const cacheData = {
+			folderId,
+			isRunning: true,
+			isLaunching: true,
+			timestamp: Date.now(),
+		};
+		await chrome.storage.local.set({ mpv_playback_cache: cacheData });
+		broadcastPlaybackState(folderId, { isLaunching: true, isRunning: true });
+	}
+}
+
 async function _handlePlayLogic(context) {
     await playbackManager.initPromise;
     const { request, folderId, data } = context;
@@ -704,6 +719,7 @@ async function _handlePlayLogic(context) {
         if (!playNewInstance && folderId && !(await checkAndConfirmFolderSwitch(folderId))) {
             return { success: true, message: "Folder switch cancelled by user." };
         }
+        await setLaunchingCache(folderId, playNewInstance);
 
         const logText = `Received 'play' request for: ${urlItem.title || urlItem.url}${playNewInstance ? " (Unmanaged Instance)" : " (Managed Playback)"}`;
         broadcastLog({
@@ -751,6 +767,9 @@ async function _handlePlayLogic(context) {
                 folderId: folderId,
                 isLastInFolder: isLast,
             };
+        } else if (!response.success && !playNewInstance && folderId) {
+            await chrome.storage.local.remove("mpv_playback_cache");
+            broadcastPlaybackState(folderId, { isLaunching: false, isRunning: false, isIdle: false });
         }
         return response;
     } else if (folderId) {
@@ -778,22 +797,6 @@ async function _handlePlayLogic(context) {
 export const handlePlay = createHandler(_handlePlayLogic, {
     manualPersistence: true,
     broadcastPlaylist: true,
-    onBefore: async ({ request, folderId }) => {
-        await playbackManager.initPromise;
-        if (!request.playNewInstance && folderId) {
-            const session = playbackManager.findSessionByFolderId(folderId);
-            if (!session || !session.isPlaying) {
-                const cacheData = {
-                    folderId,
-                    isRunning: true,
-                    isLaunching: true,
-                    timestamp: Date.now(),
-                };
-                await chrome.storage.local.set({ mpv_playback_cache: cacheData });
-                broadcastPlaybackState(folderId, { isLaunching: true, isRunning: true });
-            }
-        }
-    },
     onError: async (error, { folderId }) => {
         if (folderId) {
             await chrome.storage.local.remove("mpv_playback_cache");
@@ -808,6 +811,7 @@ async function _handlePlayM3ULogic(request, data) {
     if (!playNewInstance && folderId && !(await checkAndConfirmFolderSwitch(folderId))) {
         return { success: true, message: "Folder switch cancelled by user." };
     }
+    await setLaunchingCache(folderId, playNewInstance);
 
     if (!playNewInstance) {
         const session = playbackManager.getSession(folderId);
@@ -870,6 +874,9 @@ async function _handlePlayM3ULogic(request, data) {
 			message: successMessage,
 			playlistItems: response.playlistItems,
 		};
+	} else if (!response.success && !playNewInstance && folderId) {
+		await chrome.storage.local.remove("mpv_playback_cache");
+		broadcastPlaybackState(folderId, { isLaunching: false, isRunning: false, isIdle: false });
 	}
     return response;
 }
@@ -879,21 +886,6 @@ export const handlePlayM3U = createHandler(async (context) => {
 }, {
 	manualPersistence: true,
 	broadcastPlaylist: true,
-	onBefore: async ({ request, folderId }) => {
-		if (!request.playNewInstance && folderId) {
-			const session = playbackManager.findSessionByFolderId(folderId);
-			if (!session || !session.isPlaying) {
-				const cacheData = {
-					folderId,
-					isRunning: true,
-					isLaunching: true,
-					timestamp: Date.now(),
-				};
-				await chrome.storage.local.set({ mpv_playback_cache: cacheData });
-				broadcastPlaybackState(folderId, { isLaunching: true, isRunning: true });
-			}
-		}
-	},
 	onError: async (error, { folderId }) => {
 		if (folderId) {
 			await chrome.storage.local.remove("mpv_playback_cache");
@@ -1099,6 +1091,7 @@ export const handlePlayNewInstance = createHandler(async ({ request, folderId })
 
 	const storageData = await storage.get();
 	const globalPrefs = storageData.settings.uiPreferences.global;
+	const enrichedItem = nativeLink._injectItemSettings(urlItem, globalPrefs);
 
 	const options = {
 		playNewInstance: true,
@@ -1107,7 +1100,7 @@ export const handlePlayNewInstance = createHandler(async ({ request, folderId })
 	};
 
 	return nativeLink.call("play_new_instance", {
-		urlItem,
+		urlItem: enrichedItem,
 		folderId,
 		...options
 	});

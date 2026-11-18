@@ -318,7 +318,7 @@ def observe_stream(tag="SUBPROCESS", folder_id=None, send_message_func=None):
                                 "action": "ytdlp_update_check",
                                 "folder_id": folder_id,
                                 "log": {
-                                    "text": f"[Native Host]: YouTube playback failed. This may be due to an outdated yt-dlp. Checking for auto-update...",
+                                    "text": "[Native Host]: YouTube playback failed. This may be due to an outdated yt-dlp. Checking for auto-update...",
                                     "type": "error"
                                 }
                             })

@@ -301,11 +301,11 @@ class MpvCommandBuilder:
         ytdl_opts_list = []
         
         # Security & Runtimes & Optimization
-        if "ignore-config" not in existing_raw:
+        if self.settings.get("yt_ignore_config", True) and "ignore-config" not in existing_raw:
             ytdl_opts_list.append("ignore-config=")
-        
-        if "noplaylist" not in existing_raw:
-            ytdl_opts_list.append("noplaylist=")
+
+        if "no-playlist" not in existing_raw and "noplaylist" not in existing_raw:
+            ytdl_opts_list.append("no-playlist=")
         
         if "js-runtimes" not in existing_raw:
             node_path = self.settings.get("node_path")
@@ -439,7 +439,7 @@ class MpvCommandBuilder:
         cmd_str = ' '.join(_smart_quote(a) for a in full_command)
         if self.settings.get('os_platform', platform.system()) == "Windows" and len(cmd_str) > 7500:
             logging.error(f"CRITICAL: Command line length ({len(cmd_str)}) exceeds limit.")
-            raise RuntimeError(f"Command too long for Windows.")
+            raise RuntimeError("Command too long for Windows.")
 
         redacted_cmd_str = re.sub(r'([?&]token=)[^&\s\'"]+', r'\1[REDACTED]', cmd_str)
         logging.info(f"Constructed MPV command: {redacted_cmd_str}")

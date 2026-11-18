@@ -1,53 +1,25 @@
 ---
 name: site-compatibility-and-scraping
 description: >-
-  Governs brand-based site compatibility overrides, source swapping header management,
-  browser cookie SQLite shadow copying, stream resolution routing, and in-page video scraping.
+  Governs source swapping header management, browser cookie SQLite shadow copying,
+  stream resolution routing, and in-page video scraping.
   Load this skill whenever modifying `testing_tools/SOURCE_SWAPPING_GUIDE.md`,
   `utils/url_analyzer.py`, `services.py` (force_sanitize_headers, construct_lua_options),
   `utils/native_link/metadata_cache.py`, `utils/PageScraper.js`, `background/handlers/m3u8_scanner.js`,
-  `data/Site_Compatibility.json`, or diagnosing streaming CDN reconnection loops, cookie database locks, and 403 Forbidden errors.
+  `mpv_scripts/adaptive_headers.lua`, or diagnosing streaming CDN loops, cookie database locks, and 403 Forbidden errors.
 ---
 
 # Site Compatibility, Source Swapping & Scraping Architecture
 
-This skill defines the brand-based site compatibility engine, source swapping state isolation, browser SQLite cookie shadow copying, stream resolution routing, in-page stream scraping, and URL normalization protocols.
+This skill defines source swapping header isolation (`mpv_scripts/adaptive_headers.lua`), browser SQLite cookie shadow copying, stream resolution routing, in-page stream scraping, and URL normalization protocols.
 
 ---
 
-## 1. Brand-Based Predictive Compatibility System
+## 1. Per-Source Compatibility Rules (`mpv_scripts/adaptive_headers.lua` & `services.py`)
 
-### The Problem: CDN Reconnection Loops
-
-Certain streaming CDNs fail when aggressive FFmpeg reconnection flags (`demuxer-lavf-o`) are enabled, causing the player to enter an infinite "Will reconnect to stream" loop:
-- **Fragile Hostnames:** CDNs rotate subdomains and TLDs continuously (`vault-11.cdn.com`, `vault-99.cdn.com`), making hostname blacklists ineffective.
-- **Manual Overhead:** Requiring users to manually toggle network flags for individual videos is unacceptable.
-
-### The Solution: Brand Identity Extraction
-
-The system extracts the **Originating Brand** from the video's `original_url` (where the media was located):
-- `https://www.animeheaven.me/watch/ep1` → Brand: `animeheaven`
-- If the domain changes TLD (`.me` → `.ru`) or rotates CDNs, the extracted brand remains constant.
-
-### Compatibility Engine Pipeline
-
-```
-┌────────────────────────┐       ┌────────────────────────┐       ┌────────────────────────┐
-│ 1. Persistent Storage  │ ----> │ 2. In-Memory Cache     │ ----> │ 3. Pre-Launch Injector │
-│ Site_Compatibility.json│       │ Native Host startup    │       │ Injects safe flags     │
-└────────────────────────┘       └────────────────────────┘       │ before MPV spawns      │
-                                                                  └────────────────────────┘
-                                                                             │
-┌────────────────────────┐       ┌────────────────────────┐                  │
-│ 5. Brand Learning      │ <---- │ 4. Failure Detection   │ <────────────────┘
-│ Updates JSON file      │       │ Detects reconnect loop │
-└────────────────────────┘       └────────────────────────┘
-```
-
-1. **Persistent Storage (`data/Site_Compatibility.json`):** Stores known brand profiles (e.g. `{"animeheaven": {"enable_reconnect": false}}`).
-2. **In-Memory Cache:** Loaded into native host RAM at startup for zero-latency queries during pre-launch.
-3. **Pre-Launch Injector:** When preparing playback, queries the brand cache and forces safe settings into the launch payload.
-4. **Automated Discovery (Learning):** If an active session encounters a reconnection loop, the system applies an immediate hotfix, extracts the brand, and writes the rule to `Site_Compatibility.json`.
+Compatibility overrides are applied dynamically by source/CDN rather than via a persistent `Site_Compatibility.json` file (which does not exist in this codebase):
+- **Dynamic Header & Extractor Routing:** `services.py:force_sanitize_headers` and `mpv_scripts/adaptive_headers.lua` reset `user-agent`, `referrer`, `http-header-fields`, and `ytdl-raw-options` per item load and apply host-specific overrides (e.g., `owocdn.top`, `uwucdn.top`, `kwik.cx`).
+- **Stream vs Portal Routing:** `utils/url_analyzer.py` and `services.py` distinguish direct media streams (`use_ytdl_mpv=False`) from portal URLs (`use_ytdl_mpv=True`).
 
 ---
 

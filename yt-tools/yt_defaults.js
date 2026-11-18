@@ -182,7 +182,7 @@
           key: "quality-selection",
           label: "Preferred Quality",
           type: "select",
-          optionsKey: "SHINKU_YT_QUALITIES"
+          options: SHINKU_YT_QUALITIES
         },
         {
           key: "playback-speed",
