@@ -1,4 +1,3 @@
-import re
 from typing import Any, Dict, Optional
 
 def _snake_to_camel(snake_str: str) -> str:

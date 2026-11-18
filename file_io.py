@@ -187,13 +187,13 @@ def migrate_to_shards():
 
         for folder_id, folder_data in raw_folders.items():
             playlist = folder_data.pop("playlist", [])
-            
+
             # Index gets metadata
             index_data[folder_id] = {
                 **folder_data,
                 "item_count": len(playlist)
             }
-            
+
             # Shard gets the content
             shard_path = _get_safe_shard_path(folder_id)
             if shard_path:
@@ -234,7 +234,7 @@ def get_index():
             migrate_to_shards()
         else:
             return {}
-            
+
     with FileLock(INDEX_FILE):
         return _safe_json_load(INDEX_FILE)
 
@@ -250,7 +250,7 @@ def get_playlist_shard(folder_id):
     shard_path = _get_safe_shard_path(canonical_id)
     if not shard_path or not os.path.exists(shard_path):
         return []
-    
+
     with FileLock(shard_path):
         data = _safe_json_load(shard_path)
         return data.get("playlist", [])
@@ -347,34 +347,34 @@ def _merge_playlists(existing_playlist, new_playlist):
     """
     if not existing_playlist:
         return new_playlist
-        
+
     existing_map = {item.get('id'): item for item in existing_playlist if item.get('id')}
     merged_playlist = []
-    
+
     for new_item in new_playlist:
         item_id = new_item.get('id')
         if not item_id:
             merged_playlist.append(new_item)
             continue
-        
+
         existing_item = existing_map.get(item_id)
         if existing_item:
             # Compare timestamps (ms)
             new_ts = new_item.get('last_modified', 0)
             old_ts = existing_item.get('last_modified', 0)
-            
+
             if new_ts >= old_ts:
                 merged_playlist.append(new_item)
             else:
                 logging.debug(f"[PY][IO] Preserving newer local state for item {item_id} ({old_ts} > {new_ts})")
                 merged_playlist.append(existing_item)
-            
+
             # Remove from map to track processed items
             del existing_map[item_id]
         else:
             # Item is new from incoming data
             merged_playlist.append(new_item)
-    
+
     return merged_playlist
 
 def _move_orphan_to_trash(base_path, trash_dir, timestamp):
@@ -399,7 +399,7 @@ def save_library_batch(folders_to_save, is_incremental=False):
     with FileLock(INDEX_FILE):
         index = _safe_json_load(INDEX_FILE)
         kept_canonical_ids = set()
-        
+
         for folder_id, content in folders_to_save.items():
             if not isinstance(content, dict):
                 continue
@@ -409,21 +409,21 @@ def save_library_batch(folders_to_save, is_incremental=False):
                 continue
             kept_canonical_ids.add(canonical_id)
             new_playlist = content.get("playlist", [])
-            
+
             # 1. Load existing for merge and 2. Save Shard under a single FileLock
             with FileLock(shard_path):
                 existing_data = _safe_json_load(shard_path)
                 existing_playlist = existing_data.get("playlist", []) if isinstance(existing_data, dict) else []
                 merged_playlist = _merge_playlists(existing_playlist, new_playlist)
                 _atomic_json_dump({"playlist": merged_playlist}, shard_path)
-            
+
             # 3. Update Index Metadata
             meta = {k: v for k, v in content.items() if k != "playlist"}
             index[canonical_id] = {
                 **meta,
                 "item_count": len(merged_playlist)
             }
-        
+
         if not is_incremental:
             if not folders_to_save and index:
                 logging.warning("[PY][IO] save_library_batch received empty folders payload while index is non-empty; refusing to prune shards.")
@@ -460,18 +460,18 @@ def _atomic_json_dump(data, filepath):
     """Writes JSON data to a file atomically using a .tmp file and os.replace."""
     tmp_file = f"{filepath}.{os.getpid()}.{threading.get_ident()}.tmp"
     bak_file = f"{filepath}.bak"
-    
+
     try:
         dirname = os.path.dirname(filepath)
         if dirname:
             os.makedirs(dirname, exist_ok=True)
-        
+
         # 1. Write to temporary file
         with open(tmp_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
             f.flush()
             os.fsync(f.fileno()) # Force write to disk
-            
+
         # 2. Create backup of existing file only if it exists and is valid JSON
         if os.path.exists(filepath):
             is_valid_existing = False
@@ -485,7 +485,7 @@ def _atomic_json_dump(data, filepath):
                 logging.warning(f"[PY][IO] Existing file {filepath} is corrupt or unreadable ({val_err}); preserving existing .bak.")
             if is_valid_existing:
                 shutil.copy2(filepath, bak_file)
-            
+
         # 3. Atomic swap
         os.replace(tmp_file, filepath)
         return True
@@ -501,7 +501,7 @@ def _atomic_json_dump(data, filepath):
 def _safe_json_load(filepath, default_factory=dict):
     """Loads JSON data with a fallback to .bak if the primary file is corrupted."""
     bak_file = f"{filepath}.bak"
-    
+
     def try_load(path):
         if not os.path.exists(path):
             return None
@@ -559,7 +559,7 @@ def get_mpv_executable():
     # PROJECT_ROOT is the parent of utils/
     # SCRIPT_DIR is the folder containing native_host.py
     search_dirs = [PROJECT_ROOT, SCRIPT_DIR, os.path.dirname(sys.executable)]
-    
+
     # Add subdirectories to search list
     for d in list(search_dirs):
         search_dirs.append(os.path.join(d, "mpv"))
@@ -622,14 +622,14 @@ def merge_ytdlp_options(*args, allow_settings_flags=False):
                 else:
                     merged_map[part.strip().lower()] = ""
                     last_key = part.strip().lower()
-    
+
     final_parts = []
     for k, v in merged_map.items():
         if v == "":
             final_parts.append(f"{k}=")
         else:
             final_parts.append(f"{k}={v}")
-    
+
     merged_str = ",".join(final_parts)
     return sanitize_ytdlp_options(merged_str, allow_settings_flags=allow_settings_flags)
 
@@ -642,20 +642,20 @@ def get_all_folders_from_file():
     index = get_index()
     if not index:
         return {}
-    
+
     full_data = {}
     from concurrent.futures import ThreadPoolExecutor
-    
+
     # Use ThreadPoolExecutor for parallel file reading
     # Since this is I/O bound, more threads than cores can be beneficial.
     with ThreadPoolExecutor(max_workers=10) as executor:
         def fetch_shard(f_id, metadata):
             playlist = get_playlist_shard(f_id)
             return f_id, {**metadata, "playlist": playlist}
-        
+
         results = list(executor.map(lambda x: fetch_shard(x[0], x[1]), index.items()))
         full_data = dict(results)
-    
+
     return full_data
 
 def _get_canonical_folder_id(folder_id, index=None):
@@ -665,20 +665,20 @@ def _get_canonical_folder_id(folder_id, index=None):
     """
     if not folder_id:
         return folder_id
-    
+
     if index is None:
         index = get_index()
-        
+
     # 1. Try exact match
     if folder_id in index:
         return folder_id
-        
+
     # 2. Try case-insensitive match
     lower_id = folder_id.lower()
     for actual_id in index.keys():
         if actual_id.lower() == lower_id:
             return actual_id
-            
+
     return folder_id
 
 def get_folder_data(folder_id):
@@ -688,7 +688,7 @@ def get_folder_data(folder_id):
     meta = index.get(canonical_id)
     if not meta:
         return None
-    
+
     playlist = get_playlist_shard(canonical_id)
     return {**meta, "playlist": playlist}
 
@@ -712,18 +712,18 @@ def write_export_file(filename, data, subfolder=None):
                 if os.path.commonpath([export_root, candidate_dir]) != export_root:
                     return {"success": False, "error": "Access denied: Subfolder outside export directory."}
                 target_dir = candidate_dir
-            
+
         os.makedirs(target_dir, exist_ok=True)
-        
+
         # Remove .json extension if user provided it, we'll add it back
         base = filename
         if base.lower().endswith('.json'):
             base = base[:-5]
-            
+
         safe_basename = os.path.basename(base)
         # Enforce strict filename sanitization
         safe_basename = sanitize_string(safe_basename, is_filename=True)
-        
+
         final_filename = f"{safe_basename}.json"
         filepath = os.path.join(target_dir, final_filename)
 
@@ -750,7 +750,7 @@ def list_import_files():
     try:
         if not os.path.isdir(EXPORT_DIR):
             return {"success": True, "files": []}
-        
+
         json_files = []
         for root, dirs, files in os.walk(EXPORT_DIR):
             for file in files:
@@ -759,7 +759,7 @@ def list_import_files():
                     rel_path = os.path.relpath(os.path.join(root, file), EXPORT_DIR)
                     # Normalize to forward slashes for the browser UI
                     json_files.append(rel_path.replace(os.sep, '/'))
-        
+
         return {"success": True, "files": sorted(json_files, reverse=True)}
     except Exception as e:
         error_msg = f"[PY][IO] Failed to list import files: {e}"
@@ -854,13 +854,13 @@ def get_settings():
                 if isinstance(f, dict) and isinstance(f.get("flag"), str)
             }
             updated_flags = []
-            
+
             for default_f in default_settings["automatic_mpv_flags"]:
                 if default_f["flag"] in current_flags:
                     updated_flags.append(current_flags[default_f["flag"]])
                 else:
                     updated_flags.append(default_f)
-            
+
             settings["automatic_mpv_flags"] = updated_flags
         else:
             logging.warning("[PY][IO] Malformed automatic_mpv_flags in config; using defaults.")
@@ -930,7 +930,7 @@ def set_settings(settings_dict):
                     settings_dict['automatic_mpv_flags'] = valid_flags
 
             # --- NEW: Normalize Buffer Settings & Align Cache/Readahead ---
-            
+
             # 1. Align demuxer_readahead_secs with cache_secs if one is updated
             if 'cache_secs' in settings_dict:
                 settings_dict['demuxer_readahead_secs'] = settings_dict['cache_secs']

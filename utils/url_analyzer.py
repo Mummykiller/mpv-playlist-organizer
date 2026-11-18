@@ -45,7 +45,7 @@ class VolatileCookieManager:
     """Manages cookie extraction to volatile memory (RAM) to avoid disk writes."""
     _volatile_dir = None
     _lock = threading.Lock()
-    
+
     @classmethod
     def get_volatile_dir(cls):
         """Returns a path to a per-process/session RAM-backed directory with 0700 permissions (PY-M2)."""
@@ -59,7 +59,7 @@ class VolatileCookieManager:
             else:
                 base_dir = file_io.TEMP_DIR
                 os.makedirs(base_dir, exist_ok=True)
-                
+
             cookie_dir = tempfile.mkdtemp(prefix=f"mpv_cookies_{os.getpid()}_", dir=base_dir)
             if platform.system() != "Windows":
                 try:
@@ -104,10 +104,10 @@ class VolatileCookieManager:
         """
         import shutil
         import glob
-        
+
         system = platform.system()
         user_home = os.path.expanduser("~")
-        
+
         # Determine the database path based on OS and browser
         db_rel_path = None
         if system == "Linux":
@@ -134,7 +134,7 @@ class VolatileCookieManager:
                     os.path.join(user_home, ".config/microsoft-edge"),
                     os.path.join(user_home, ".var/app/com.microsoft.Edge/config/microsoft-edge")
                 ]
-            
+
             # Find all potential Cookies files in Default or Profile *
             candidates = []
             for base in bases:
@@ -143,9 +143,9 @@ class VolatileCookieManager:
                     pat = os.path.join(base, profile_pat, "Cookies")
                     matches = glob.glob(pat)
                     candidates.extend(matches)
-            
+
             db_rel_path = next((p for p in candidates if os.path.exists(p)), None)
-                    
+
             if not db_rel_path:
                 # Fallback to the old simple mapping if no specific candidate matched
                 base = os.path.join(user_home, ".config")
@@ -160,7 +160,7 @@ class VolatileCookieManager:
                 db_rel_path = os.path.join(base, mapping.get(browser.lower(), ""))
         elif system == "Windows":
             base = os.environ.get('LOCALAPPDATA', "")
-            
+
             # Windows Profile Patterns
             win_bases = []
             if browser.lower() == "chrome":
@@ -171,7 +171,7 @@ class VolatileCookieManager:
                 win_bases = [os.path.join(base, "Microsoft/Edge/User Data")]
             elif browser.lower() == "vivaldi":
                 win_bases = [os.path.join(base, "Vivaldi/User Data")]
-            
+
             candidates = []
             for w_base in win_bases:
                 for profile_pat in ["Default", "Profile *"]:
@@ -204,7 +204,9 @@ class VolatileCookieManager:
         temp_dir_obj = tempfile.TemporaryDirectory(dir=volatile_dir, prefix="shadow_profile_")
         shadow_root = temp_dir_obj.name
 
-        cleanup_shadow = lambda: shutil.rmtree(shadow_root, ignore_errors=True) if os.path.exists(shadow_root) else None
+        def cleanup_shadow():
+            if os.path.exists(shadow_root):
+                shutil.rmtree(shadow_root, ignore_errors=True)
         atexit.register(cleanup_shadow)
 
         try:
@@ -218,13 +220,13 @@ class VolatileCookieManager:
 
             logging.info(f"Shadow Copy: Duplicating locked database to {shadow_db_path}")
             shutil.copy2(db_rel_path, shadow_db_path)
-            
+
             settings = file_io.get_settings()
             configured_ytdlp = settings.get("ytdlp_path")
             if configured_ytdlp and not security.is_safe_executable_path(configured_ytdlp, "ytdlp_path"):
                 configured_ytdlp = None
             ytdlp_path = configured_ytdlp or shutil.which("yt-dlp") or "yt-dlp"
-            
+
             cmd = [
                 ytdlp_path,
                 '--cookies-from-browser', f"{browser}:{shadow_root}",
@@ -233,7 +235,7 @@ class VolatileCookieManager:
             ]
             if ignore_config:
                 cmd.insert(1, '--ignore-config')
-            
+
             subprocess.run(
                 cmd,
                 capture_output=True,
@@ -242,7 +244,7 @@ class VolatileCookieManager:
                 timeout=20,
                 env=security.get_scrubbed_env()
             )
-            
+
             return os.path.exists(target_path) and os.path.getsize(target_path) > 0
         except Exception as e:
             logging.warning(f"Shadow Copy failed: {e}")
@@ -272,10 +274,10 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
     global _COOKIES_CACHE
     import time
     import shutil
-    
+
     url = file_io.sanitize_string(url, is_filename=False)
     now = time.time()
-    
+
     # Layer 1: In-memory cache check (1 hour)
     with _COOKIES_CACHE_LOCK:
         cached_path = _COOKIES_CACHE["path"]
@@ -288,18 +290,18 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
     try:
         # Use VOLATILE directory
         cookies_dir = VolatileCookieManager.get_volatile_dir()
-        
+
         # Use UUID to prevent collisions and ensure privacy per-session if needed
         temp_filename = f"{COOKIE_PREFIX}{browser}_{uuid.uuid4().hex[:6]}{COOKIE_EXT}"
         temp_path = os.path.join(cookies_dir, temp_filename)
-        
+
         # Layer 3: Hard Refresh via yt-dlp
         settings = file_io.get_settings()
         configured_ytdlp = settings.get("ytdlp_path")
         if configured_ytdlp and not security.is_safe_executable_path(configured_ytdlp, "ytdlp_path"):
             configured_ytdlp = None
         ytdlp_path = configured_ytdlp or shutil.which("yt-dlp") or "yt-dlp"
-        
+
         cookie_cmd = [
             ytdlp_path,
             '--cookies-from-browser', browser,
@@ -310,16 +312,16 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
             '--',
             url
         ]
-        
+
         if ignore_config:
             cookie_cmd.insert(1, '--ignore-config')
-        
+
         logging.info(f"Extracting cookies to RAM ({temp_path}) for {browser}...")
         subprocess.run(cookie_cmd, capture_output=True, text=True, check=False, timeout=30, env=security.get_scrubbed_env())
-        
+
         # --- Check for success or trigger Shadow Copy Fallback ---
         success = os.path.exists(temp_path) and os.path.getsize(temp_path) > 0
-        
+
         if not success:
             logging.info(f"Primary extraction failed. Triggering Shadow Copy fallback for {browser}...")
             success = VolatileCookieManager.extract_with_shadow_copy(browser, url, temp_path, ignore_config=ignore_config)
@@ -345,12 +347,12 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
 
 def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cookies=True, yt_mark_watched=True, yt_ignore_config=True, other_sites_use_cookies=True, ytdl_quality='best', check_cancelled=None):
     """
-    Runs bypass logic. Returns 'cookies_browser' string for direct MPV usage, 
+    Runs bypass logic. Returns 'cookies_browser' string for direct MPV usage,
     or 'cookies_file' path if extraction was forced (e.g. for Python-side expansion).
     """
     # First line of defense inside analyzer: sanitize the URL
     url = file_io.sanitize_string(url, is_filename=False, is_url=True)
-    
+
     # --- Protocol Validation ---
     if not url.lower().startswith(security.ALLOWED_PROTOCOLS):
         logging.warning(f"Security: Rejected URL with unsafe protocol: {url}")
@@ -358,17 +360,17 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
             "success": False,
             "error": "Invalid URL protocol. Only http, https, file, udp, rtmp, rtsp, and mms schemes are allowed."
         }
-    
+
     # --- SSRF Protection ---
     if url.lower().startswith(('http://', 'https://')) and not is_safe_url(url):
         return {
             "success": False,
             "error": "Security Block: Access to private/local networks is not allowed."
         }
-    
+
     # Use provided UA or a reasonable Chrome-like default
     effective_user_agent = user_agent_str if user_agent_str else "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    
+
     settings = file_io.get_settings()
     configured_ytdlp = settings.get("ytdlp_path")
     if configured_ytdlp and not security.is_safe_executable_path(configured_ytdlp, "ytdlp_path"):
@@ -398,7 +400,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         # Header-First Direct: Stop extracting cookie files to RAM for Animepahe.
         # Instead, we pass the browser name to MPV and force ytdl=yes.
         # This allows MPV to handle the Kwik.cx decryption natively and faster.
-        
+
         cookies_browser = None
         if is_other_cookies_enabled and browser and browser != "None":
             cookies_browser = browser
@@ -407,16 +409,16 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         # even for owocdn/uwucdn mirror domains.
         referer = "https://kwik.cx/"
         origin = "https://kwik.cx"
-        
+
         # Detection for direct .m3u8 streams vs landing pages
         is_direct_vault = (".m3u8" in url.lower()) and ("owocdn" in url or "uwucdn" in url or VAULT_RE.search(url))
-        
+
         # Anti-bot args for yt-dlp just in case it's used elsewhere (landing pages)
         ytdl_args = r"extractor-args=generic:impersonate;youtube:player_client=android\,ios"
 
         return {
             "success": True,
-            "url": url, 
+            "url": url,
             "headers": {
                 "User-Agent": effective_user_agent,
                 "Referer": referer,
@@ -424,12 +426,12 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
             },
             "ytdl_raw_options": ytdl_args if not is_direct_vault else None,
 
-            # Only use ytdl for kwik.cx pages or unknown mirrors. 
+            # Only use ytdl for kwik.cx pages or unknown mirrors.
             # Direct vault streams MUST use native ffmpeg to avoid Cloudflare challenges.
-            "use_ytdl_mpv": not is_direct_vault, 
+            "use_ytdl_mpv": not is_direct_vault,
             "is_youtube": False,
             "disable_http_persistent": False,
-            "cookies_file": None, 
+            "cookies_file": None,
             "cookies_browser": cookies_browser if not is_direct_vault else None
         }
 
@@ -466,7 +468,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
 
                 cookies_file = None
                 cookies_browser = None
-                
+
                 if browser and browser != "None":
                     if is_yt_enabled and is_yt_cookies_enabled:
                         # For expansion, we MUST extract to file so Python can use it
@@ -474,7 +476,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                         if cookies_file:
                             cmd.extend(['--cookies', cookies_file])
                             # Also pass browser name for the entries themselves to use later
-                            cookies_browser = browser 
+                            cookies_browser = browser
                         else:
                             # Fallback if extraction fails
                             cmd.extend(['--cookies-from-browser', browser])
@@ -484,23 +486,23 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
 
                 result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30, env=security.get_scrubbed_env())
                 lines = result.stdout.strip().split('\n')
-                
+
                 entries = []
                 for line in lines:
                     if '|' in line:
                         title, webpage_url = line.split('|', 1)
                         title = file_io.sanitize_string(title)
-                        
+
                         ytdl_opts = []
-                        # NOTE: We do NOT append "cookies=" here. 
+                        # NOTE: We do NOT append "cookies=" here.
                         # We will pass cookies_browser to MPV instead.
-                        
+
                         entries.append({
                             "title": title,
                             "url": webpage_url,
                             "original_url": webpage_url,
                             "is_youtube": True,
-                            "use_ytdl_mpv": True, 
+                            "use_ytdl_mpv": True,
                             "disable_http_persistent": False,
                             "headers": {"User-Agent": effective_user_agent},
                             "ytdl_raw_options": ",".join(ytdl_opts) if ytdl_opts else None,
@@ -509,7 +511,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                             "mark_watched": is_mark_watched_enabled and is_yt_cookies_enabled,
                             "ytdl_format": ytdl_format
                         })
-                
+
                 if entries:
                     return {
                         "success": True,
@@ -540,7 +542,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         try:
             cookies_file = None
             cookies_browser = None
-            
+
             if is_yt_cookies_enabled and browser and browser != "None":
                 # OPTIMIZATION: Do NOT extract cookies here.
                 # Just pass the browser name.
@@ -578,15 +580,15 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
             '--default-search', 'auto',
             '--user-agent', effective_user_agent,
         ]
-        
-        if is_yt_ignore_config_enabled: 
+
+        if is_yt_ignore_config_enabled:
             cmd.insert(1, '--ignore-config')
 
         if is_other_cookies_enabled and browser and browser != "None":
             cmd.extend(['--cookies-from-browser', browser])
-        
+
         cmd.extend(['--', url])
-        
+
         logging.info(f"Resolving non-YouTube URL externally: {url} with format {ytdl_format}")
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30, env=security.get_scrubbed_env())
         urls = [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -637,7 +639,7 @@ def normalize_url(url):
     """
     if not url or not isinstance(url, str):
         return url
-    
+
     try:
         from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
         u = urlparse(url)
@@ -646,7 +648,7 @@ def normalize_url(url):
         query = dict(parse_qsl(u.query))
         for p in ['t', 'index', 'start', 'ab_channel', 'attr_tag', 'si', 'feature', 'pp']:
             query.pop(p, None)
-        
+
         new_query = urlencode(sorted(query.items()))
         return urlunparse((u.scheme, u.netloc, u.path, u.params, new_query, ""))
     except Exception as e:
@@ -665,6 +667,6 @@ if __name__ == "__main__":
 
     result = run_bypass_logic(url, browser, youtube_enabled, user_agent)
     print(json.dumps(result))
-    
+
     if not result.get("success"):
         sys.exit(1)

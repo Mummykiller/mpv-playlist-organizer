@@ -79,15 +79,15 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
     global LAST_ANILIST_FRESH_LOG_TIME
     anilist_cache = AniListCache(cache_file, script_dir, send_message_func)
     now = time.time()
-    
+
     full_cache = anilist_cache._load_cache()
     today_ts = full_cache.get("today_timestamp", 0)
-    
+
     is_new_day = False
     if today_ts > 0:
         cache_date = datetime.fromtimestamp(today_ts).date()
         is_new_day = datetime.fromtimestamp(now).date() != cache_date
-    
+
     if delete_cache or is_new_day:
         if delete_cache:
             logging.info("AniList Cache: Manual deletion requested.")
@@ -95,7 +95,7 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
         elif is_new_day:
             logging.info("AniList Cache: New day detected. Wiping all offsets.")
             send_message_func({"log": {"text": "[AniList]: New day detected. Refreshing schedule...", "type": "info"}})
-            
+
         if os.path.exists(cache_file):
             try:
                 os.remove(cache_file)
@@ -123,7 +123,7 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
     def perform_full_fetch_and_cache(target_days):
         if target_days == 0:
             send_message_func({"log": {"text": "[AniList]: Fetching fresh data from API...", "type": "info"}})
-        
+
         res = anilist_cache._fetch_from_anilist_script(is_ping=False, days=target_days)
         if res['success']:
             try:
@@ -137,7 +137,7 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
                 res['output'] = parsed_data
                 if target_days == 0:
                     full_cache["today_timestamp"] = now
-                
+
                 full_cache["offsets"] = offsets
                 anilist_cache._save_cache(full_cache)
             except Exception as e:
@@ -149,7 +149,7 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
         is_expired_by_timer = (now - day_cache['timestamp'] > anilist_cache.CACHE_DURATION_S)
         next_airing_at = day_cache['data'].get('next_airing_at')
         is_expired_by_release = (day_key == "0" and next_airing_at and now > next_airing_at)
-        
+
         if is_expired_by_timer or is_expired_by_release or force_refresh:
             if day_key == "0":
                 is_today_expired = True

@@ -97,7 +97,7 @@ def _run_update_command(command, send_message_func):
 
     for line in iter(process.stdout.readline, ''):
         send_message_func({"log": {"text": f"[yt-dlp]: {line.strip()}", "type": "info"}})
-    
+
     process.stdout.close()
     return process.wait()
 
@@ -124,14 +124,14 @@ def update_ytdlp(send_message_func):
             error_msg = f"Update process failed with exit code {return_code}."
             send_message_func({"log": {"text": f"[yt-dlp]: {error_msg}", "type": "error"}})
             return {"success": False, "error": error_msg}
-        
+
         version_after = _get_ytdlp_version(current_path, send_message_func)
         if not version_after:
             return {"success": False, "error": "Could not verify yt-dlp version after update."}
 
         send_message_func({"log": {"text": f"[yt-dlp]: New version: {version_after}", "type": "info"}})
         success_msg = f"Successfully updated yt-dlp from {version_before} to {version_after}." if version_after != version_before else f"yt-dlp is already at the latest version ({version_after})."
-        
+
         global _DEPENDENCY_STATUS_CACHE
         _DEPENDENCY_STATUS_CACHE["data"] = None
         _DEPENDENCY_STATUS_CACHE["timestamp"] = 0
@@ -172,7 +172,7 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
 
     ytdlp_exe_name = "yt-dlp.exe" if system == "Windows" else "yt-dlp"
     ytdlp_path = shutil.which(ytdlp_exe_name)
-    
+
     # NEW: On Windows, check the same folder as mpv.exe if not found in PATH
     if not ytdlp_path and system == "Windows" and mpv_status["found"]:
         mpv_dir = os.path.dirname(mpv_status["path"])
@@ -208,7 +208,7 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
             if os.path.exists(p) and os.access(p, os.X_OK):
                 ffmpeg_path = p
                 break
-    
+
     if ffmpeg_path:
         ffmpeg_status["found"] = True
         ffmpeg_status["path"] = ffmpeg_path

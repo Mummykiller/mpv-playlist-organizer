@@ -2,7 +2,6 @@ import os
 import sys
 import unittest
 import json
-import time
 import socket
 from unittest.mock import MagicMock, patch
 
@@ -277,7 +276,7 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
 
         # Verify set_url_options calls used expect_response=False
         set_url_calls = [
-            call for call in mock_ipc.send.call_args_list 
+            call for call in mock_ipc.send.call_args_list
             if call[0] and call[0][0].get("command", [])[:2] == ["script-message", "set_url_options"]
         ]
         self.assertTrue(len(set_url_calls) >= 2)

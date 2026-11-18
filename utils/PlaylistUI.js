@@ -52,7 +52,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		render(playlist, lastPlayedId, isFolderActive = false, completedIds = []) {
-			const renderGen = (this._renderGeneration = (this._renderGeneration || 0) + 1);
+			this._renderGeneration = (this._renderGeneration || 0) + 1;
+			const renderGen = this._renderGeneration;
 			const completedSet = new Set(completedIds || []);
 			let effectivePlaylist = playlist || [];
 			

@@ -15,13 +15,13 @@ class DataHandler(BaseHandler):
     def handle_log_event(self, request: native_link.LogRequest):
         # Determine level
         level_name = request.level.upper()
-        
+
         # Map JS FATAL to Python CRITICAL
         if level_name == "FATAL":
             level = logging.CRITICAL
         else:
             level = getattr(logging, level_name, logging.INFO)
-        
+
         msg = str(request.message or "")[:4096]
         stack = str(getattr(request, 'stack', None) or "")[:4096]
 
@@ -54,9 +54,9 @@ class DataHandler(BaseHandler):
         from utils import logger as logger_module
         logger_module.shutdown()
         resolved_dir = logger_module.initialize(self.ctx.data_dir, self.ctx.script_dir) or self.ctx.data_dir
-        
+
         js_diagnostics = request.data or {}
-        
+
         def read_tail(filename, kb=100):
             path = os.path.join(resolved_dir, filename)
             if not os.path.exists(path):
@@ -75,14 +75,14 @@ class DataHandler(BaseHandler):
         native_log = read_tail("native_host.log")
         ipc_log = read_tail("ipc_events.log")
         browser_log = read_tail("browser_errors.log")
-        
+
         import sys
         system_info = {
             "python_version": sys.version,
             "platform": platform.platform(),
             "data_dir": self.ctx.data_dir
         }
-        
+
         diag_collector = getattr(self.ctx, 'diagnostic_collector', None)
         native_errors = diag_collector.get_errors() if diag_collector else []
 
@@ -100,7 +100,7 @@ class DataHandler(BaseHandler):
         data = request.data
         if data is None:
             return native_link.failure("No data provided.")
-            
+
         if request.is_incremental:
             success = self.file_io.save_library_batch(data, is_incremental=True)
             if success:
@@ -150,7 +150,7 @@ class DataHandler(BaseHandler):
             if os.path.commonpath([export_dir_real, filepath]) != export_dir_real or not filepath.lower().endswith('.json'):
                 msg = "Access denied: Path outside export directory."
                 return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
-            
+
             with open(filepath, 'r', encoding='utf-8') as f:
                 import json
                 data = json.load(f)
@@ -200,7 +200,7 @@ class DataHandler(BaseHandler):
         folder_id = getattr(request, 'folder_id', None)
         if not folder_id:
             return native_link.failure("No folder ID provided.")
-        
+
         try:
             new_playlist = []
             def _reorder_shard(playlist, _index_entry):

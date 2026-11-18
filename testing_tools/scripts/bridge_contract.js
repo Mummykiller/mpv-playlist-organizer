@@ -342,7 +342,7 @@ const ACTION_SCHEMAS = {
 function validateContract(snakedPayload) {
 	const { action, request_id } = snakedPayload;
 	if (!action) return { valid: false, error: "Missing 'action' key." };
-	
+
 	const allowedKeys = ACTION_SCHEMAS[action];
 	if (!allowedKeys) {
 		// BaseRequest fallback
@@ -354,13 +354,13 @@ function validateContract(snakedPayload) {
 
 	const validKeys = new Set([...allowedKeys, "action", "request_id", ...SETTINGS_FIELDS]);
 	const payloadKeys = Object.keys(snakedPayload);
-	
+
 	for (const key of payloadKeys) {
 		if (!validKeys.has(key)) {
 			return { valid: false, error: `Key '${key}' is not defined in Python model for action '${action}'.` };
 		}
 	}
-	
+
 	return { valid: true };
 }
 

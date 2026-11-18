@@ -3,7 +3,6 @@ from tkinter import ttk, scrolledtext, messagebox, filedialog
 import threading
 import queue
 import logging
-import re
 import platform
 import os
 import json
@@ -286,7 +285,7 @@ class HostManagerApp:
         frame = ttk.Frame(top, padding=30)
         frame.pack(fill=tk.BOTH, expand=True)
         ttk.Label(frame, text="⚠️ MPV Media Player Missing", font=(MODERN_FONT, 14, "bold"), foreground="#ed4245").pack(anchor=tk.W, pady=(0, 10))
-        
+
         def browse_path():
             path = filedialog.askopenfilename(title="Select mpv")
             if path:

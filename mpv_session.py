@@ -4,7 +4,6 @@ import sys
 import threading
 import time
 import platform
-import re
 from utils import ipc_utils, session_health, session_ipc_ops
 from utils.session_services import EnrichmentService, LauncherService
 import services

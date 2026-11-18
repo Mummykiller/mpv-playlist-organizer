@@ -4,7 +4,7 @@ import os
 import errno
 import threading
 import time
-import sys 
+import sys
 import json
 import hmac
 from urllib.parse import urlparse, parse_qs
@@ -66,7 +66,7 @@ class PlaylistHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     with open(m3u_file_path, 'rb') as f:
                         content = f.read()
-                    
+
                     self.send_response(200)
                     self.send_header('Content-type', 'audio/x-mpegurl')
                     self.send_header('Content-Length', str(len(content)))
@@ -136,7 +136,7 @@ def start_playlist_server(start_port=0, max_port_attempts=5, m3u_file_to_serve='
         # Structured output for reliable parsing by native host
         print(json.dumps({"port": actual_port, "status": "running"}))
         sys.stdout.flush()
-        
+
         logging.info(f"Serving M3U playlist on 127.0.0.1:{actual_port}")
         server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         server_thread.start()

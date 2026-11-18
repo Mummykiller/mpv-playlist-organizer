@@ -5,7 +5,6 @@ import platform
 import stat
 import sys
 import threading
-import time
 import unittest
 from unittest.mock import MagicMock
 

@@ -27,18 +27,18 @@ class TestRobustness(BaseTestCase):
         """Verify that the handshake file is created with correct JSON structure."""
         flag_dir = os.path.join(self.test_dir, "flags_test")
         os.makedirs(flag_dir, exist_ok=True)
-        
+
         handshake_data = {
             "folder_id": "test_folder",
             "project_root": self.test_dir,
             "id": str(uuid.uuid4())
         }
-        
+
         handshake_path = os.path.join(flag_dir, f"handshake_test_{uuid.uuid4().hex}.json")
 
         with open(handshake_path, 'w', encoding='utf-8') as f:
             json.dump(handshake_data, f)
-        
+
         self.assertTrue(os.path.exists(handshake_path))
         with open(handshake_path, 'r') as f:
             loaded = json.load(f)
@@ -52,15 +52,15 @@ class TestRobustness(BaseTestCase):
             "last_played_id": "123",
             "playlist_items": [{"item_id": "abc", "resume_time": 10}]
         }
-        
+
         def js_normalize(data):
             if isinstance(data, list): return [js_normalize(x) for x in data]
             if not isinstance(data, dict): return data
-            
+
             def snake_to_camel(s):
                 parts = s.split('_')
                 return parts[0] + ''.join(x.title() for x in parts[1:])
-            
+
             return {snake_to_camel(k): js_normalize(v) for k, v in data.items()}
 
         normalized = js_normalize(python_data)
@@ -78,7 +78,7 @@ class TestRobustness(BaseTestCase):
             index = file_io.get_index()
             index[test_folder_id] = {"name": "Test Folder", "playlist": []}
             file_io.save_index(index)
-            
+
             test_playlist = [{"id": "item1", "url": "https://example.com/stream.mp4", "resume_time": 0}]
             file_io.save_playlist_shard(test_folder_id, test_playlist)
 
@@ -90,12 +90,12 @@ class TestRobustness(BaseTestCase):
                 ipc_path="/tmp/mock_ipc_not_existing",
                 send_message_func=self.mock_send
             )
-            
+
             tracker.commit_interval = 0.4
             tracker.is_tracking = True
             tracker._stop_event.clear()
             tracker._start_heartbeat()
-            
+
             tracker._update_resume_time("item1", 123)
             deadline = time.time() + 2.5
             saved_time = None
@@ -122,7 +122,7 @@ class TestRobustness(BaseTestCase):
             index = file_io.get_index()
             index[test_folder_id] = {"name": "Test Folder", "playlist": []}
             file_io.save_index(index)
-            
+
             test_playlist = [
                 {"id": "item1", "url": "https://example.com/1.mp4", "resume_time": 0},
                 {"id": "item2", "url": "https://example.com/2.mp4", "resume_time": 0}
@@ -138,24 +138,24 @@ class TestRobustness(BaseTestCase):
                 ipc_path="/tmp/mock_ipc_not_existing",
                 send_message_func=lambda m: messages.append(m)
             )
-            
+
             # Simulate item1 finishing at 1420s
             tracker.current_id = "item1"
             tracker.current_session_duration = 1420
             tracker.last_time_pos = 1420
-            
+
             # Transition to item2
             tracker.previous_id = "item1"
             tracker.current_id = "item2"
             tracker.current_session_duration = 0
             tracker.last_time_pos = None
-            
+
             # Simulate late stop/quit event right after transition (< 1s duration)
             # Must attribute to item1, NOT item2
             target_id = tracker.current_id
             if tracker.current_session_duration < 1 and tracker.previous_id:
                 target_id = tracker.previous_id
-            
+
             self.assertEqual(target_id, "item1")
             self.assertNotIn("item2", tracker.resume_cache)
         finally:
@@ -170,7 +170,7 @@ class TestRobustness(BaseTestCase):
             py_settings = file_io.get_settings()
             js_file = os.path.join(PROJECT_ROOT, "utils", "storageManager.js")
             self.assertTrue(os.path.exists(js_file), "storageManager.js must exist")
-            
+
             with open(js_file, "r", encoding="utf-8") as f:
                 js_content = f.read()
 
@@ -191,7 +191,7 @@ class TestRobustness(BaseTestCase):
                 return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
             js_snake = {camel_to_snake(k): k for k in js_keys}
-            
+
             ui_only_keys = {
                 "minimized", "mode", "log_visible", "pinned", "position", "top", "left", "right", "bottom",
                 "anilist_panel_visible", "lock_anilist_panel", "force_panel_attached", "anilist_attach_on_open",
@@ -409,7 +409,7 @@ class TestRobustness(BaseTestCase):
             res = handler._orchestrate_playback(req, 'single')
             self.assertTrue(res.get("success"), f"Playback promotion failed: {res}")
             handler.mpv_session.start.assert_called_once()
-            
+
             # Verify launch payload was promoted to batch and item1 state was merged
             launch_payload = handler.mpv_session.start.call_args[0][0]
             self.assertIsInstance(launch_payload, list)

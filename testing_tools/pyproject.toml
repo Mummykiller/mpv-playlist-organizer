@@ -1,9 +1,17 @@
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+extend-exclude = [
+    "yt-tools-standalone",
+    "yt-tools-legacy",
+    "mpv-playlist-organizer-release",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]
 # E402 is ignored intentionally because entry points (cli.py, native_host.py, installer.py)
 # set sys.dont_write_bytecode = True and PYTHONDONTWRITEBYTECODE before importing modules.
-ignore = ["E402", "E501"]
+ignore = ["E402", "E501", "E701"]
+
+[tool.ruff.lint.per-file-ignores]
+"yt-tools/*.py" = ["W191"]

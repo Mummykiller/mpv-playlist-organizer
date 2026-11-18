@@ -62,7 +62,7 @@ class PlaybackRequest(BaseRequest):
     playlist: Optional[List[Dict[str, Any]]] = None
     playlist_start_id: Optional[str] = None
     m3u_data: Optional[Dict[str, Any]] = None
-    
+
     # Launch Options
     geometry: Optional[str] = None
     custom_width: Optional[int] = None
@@ -73,7 +73,7 @@ class PlaybackRequest(BaseRequest):
     force_terminal: bool = False
     play_new_instance: bool = False
     is_unmanaged: bool = False
-    
+
     # Settings
     settings: SettingsOverrides = field(default_factory=SettingsOverrides)
 

@@ -11,10 +11,10 @@ from utils.native_link.translator import ACTION_MAP
 
 def generate_contract():
     print("Generating Bridge Contract from Python Models...")
-    
+
     # 1. Extract Settings Fields
     settings_fields = [f.name for f in fields(models.SettingsOverrides)]
-    
+
     # 2. Map Actions to their expected fields
     action_schemas = {}
     for action, req_class in ACTION_MAP.items():
@@ -41,7 +41,7 @@ const ACTION_SCHEMAS = {json.dumps(action_schemas, indent=4)};
 function validateContract(snakedPayload) {{
 	const {{ action, request_id }} = snakedPayload;
 	if (!action) return {{ valid: false, error: "Missing 'action' key." }};
-	
+
 	const allowedKeys = ACTION_SCHEMAS[action];
 	if (!allowedKeys) {{
 		// BaseRequest fallback
@@ -53,13 +53,13 @@ function validateContract(snakedPayload) {{
 
 	const validKeys = new Set([...allowedKeys, "action", "request_id", ...SETTINGS_FIELDS]);
 	const payloadKeys = Object.keys(snakedPayload);
-	
+
 	for (const key of payloadKeys) {{
 		if (!validKeys.has(key)) {{
 			return {{ valid: false, error: `Key '${{key}}' is not defined in Python model for action '${{action}}'.` }};
 		}}
 	}}
-	
+
 	return {{ valid: true }};
 }}
 
@@ -67,7 +67,7 @@ if (typeof module !== "undefined") {{
 	module.exports = {{ validateContract, ACTION_SCHEMAS }};
 }}
 """
-    
+
     target_path = os.path.join(os.path.dirname(__file__), "scripts", "bridge_contract.js")
     with open(target_path, "w") as f:
         f.write(js_content)

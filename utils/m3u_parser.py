@@ -18,10 +18,10 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
     # Remove BOM if present
     if m3u_content.startswith('\ufeff'):
         m3u_content = m3u_content[1:]
-        
+
     lines = m3u_content.strip().split('\n')
     url_items = []
-    
+
     current_title: Optional[str] = None
     current_headers: Dict[str, str] = {}
     current_ytdl_options: List[str] = []
@@ -30,7 +30,7 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
         """Extracts Key=Value or Key:Value pairs, supporting quoted values and pipes."""
         if not s:
             return []
-            
+
         # If pipes are present, we use a simple split as they are considered safe delimiters
         if '|' in s:
             pairs = []
@@ -45,7 +45,7 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
         # Pattern: Key followed by : or = followed by (quoted string OR non-comma string)
         pattern = r'([a-zA-Z0-9_-]+)\s*[:=]\s*("[^"]*"|[^,]+)'
         matches = re.findall(pattern, s)
-        
+
         # Clean up quotes from values
         return [(k.strip(), v.strip().strip('"')) for k, v in matches]
 
@@ -53,7 +53,7 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
         line = line.strip()
         if not line or line.startswith('#EXTM3U'):
             continue
-        
+
         if line.startswith('#EXTINF:'):
             match = re.search(r'#EXTINF:[-0-9]+,(.*)', line)
             if match:
@@ -74,13 +74,13 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
         elif not line.startswith('#'):
             # This is a URL - sanitize it
             sanitized_url = file_io.sanitize_string(line, is_url=True)
-            
+
             # --- Basic Validation ---
             # Prevent "Ghost" items from malformed files (must have a scheme or look like a path)
             # We enforce that a URL must not contain spaces (unless it's a local path) and must look like a resource.
             is_valid_url = re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', sanitized_url)
             is_valid_path = sanitized_url.startswith(('/', './', '../')) or (len(sanitized_url) > 2 and (sanitized_url[1:3] == ':\\' or sanitized_url[1:3] == ':/'))
-            
+
             if not (is_valid_url or is_valid_path) or (' ' in sanitized_url and not is_valid_path):
                 logging.debug(f"M3U Parser: Skipping invalid URL/Path: {sanitized_url}")
                 current_title = None
@@ -130,7 +130,7 @@ if __name__ == '__main__':
     #EXTINF:-1,Simple Stream
     https://example.com/simple_stream.mp4
     """
-    
+
     parsed_items = parse_m3u(test_m3u_content)
     for i, item in enumerate(parsed_items):
         print(f"--- Item {i+1} ---")

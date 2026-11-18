@@ -76,7 +76,7 @@ def process_file(config, verbose=False):
         imports_str = match.group(1).replace('\n', ' ').strip()
         imports = [i.strip() for i in imports_str.split(',') if i.strip()]
         path = match.group(2)
-        
+
         if path in dependencies:
             dep_ns = dependencies[path]
             lines = [f'const {i} = {dep_ns}.{i};' for i in imports]
@@ -108,7 +108,7 @@ def process_file(config, verbose=False):
     output.append(f"window.{namespace} = window.{namespace} || {{}};")
     output.append("(() => {")
     output.append(f"\tconst MPV = window.{namespace};")
-    
+
     for line in content.split('\n'):
         if line.strip():
             output.append("\t" + line)

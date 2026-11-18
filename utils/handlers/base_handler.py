@@ -11,7 +11,7 @@ class BaseHandler:
         self.services = ctx.services
         self.ipc_utils = ctx.ipc
         self.send_message = ctx.sender
-        
+
         from ..item_processor import ItemProcessor
         self.item_processor = ItemProcessor(
             ctx.services, ctx.sender, ctx.io,

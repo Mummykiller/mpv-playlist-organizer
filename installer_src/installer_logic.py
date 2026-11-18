@@ -109,10 +109,10 @@ class InstallerLogic:
     def find_extension_id(self, browser_name):
         """Attempts to find the extension ID by scanning browser preferences."""
         user_data_root = self.manual_user_data_paths.get(browser_name.lower())
-        
+
         if not user_data_root:
             user_data_root = self.get_browser_user_data_dir(browser_name)
-            
+
         if not user_data_root or not os.path.exists(user_data_root):
             self.log(f"User Data directory not found for {browser_name}: {user_data_root}")
             if self.ask_dir:
@@ -120,7 +120,7 @@ class InstallerLogic:
                 user_data_root = self.ask_dir(f"Select User Data directory for {browser_name}")
                 if user_data_root:
                     self.manual_user_data_paths[browser_name.lower()] = user_data_root
-            
+
         if not user_data_root or not os.path.exists(user_data_root):
             self.log(f"❌ User Data directory NOT found/selected for {browser_name}")
             return None
@@ -131,7 +131,7 @@ class InstallerLogic:
         profiles = ['Default', 'Guest Profile']
         for i in range(1, 31):
             profiles.append(f'Profile {i}')
-        
+
         # Add common Opera-specific profile if applicable
         if browser_name.lower() == "opera":
             profiles.append(".") # Opera often has preferences in root of User Data
@@ -235,9 +235,9 @@ class InstallerLogic:
                 cmd = [status['ytdlp']['path'], "--cookies-from-browser", browser]
                 if manual_path:
                     cmd = [status['ytdlp']['path'], "--cookies-from-browser", f"{browser}:{manual_path}"]
-                
+
                 cmd.extend(["--simulate", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"])
-                
+
                 startupinfo = None
                 if platform.system() == "Windows":
                     startupinfo = subprocess.STARTUPINFO()
@@ -355,7 +355,7 @@ class WindowsLogic(InstallerLogic):
             f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\n"{python_executable}" "%~dp0{SCRIPT_NAME}" %*')
         self.log("Created wrapper script: run_native_host.bat")
 
-        # Native messaging manifests MUST use forward slashes or escaped backslashes in JSON, 
+        # Native messaging manifests MUST use forward slashes or escaped backslashes in JSON,
         # but the manifest file path itself should be native.
         manifest_path = os.path.join(DATA_DIR, f"{HOST_NAME}-chrome.json")
         chrome_manifest = {
@@ -374,7 +374,7 @@ class WindowsLogic(InstallerLogic):
         self.log(f"Created manifest: {display_manifest}")
 
         browsers = self.get_browser_configs()
-        
+
         # Registry paths on Windows MUST use backslashes
         native_manifest_path = os.path.normpath(manifest_path)
 

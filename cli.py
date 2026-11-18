@@ -1,4 +1,3 @@
-import argparse
 import sys
 import logging
 import time
@@ -72,7 +71,7 @@ def _cli_play_folder(args):
             for available_folder_id in sorted(folders_data.keys()):
                 print(f"  - {available_folder_id}")
         sys.exit(1)
-    
+
     playlist_items = folder_info.get("playlist", [])
 
     if not playlist_items:
@@ -80,7 +79,7 @@ def _cli_play_folder(args):
         sys.exit(0)
 
     print(f"Starting mpv for folder '{folder_id}' with {len(playlist_items)} item(s)...")
-    
+
     # Retrieve settings to pass to start()
     settings = file_io.get_settings()
     settings["clear_on_completion"] = "yes"
@@ -117,7 +116,7 @@ def _cli_play_folder(args):
             print("\nInterrupted by user. Closing mpv...")
             mpv_session.close()
             break
-    
+
     print("Playback finished.")
 
 def handle_cli():
@@ -132,11 +131,11 @@ def handle_cli():
         return False
 
     logging.info(f"Native host started in CLI mode with args: {sys.argv}")
-    
+
     cli = BaseCLI(description="Command-line interface for MPV Playlist Organizer.", setup_logging=False)
     subparsers = cli.add_subparsers(dest='command', help='Available commands')
 
-    # Note: We don't set required=True for subparsers so we can manually handle 
+    # Note: We don't set required=True for subparsers so we can manually handle
     # the empty-argument case and print help gracefully.
 
     play_parser = subparsers.add_parser('play', help='Play a playlist from a specified folder.')
@@ -156,5 +155,5 @@ def handle_cli():
         args.func(args)
     else:
         cli.parser.print_help()
-    
+
     return True

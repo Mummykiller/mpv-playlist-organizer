@@ -14,7 +14,6 @@ import time
 import signal
 import threading
 import platform
-import re
 import traceback
 import ctypes
 from datetime import datetime
@@ -58,7 +57,7 @@ def _get_emergency_log_path():
         base = os.path.join(home, 'Library/Application Support')
     else:
         base = os.path.join(home, '.local/share')
-    
+
     path = os.path.join(base, app_name)
     try:
         os.makedirs(path, exist_ok=True)
@@ -92,7 +91,7 @@ try:
     import file_io
     DATA_DIR = file_io.DATA_DIR
     HOME_DIR = os.path.expanduser("~")
-    
+
     # --- Logging Setup (Deferred to runtime init, or safe on demand) ---
     from utils import logger
     LOG_FILE = os.path.join(DATA_DIR, "native_host.log") # For the crash handler check
@@ -166,7 +165,7 @@ try:
         """Reads a message from stdin and decodes it."""
         if sys.stdin is None:
             raise EOFError("stdin is None")
-            
+
         raw_length = sys.stdin.buffer.read(4)
         if len(raw_length) == 0:
             logging.info("[PY][MAIN] Stdin closed (EOF). Exiting native host.")
@@ -174,13 +173,13 @@ try:
         if len(raw_length) < 4:
             logging.info(f"[PY][MAIN] Stdin truncated header ({len(raw_length)} bytes). Exiting native host.")
             sys.exit(0)
-            
+
         message_length = struct.unpack('@I', raw_length)[0]
         # Security check: Limit incoming message size
         if message_length > security.SECURITY_LIMITS['MAX_IPC_MESSAGE_SIZE']:
              logging.error(f"[PY][MAIN] Incoming message too large: {message_length} bytes.")
              sys.exit(1)
-             
+
         message = sys.stdin.buffer.read(message_length).decode('utf-8')
         return json.loads(message)
 
@@ -202,7 +201,7 @@ try:
                         elif isinstance(obj, dict):
                             return {k: mask_recursive(v) for k, v in obj.items()}
                         return obj
-                    
+
                     message_content = dict(message_content)
                     if "log" in message_content:
                         message_content["log"] = mask_recursive(message_content["log"])
@@ -542,7 +541,7 @@ try:
                         send_message(native_link.success(restore_data, action="session_restored", log_level=current_level))
                 except Exception as e:
                     logging.error(f"[PY][MAIN] Error during automatic session restoration: {e}")
-            
+
             threading.Thread(target=async_restore, daemon=True).start()
 
             while True:
@@ -566,7 +565,7 @@ try:
     if __name__ == '__main__':
         initialize_runtime()
         logging.info(f"[PY][START] Args: {sys.argv}, TTY: {sys.stdin.isatty() if sys.stdin else 'None'}")
-        
+
         is_browser = False
         is_cli_command = len(sys.argv) > 1 and sys.argv[1] in ('play', 'list', '-h', '--help')
         if len(sys.argv) > 1 and not is_cli_command:

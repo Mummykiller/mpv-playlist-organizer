@@ -24,7 +24,7 @@ _init_lock = threading.RLock()
 
 class ContextQueueHandler(logging.handlers.QueueHandler):
     """
-    Custom QueueHandler that injects ContextVar data into the record 
+    Custom QueueHandler that injects ContextVar data into the record
     before it is sent to the background thread.
     """
     def prepare(self, record):
@@ -175,20 +175,20 @@ def shutdown():
         if _listener:
             # Stop the listener first (it will flush the queue)
             _listener.stop()
-            
+
             # CRITICAL: Manually close the handlers that were passed to the listener
             # because QueueListener.stop() does not automatically close them.
             for handler in _listener.handlers:
                 handler.close()
-                
+
             _listener = None
-        
+
         # Close all handlers in the root logger
         root = logging.getLogger()
         for h in root.handlers[:]:
             h.close()
             root.removeHandler(h)
-        
+
         _is_initialized = False
         _active_data_dir = None
 
@@ -277,7 +277,7 @@ def observe_stream(tag="SUBPROCESS", folder_id=None, send_message_func=None):
     Includes specialized detection for yt-dlp failures.
     """
     import re
-    
+
     # Keywords that suggest yt-dlp is outdated for YouTube.
     YTDLP_FAILURE_KEYWORDS = [
         "HTTP Error 410", # "HTTP Error 410: Gone" is a classic sign.
@@ -287,7 +287,7 @@ def observe_stream(tag="SUBPROCESS", folder_id=None, send_message_func=None):
         "confirm you’re not a bot",
         "403: Forbidden"
     ]
-    
+
     # Regex to strip ANSI escape codes (colors)
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
@@ -299,20 +299,20 @@ def observe_stream(tag="SUBPROCESS", folder_id=None, send_message_func=None):
                     decoded_line = line.decode('utf-8', errors='replace').strip()
                     if not decoded_line:
                         continue
-                        
+
                     clean_line = ansi_escape.sub('', decoded_line)
-                    
+
                     # Noise filters
                     if any(x in clean_line for x in ["'uname' is not recognized", "keepalive request failed", "[mpv_thumbnail_script]"]):
                         continue
-                        
+
                     logging.info(f"[{tag}] {clean_line}")
 
                     # yt-dlp Failure Detection
                     if not ytdlp_failure_detected and any(keyword in clean_line for keyword in YTDLP_FAILURE_KEYWORDS):
-                        ytdlp_failure_detected = True 
+                        ytdlp_failure_detected = True
                         logging.warning(f"[{tag}] Potential yt-dlp failure detected: {clean_line}")
-                        
+
                         if send_message_func and folder_id:
                             send_message_func({
                                 "action": "ytdlp_update_check",

@@ -16,7 +16,7 @@ ALLOWED_PROTOCOLS = security.ALLOWED_PROTOCOLS
 
 def _windows_quote(s):
     """
-    Custom quoter for Windows that handles spaces and special characters 
+    Custom quoter for Windows that handles spaces and special characters
     without stripping backslashes.
     """
     if not s:
@@ -43,7 +43,7 @@ class MpvCommandBuilder:
         self.is_youtube_override = is_youtube_override
         self.is_youtube = is_youtube
         self.force_bypass_hint = force_bypass
-        
+
         self.url = None
         self.ipc_path = None
         self.scripts = []
@@ -108,11 +108,11 @@ class MpvCommandBuilder:
             p = os.path.join(script_dir, "mpv_scripts", "on_completion.lua")
             if os.path.exists(p):
                 self.scripts.append(p)
-                if flag_dir: 
+                if flag_dir:
                     safe_flag_dir = file_io.validate_safe_path(flag_dir)
                     if safe_flag_dir:
                          self.script_opts.append(f'on_completion-flag_dir={safe_flag_dir}')
-                
+
                 # Pass clear_on_item_finish preference
                 clear_item = self.settings.get('clear_on_item_finish', False)
                 self.script_opts.append(f"on_completion-clear_on_item_finish={'yes' if clear_item else 'no'}")
@@ -189,16 +189,16 @@ class MpvCommandBuilder:
         # Handle custom flags early to extract and merge script-opts
         parsed_custom = []
         is_windows = platform.system() == "Windows"
-        
+
         if self.custom_flags:
             try:
                 if isinstance(self.custom_flags, list):
                     for f in self.custom_flags:
-                        if isinstance(f, dict) and f.get('enabled', True): 
+                        if isinstance(f, dict) and f.get('enabled', True):
                             parsed_custom.extend(shlex.split(f.get('flag',''), posix=not is_windows))
-                        elif isinstance(f, str): 
+                        elif isinstance(f, str):
                             parsed_custom.extend(shlex.split(f, posix=not is_windows))
-                elif isinstance(self.custom_flags, str): 
+                elif isinstance(self.custom_flags, str):
                     parsed_custom.extend(shlex.split(self.custom_flags, posix=not is_windows))
             except (ValueError, TypeError) as e:
                 logging.debug(f"[MPV_CMD] Failed to parse custom flags: {e}")
@@ -218,14 +218,14 @@ class MpvCommandBuilder:
         if self.idle_val: args.append(f'--idle={self.idle_val if isinstance(self.idle_val, str) else "yes"}')
         if self.input_terminal: args.append(f'--input-terminal={self.input_terminal}')
         for s in self.scripts: args.append(f'--script={s}')
-        
+
         # --- COMBINED SCRIPT OPTS ---
-        if final_script_opts: 
+        if final_script_opts:
             args.append(f"--script-opts={','.join(final_script_opts)}")
-        
+
         for p in self.properties: args.append(p)
         if self.title: args.append(f'--title={security.sanitize_string(self.title)}')
-        
+
         # Debug: Force keep-open for unmanaged instances if it's likely a crash
         if not self.ipc_path:
             args.append("--keep-open=yes")
@@ -240,14 +240,14 @@ class MpvCommandBuilder:
             headers_lower = {k.lower(): v for k, v in self.headers.items()}
             ua = headers_lower.get('user-agent')
             ref = headers_lower.get('referer')
-            
+
             if ua: args.append(f'--user-agent={security.sanitize_string(str(ua))}')
             if ref: args.append(f'--referrer={security.sanitize_string(str(ref))}')
 
         decoder = self.settings.get('mpv_decoder', 'auto')
         if decoder and re.match(r'^[a-zA-Z0-9_-]+$', str(decoder)):
             args.append(f"--hwdec={decoder}")
-        
+
         profile = self.settings.get('performance_profile', 'default')
         if profile == 'low': args.append("--profile=fast")
         elif profile == 'medium': args.extend(["--scale=spline36", "--cscale=spline36", "--vo=gpu"])
@@ -263,7 +263,7 @@ class MpvCommandBuilder:
         display_sync = self.settings.get('enable_display_sync')
         if display_sync is None:
              display_sync = self.settings.get('ultra_video_sync', profile == 'ultra')
-        
+
         if display_sync:
             args.append("--video-sync=display-resample")
             # Interpolation requires display-resample to be effective
@@ -295,18 +295,18 @@ class MpvCommandBuilder:
             if int(q) > 1080: ytdl_format = f"bv*[height<=?{q}][vcodec~='^vp0?9|^av01']+ba/bv*[height<=?{q}]+ba/best"
             else: ytdl_format = f"bv*[height<=?{q}]+ba/best"
         args.append(f"--ytdl-format={ytdl_format}")
-        
+
         # 1. Prepare Essential YTDL Options
         existing_raw = str(self.ytdl_raw_options or "")
         ytdl_opts_list = []
-        
+
         # Security & Runtimes & Optimization
         if self.settings.get("yt_ignore_config", True) and "ignore-config" not in existing_raw:
             ytdl_opts_list.append("ignore-config=")
 
         if "no-playlist" not in existing_raw and "noplaylist" not in existing_raw:
             ytdl_opts_list.append("no-playlist=")
-        
+
         if "js-runtimes" not in existing_raw:
             node_path = self.settings.get("node_path")
             if node_path and os.path.exists(node_path) and security.is_safe_executable_path(node_path, "node_path"):
@@ -317,7 +317,7 @@ class MpvCommandBuilder:
         # Cookies
         if self.cookies_browser and self.cookies_browser != "None" and "cookies-from-browser" not in existing_raw:
             ytdl_opts_list.append(f"cookies-from-browser={self.cookies_browser}")
-        
+
         # User-Agent (Sync with MPV to prevent 403)
         if self.headers:
             headers_lower = {k.lower(): v for k, v in self.headers.items()}
@@ -339,13 +339,13 @@ class MpvCommandBuilder:
         if final_ytdl_raw:
             # We don't manually quote here, as build() handles argument quoting
             args.append(f"--ytdl-raw-options={final_ytdl_raw}")
-        
+
         if self.playlist_start is not None:
             args.append(f"--playlist-start={self.playlist_start}")
-        
+
         if self.start_time is not None:
             args.append(f"--start={self.start_time}")
-        
+
         if self.cookies_file:
             args.append(f"--cookies-file={self.cookies_file}")
 
@@ -369,7 +369,7 @@ class MpvCommandBuilder:
 
         if self.has_terminal_flag: args = [a for a in args if a != '--terminal' and a != 'terminal']
         full_command = args + (['--'] + (self.url if isinstance(self.url, list) else [self.url]) if self.url else [])
-        
+
         if self.settings.get('os_platform', platform.system()) != "Windows" and self.has_terminal_flag:
             term_cmd = []
 
@@ -460,7 +460,7 @@ def construct_mpv_command(mpv_exe, ipc_path=None, url=None, is_youtube=False, yt
     b.with_force_terminal(force_terminal).with_input_terminal(input_terminal)
     b.with_disable_http_persistent(disable_http_persistent).with_start_paused(start_paused)
     b.with_idle(idle).with_youtube_options(is_youtube, ytdl_raw_options)
-    
+
     if script_dir:
         b.with_adaptive_headers_script(script_dir)
         b.with_python_interaction_script(script_dir)

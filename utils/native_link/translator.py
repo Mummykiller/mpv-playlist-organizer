@@ -1,6 +1,6 @@
 from typing import Dict, Any, Type, Optional
 from .models import (
-    BaseRequest, PlaybackRequest, LiveUpdateRequest, 
+    BaseRequest, PlaybackRequest, LiveUpdateRequest,
     DataSyncRequest, ServiceRequest, SettingsOverrides, LogRequest,
     LogBrowserErrorRequest
 )
@@ -13,7 +13,7 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
     'play_m3u': PlaybackRequest,
     'append': PlaybackRequest,
     'play_new_instance': PlaybackRequest,
-    
+
     # Live Updates / Status
     'remove_item_live': LiveUpdateRequest,
     'remove_items_live': LiveUpdateRequest,
@@ -23,7 +23,7 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
     'is_mpv_running': LiveUpdateRequest,
     'get_playback_status': LiveUpdateRequest,
     'close_mpv': LiveUpdateRequest,
-    
+
     # Data & Settings
     'export_data': DataSyncRequest,
     'export_playlists': DataSyncRequest,
@@ -34,11 +34,11 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
     'get_smart_reorder': DataSyncRequest,
     'get_metadata_cache': DataSyncRequest,
     'cancel_task': DataSyncRequest,
-    
+
     # Services
     'get_anilist_releases': ServiceRequest,
     'check_dependencies': ServiceRequest,
-    
+
     # Logging
     'log_event': LogRequest,
     'log_browser_error': LogBrowserErrorRequest,
@@ -87,12 +87,12 @@ def _normalize_message(data: Any, parent_key: Optional[str] = None) -> Any:
 def translate(message: Dict[str, Any]) -> BaseRequest:
     # 1. Pre-normalize all keys to snake_case
     norm_message = _normalize_message(message)
-    
+
     action = norm_message.get('action')
     request_id = norm_message.get('request_id')
-    
+
     req_class = ACTION_MAP.get(action, BaseRequest)
-    
+
     if req_class == PlaybackRequest:
         return PlaybackRequest(
             action=action,
@@ -114,7 +114,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             is_unmanaged=norm_message.get('is_unmanaged', False),
             settings=SettingsOverrides.from_dict(norm_message)
         )
-    
+
     elif req_class == LiveUpdateRequest:
         return LiveUpdateRequest(
             action=action,
@@ -129,7 +129,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             session_ids=norm_message.get('session_ids'),
             new_order=norm_message.get('new_order')
         )
-    
+
     elif req_class == DataSyncRequest:
         return DataSyncRequest(
             action=action,
@@ -144,7 +144,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             shard=norm_message.get('shard'),
             task_id=norm_message.get('task_id')
         )
-        
+
     elif req_class == ServiceRequest:
         return ServiceRequest(
             action=action,
@@ -155,7 +155,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             days=norm_message.get('days', 0),
             force_refresh=norm_message.get('force_refresh', False)
         )
-    
+
     elif req_class == LogRequest:
         return LogRequest(
             action=action,
@@ -165,7 +165,7 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             context=norm_message.get('context', 'JS'),
             stack=norm_message.get('stack', '')
         )
-    
+
     elif req_class == LogBrowserErrorRequest:
         return LogBrowserErrorRequest(
             action=action,
@@ -174,5 +174,5 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             context=norm_message.get('context', 'Browser'),
             stack=norm_message.get('stack', '')
         )
-    
+
     return BaseRequest(action=action, request_id=request_id)

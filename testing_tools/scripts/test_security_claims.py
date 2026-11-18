@@ -1,6 +1,5 @@
 import os
 import unittest
-import json
 import sys
 
 # Add project root to path
@@ -26,16 +25,16 @@ class TestSecurityClaims(BaseTestCase):
         self.assertFalse(security.is_safe_url("http://127.0.0.2:8000/api"))
         self.assertFalse(security.is_safe_url("http://127.127.127.127/status"))
         self.assertFalse(security.is_safe_url("http://localhost:8080"))
-        
+
         # Private Class A/B/C
         self.assertFalse(security.is_safe_url("http://192.168.1.1/config"))
         self.assertFalse(security.is_safe_url("http://10.0.0.5/meta-data"))
         self.assertFalse(security.is_safe_url("https://172.16.0.100/internal"))
         self.assertFalse(security.is_safe_url("http://172.31.255.255/secrets"))
-        
+
         # Link-local / Cloud metadata endpoint
         self.assertFalse(security.is_safe_url("http://169.254.169.254/latest/meta-data"))
-        
+
         # IPv6 Loopback, Link-Local, and Unique-Local
         self.assertFalse(security.is_safe_url("http://[::1]/debug"))
         self.assertFalse(security.is_safe_url("http://[::]/admin"))
@@ -137,14 +136,14 @@ class TestSecurityClaims(BaseTestCase):
         """Claim 3.1: Strips restricted characters ($, `, ", etc.) from OSD/Metadata."""
         malicious = 'Test $(echo safe) `cat /dev/null` "quoted" \n \r \t'
         sanitized = security.sanitize_string(malicious, is_filename=False)
-        
+
         self.assertNotIn('$', sanitized)
         self.assertNotIn('`', sanitized)
         self.assertNotIn('"', sanitized)
         self.assertNotIn('\n', sanitized)
         self.assertNotIn('\r', sanitized)
         self.assertNotIn('\t', sanitized)
-        
+
         self.assertIn('Test', sanitized)
         self.assertIn('echo safe', sanitized)
         self.assertIn('cat /dev/null', sanitized)
@@ -249,7 +248,7 @@ class TestSecurityClaims(BaseTestCase):
                 "title": 'Title $(date) `true` "quoted"'
             }
         ]
-        
+
         dependencies = {
             'get_all_folders_from_file': lambda: {},
             'get_mpv_executable': lambda: "mpv",
@@ -260,10 +259,10 @@ class TestSecurityClaims(BaseTestCase):
             'metadata_cache': None,
             'task_manager': None
         }
-        
+
         session = mpv_session.MpvSessionManager(os.path.join(self.test_dir, "session.json"), dependencies)
         m3u_content = session._generate_m3u_content(malicious_items)
-        
+
         self.assertIn("#EXTM3U", m3u_content)
         self.assertNotIn('$', m3u_content)
         self.assertNotIn('`', m3u_content)
@@ -275,15 +274,15 @@ class TestSecurityClaims(BaseTestCase):
         data_dir = os.path.join(self.test_dir, "data")
         script_dir = os.path.join(self.test_dir, "app")
         temp_dir = os.path.join(self.test_dir, "temp")
-        
+
         os.makedirs(data_dir, exist_ok=True)
         os.makedirs(script_dir, exist_ok=True)
         os.makedirs(temp_dir, exist_ok=True)
-        
+
         # Valid files within sandbox
         safe_file = os.path.join(data_dir, "config.json")
         self.assertIsNotNone(security.validate_safe_path(safe_file, data_dir, script_dir, temp_dir))
-        
+
         # Subdirectories within sandbox
         sub_file = os.path.join(temp_dir, "playlists", "session_1.m3u")
         self.assertIsNotNone(security.validate_safe_path(sub_file, data_dir, script_dir, temp_dir))
@@ -344,19 +343,19 @@ class TestSecurityClaims(BaseTestCase):
         v1 = {"v": 1}
         v2 = {"v": 2}
         v3 = {"v": 3}
-        
+
         file_io._atomic_json_dump(v1, test_file)
         file_io._atomic_json_dump(v2, test_file)
         self.assertTrue(os.path.exists(test_file + ".bak"))
-        
+
         file_io._atomic_json_dump(v3, test_file)
         bak_data = file_io._safe_json_load(test_file + ".bak")
         self.assertEqual(bak_data["v"], 2)
-        
+
         # Simulate Corruption of Primary (V3)
         with open(test_file, 'w') as f:
             f.write("{ corrupt json")
-            
+
         # Recovery should load Backup (V2)
         recovered = file_io._safe_json_load(test_file)
         self.assertEqual(recovered["v"], 2)
@@ -366,14 +365,14 @@ class TestSecurityClaims(BaseTestCase):
         home_dir = "/home/safe_user"
         data_dir = "/home/safe_user/.config/mpv_app"
         script_dir = "/home/safe_user/repo/mpv-playlist-organizer"
-        
+
         sensitive_text = f"Opening {data_dir}/config.json via {script_dir}/native_host.py for user at {home_dir}/Videos"
         masked = security.mask_path(sensitive_text, data_dir, script_dir, home_dir)
-        
+
         self.assertNotIn(data_dir, masked)
         self.assertNotIn(script_dir, masked)
         self.assertNotIn(home_dir, masked)
-        
+
         self.assertIn("<DATA_DIR>/config.json", masked)
         self.assertIn("<APP_DIR>/native_host.py", masked)
         self.assertIn("<HOME>/Videos", masked)
@@ -386,7 +385,7 @@ class TestSecurityClaims(BaseTestCase):
         """Verifies tracking parameter and fragment stripping for reliable playlist item matching."""
         raw_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s&index=3&si=tracking123&feature=share#t=42"
         normalized = url_analyzer.normalize_url(raw_url)
-        
+
         self.assertIn("v=dQw4w9WgXcQ", normalized)
         self.assertNotIn("t=42s", normalized)
         self.assertNotIn("index=3", normalized)

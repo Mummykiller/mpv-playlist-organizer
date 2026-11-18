@@ -27,7 +27,7 @@ def is_pid_running(pid):
     if pid <= 0:
         return False
     system = platform.system()
-    
+
     if system == "Windows":
         import ctypes
         # PROCESS_QUERY_LIMITED_INFORMATION is sufficient for existence check and works across users
@@ -242,7 +242,7 @@ class IPCSocketManager:
         """
         self._ipc_path = ipc_path
         start_time = time.time()
-        
+
         logging.info(f"Attempting to connect to MPV IPC: {ipc_path}")
 
         while time.time() - start_time < timeout:
@@ -256,10 +256,10 @@ class IPCSocketManager:
                     self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                     self._sock.connect(ipc_path)
                     self._sock_file = self._sock.makefile('rb')
-                
+
                 self._ipc_path = ipc_path
                 logging.info(f"Successfully connected to MPV IPC: {ipc_path}")
-                
+
                 if start_event_reader:
                     with self._buffer_lock: # Ensure we set running flag under lock
                         self._event_reader_running = True
@@ -267,7 +267,7 @@ class IPCSocketManager:
                     self._event_reader_thread.daemon = True # Allow program to exit even if thread is running
                     self._event_reader_thread.start()
                     logging.debug("IPC event reader thread started.")
-                
+
                 return True
             except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
                 logging.debug(f"IPC connection failed (will retry): {e}")
@@ -277,7 +277,7 @@ class IPCSocketManager:
                 logging.error(f"Unexpected error during IPC connection attempt (will retry): {e}")
                 self._cleanup_attempt_handles()
                 time.sleep(0.2)
-        
+
         logging.error(f"Failed to connect to MPV IPC at {ipc_path} after {timeout} seconds.")
         return False
 
@@ -336,7 +336,7 @@ class IPCSocketManager:
             with self._buffer_lock:
                 if not self._event_reader_running:
                     break
-                
+
                 sock_handle = self._sock
                 reader_handle = self._sock_file
                 if not sock_handle and not reader_handle:
@@ -385,14 +385,14 @@ class IPCSocketManager:
                     # EOF detected, connection closed by MPV or remote end
                     ipc_logger.info("IPC event reader detected EOF. Signaling connection closure.")
                     with self._buffer_lock:
-                        self._event_reader_running = False 
+                        self._event_reader_running = False
                         self._buffer_lock.notify_all()
                     break
             except (ConnectionResetError, BrokenPipeError, OSError, ValueError) as e:
                 # ValueError specifically happens if reader_handle is closed during readline()
                 logging.debug(f"IPC event reader thread connection error: {e}. Stopping.")
                 with self._buffer_lock:
-                    self._event_reader_running = False 
+                    self._event_reader_running = False
                     self._buffer_lock.notify_all()
                 break
             except Exception as e:
@@ -412,7 +412,7 @@ class IPCSocketManager:
         if not self._sock:
             logging.warning(f"Attempted to send command '{command_dict.get('command')}' but IPC socket is not connected.")
             return None
-        
+
         with self._send_lock:
             # Assign a unique request_id to ensure we match the correct response
             if "request_id" not in command_dict:
@@ -490,29 +490,29 @@ class IPCSocketManager:
                         # Check internal buffer for a command response (matching request_id)
                         for i in range(len(self._event_buffer)):
                             item = self._event_buffer[i]
-                            # NEW: Precise request_id matching only. 
+                            # NEW: Precise request_id matching only.
                             # Non-command events are filtered out by the logic above.
                             if item.get("request_id") == req_id:
-                                del self._event_buffer[i] 
+                                del self._event_buffer[i]
                                 response = item
                                 ipc_logger.debug(f"IPC RECV (from buffer): {json.dumps(response)}")
                                 return response
-                        
+
                         elapsed = time.time() - start_read_time
                         if elapsed >= timeout:
                             logging.warning(f"Timed out waiting for command response for id {req_id} after {timeout} seconds.")
                             return None
-                        
+
                         # Wait for notify from reader thread
                         if not self._buffer_lock.wait(timeout - elapsed):
                              # wait() returns False on timeout (Python 3.2+)
                              if time.time() - start_read_time >= timeout:
                                  logging.warning(f"Timed out (wait) for command response for id {req_id}")
                                  return None
-                        
+
             except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError) as e:
                 logging.debug(f"IPC send error (connection likely lost): {e}")
-                self.close() 
+                self.close()
                 return None
             except Exception as e:
                 logging.error(f"Unexpected error during IPC send command: {e}")
@@ -531,10 +531,10 @@ class IPCSocketManager:
                     event = self._event_buffer.popleft()
                     ipc_logger.debug(f"IPC EVENT (from buffer): {json.dumps(event)}")
                     return event
-                
+
                 if not self._event_reader_running:
                     return None
-                
+
                 if timeout is not None:
                     elapsed = time.time() - start_time
                     if elapsed >= timeout:
@@ -608,7 +608,7 @@ class IPCSocketManager:
         """
         if platform.system() == "Windows":
             return
-        
+
         import stat
         cdir = IPC_DIR_LINUX
         if not cdir or not os.path.isdir(cdir) or not os.access(cdir, os.R_OK | os.W_OK):
@@ -671,7 +671,7 @@ class IPCSocketManager:
             if self._event_reader_thread.is_alive():
                 logging.debug("IPC event reader thread did not terminate gracefully (likely blocked on I/O).")
         self._event_reader_thread = None
-        
+
         # Clear any buffered events that were not processed
         with self._buffer_lock:
             self._event_buffer.clear()
@@ -701,7 +701,7 @@ def is_process_alive(pid, ipc_path):
     """
     if not pid or not ipc_path:
         return False
-    
+
     # Optimization: Check if the PID is even running before trying the socket.
     # This avoids a 2-second timeout if the process is completely gone.
     if not is_pid_running(pid):
@@ -710,7 +710,7 @@ def is_process_alive(pid, ipc_path):
     # We use a temporary manager to test connectivity without starting a background reader.
     # This avoids spawning threads for a simple one-shot check.
     temp_manager = IPCSocketManager()
-    if not temp_manager.connect(ipc_path, timeout=1.0, start_event_reader=False): 
+    if not temp_manager.connect(ipc_path, timeout=1.0, start_event_reader=False):
         return False
 
     # If connected, send a command to verify the PID.
@@ -723,7 +723,7 @@ def is_process_alive(pid, ipc_path):
         ipc_logger.debug(f"[PY][IPC] is_process_alive: PID mismatch. Expected {pid}, got {actual_pid}. (Socket is alive)")
     else:
         ipc_logger.debug("[PY][IPC] is_process_alive: Failed to get PID from MPV.")
-            
+
     return False
 
 
@@ -739,8 +739,8 @@ def get_ipc_path():
     """Generates a unique, platform-specific path for the mpv IPC socket/pipe."""
     # Use the process ID of the *current* python process
     # This ensures a unique path for each native_host instance.
-    pid = os.getpid() 
-    
+    pid = os.getpid()
+
     if platform.system() == "Windows":
         # Named pipes on Windows are global names.
         # Format: \\.\pipe\<PipeName>

@@ -871,12 +871,10 @@ select:focus-visible {
 
 /* --- AniList Releases Section --- */
 #anilist-releases-container {
-	background-color: var(--bg-secondary);
 	border-radius: var(--radius);
 	/* Add a small horizontal padding for breathing room. */
 	padding: 0 8px;
 	overflow-y: auto;
-	border: 1px solid var(--border-primary); /* This will be overridden by transparent styles below */
 	display: flex;
 	flex-direction: column;
 	/* The following styles are for the floating panel, which has a transparent, blurred background */
@@ -900,8 +898,6 @@ select:focus-visible {
 	font-size: 14px;
 	display: flex;
 	flex-direction: column;
-	height: 620px; /* Default height for the panel */
-	/* These two are crucial for resizing to work correctly */
 	height: 100%;
 	overflow: hidden;
 	border: 1px solid var(--border-primary);

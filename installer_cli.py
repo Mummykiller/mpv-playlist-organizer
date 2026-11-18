@@ -15,7 +15,7 @@ class CommandLineApp:
         def ask_dir_cli(title):
             print(f"\n[ACTION REQUIRED] {title}")
             return input("Path (Enter to skip): ").strip()
-        
+
         return get_logic_for_platform(log_func=print, ask_dir_func=ask_dir_cli)
 
     def _print_header(self, text):
@@ -33,9 +33,9 @@ class CommandLineApp:
             print(" 5. Install CLI Wrapper (mpv-cli)")
             print(" 6. Add Folder to User PATH")
             print(" 0. Exit")
-            
+
             choice = input("\nSelect an option: ").strip()
-            
+
             if choice == "1":
                 self.perform_install()
             elif choice == "2":
@@ -55,7 +55,7 @@ class CommandLineApp:
 
     def perform_install(self):
         self._print_header("INSTALLATION")
-        
+
         # 1. Get Extension ID
         current_id = ""
         manifest_path = os.path.join(file_io.DATA_DIR, f"{HOST_NAME}-chrome.json")
@@ -72,7 +72,7 @@ class CommandLineApp:
             ext_id = input("Enter new ID (or press Enter to keep current): ").strip() or current_id
         else:
             ext_id = input("Enter your Extension ID: ").strip()
-            
+
         try:
             ext_id = validate_extension_id(ext_id)
         except ValueError as e:
@@ -81,7 +81,7 @@ class CommandLineApp:
 
         # 2. Settings
         use_bypass = input("Enable Advanced URL Analysis? (y/n) [n]: ").lower().startswith('y')
-        
+
         selected_browser = "brave"
         use_youtube = False
         if use_bypass:

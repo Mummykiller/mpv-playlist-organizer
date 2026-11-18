@@ -6,12 +6,12 @@ class SmartReorder:
     """
     Utility for organizing playlists by grouping similar titles and ordering by season/episode.
     """
-    
+
     # Regex patterns for extraction
     SEASON_REGEX = re.compile(r'(?:Season\s*(\d+)|(?<![a-zA-Z0-9])S(\d+))', re.IGNORECASE)
     EXPLICIT_EPISODE_REGEX = re.compile(r'(?<![a-zA-Z])(?:e|ep\.?|episode)\s*(\d+(?:\.\d+)?)', re.IGNORECASE)
     STANDALONE_EPISODE_REGEX = re.compile(r'(?:^|[\s\-_.,|\[\]()])(\d+(?:\.\d+)?)(?=$|[\s\-_.,|\[\]()])')
-    
+
     def __init__(self, threshold=0.85):
         self.threshold = threshold
 
@@ -21,7 +21,7 @@ class SmartReorder:
         """
         if not title:
             return ""
-        
+
         # Remove Season indicators first
         normalized = self.SEASON_REGEX.sub('', title)
         # Remove Episode indicators: explicit first, otherwise standalone (only the episode match)
@@ -39,7 +39,7 @@ class SmartReorder:
                 candidate = normalized[:m.start(1)] + normalized[m.end(1):]
                 if re.sub(r'[\s\-_.,|\[\](){}]+', ' ', candidate).strip():
                     normalized = candidate
-        
+
         # Clean up whitespace and special characters
         normalized = re.sub(r'[\s\-_.,|\[\](){}]+', ' ', normalized).strip().lower()
         return normalized
@@ -50,7 +50,7 @@ class SmartReorder:
         """
         season = 0
         episode = 0.0
-        
+
         if not title:
             return season, episode
 
@@ -58,10 +58,10 @@ class SmartReorder:
         if s_match:
             # Groups 1 or 2 depending on which part of the regex matched
             season = int(s_match.group(1) or s_match.group(2))
-            
+
         # Strip matched season text before running episode matching so "Season 2 - 05" doesn't match "2"
         cleaned_title = self.SEASON_REGEX.sub(' ', title)
-        
+
         # Test explicit episode patterns first before falling back to standalone numbers
         e_match = self.EXPLICIT_EPISODE_REGEX.search(cleaned_title)
         val = None
@@ -78,7 +78,7 @@ class SmartReorder:
                 episode = float(val)
             except (ValueError, TypeError) as e:
                 logging.debug(f"[SMART_REORDER] Could not convert episode '{val}' to float: {e}")
-                
+
         return season, episode
 
     def are_similar(self, title1, title2):
@@ -87,10 +87,10 @@ class SmartReorder:
         """
         norm1 = self.normalize_title(title1)
         norm2 = self.normalize_title(title2)
-        
+
         if not norm1 or not norm2:
             return False
-            
+
         ratio = difflib.SequenceMatcher(None, norm1, norm2).ratio()
         return ratio >= self.threshold
 
@@ -125,7 +125,7 @@ class SmartReorder:
                     group.append(entry)
                     found_group = True
                     break
-            
+
             if not found_group:
                 groups.append([entry])
 

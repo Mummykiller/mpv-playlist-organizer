@@ -20,7 +20,7 @@ class M3UServer:
         self.temp_playlists_dir = temp_playlists_dir
         self.server_token = server_token or secrets.token_hex(16)
         self.server_lock = threading.RLock()
-        
+
         self.process = None
         self.port = None
         self.temp_file = None
@@ -34,7 +34,7 @@ class M3UServer:
             os.makedirs(self.temp_playlists_dir, exist_ok=True)
             if not self.temp_file:
                 self.temp_file = os.path.join(self.temp_playlists_dir, f"{SERVER_PREFIX}{os.getpid()}{SERVER_EXT}")
-            
+
             with open(self.temp_file, 'w', encoding='utf-8') as f:
                 f.write(m3u_content)
 
@@ -54,7 +54,7 @@ class M3UServer:
                     [sys.executable, server_path, '--port', '0', '--file', self.temp_file],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, env=server_env
                 )
-                
+
                 # Wait for port identification reliably via background queue reader
                 stdout_queue = queue.Queue()
                 def read_stdout(proc, q):
@@ -107,7 +107,7 @@ class M3UServer:
                     raise RuntimeError("Port detection failed: playlist server did not report an open port.")
 
                 fetch_url = f"http://127.0.0.1:{self.port}/playlist.m3u?token={self.server_token}"
-                
+
                 # Probe server to verify it is responsive before returning URL
                 server_ready = False
                 for _ in range(30):
@@ -119,7 +119,7 @@ class M3UServer:
                     except (URLError, OSError, TimeoutError) as poll_err:
                         logging.debug(f"[M3U_SERVER] Server not ready yet: {poll_err}")
                     time.sleep(0.1)
-                
+
                 if not server_ready:
                     raise RuntimeError(f"Server timeout waiting for response at {fetch_url}")
 
@@ -145,7 +145,7 @@ class M3UServer:
                 self.process = None
                 self.port = None
                 time.sleep(0.2)
-            
+
             if self.temp_file and os.path.exists(self.temp_file):
                 try:
                     os.remove(self.temp_file)
