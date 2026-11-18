@@ -138,7 +138,7 @@ def main():
         pass
     else:
         logging.info(f"Fetching anime episodes releasing (Offset: {args.days} days)...")
-    
+
     # Get the current time in the user's local timezone
     local_tz = datetime.now().astimezone().tzinfo
     now_local = datetime.now(local_tz)
@@ -171,7 +171,7 @@ def main():
             page_info = data.get('data', {}).get('Page', {}).get('pageInfo', {})
 
             all_airing_ats.extend([s['airingAt'] for s in schedules])
-            
+
             has_next_page = page_info.get('hasNextPage', False)
             page += 1
 
@@ -185,7 +185,7 @@ def main():
         data = get_today_airing_anime(start_timestamp_utc, end_timestamp_utc, page=page)
         if not data:
             break
-        
+
         schedules = data.get('data', {}).get('Page', {}).get('airingSchedules', [])
         page_info = data.get('data', {}).get('Page', {}).get('pageInfo', {})
 
@@ -193,10 +193,10 @@ def main():
             total_from_api = page_info.get('total', 0)
 
         all_schedules.extend(schedules)
-        
+
         has_next_page = page_info.get('hasNextPage', False)
         page += 1
-    
+
     if not all_schedules:
         # Even if there are no releases for the day, we should report the total
         # count from the API if we got it, as it might be non-zero for other pages.
@@ -212,9 +212,9 @@ def main():
         title = media['title']['english'] or media['title']['romaji'] or media['title']['native']
         episode = schedule['episode']
         airing_at_utc = schedule['airingAt']
-        
+
         local_airing_time = convert_utc_to_local(airing_at_utc)
-        
+
         output_data.append({
             'id': media['id'],
             'title': title,

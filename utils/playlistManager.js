@@ -7,7 +7,7 @@ import { findM3u8InUrl } from "../background/handlers/m3u8_scanner.js";
 import { createHandler } from "../background/handler_factory.js";
 import { broadcastPlaylistState, broadcastItemUpdate, isFolderActive } from "../background/ui_broadcaster.js";
 import { broadcastLog } from "../background/messaging.js";
-import { normalizeYouTubeUrl, getActiveTab, promptUserConfirmation } from "./commUtils.module.js";
+import { normalizeYouTubeUrl, promptUserConfirmation } from "./commUtils.module.js";
 import { nativeLink } from "./nativeLink.js";
 import { storage } from "../background/storage_instance.js";
 import { playbackManager } from "../background/playback_manager.js";

@@ -2,7 +2,7 @@
 MPV Playlist Organizer - Backend Services
 Collection of utilities for URL processing, dependency management, and MPV command building.
 
-NOTE ON LATE IMPORTS (E402): 
+NOTE ON LATE IMPORTS (E402):
 Imports are intentionally deferred to minimize initial startup time for the Native Host.
 """
 import logging
@@ -100,16 +100,16 @@ def get_mark_watched(item, settings):
 
 def force_sanitize_headers(url, headers):
     """
-    LAST STAND OVERRIDE: Detects AnimePahe/Kwik CDN URLs and forces the correct 
+    LAST STAND OVERRIDE: Detects AnimePahe/Kwik CDN URLs and forces the correct
     headers regardless of what metadata was stored in the item or sent by the browser.
     """
     if not url:
         return headers
-    
+
     # Standardize detection
     url_low = str(url).lower()
     is_pahe_cdn = (".owocdn.top" in url_low) or (".uwucdn.top" in url_low) or ("kwik.cx" in url_low)
-    
+
     if is_pahe_cdn:
         if not headers:
             headers = {}
@@ -117,7 +117,7 @@ def force_sanitize_headers(url, headers):
         headers["Referer"] = "https://kwik.cx/"
         headers["Origin"] = "https://kwik.cx"
         logging.debug(f"[PY][Services] Forced Kwik headers for: {url}")
-        
+
     return headers
 
 def construct_lua_options(item, settings, script_dir, index=None):
@@ -127,7 +127,7 @@ def construct_lua_options(item, settings, script_dir, index=None):
     """
     essential_flags = get_essential_ytdlp_flags(settings)
     raw_opts = item.get('ytdl_raw_options')
-    
+
     # Strip dangerous settings-only flags from untrusted item payload BEFORE merging
     if raw_opts:
         import utils.security as security
@@ -139,9 +139,9 @@ def construct_lua_options(item, settings, script_dir, index=None):
          raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
 
     final_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags, allow_settings_flags=True)
-    
+
     item_url = sanitize_url(item.get('original_url') or item.get('url'))
-    
+
     # Defensive extraction of resume time
     raw_resume = item.get('resume_time') if item.get('resume_time') is not None else item.get('resumeTime')
     try:
@@ -149,14 +149,14 @@ def construct_lua_options(item, settings, script_dir, index=None):
     except (ValueError, TypeError) as e:
         logging.debug(f"[PY][Services] Could not parse resume_time '{raw_resume}': {e}")
         resume_time = 0
-        
+
     logging.info(f"[PY][Services] construct_lua_options: item='{item.get('title')}', resume_time={resume_time}")
 
     # FORCE SANITIZE: Override stale headers from browser storage
     sanitized_headers = force_sanitize_headers(item_url, item.get('headers'))
 
     lua_options = {
-        "id": item.get('id'), 
+        "id": item.get('id'),
         "title": item.get('title'),
         "headers": sanitized_headers,
         "ytdl_raw_options": final_opts,
@@ -186,11 +186,11 @@ def construct_lua_options(item, settings, script_dir, index=None):
         "watched": item.get('watched') if item.get('watched') is not None else item.get('watched', False),
         "targeted_defaults": settings.get('targeted_defaults', 'none')
     }
-    
+
     # If precise resume is disabled globally, don't pass it to Lua
     if not settings.get('enable_precise_resume', True):
         lua_options["resume_time"] = None
-        
+
     return lua_options, item_url
 
 # --- Dependency Checking & Updating ---
@@ -206,26 +206,26 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
 def get_essential_ytdlp_flags(settings=None, bypass=False):
     """Returns the baseline yt-dlp flags required for reliable streaming and security."""
     config = settings if settings else file_io._safe_json_load(file_io.CONFIG_FILE)
-    
+
     # Base security and functionality flags
     flags_list = ["remote-components=ejs:github"]
-    
+
     # Handle JS Runtimes (Critical for YouTube)
     node_path = config.get("node_path")
     if node_path and os.path.exists(node_path) and security.is_safe_executable_path(node_path, "node_path"):
         flags_list.append(f"js-runtimes=node:{node_path}")
     else:
         flags_list.append("js-runtimes=node")
-    
+
     if config.get('yt_ignore_config', True):
         flags_list.insert(0, "ignore-config=")
-    
+
     # Performance Injectors - SKIP IF BYPASS ACTIVE
     if not bypass:
         concurrent = config.get('ytdlp_concurrent_fragments', 4)
         if concurrent > 1:
             flags_list.append(f"concurrent-fragments={concurrent}")
-        
+
         buf_size = config.get('stream_buffer_size', '10M')
         if buf_size:
             flags_list.append(f"buffer-size={buf_size}")
@@ -233,7 +233,7 @@ def get_essential_ytdlp_flags(settings=None, bypass=False):
     ffmpeg_path = config.get("ffmpeg_path")
     if ffmpeg_path and os.path.exists(ffmpeg_path) and security.is_safe_executable_path(ffmpeg_path, "ffmpeg_path"):
         flags_list.append(f"ffmpeg-location={ffmpeg_path}")
-    
+
     return ",".join(flags_list)
 
 # --- MPV Command Construction ---
@@ -257,7 +257,7 @@ def apply_bypass_script(url_item, send_message_func, settings=None, session=None
     original_url = sanitize_url(url_item['url'])
     if settings is None:
         settings = file_io.get_settings()
-    
+
     enable_url_analysis = settings.get("enable_url_analysis", False)
     browser_for_analysis = settings.get("browser_for_url_analysis", "chrome")
     enable_youtube_analysis = settings.get("enable_youtube_analysis", False)
@@ -281,11 +281,11 @@ def apply_bypass_script(url_item, send_message_func, settings=None, session=None
         logging.info(f"Executing URL analysis for URL: {original_url}")
         if not quiet:
             send_message_func({"action": "log_from_native_host", "log": {"text": f"Running URL analysis for: {original_url}", "type": "info"}})
-        
+
         result = url_analyzer.run_bypass_logic(
-            original_url, 
-            browser_for_analysis, 
-            youtube_enabled_for_script, 
+            original_url,
+            browser_for_analysis,
+            youtube_enabled_for_script,
             user_agent_string,
             yt_use_cookies=yt_use_cookies,
             yt_mark_watched=yt_mark_watched,

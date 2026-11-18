@@ -124,7 +124,8 @@ global.window = { chrome: global.chrome };
 global.document = domForRequire.window.document;
 global.Node = domForRequire.window.Node;
 global.Element = domForRequire.window.Element;
-const MPV = global.window.MPV_INTERNAL = {};
+global.window.MPV_INTERNAL = {};
+const MPV = global.window.MPV_INTERNAL;
 
 // Mock required internal utilities
 MPV.domUtils = {

@@ -31,7 +31,7 @@ def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
     if not security.is_safe_executable_path(ytdlp_path, setting_key="ytdlp_path"):
         logging.warning(f"[PY][Sync] Rejected unsafe yt-dlp executable path: {ytdlp_path}")
         return False, "Unsafe or invalid yt-dlp executable path"
-    
+
     logging.info(f"[PY][Sync] Marking watched using {ytdlp_path} for URL: {url}")
 
     cmd = [
@@ -44,12 +44,12 @@ def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
         cmd.extend(["--cookies", cookies_info])
     else:
         cmd.extend(["--cookies-from-browser", cookies_info])
-    
+
     if user_agent:
         cmd.extend(["--user-agent", user_agent])
-    
+
     cmd.extend(["--", url])
-    
+
     try:
         result = subprocess.run(
             cmd,
@@ -70,12 +70,12 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
     # 1. Validation & Pre-Sync Operations (No file locks yet)
     index = file_io.get_index()
     canonical_id = file_io._get_canonical_folder_id(folder_id, index)
-    
+
     if canonical_id not in index:
         return False, f"Aborted: Folder '{folder_id}' not found in index.json"
 
     settings = file_io.get_settings()
-    
+
     # 2. Check if already marked EXTERNALLY to avoid slow network call
     is_already_marked_externally = False
     playlist = file_io.get_playlist_shard(canonical_id)
@@ -84,10 +84,10 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
             if item.get("id") == item_id:
                 is_already_marked_externally = item.get("marked_as_watched", False)
                 break
-    
+
     watched_success = True # Default to true if not marking
     mark_watched_error = None
-    
+
     # 3. Slow Network Call (ONLY if not already marked EXTERNALLY)
     if mark_watched and not is_already_marked_externally and settings.get('yt_mark_watched', True):
         watched_success, mark_watched_error = mark_video_as_watched(url, cookies, ua)
@@ -119,17 +119,17 @@ def sync_state(folder_id, item_id, resume_time=None, mark_watched=False, update_
                         item["watched"] = True
                         item["last_modified"] = int(time.time() * 1000)
                         needs_shard_save = True
-                
+
                 # Update Resume Time
                 if resume_time is not None and settings.get('enable_smart_resume', True):
                     time_val = int(float(resume_time))
                     current_stored = item.get("resume_time", 0)
-                    
-                    # PROTECTION: If we are trying to set to 0, ensure it's not overwriting 
+
+                    # PROTECTION: If we are trying to set to 0, ensure it's not overwriting
                     # a significant progress unless we are reasonably sure it's intentional.
                     # (e.g. if the caller provided it explicitly or it's a minor drift)
                     is_reset = (time_val == 0 and current_stored > 10)
-                    
+
                     # For now, we trust the caller (Tracker) because we added guards there,
                     # but we'll add a log for visibility.
                     if is_reset:
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     cli.add_argument("--url", help="YouTube URL (required for mark-watched)")
     cli.add_argument("--cookies", help="Cookies file or browser (required for mark-watched)")
     cli.add_argument("--ua", help="User Agent (optional for mark-watched)")
-    
+
     args = cli.parse_args()
     success, msg = sync_state(args.folder, args.item, args.time, args.mark_watched, args.last_played, args.url, args.cookies, args.ua)
     if success:

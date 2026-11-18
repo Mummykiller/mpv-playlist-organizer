@@ -26,7 +26,7 @@ from installer_cli import CommandLineApp
 def main():
     # Priority 1: Force CLI if requested via argument or if TTY is detected without GUI
     force_cli = "--cli" in sys.argv or not GUI_AVAILABLE
-    
+
     if force_cli:
         app = CommandLineApp()
         app.run()

@@ -348,17 +348,17 @@ class TestLoggingSystem(BaseTestCase):
 
         # 1. Verify file contents and message counts
         with open(self.main_log, 'r', encoding='utf-8') as f:
-            main_lines = [l.strip() for l in f if "MAIN_CONCURRENT" in l]
+            main_lines = [line.strip() for line in f if "MAIN_CONCURRENT" in line]
             f.seek(0)
             main_full = f.read()
 
         with open(self.ipc_log, 'r', encoding='utf-8') as f:
-            ipc_lines = [l.strip() for l in f if "IPC_CONCURRENT" in l]
+            ipc_lines = [line.strip() for line in f if "IPC_CONCURRENT" in line]
             f.seek(0)
             ipc_full = f.read()
 
         with open(self.browser_error_log, 'r', encoding='utf-8') as f:
-            brw_lines = [l.strip() for l in f if "BRW_CONCURRENT" in l]
+            brw_lines = [line.strip() for line in f if "BRW_CONCURRENT" in line]
             f.seek(0)
             brw_full = f.read()
 

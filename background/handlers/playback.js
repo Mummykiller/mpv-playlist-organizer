@@ -12,8 +12,7 @@ import {
 	broadcastPlaylistState, 
 	broadcastPlaybackState, 
 	broadcastItemUpdate,
-	getVisualPlaybackState, 
-	isFolderActive 
+	getVisualPlaybackState
 } from "../ui_broadcaster.js";
 
 const MPV_PLAYLIST_COMPLETED_EXIT_CODE = 99;

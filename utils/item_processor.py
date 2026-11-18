@@ -22,12 +22,12 @@ class ItemProcessor:
         """
         if item.get('enriched'):
             return [item]
-        
+
         if session and getattr(session, 'launch_cancelled', False):
             raise RuntimeError("Launch cancelled by user.")
 
         self.ensure_id(item)
-        
+
         # Ensure it has an original URL
         url = item.get('url')
         if not item.get('original_url'):
@@ -56,7 +56,7 @@ class ItemProcessor:
         logging.info(f"[ItemProcessor] Applying bypass script for: {url}")
         res = self.services.apply_bypass_script(item, self.send_message, settings=settings, session=session, quiet=quiet)
         (
-            processed_url, headers, ytdl_opts, use_ytdl, is_yt, entries, 
+            processed_url, headers, ytdl_opts, use_ytdl, is_yt, entries,
             disable_http, cookies_file, mark_watched, ytdl_fmt, cookies_browser
         ) = res
 
@@ -70,11 +70,11 @@ class ItemProcessor:
                 entry.setdefault('use_ytdl_mpv', False)
                 if cookies_browser: entry['cookies_browser'] = cookies_browser
                 if cookies_file: entry['cookies_file'] = cookies_file
-                
+
                 # Cache individual entries if possible
                 if self.metadata_cache:
                     self.metadata_cache.set(entry['url'], entry)
-                    
+
                 processed_entries.append(entry)
             return processed_entries
 
@@ -82,7 +82,7 @@ class ItemProcessor:
         item['url'] = processed_url
         item['original_url'] = item.get('original_url') or item.get('url')
         item['ytdl_format'] = ytdl_fmt
-        
+
         if headers:
             if not item.get('headers'):
                 item['headers'] = headers
@@ -98,14 +98,14 @@ class ItemProcessor:
         item['cookies_file'] = cookies_file
         item['cookies_browser'] = cookies_browser
         item['mark_watched'] = mark_watched
-        
+
         if cookies_file and session_cookies is not None:
             if sync_lock:
                 with sync_lock:
                     session_cookies.add(cookies_file)
             else:
                 session_cookies.add(cookies_file)
-                
+
         item['enriched'] = True
 
         # --- Save to Global Cache ---
@@ -123,7 +123,7 @@ class ItemProcessor:
             return url_items_or_m3u, True
         if isinstance(url_items_or_m3u, dict):
             return [url_items_or_m3u], True
-        
+
         if not isinstance(url_items_or_m3u, str):
             return [], False
 
@@ -156,7 +156,7 @@ class ItemProcessor:
             if not is_safe_url(url_items_or_m3u):
                 logging.error(f"SSRF Protection: Blocked access to {url_items_or_m3u}")
                 return [], False
-            
+
             m3u_content = self._fetch_remote_m3u(url_items_or_m3u, headers)
             if m3u_content:
                 return parse_m3u(m3u_content), True
@@ -170,7 +170,7 @@ class ItemProcessor:
         from urllib.request import Request, HTTPRedirectHandler, build_opener
         from urllib.error import HTTPError
         from .url_analyzer import is_safe_url
-        
+
         if not is_safe_url(url):
             logging.error(f"SSRF Protection: Blocked fetch of unsafe M3U URL: {url}")
             return None

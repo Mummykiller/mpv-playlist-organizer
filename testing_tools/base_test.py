@@ -14,21 +14,21 @@ from utils import logger
 
 class BaseTestCase(unittest.TestCase):
     """Base class for all MPV Playlist Organizer tests."""
-    
+
     def setUp(self):
         # Create a clean temp directory for logs and data
         self.test_dir = tempfile.mkdtemp()
-        
+
         # Mock UI message sender
         self.sent_messages = []
         def mock_send(msg):
             self.sent_messages.append(msg)
         self.mock_send = mock_send
-        
+
         # Initialize logger with temp dir
         logger.set_ui_sender(mock_send)
         logger.initialize(self.test_dir, PROJECT_ROOT)
-        
+
         # Common paths
         self.main_log = os.path.join(self.test_dir, "native_host.log")
         self.ipc_log = os.path.join(self.test_dir, "ipc_events.log")
@@ -46,7 +46,7 @@ class BaseTestCase(unittest.TestCase):
                         logging.warning(f"Failed to remove temp test_dir {self.test_dir}: {e}")
                     else:
                         time.sleep(0.05)
-        
+
         # Reset logging for next test
         root = logging.getLogger()
         root.handlers.clear()

@@ -98,15 +98,15 @@ class EnrichmentService(ItemProcessor):
                         if session.ipc_manager.get_property("pid", timeout=0.5):
                             break
                     time.sleep(0.2)
-                
+
                 if not is_sync_valid():
                     return
-                
+
                 history_items = url_items[:start_index]
                 future_items = url_items[start_index + 1:]
-                
+
                 logging.info(f"[PY][Session] Background Flow: start_index={start_index}, history={len(history_items)}, future={len(future_items)}")
-                
+
                 total_to_process = len(future_items) + len(history_items)
                 if total_to_process > 0:
                     self.send_message({"action": "log_from_native_host", "log": {"text": f"Restoring playlist: Processing {total_to_process} items for '{folder_id}'...", "type": "info"}})
@@ -121,7 +121,7 @@ class EnrichmentService(ItemProcessor):
                         res = self.enrich_single_item(item, folder_id, session.session_cookies, session.sync_lock, settings=settings, session=session, quiet=True)
                         if res:
                             enriched_batch.extend(res)
-                        
+
                         # BATCH UPDATE: Every 5 items, push to MPV to keep UI alive
                         if len(enriched_batch) >= 5:
                             if not is_sync_valid():
@@ -129,7 +129,7 @@ class EnrichmentService(ItemProcessor):
                             logging.info(f"[PY][Session] Background: Pushing batch of {len(enriched_batch)} future items.")
                             session.append_batch(enriched_batch, mode="append", folder_id=folder_id, quiet=True)
                             enriched_batch = []
-                    
+
                     if enriched_batch and is_sync_valid():
                         logging.info(f"[PY][Session] Background: Pushing final batch of {len(enriched_batch)} future items.")
                         session.append_batch(enriched_batch, mode="append", folder_id=folder_id, quiet=True)
@@ -145,14 +145,14 @@ class EnrichmentService(ItemProcessor):
                         if res:
                             # Prepend to batch so we maintain original order when prepending to MPV
                             enriched_batch = res + enriched_batch
-                        
+
                         if len(enriched_batch) >= 5:
                             if not is_sync_valid():
                                 return
                             logging.info(f"[PY][Session] Background: Pushing batch of {len(enriched_batch)} history items.")
                             session.append_batch(enriched_batch, mode="prepend", folder_id=folder_id, quiet=True)
                             enriched_batch = []
-                    
+
                     if enriched_batch and is_sync_valid():
                         logging.info(f"[PY][Session] Background: Pushing final batch of {len(enriched_batch)} history items.")
                         session.append_batch(enriched_batch, mode="prepend", folder_id=folder_id, quiet=True)
@@ -162,7 +162,7 @@ class EnrichmentService(ItemProcessor):
 
                 if session.playlist_tracker:
                     session.playlist_tracker.update_playlist_order(session.playlist)
-                
+
                 # --- REFRESH LUA INDICES AFTER MOVE ---
                 # Since we moved items, we must update Lua's index mapping.
                 if session.ipc_manager and session.ipc_manager.is_connected():
@@ -171,7 +171,7 @@ class EnrichmentService(ItemProcessor):
                             item, settings, session.SCRIPT_DIR, index=idx
                         )
                         session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
-                    
+
                     # Single consolidated OSD message
                     session.ipc_manager.send({"command": ["show-text", "Playlist restored", 2000]})
 
@@ -230,8 +230,8 @@ class LauncherService:
                 time.sleep(1.0)
                 if not ipc_utils.is_pid_running(pid):
                     logging.info(f"Restored Process Watcher: Detected exit of orphaned MPV process (PID {pid}).")
-                    
-                    return_code = -1 
+
+                    return_code = -1
                     exit_reason = None
                     is_manual = (
                         getattr(self.session, 'manual_quit', False)
@@ -262,16 +262,16 @@ class LauncherService:
 
                     if should_send:
                         self.session.send_message({
-                            "action": "mpv_exited", 
-                            "folder_id": folder_id, 
-                            "return_code": return_code, 
+                            "action": "mpv_exited",
+                            "folder_id": folder_id,
+                            "return_code": return_code,
                             "reason": exit_reason,
-                            "played_ids": stats.get("played_ids", []), 
+                            "played_ids": stats.get("played_ids", []),
                             "watched_ids": stats.get("watched_ids", []),
                             "session_ids": stats.get("session_ids", [])
                         })
                     break
-                
+
                 if not self.session.is_alive or self.session.pid != pid:
                     logging.info(f"Restored Process Watcher: Session state changed. Stopping watcher for PID {pid}.")
                     break
@@ -285,7 +285,7 @@ class LauncherService:
     def _sync_initial_state(self, url_item, folder_id, settings, playlist_start_index, launch_lua_options, launch_url):
         """Sets up IPC properties, lua options, and triggers the initial file load."""
         mgr = self.session.ipc_manager
-        
+
         # 1. Register the current item's options with its actual global index
         lua_opts, item_url = services.construct_lua_options(
             url_item, settings, self.session.SCRIPT_DIR, index=playlist_start_index
@@ -370,7 +370,7 @@ class LauncherService:
             full_command, has_terminal_flag = services.construct_mpv_command(
                 mpv_exe=mpv_exe, ipc_path=ipc_path, url=launch_url, is_youtube=is_youtube,
                 ytdl_raw_options=kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options'),
-                geometry=kwargs.get('geometry'), 
+                geometry=kwargs.get('geometry'),
                 custom_width=kwargs.get('custom_width'),
                 custom_height=kwargs.get('custom_height'), custom_mpv_flags=kwargs.get('custom_mpv_flags'),
                 automatic_mpv_flags=kwargs.get('automatic_mpv_flags'),
@@ -378,7 +378,7 @@ class LauncherService:
                 disable_http_persistent=kwargs.get('disable_http_persistent', False),
                 start_paused=kwargs.get('start_paused', False), script_dir=self.session.SCRIPT_DIR,
                 load_on_completion_script=True, title=url_item.get('title'),
-                use_ytdl_mpv=use_ytdl_mpv, is_youtube_override=use_ytdl_mpv, idle="yes", 
+                use_ytdl_mpv=use_ytdl_mpv, is_youtube_override=use_ytdl_mpv, idle="yes",
                 force_terminal=kwargs.get('force_terminal', False), settings=settings,
                 flag_dir=self.session.FLAG_DIR, playlist_start_index=0,
                 cookies_browser=kwargs.get('cookies_browser') or url_item.get('cookies_browser'),
@@ -426,7 +426,7 @@ class LauncherService:
 
             # 6. Exit Watcher
             self._start_exit_watcher(process, folder_id)
-            
+
             resume_msg = f" at {int(float(launch_lua_options['resume_time']))}s" if launch_lua_options.get('resume_time') else ""
             logging.info(f"[PY][Session] Launcher.launch() successful{resume_msg}")
             return {"success": True, "message": f"MPV playback initiated{resume_msg}."}
@@ -467,17 +467,17 @@ class LauncherService:
         def process_waiter(proc, f_id):
             initial_pid = proc.pid
             actual_pid = getattr(self.session, 'pid', None)
-            
+
             if actual_pid and actual_pid != initial_pid:
                 while proc.poll() is None:
                     if not ipc_utils.is_pid_running(actual_pid): break
                     time.sleep(0.1)
             else:
                 proc.wait()
-            
+
             return_code = proc.poll() if proc.poll() is not None else 0
             if proc.poll() is None: threading.Thread(target=proc.wait, daemon=True).start()
-            
+
             exit_reason = None
             actual_pid = getattr(self.session, 'pid', None)
             pids = list(set(filter(None, [initial_pid, actual_pid])))
@@ -517,7 +517,7 @@ class LauncherService:
             if should_send:
                 self.session.send_message({
                     "action": "mpv_exited", "folder_id": f_id, "return_code": return_code, "reason": exit_reason,
-                    "played_ids": stats.get("played_ids", []), 
+                    "played_ids": stats.get("played_ids", []),
                     "watched_ids": stats.get("watched_ids", []),
                     "session_ids": stats.get("session_ids", [])
                 })
@@ -533,7 +533,7 @@ class LauncherService:
             logging.info(f"Closing MPV session for PID: {self.session.pid}")
             self.session.manual_quit = True
             self.session.is_closing = True
-            
+
             # Local copies for use outside the lock
             proc = self.session.process
             pid = self.session.pid
@@ -546,7 +546,7 @@ class LauncherService:
                 with self.session.sync_lock:
                     self.session.ipc_manager = ipc_utils.IPCSocketManager()
                     ipc_manager = self.session.ipc_manager
-            
+
             if not ipc_manager.is_connected():
                 logging.info(f"IPC not connected. Attempting reconnection to {ipc_path} for graceful quit...")
                 ipc_manager.connect(ipc_path, timeout=0.5)
@@ -587,7 +587,7 @@ class LauncherService:
                 logging.info(f"Reconnected session: Attempting to close verified MPV PID {pid}")
                 try:
                     if platform.system() == "Windows":
-                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], 
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
                                      capture_output=True, check=False)
                     else:
                         os.kill(pid, signal.SIGTERM)
@@ -596,11 +596,11 @@ class LauncherService:
                             if not ipc_utils.is_pid_running(pid):
                                 was_killed = True
                                 break
-                        
+
                         if not was_killed:
                             os.kill(pid, signal.SIGKILL)
                             was_killed = True
-                    
+
                     if not was_killed and not ipc_utils.is_pid_running(pid):
                         was_killed = True
                 except OSError as e:

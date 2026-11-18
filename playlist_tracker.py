@@ -24,7 +24,7 @@ class PlaylistTracker:
         self.threshold_met_ids = set() # Items watched > 30s
         self.watched_this_session = set() # Track items already marked as watched this session
         self.session_item_ids = [] # Persistent history of all items in this session
-        
+
         # New: Track playback duration in the current session
         self.current_session_duration = 0
         self.last_time_pos = None
@@ -34,7 +34,7 @@ class PlaylistTracker:
         self.watched_cache = {} # NEW: Map of item_id -> bool for pending 'watched' disk writes
         self.dirty_last_played_id = None # Pending last_played_id for disk commit
         self.confirmed_playing_id = None # Confirmed playing ID after 2s playback threshold
-        
+
         self.file_io = file_io
         self.settings = settings # Store settings for global fallbacks
         self.ipc_path = ipc_path # Store the IPC path to create a dedicated connection
@@ -93,7 +93,7 @@ class PlaylistTracker:
             session_ids = list(self.session_item_ids)
 
         logging.info(f"[PY][Tracker] Playlist tracker stopped for folder '{self.folder_id}'. Played item IDs: {played_ids}")
-        
+
         stats = {
             "played_ids": played_ids,
             "watched_ids": watched_ids,
@@ -104,7 +104,7 @@ class PlaylistTracker:
             self.tracking_thread.join(timeout=2.0)
             if self.tracking_thread.is_alive():
                 logging.warning(f"[PY][Tracker] Tracking thread for '{self.folder_id}' did not exit within 2s.")
-        
+
         # Final commit to ensure no data loss on shutdown
         # This will take the FileLock, which is safe now as the tracking thread has been joined or timed out.
         self._commit_to_disk()
@@ -116,7 +116,7 @@ class PlaylistTracker:
             pending_count = len(self.pending_threads)
         if pending_count:
             logging.info(f"[PY][Tracker] Leaving {pending_count} mark-watched threads to finish in background.")
-        
+
         return stats
 
     def add_item(self, item):
@@ -178,7 +178,7 @@ class PlaylistTracker:
 
         # Immediate Heartbeat to register Python presence
         self.ipc_manager.send({"command": ["script-message", "tracker_heartbeat"]})
-        
+
         # Register handlers for individual item completion
         self.ipc_manager.register_script_message_handler("item_natural_completion", self._handle_item_completion)
         self.ipc_manager.register_script_message_handler("item_natural_completion_by_id", self._handle_item_completion_by_id)
@@ -191,7 +191,7 @@ class PlaylistTracker:
         self.pending_last_played_id = None # NEW: Only commit to disk if it actually plays
         current_time = 0
         last_heartbeat = 0
-        
+
         logging.info(f"[PY][Tracker] Starting event loop. Initial current_id: {self.current_id}")
 
         while self.is_tracking:
@@ -221,7 +221,7 @@ class PlaylistTracker:
                         logging.info(f"[PY][Tracker] IPC connection lost unexpectedly for folder '{self.folder_id}'. Signaling shutdown.")
                         self._notify_quitting()
                         break
-                    
+
                     time.sleep(0.05) # Tiny timer for stability
                     continue
 
@@ -231,7 +231,7 @@ class PlaylistTracker:
 
                     if prop_name == 'user-data/id':
                         new_id = data
-                        
+
                         # IGNORE invalid/error IDs from MPV
                         if new_id is None or new_id == -1 or new_id == "-1" or new_id == "":
                             logging.debug(f"[PY][Tracker] Ignoring invalid ID from MPV: {new_id}")
@@ -279,7 +279,7 @@ class PlaylistTracker:
                                         is_enabled = item.get('mark_watched', True)
                                         already_marked = item.get('marked_as_watched', False)
                                         break
-                            
+
                             status_info = ""
                             if is_yt:
                                 if not is_enabled:
@@ -289,10 +289,10 @@ class PlaylistTracker:
 
                             # 3. Notify the MPV terminal that we are tracking this new video
                             self._remote_log(f"AdaptiveHeaders: Tracking: {display_name}{status_info}")
-                            
+
                             # 4. Immediately notify the extension to update the UI highlight (Visual only)
                             logging.info(f"[PY][Tracker] Active episode changed to ID {self.current_id}. Notifying UI (Visual).")
-                            
+
                             # Force a disk commit for 'currently_playing' logic immediately on change
                             self._commit_to_disk()
 
@@ -304,7 +304,7 @@ class PlaylistTracker:
                             })
                             # Also update general status
                             self._update_playback_status()
-                    
+
                     elif prop_name == 'pause' or prop_name == 'idle-active':
                         logging.debug(f"[PY][Tracker] property-change '{prop_name}' detected: {data}")
                         self._update_playback_status()
@@ -317,23 +317,23 @@ class PlaylistTracker:
                 elif event.get('event') == 'end-file':
                     reason = event.get('reason')
                     logging.debug(f"[PY][Tracker] end-file event detected. Reason: {reason}, ID: {self.current_id}")
-                    
+
                     if reason == 'error':
                         if self.pending_last_played_id == self.current_id:
                             logging.warning(f"[PY][Tracker] Item {self.current_id} failed with error. Aborting state commit.")
                             self.pending_last_played_id = None
-                    
+
                     if reason == 'eof':
-                        # Attribution logic: 
+                        # Attribution logic:
                         # We now rely primarily on 'item_natural_completion_by_id' from Lua
                         # but we still want to update the resume time and played_ids set.
                         target_id_for_eof = self.current_id
-                        
+
                         # Only fallback to previous_id if we literally just switched and haven't played anything.
                         if self.current_session_duration < 1 and self.previous_id:
                             logging.info(f"[PY][Tracker] Detected late EOF event. Attributing to previous item: {self.previous_id}")
                             target_id_for_eof = self.previous_id
-                        
+
                         if target_id_for_eof:
                             # We mark as played and reset resume, but we NO LONGER force mark-as-watched here.
                             # Lua will send the explicit 'item_natural_completion_by_id' signal.
@@ -347,7 +347,7 @@ class PlaylistTracker:
                                 if self.playlist and self.playlist[-1].get('id') == target_id_for_eof:
                                     logging.info(f"[PY][Tracker] Last item in session playlist finished naturally ({target_id_for_eof}). Setting completion flag.")
                                     self.is_naturally_completed = True
-                            
+
                     elif reason == 'stop' or reason == 'quit':
                         target_id = self.current_id
                         if self.current_session_duration < 1 and self.previous_id:
@@ -380,24 +380,24 @@ class PlaylistTracker:
             target_id = args[0] if args else None
             if not target_id:
                 return
-            
+
             # CRITICAL: Strip quotes from Lua string
             target_id = target_id.strip('"').strip("'")
 
             logging.info(f"[PY][Tracker] Item ID {target_id} finished naturally. Notifying extension.")
-            
-            # Critical: Add to watched_this_session IMMEDIATELY to block any late 
+
+            # Critical: Add to watched_this_session IMMEDIATELY to block any late
             # time-pos updates from trying to save or mark it again.
             with self.lock:
                 self.watched_this_session.add(target_id)
                 self.played_item_ids.add(target_id)
-            
+
             # Reset its disk state to 0 so even if a sync happens, it's clean
             self._update_resume_time(target_id, 0)
-            
+
             # NEW: Mark as watched locally for all videos upon natural completion
             self._update_marked_as_watched(target_id, watched_status=True, persist=bool(self.folder_id))
-            
+
             # Send specialized clear message
             self.send_message({
                 "action": "item_natural_completion",
@@ -412,7 +412,7 @@ class PlaylistTracker:
         logging.info(f"[PY][Tracker] Received item_natural_completion with args: {args}")
         try:
             pos = int(args[0]) if args else -1
-            if pos < 0: 
+            if pos < 0:
                 logging.warning(f"[PY][Tracker] Invalid position received: {pos}")
                 return
 
@@ -422,22 +422,22 @@ class PlaylistTracker:
                     target_id = self.playlist[pos].get('id')
                 else:
                     logging.warning(f"[PY][Tracker] Position {pos} out of range for playlist length {len(self.playlist)}")
-            
+
             if target_id:
                 logging.info(f"[PY][Tracker] Item at index {pos} (ID: {target_id}) finished naturally. Notifying extension for individual clear.")
-                
-                # Critical: Add to watched_this_session IMMEDIATELY to block any late 
+
+                # Critical: Add to watched_this_session IMMEDIATELY to block any late
                 # time-pos updates from trying to save or mark it again.
                 with self.lock:
                     self.watched_this_session.add(target_id)
                     self.played_item_ids.add(target_id)
-                
+
                 # Reset its disk state to 0 so even if a sync happens, it's clean
                 self._update_resume_time(target_id, 0)
-                
+
                 # NEW: Mark as watched locally for all videos upon natural completion
                 self._update_marked_as_watched(target_id, watched_status=True, persist=bool(self.folder_id))
-                
+
                 # Send specialized clear message
                 self.send_message({
                     "action": "item_natural_completion",
@@ -451,7 +451,7 @@ class PlaylistTracker:
         """Notifies extension and queues last_played_id for disk commit."""
         if not item_id or item_id == -1 or item_id == "-1":
             return
-        
+
         with self.lock:
             if self.folder_id:
                 self.dirty_last_played_id = item_id
@@ -524,14 +524,14 @@ class PlaylistTracker:
         """Notifies extension and queues resume_time for throttled disk commit."""
         if not item_id or item_id == -1 or item_id == "-1":
             return
-        
+
         last_modified = int(time.time() * 1000)
 
         # 1. Update Cache
         with self.lock:
             if self.folder_id:
                 self.resume_cache[item_id] = int(resume_time)
-            
+
         # 2. Notify the extension (Real-time UI update)
         self.send_message({
             "action": "update_item_resume_time",
@@ -546,20 +546,20 @@ class PlaylistTracker:
         def heartbeat_loop():
             while not self._stop_event.is_set():
                 time.sleep(1)
-                if not self.is_tracking: 
+                if not self.is_tracking:
                     logging.debug("[PY][Tracker] Heartbeat stopping: is_tracking is False.")
                     break
-                
+
                 # Preliminary check for pending work (non-critical if we miss it here)
                 has_work = False
                 with self.lock:
                     has_work = bool(self.resume_cache or self.watched_status_cache or self.watched_cache or self.dirty_last_played_id)
-                
+
                 if has_work:
                     if time.time() - self.last_commit_time >= self.commit_interval:
                         logging.debug("[PY][Tracker] Heartbeat triggering forced commit.")
                         self._commit_to_disk()
-        
+
         thread = threading.Thread(target=heartbeat_loop, daemon=True)
         thread.start()
 
@@ -589,12 +589,12 @@ class PlaylistTracker:
         """Performs an atomic read-modify-write to the playlist shard with all cached changes (PY-M5, PY-M6)."""
         with self._commit_lock:
             self.last_commit_time = time.time()
-            
+
             # 1. Thread-Safe Snapshot and Clear
             with self.lock:
                 if not self.folder_id or (not self.resume_cache and not self.watched_status_cache and not self.watched_cache and not self.dirty_last_played_id):
                     return
-                
+
                 res_snap = dict(self.resume_cache)
                 stat_snap = dict(self.watched_status_cache)
                 watch_snap = dict(self.watched_cache)
@@ -602,7 +602,7 @@ class PlaylistTracker:
                 if last_played_snap:
                     self.confirmed_playing_id = last_played_snap
                 confirmed_id = last_played_snap or self.confirmed_playing_id
-                
+
                 self.resume_cache.clear()
                 self.watched_status_cache.clear()
                 self.watched_cache.clear()
@@ -611,7 +611,7 @@ class PlaylistTracker:
             commit_success = False
             try:
                 logging.debug(f"[PY][Tracker] Committing throttled updates to disk for folder '{self.folder_id}'...")
-                
+
                 def shard_updater(playlist, index_entry):
                     changed = False
                     if last_played_snap and index_entry is not None:
@@ -622,7 +622,7 @@ class PlaylistTracker:
                     if playlist:
                         for item in playlist:
                             item_id = item.get("id")
-                            
+
                             # Mutually Exclusive 'currently_playing'
                             if confirmed_id:
                                 is_current = (item_id == confirmed_id)
@@ -630,7 +630,7 @@ class PlaylistTracker:
                                     item["currently_playing"] = is_current
                                     item["last_modified"] = int(time.time() * 1000)
                                     changed = True
-                            
+
                             # Sync from Snapshots
                             if item_id in res_snap:
                                 item["resume_time"] = res_snap[item_id]
@@ -641,7 +641,7 @@ class PlaylistTracker:
                                 item["marked_as_watched"] = stat_snap[item_id]
                                 item["last_modified"] = int(time.time() * 1000)
                                 changed = True
-                            
+
                             if item_id in watch_snap:
                                 item["watched"] = watch_snap[item_id]
                                 item["last_modified"] = int(time.time() * 1000)
@@ -678,7 +678,7 @@ class PlaylistTracker:
         """Notifies extension and queues status for disk commit. Supports partial updates."""
         if not item_id or item_id == -1 or item_id == "-1":
             return
-        
+
         last_modified = int(time.time() * 1000)
 
         try:
@@ -710,7 +710,7 @@ class PlaylistTracker:
             }
             if marked_status is not None: msg["marked_as_watched"] = marked_status
             if watched_status is not None: msg["watched"] = watched_status
-            
+
             self.send_message(msg)
 
         except Exception as e:
@@ -734,7 +734,7 @@ class PlaylistTracker:
                 if item.get('id') == item_id:
                     target_item = item
                     break
-        
+
         if not target_item:
             logging.debug(f"[PY][Tracker] Cannot mark watched: Item ID {item_id} not found in internal playlist.")
             return
@@ -749,10 +749,10 @@ class PlaylistTracker:
         is_enabled = target_item.get('mark_watched')
         if is_enabled is None:
             is_enabled = target_item.get('settings', {}).get('yt_mark_watched', True)
-        
+
         has_marked_flag = target_item.get('marked_as_watched', False)
         has_watched_flag = target_item.get('watched', False)
-        
+
         has_cookies = target_item.get('cookies_file') is not None
         # NEW: Check item browser, fallback to global setting
         browser = target_item.get('cookies_browser') or self.settings.get('browser_for_url_analysis')
@@ -760,21 +760,21 @@ class PlaylistTracker:
         # Robust URL check: fallback to standard 'url' if 'original_url' missing
         watch_url = target_item.get('original_url') or target_item.get('url')
         has_url = watch_url is not None
-        
+
         logging.debug(f"[PY][Tracker] Mark-watched check for {item_id}: enabled={is_enabled}, has_marked={has_marked_flag}, cookies={has_cookies}, browser={has_browser}, url={has_url}")
-        
+
         title = target_item.get('title') or watch_url or item_id
         if len(title) > 50:
             title = title[:47] + "..."
 
         # --- Phased Marking ---
-        
+
         # 1. Local Mark (The 30s threshold mark)
         # This applied to ALL videos regardless of provider.
         if not has_watched_flag:
             logging.info(f"[PY][Tracker] Marking item {item_id} as watched (30s threshold reached).")
             self._update_marked_as_watched(item_id, watched_status=True, persist=bool(self.folder_id))
-            
+
             # Force immediate commit so it shows in JSON files instantly
             self._commit_to_disk()
             has_watched_flag = True # Update local variable
@@ -793,10 +793,10 @@ class PlaylistTracker:
             if has_url and not has_cookies and has_browser:
                 logging.info(f"[PY][Tracker] Lazy-extracting cookies from '{browser}' for history update...")
                 self._remote_log("AdaptiveHeaders: Extracting cookies for history...")
-                
+
                 # Use volatile storage (RAM)
                 extracted_path = url_analyzer.get_cookies_file(browser, watch_url, force_refresh=False)
-                
+
                 if extracted_path:
                     with self.lock:
                         target_item['cookies_file'] = extracted_path
@@ -812,15 +812,15 @@ class PlaylistTracker:
                     if item_id in self.watched_this_session:
                         return
                     self.watched_this_session.add(item_id)
-                
+
                 cookies = target_item['cookies_file']
                 headers = target_item.get('headers', {})
                 ua = headers.get('User-Agent')
-                
+
                 logging.info(f"[PY][Tracker] Triggering watch history update for: {watch_url}")
                 self.send_message({"log": {"text": "[Tracker]: Mark-as-watched triggered for YouTube video.", "type": "info"}})
                 self._remote_log(f"AdaptiveHeaders: Marking {title} as watched on YouTube.")
-                
+
                 if self.ipc_manager and self.ipc_manager.is_connected():
                     self.ipc_manager.send({"command": ["show-text", "YouTube: Marking as watched...", 3000]})
 
@@ -860,8 +860,8 @@ class PlaylistTracker:
             # YouTube video but already marked or disabled
             with self.lock:
                 self.watched_this_session.add(item_id)
-            
-            # Note: We don't flood the OSD/Log for temporary skips (missing cookies/url) 
+
+            # Note: We don't flood the OSD/Log for temporary skips (missing cookies/url)
             # because they might resolve themselves in a few seconds.
 
     def _update_playback_status(self):
@@ -872,7 +872,7 @@ class PlaylistTracker:
         try:
             is_paused = self.ipc_manager.get_property("pause", timeout=0.2, default=False)
             is_idle = self.ipc_manager.get_property("idle-active", timeout=0.2, default=False)
-            
+
             # Send status update back to Python Host under lock (PY-M14)
             with self.lock:
                 watched_ids = list(self.threshold_met_ids)
@@ -895,4 +895,3 @@ class PlaylistTracker:
         if self.ipc_manager:
             self.ipc_manager.log_to_mpv(message)
 
-    

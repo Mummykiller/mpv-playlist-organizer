@@ -211,7 +211,7 @@ def is_safe_url(url, web_only=False):
     """
     if not url or not isinstance(url, str):
         return False
-        
+
     if len(url) > SECURITY_LIMITS['MAX_URL_LENGTH']:
         logging.warning("Security: URL exceeds length limit.")
         return False
@@ -444,7 +444,7 @@ def sanitize_string(s, is_filename=False, is_url=False):
         restricted = ['"', '`', '$', '\n', '\r', '\t']
         for char in restricted:
             s = s.replace(char, '')
-            
+
     return s.strip()
 
 def sanitize_ytdlp_options(options_str, allow_settings_flags=False):
@@ -461,7 +461,7 @@ def sanitize_ytdlp_options(options_str, allow_settings_flags=False):
     safe_options = []
     parts = re.split(r'(?<!\\),', options_str)
     last_clean_key = None
-    
+
     for part in parts:
         part = part.strip()
         if not part:
@@ -485,11 +485,11 @@ def sanitize_ytdlp_options(options_str, allow_settings_flags=False):
             else:
                 last_clean_key = None
             continue
-        
+
         key, value = part.split('=', 1)
         clean_key = key.strip().lower().lstrip('-')
         last_clean_key = clean_key
-        
+
         if clean_key in allowed_set:
             # Sanitize value to prevent shell injection or option breaking
             # We strip characters that could be used to chain commands or break out of strings
@@ -508,7 +508,7 @@ def sanitize_ytdlp_options(options_str, allow_settings_flags=False):
         else:
             logging.warning(f"Security: Removed unsafe or disallowed yt-dlp flag '{clean_key}'")
             last_clean_key = None
-        
+
     return ",".join(safe_options)
 
 def validate_safe_path(path, data_dir, script_dir, temp_dir, allow_user_content=False):
@@ -518,29 +518,29 @@ def validate_safe_path(path, data_dir, script_dir, temp_dir, allow_user_content=
         # Windows Named Pipes
         if platform.system() == "Windows" and path.startswith("\\\\.\\pipe\\"):
             return path
-            
+
         resolved = os.path.realpath(os.path.abspath(path))
-        
+
         # Standard Allowed Bases
         allowed = [os.path.realpath(d) for d in [data_dir, script_dir, temp_dir] if d]
-        
+
         # Linux/Unix Runtime Sockets
         if platform.system() == "Linux":
             # 1. Shared Memory
             if os.path.exists("/dev/shm"):
                 allowed.append(os.path.realpath("/dev/shm"))
-            
+
             # 2. XDG Runtime (Standard for sockets)
             xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
             if xdg_runtime:
                 allowed.append(os.path.realpath(xdg_runtime))
-            
+
             # 3. Fallback IPC dir in home
             allowed.append(os.path.realpath(os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")))
 
         if any(os.path.commonpath([resolved, prefix]) == prefix for prefix in allowed):
             return resolved
-        
+
         if allow_user_content: return resolved
         logging.warning(f"Security: Path outside sandbox: {resolved}")
         return None
@@ -576,7 +576,7 @@ def validate_payload(data, max_depth=32):
 
     if not check_size(data):
         return False, "Payload data exceeds security limits"
-    
+
     return True, None
 
 def mask_path(text, data_dir=None, script_dir=None, home_dir=None):
@@ -594,7 +594,7 @@ def mask_path(text, data_dir=None, script_dir=None, home_dir=None):
 
     if home_dir is None:
         home_dir = os.path.expanduser("~")
-    
+
     replacements = [
         (path, tag) for path, tag in [
             (data_dir, "<DATA_DIR>"),

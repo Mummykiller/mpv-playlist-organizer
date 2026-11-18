@@ -36,10 +36,10 @@ class Janitor:
 
         # mpv_cookies_PID_uuid.txt or mpv_cookies_browser_hex.txt
         cookie_re = re.compile(re.escape(url_analyzer.COOKIE_PREFIX) + r'(?:(?P<pid>\d+)_|[a-zA-Z0-9_-]+)')
-        
+
         # delta_PID_uuid.m3u
         delta_re = re.compile(re.escape(mpv_session.DELTA_PREFIX) + r'(?P<pid>\d+)_')
-        
+
         # server_PID.m3u
         server_re = re.compile(re.escape(m3u_server.SERVER_PREFIX) + r'(?P<pid>\d+)' + re.escape(m3u_server.SERVER_EXT) + r'$')
 
@@ -63,11 +63,11 @@ class Janitor:
                 for filename in files:
                     file_path = os.path.join(root, filename)
                     matched = False
-                    
+
                     for pattern, ext, threshold in PATTERNS:
                         if not filename.lower().endswith(ext):
                             continue
-                        
+
                         match = pattern.match(filename)
                         if match:
                             matched = True
@@ -95,7 +95,7 @@ class Janitor:
                             except (ValueError, OSError) as e:
                                 logging.warning(f"Janitor: Error removing stale file {filename}: {e}")
                             break
-                    
+
                     # Fallback: delete known temp extensions older than 72 hours if they didn't match a PID pattern
                     if not matched and any(filename.lower().endswith(e) for e in ['.m3u', '.json', '.txt', '.flag']):
                         try:
@@ -127,14 +127,14 @@ class Janitor:
             logging.info(f"Janitor: Checking for stale IPC resources in {ipc_dir} (72h threshold)")
             now = time.time()
             three_days_ago = now - (72 * 3600)
-            
+
             socket_re = re.compile(r'^mpv-socket-(?P<pid>\d+)$')
             flag_re = re.compile(re.escape(mpv_session.NATURAL_COMPLETION_FLAG) + r'(?P<pid>\d+)\.flag$')
-            
+
             try:
                 for item in os.listdir(ipc_dir):
                     item_path = os.path.join(ipc_dir, item)
-                    
+
                     # Sockets
                     s_match = socket_re.match(item)
                     if s_match:
@@ -195,10 +195,10 @@ class Janitor:
         now = time.time()
         three_days_ago = now - (72 * 3600)
         one_hour_ago = now - 3600
-        
+
         flag_re = re.compile(r'^mpv_natural_completion_(?P<pid>\d+)\.flag$')
         handshake_re = re.compile(r'^handshake_.*\.json$')
-        
+
         try:
             for item in os.listdir(flag_dir):
                 item_path = os.path.join(flag_dir, item)

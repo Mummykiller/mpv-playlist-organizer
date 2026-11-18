@@ -28,7 +28,7 @@ class TestReproCrash(BaseTestCase):
 
     def setUp(self):
         super().setUp()
-        
+
         # 1. Mock Dependencies for MpvSessionManager
         self.deps = {
             'get_all_folders_from_file': MagicMock(),
@@ -40,11 +40,11 @@ class TestReproCrash(BaseTestCase):
             'metadata_cache': None,
             'task_manager': None
         }
-        
+
         # 2. Instantiate Real Session Manager
         session_file = os.path.join(self.test_dir, "session.json")
         self.mpv_session = MpvSessionManager(session_file, self.deps)
-        
+
         # 3. Create Context for Handler
         self.ctx = MagicMock()
         self.ctx.data_dir = self.test_dir
@@ -57,7 +57,7 @@ class TestReproCrash(BaseTestCase):
         self.ctx.services = MagicMock()
         self.ctx.metadata_cache = None
         self.ctx.task_manager = None
-        
+
         self.handler = PlaybackHandler(self.ctx)
 
     def tearDown(self):
@@ -85,9 +85,9 @@ class TestReproCrash(BaseTestCase):
                     with self.mpv_session.sync_lock:
                         self.mpv_session.pid = 9999
                         self.mpv_session.is_alive = True
-                    
+
                     time.sleep(0.01)
-                    
+
                     with self.mpv_session.sync_lock:
                         self.mpv_session.pid = 9999
                 except Exception as e:
@@ -96,16 +96,16 @@ class TestReproCrash(BaseTestCase):
 
         t1 = threading.Thread(target=poller)
         t2 = threading.Thread(target=launcher)
-        
+
         t1.start()
         t2.start()
-        
+
         time.sleep(0.5)
-        
+
         stop_event.set()
         t1.join()
         t2.join()
-        
+
         self.assertEqual(len(errors), 0, f"Caught concurrency errors: {errors}")
 
     def test_active_session_append_vs_toggle(self):
@@ -117,7 +117,7 @@ class TestReproCrash(BaseTestCase):
         self.mpv_session.ipc_manager = MagicMock()
         self.mpv_session.ipc_manager.is_connected.return_value = True
         self.mpv_session._sync_playlist_from_mpv = MagicMock()
-        
+
         mock_append_result = native_link.success(message="Added 1 items.")
         self.handler.handle_append = MagicMock(return_value=mock_append_result)
 
@@ -159,7 +159,7 @@ class TestReproCrash(BaseTestCase):
     def test_ipc_reader_malformed_json_resilience(self):
         """Verifies that IPCSocketManager reader skips corrupted JSON without crashing."""
         ipc_mgr = ipc_utils.IPCSocketManager()
-        
+
         # Mock stream feeding: corrupted line, empty line, followed by valid JSON
         lines = [
             b"{ malformed json missing closing brace\n",
@@ -167,18 +167,18 @@ class TestReproCrash(BaseTestCase):
             b"{\"event\": \"property-change\", \"name\": \"pause\", \"data\": true}\n",
             b"" # EOF
         ]
-        
+
         mock_file = MagicMock()
         mock_file.readline.side_effect = lines
-        
+
         ipc_mgr._sock_file = mock_file
         ipc_mgr._sock = MagicMock()
         ipc_mgr._event_reader_running = True
-        
+
         with patch.object(ipc_utils.platform, 'system', return_value="Linux"):
             with patch("select.select", return_value=([ipc_mgr._sock], [], [])):
                 ipc_mgr._event_reader_loop()
-        
+
         # Verify reader didn't crash and captured the valid event
         self.assertEqual(len(ipc_mgr._event_buffer), 1)
         event = ipc_mgr._event_buffer[0]
@@ -189,22 +189,22 @@ class TestReproCrash(BaseTestCase):
         """Verifies file_io._safe_json_load recovers from corrupted JSON via .bak or returns default."""
         test_file = os.path.join(self.test_dir, "corrupted_test.json")
         bak_file = test_file + ".bak"
-        
+
         # 1. Valid backup exists
         with open(test_file, 'w') as f:
             f.write("{ not valid json !!")
         with open(bak_file, 'w') as f:
             json.dump({"recovered": True}, f)
-            
+
         data = file_io._safe_json_load(test_file, default_factory=dict)
         self.assertTrue(data.get("recovered"), "Should recover from .bak when primary is corrupt")
-        
+
         # 2. Both primary and backup corrupted -> returns default_factory without raising exception
         with open(test_file, 'w') as f:
             f.write("corrupted primary as well")
         with open(bak_file, 'w') as f:
             f.write("corrupted backup as well")
-            
+
         data_default = file_io._safe_json_load(test_file, default_factory=lambda: {"fallback": 123})
         self.assertEqual(data_default, {"fallback": 123})
 
@@ -237,11 +237,11 @@ class TestReproCrash(BaseTestCase):
         ipc_mgr = ipc_utils.IPCSocketManager()
         mock_sock = MagicMock()
         mock_sock.sendall.side_effect = BrokenPipeError("Broken pipe to MPV")
-        
+
         ipc_mgr._sock = mock_sock
         ipc_mgr._sock_file = MagicMock()
         ipc_mgr._system = "Linux"
-        
+
         with patch.object(ipc_mgr, 'close') as mock_close:
             result = ipc_mgr.send({"command": ["get_property", "pause"]})
             self.assertIsNone(result, "send() must return None on BrokenPipeError")
@@ -270,7 +270,7 @@ class TestReproCrash(BaseTestCase):
         self.mpv_session.is_alive = True
         self.mpv_session.pid = 88888
         self.mpv_session.owner_folder_id = "test_dead_folder"
-        
+
         self.handler.ipc_utils.is_pid_running.return_value = False
 
         status_res = self.handler.handle_get_playback_status(native_link.LiveUpdateRequest(action="get_playback_status"))
@@ -297,7 +297,7 @@ class TestReproCrash(BaseTestCase):
         self.mpv_session.is_alive = True
         self.mpv_session.pid = 66666
         self.mpv_session.owner_folder_id = "health_folder"
-        
+
         # Mock IPC manager that always fails ping
         mock_ipc = MagicMock()
         mock_ipc.get_property.return_value = None
@@ -306,7 +306,7 @@ class TestReproCrash(BaseTestCase):
         with patch("utils.ipc_utils.is_pid_running", return_value=False):
             try:
                 self.mpv_session._start_health_watcher()
-                
+
                 # Poll until watcher thread transitions session to dead (500ms intervals)
                 deadline = time.time() + 2.0
                 while time.time() < deadline:
@@ -314,7 +314,7 @@ class TestReproCrash(BaseTestCase):
                     if not self.mpv_session.is_alive and "dead" in health_states:
                         break
                     time.sleep(0.05)
-                
+
                 # Session should be cleared when PID is dead
                 self.assertFalse(self.mpv_session.is_alive)
                 self.assertIsNone(self.mpv_session.pid)

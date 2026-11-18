@@ -53,7 +53,7 @@ class TestNativeHostBoot(BaseTestCase):
         env["XDG_DATA_HOME"] = working_dir
         env["HOME"] = working_dir
         script_path = os.path.join(PROJECT_ROOT, "native_host.py")
-        
+
         proc = subprocess.Popen(
             [sys.executable, script_path],
             stdin=subprocess.PIPE,
@@ -88,7 +88,7 @@ class TestNativeHostBoot(BaseTestCase):
             msg = self.read_msg(proc, timeout=timeout)
             if msg is None:
                 return None
-            
+
             if msg.get('request_id') == request_id:
                 return msg
             else:
@@ -130,17 +130,17 @@ class TestNativeHostBoot(BaseTestCase):
     def test_host_clean_exit_on_stdin_eof(self):
         """Verifies host process detects stdin EOF cleanly and exits with code 0."""
         proc = self.spawn_host(self.test_dir)
-        
+
         # Close stdin to trigger EOF in get_message
         proc.stdin.close()
-        
+
         exit_code = proc.wait(timeout=3.0)
         self.assertEqual(exit_code, 0, "Host should exit with code 0 when stdin is closed")
 
     def test_host_oversized_message_rejection(self):
         """Verifies host rejects messages exceeding MAX_IPC_MESSAGE_SIZE and exits safely."""
         proc = self.spawn_host(self.test_dir)
-        
+
         # Send 4-byte length prefix exceeding 5MB limit
         oversized_len = security.SECURITY_LIMITS['MAX_IPC_MESSAGE_SIZE'] + 1024
         proc.stdin.write(struct.pack('@I', oversized_len))
@@ -153,7 +153,7 @@ class TestNativeHostBoot(BaseTestCase):
     def test_host_truncated_header_resilience(self):
         """Verifies host does not crash or hang when receiving a truncated header (< 4 bytes) followed by EOF."""
         proc = self.spawn_host(self.test_dir)
-        
+
         # Send only 2 bytes instead of 4, then close pipe
         proc.stdin.write(b"\x01\x00")
         proc.stdin.close()
@@ -167,12 +167,12 @@ class TestNativeHostBoot(BaseTestCase):
     def test_host_handles_invalid_json(self):
         """Verifies that malformed JSON doesn't necessarily crash the host."""
         proc = self.spawn_host(self.test_dir)
-        
+
         # Send malformed length/data
         proc.stdin.write(struct.pack('@I', 10))
         proc.stdin.write(b"not-json!!")
         proc.stdin.flush()
-        
+
         time.sleep(0.5)
         if proc.poll() is not None:
             stderr = proc.stderr.read().decode('utf-8', errors='replace')
@@ -193,14 +193,14 @@ class TestNativeHostBoot(BaseTestCase):
     def test_native_messaging_boot_handshake(self):
         """Verifies the initial ping/status handshake with the native host."""
         proc = self.spawn_host(self.test_dir)
-        
+
         req_id = "handshake-ping-1"
         ping_msg = {
             "action": "ping",
             "request_id": req_id
         }
         self.send_msg(proc, ping_msg)
-        
+
         response = self.read_response(proc, req_id)
         self.assertIsNotNone(response, "Timed out waiting for ping response")
         self.assertTrue(response.get('success'), f"Ping failed: {response}")
@@ -212,14 +212,14 @@ class TestNativeHostBoot(BaseTestCase):
     def test_native_messaging_restore_session_handshake(self):
         """Verifies the session restoration handshake handler."""
         proc = self.spawn_host(self.test_dir)
-        
+
         req_id = "handshake-restore-1"
         restore_msg = {
             "action": "restore_session",
             "request_id": req_id
         }
         self.send_msg(proc, restore_msg)
-        
+
         response = self.read_response(proc, req_id)
         self.assertIsNotNone(response, "Timed out waiting for restore_session response")
         self.assertTrue(response.get('success'))
@@ -295,7 +295,7 @@ class TestNativeHostBoot(BaseTestCase):
     def test_play_m3u_registration(self):
         """Verifies that play_m3u is registered and doesn't return 'Unknown command'."""
         proc = self.spawn_host(self.test_dir)
-        
+
         req_id = "test-play-m3u"
         msg = {
             "action": "play_m3u",
@@ -304,10 +304,10 @@ class TestNativeHostBoot(BaseTestCase):
             "url_item": {"url": "http://example.com/test.mp4", "title": "Test"}
         }
         self.send_msg(proc, msg)
-        
+
         response = self.read_response(proc, req_id)
         self.assertIsNotNone(response, "Host crashed or timed out on play_m3u")
-        
+
         error = response.get('error', '')
         self.assertNotIn("Unknown command", error)
 

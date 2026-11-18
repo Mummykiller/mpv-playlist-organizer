@@ -19,7 +19,7 @@ class PlaybackHandler(BaseHandler):
         logging.info(f"[PY][Handler] _orchestrate_playback start: input_type='{input_type}', folder_id='{request.folder_id}'")
         folder_id = request.folder_id or str(uuid.uuid4())
         settings = self._get_merged_settings(request.settings)
-        
+
         # 1. Resolve Input
         raw_input = None
         effective_input_type = input_type
@@ -32,12 +32,12 @@ class PlaybackHandler(BaseHandler):
                 shard_playlist = self.file_io.get_playlist_shard(request.folder_id)
                 if shard_playlist:
                     logging.info(f"[PY][Handler] Promoting single play request to folder batch for '{request.folder_id}'.")
-                    
+
                     # CRITICAL: Merge the latest data from request.url_item into the shard item
                     if request.url_item and request.url_item.get('id'):
                         target_id = request.url_item.get('id')
                         request.playlist_start_id = target_id
-                        
+
                         for i, shard_item in enumerate(shard_playlist):
                             if shard_item.get('id') == target_id:
                                 # Prioritize incoming browser data for this specific item
@@ -46,10 +46,10 @@ class PlaybackHandler(BaseHandler):
                                 shard_playlist[i] = updated_item
                                 logging.info(f"[PY][Handler] Merged browser state for {target_id}. Resume: {updated_item.get('resume_time')}s")
                                 break
-                    
+
                     raw_input = shard_playlist
                     effective_input_type = 'batch'
-            
+
             if not raw_input:
                 if request.url_item and 'resume_time' in request.url_item and not request.playlist_start_id:
                     request.url_item['resume_time'] = None
@@ -63,14 +63,14 @@ class PlaybackHandler(BaseHandler):
                 logging.warning(f"[PY][Handler] {msg}")
                 return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
             raw_input = m3u_data['value']
-        
+
         # Resolve to standard list of items
         logging.info("[PY][Handler] Resolving input items...")
         items, is_expanded = self.item_processor.resolve_input_items(
             raw_input, None, (request.url_item or {}).get('headers')
         )
         logging.info(f"[PY][Handler] Resolved {len(items) if items else 0} items.")
-        
+
         if not items:
             msg = "Could not resolve any playable items."
             logging.warning(f"[PY][Handler] {msg}")
@@ -85,7 +85,7 @@ class PlaybackHandler(BaseHandler):
             logging.info(f"[PY][Handler] Session already alive for folder '{folder_id}'. Checking for pause cycle or unqueued items.")
             if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
                 current_playing_id = self.mpv_session.ipc_manager.get_property("user-data/id", timeout=0.5)
-                
+
                 should_toggle_pause = False
                 if effective_input_type == 'single' and request.url_item:
                     target_id = request.url_item.get('id')
@@ -122,14 +122,14 @@ class PlaybackHandler(BaseHandler):
         logging.info("[PY][Handler] Starting enrichment and launch payload construction...")
         self.mpv_session.launch_cancelled = False # Reset for new attempt
         launch_payload = items if len(items) > 1 else items[0]
-        
+
         # Log the intent to the browser
         if len(items) > 1:
             log_text = f"Launching batch playback ({len(items)} items) for '{folder_id}'..."
         else:
             item_title = items[0].get('title') or "Selected Item"
             log_text = f"Launching playback for: {item_title}"
-        
+
         self.ctx.sender({"action": "log_from_native_host", "log": {"text": log_text, "type": "info"}})
 
         try:
@@ -137,14 +137,14 @@ class PlaybackHandler(BaseHandler):
             logging.info("[PY][Handler] Calling mpv_session.start (first pass)...")
             first_call_result = self.mpv_session.start(
                 launch_payload, folder_id, settings, self.file_io,
-                geometry=request.geometry, custom_width=request.custom_width, 
-                custom_height=request.custom_height, custom_mpv_flags=request.custom_mpv_flags, 
-                automatic_mpv_flags=request.automatic_mpv_flags, 
+                geometry=request.geometry, custom_width=request.custom_width,
+                custom_height=request.custom_height, custom_mpv_flags=request.custom_mpv_flags,
+                automatic_mpv_flags=request.automatic_mpv_flags,
                 start_paused=request.start_paused, force_terminal=request.force_terminal,
                 playlist_start_id=request.playlist_start_id
             )
             logging.info(f"[PY][Handler] First pass result: success={first_call_result.get('success')}, handled_directly={first_call_result.get('handled_directly')}")
-            
+
             # --- CANCELLATION CHECK ---
             if getattr(self.mpv_session, 'launch_cancelled', False):
                 logging.info("[PY][Handler] Launch cancelled by user during Pass 1. Aborting Pass 2.")
@@ -157,7 +157,7 @@ class PlaybackHandler(BaseHandler):
             enriched_url_items = first_call_result["enriched_url_items"]
             first_item = enriched_url_items[0] if enriched_url_items else {}
             enriched_m3u_content = first_call_result.get("enriched_m3u_content")
-            
+
             target_payload = enriched_url_items
             if enriched_m3u_content and (input_type == 'm3u' or len(enriched_url_items) > 1):
                 logging.info("[PY][Handler] Starting local M3U server for multi-item payload.")
@@ -169,9 +169,9 @@ class PlaybackHandler(BaseHandler):
             logging.info("[PY][Handler] Calling mpv_session.start (final pass)...")
             return self.mpv_session.start(
                 target_payload, folder_id, settings, self.file_io,
-                geometry=request.geometry, custom_width=request.custom_width, 
-                custom_height=request.custom_height, custom_mpv_flags=request.custom_mpv_flags, 
-                automatic_mpv_flags=request.automatic_mpv_flags, 
+                geometry=request.geometry, custom_width=request.custom_width,
+                custom_height=request.custom_height, custom_mpv_flags=request.custom_mpv_flags,
+                automatic_mpv_flags=request.automatic_mpv_flags,
                 start_paused=request.start_paused, enriched_items_list=enriched_url_items,
                 headers=first_item.get('headers'),
                 ytdl_raw_options=first_item.get('ytdl_raw_options'),
@@ -209,14 +209,14 @@ class PlaybackHandler(BaseHandler):
     def handle_append(self, request: native_link.PlaybackRequest):
         url_item = request.url_item
         url_items_list = request.url_items
-        folder_id = request.folder_id 
+        folder_id = request.folder_id
         if not folder_id or (not url_item and not url_items_list):
             return native_link.failure("Missing folder_id or items for append action.")
-        
+
         canonical_id = self.file_io._get_canonical_folder_id(folder_id)
         items_to_process = url_items_list if url_items_list else [url_item]
         settings = self._get_merged_settings(request.settings)
-        
+
         job_id = None
         if len(items_to_process) > 1:
             log_msg = f"Appending {len(items_to_process)} items to playlist '{canonical_id}'..."
@@ -231,29 +231,29 @@ class PlaybackHandler(BaseHandler):
             def process_wrapper(item):
                 # Direct enrichment without folder context overhead
                 return self.item_processor.enrich_single_item(
-                    item, canonical_id, 
-                    session_cookies=self.mpv_session.session_cookies, 
+                    item, canonical_id,
+                    session_cookies=self.mpv_session.session_cookies,
                     sync_lock=self.mpv_session.sync_lock,
-                    settings=settings, 
+                    settings=settings,
                     session=self.mpv_session,
                     quiet=(len(items_to_process) > 1)
                 )
-            
+
             futures = [executor.submit(process_wrapper, itm) for itm in items_to_process]
             for future in futures:
                 if job_id and self.ctx.task_manager.is_cancelled(job_id):
                     break
-                
+
                 try:
                     res = future.result()
                     if res: final_processed_items.extend(res)
                 except Exception as e:
                     logging.error(f"Error enriching item in append batch: {e}")
-                
+
                 processed_count += 1
                 if job_id:
                     self.ctx.task_manager.update_job(job_id, progress=processed_count)
-        
+
         if job_id:
             status = "completed" if not self.ctx.task_manager.is_cancelled(job_id) else "cancelled"
             self.ctx.task_manager.update_job(job_id, status=status)
@@ -356,7 +356,7 @@ class PlaybackHandler(BaseHandler):
     def handle_close_mpv(self, request: native_link.LiveUpdateRequest):
         # Force cancel any pending/in-flight launches
         self.mpv_session.launch_cancelled = True
-            
+
         response = self.mpv_session.close()
         self.m3u_server.stop()
         return response
@@ -367,11 +367,11 @@ class PlaybackHandler(BaseHandler):
         if not request.folder_id or not request.item_id:
             logging.warning(f"[PY][Handler] update_item_marked_as_watched: Missing folder_id or item_id. folder_id={request.folder_id}, item_id={request.item_id}")
             return native_link.failure("Missing folder_id or item_id.")
-        
+
         canonical_id = self.file_io._get_canonical_folder_id(request.folder_id)
         res = self.mpv_session.update_item_watch_status(
-            request.item_id, 
-            canonical_id, 
+            request.item_id,
+            canonical_id,
             marked_as_watched=request.marked_as_watched,
             watched=request.watched
         )
@@ -388,7 +388,7 @@ class PlaybackHandler(BaseHandler):
             owner_folder_id = self.mpv_session.owner_folder_id
 
         is_running = is_alive and pid is not None
-        
+
         # 1. Fast PID check first
         if is_running and not self.ipc_utils.is_pid_running(pid):
             is_running = False
@@ -425,7 +425,7 @@ class PlaybackHandler(BaseHandler):
             last_played_id_cache = getattr(self.mpv_session, 'last_played_id_cache', None)
 
         is_running = is_alive and pid is not None
-        
+
         # 1. Fast PID check
         if is_running and not self.ipc_utils.is_pid_running(pid):
             is_running = False
@@ -441,18 +441,18 @@ class PlaybackHandler(BaseHandler):
             if should_clear:
                 self.mpv_session.clear()
             return native_link.success({"is_running": False, "is_paused": False})
-        
+
         is_paused = self.mpv_session.get_pause_state()
         is_idle = self.mpv_session.get_idle_state()
         session_ids = [item.get('id') for item in playlist_snapshot if item.get('id')]
-        
+
         if is_paused is None: is_paused = False
         if is_idle is None: is_idle = False
-        
+
         last_played_id = None
         if playlist_tracker:
             last_played_id = getattr(playlist_tracker, 'last_played_id', None)
-        
+
         if not last_played_id:
             last_played_id = last_played_id_cache
 
@@ -468,12 +468,12 @@ class PlaybackHandler(BaseHandler):
     @command('play_new_instance')
     def handle_play_new_instance(self, request: native_link.PlaybackRequest):
         settings = self._get_merged_settings(request.settings)
-        
+
         # Support both 'playlist' and 'url_item' inputs
         playlist = request.playlist
         if not playlist and request.url_item:
             playlist = [request.url_item]
-            
+
         return self._launch_unmanaged_mpv(
             playlist or [], request.geometry, request.custom_width,
             request.custom_height, request.custom_mpv_flags, request.automatic_mpv_flags,
@@ -484,7 +484,7 @@ class PlaybackHandler(BaseHandler):
         mpv_exe = self.file_io.get_mpv_executable()
         if settings is None:
             settings = self.file_io.get_settings()
-        
+
         # 0.5 Log batch preparation
         if not playlist:
             return native_link.failure("Could not resolve any items for unmanaged launch.")
@@ -513,7 +513,7 @@ class PlaybackHandler(BaseHandler):
         first_item = enriched_playlist[0]
         if not first_item.get('folder_id') and folder_id:
             first_item['folder_id'] = folder_id
-            
+
         headers = first_item.get('headers')
         cookies_browser = first_item.get('cookies_browser')
         cookies_file = first_item.get('cookies_file')
@@ -541,19 +541,19 @@ class PlaybackHandler(BaseHandler):
             # NOTE: We do NOT pass start_time here via CLI args, because it creates a global
             # '--start' flag that applies to ALL videos. We rely on the handshake/Lua for that.
             full_command, has_terminal_flag = self.services.construct_mpv_command(
-                mpv_exe=mpv_exe, 
-                url=enriched_playlist, 
+                mpv_exe=mpv_exe,
+                url=enriched_playlist,
                 geometry=geometry,
-                custom_width=custom_width, 
+                custom_width=custom_width,
                 custom_height=custom_height,
-                custom_mpv_flags=custom_mpv_flags, 
+                custom_mpv_flags=custom_mpv_flags,
                 automatic_mpv_flags=automatic_mpv_flags,
-                settings=settings, 
+                settings=settings,
                 playlist_start_index=0,
-                headers=headers, 
+                headers=headers,
                 cookies_browser=cookies_browser,
                 cookies_file=cookies_file,
-                ytdl_raw_options=ytdl_raw_options, 
+                ytdl_raw_options=ytdl_raw_options,
                 is_youtube=is_youtube,
                 use_ytdl_mpv=use_ytdl_mpv,
                 script_dir=self.ctx.script_dir,
@@ -561,16 +561,16 @@ class PlaybackHandler(BaseHandler):
                 flag_dir=flag_dir,
                 handshake_path=handshake_path
             )
-            
+
             import subprocess
             import threading
             from .. import security
             env = security.get_scrubbed_env(keep_terminal=has_terminal_flag)
             process = subprocess.Popen(full_command, env=env, **self.services.get_mpv_popen_kwargs(has_terminal_flag))
-            
+
             # Handshake cleanup for unmanaged instances needs a small delay or a thread
             def delayed_cleanup(path, proc):
-                # Unmanaged sessions don't have a manager to clear them, 
+                # Unmanaged sessions don't have a manager to clear them,
                 # so we wait for the process to end or a reasonable timeout for the handshake to be read.
                 # Actually, MPV reads script-opts at startup. 5 seconds is plenty.
                 time.sleep(10)
@@ -579,14 +579,14 @@ class PlaybackHandler(BaseHandler):
                         os.remove(path)
                 except OSError as e:
                     logging.debug(f"[PY][PlaybackHandler] Failed to remove unmanaged handshake file {path}: {e}")
-            
+
             threading.Thread(target=delayed_cleanup, args=(handshake_path, process), daemon=True).start()
-            
+
             # Use the new non-blocking stream observer
             if process.stdout:
                 observer = self.ctx.log_stream(tag="MPV-UNMANAGED", send_message_func=self.ctx.sender)
                 threading.Thread(target=observer, args=(process.stdout,), daemon=True).start()
-            
+
             return native_link.success(message="Unmanaged session launched.")
         except Exception as e:
             import traceback

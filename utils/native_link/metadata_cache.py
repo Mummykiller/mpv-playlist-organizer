@@ -1,5 +1,4 @@
 import os
-import json
 import logging
 import threading
 import time
@@ -34,18 +33,18 @@ class MetadataCache:
         """Retrieves cached metadata for a URL."""
         if not url:
             return None
-            
+
         path = self._get_cache_path(url)
         if not os.path.exists(path):
             return None
-        
+
         try:
             with self.lock:
                 with self.file_io.FileLock(path):
                     # Use file_io for robust loading
                     cache = self.file_io._safe_json_load(path)
                     entry = cache.get(url)
-                    
+
                     if entry:
                         # Optional: check expiration (e.g. 7 days)
                         if time.time() - entry.get("cached_at", 0) > 604800:
@@ -59,7 +58,7 @@ class MetadataCache:
         """Saves metadata for a URL to the global cache."""
         if not url or not metadata:
             return
-            
+
         path = self._get_cache_path(url)
         try:
             # Extract only stable metadata (no session-specific RAM paths)
@@ -72,7 +71,7 @@ class MetadataCache:
                 "cookies_browser": metadata.get("cookies_browser"),
                 "cached_at": time.time()
             }
-            
+
             # Don't cache if no useful info
             if not stable_meta["title"] and not stable_meta["headers"]:
                 return
@@ -81,7 +80,7 @@ class MetadataCache:
                 with self.file_io.FileLock(path):
                     cache = self.file_io._safe_json_load(path)
                     cache[url] = stable_meta
-                    
+
                     # Limit cache size per domain shard (e.g. 1000 items)
                     if len(cache) > 1000:
                         # Remove oldest entries

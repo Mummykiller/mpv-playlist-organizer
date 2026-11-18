@@ -24,10 +24,10 @@ class TaskManager:
             "total": total,
             "can_cancel": True
         }
-        
+
         with self.lock:
             self.jobs[job_id] = job_data
-        
+
         self._broadcast_task_update(job_id)
         return job_id
 
@@ -44,12 +44,12 @@ class TaskManager:
                 job["status"] = status
             if label is not None:
                 job["label"] = label
-            
+
             # Auto-cleanup on completion or failure
             is_finished = job["status"] in ["completed", "failed", "cancelled"]
 
         self._broadcast_task_update(job_id, removed=is_finished)
-        
+
         if is_finished:
             with self.lock:
                 if job_id in self.jobs:
@@ -63,7 +63,7 @@ class TaskManager:
             if job_id in self.jobs:
                 self._cancelled_jobs.add(job_id)
                 self.jobs[job_id]["status"] = "cancelled"
-        
+
         # Immediate broadcast so UI can show "Cancelling..."
         self._broadcast_task_update(job_id)
 
@@ -77,7 +77,7 @@ class TaskManager:
         job_data = None
         with self.lock:
             job_data = self.jobs.get(job_id)
-        
+
         if not job_data and not removed:
             return
 
