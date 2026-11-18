@@ -135,7 +135,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	}
 
 	const NORMALIZE_WHITELIST = new Set(["request_id", "url", "m3u8", "mp4"]);
-	const PRESERVE_MAP_KEYS = new Set(["customNames", "custom_names", "folders"]);
+	const PRESERVE_MAP_KEYS = new Set(["customNames", "custom_names", "folders", "domains"]);
 
 	/**
 	 * Recursively normalizes keys in an object from snake_case to camelCase.

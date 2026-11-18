@@ -15,36 +15,29 @@ This skill defines the multi-batch test execution pipeline, `BaseTestCase` test 
 
 ## 1. Test Suite Architecture (`testing_tools/run_suite.py`)
 
-The test suite executes in three segregated batches to isolate failures:
+`run_suite.py` runs `PYTHON_TEST_FILES` (all 9 Python test modules in parallel via `ThreadPoolExecutor`) concurrently with `run_js_batch()` (which runs contract sync, Node unit tests, static AST/regex gates, and available linters):
 
 ```mermaid
 flowchart TD
-    Start["run_suite.py"] --> Contract["0. Contract Sync<br/>generate_bridge_contract.py"]
-    Contract --> B1["Batch 1: Python Logic & Robustness"]
-    B1 --> B2["Batch 2: Frontend Logic & Bridge"]
-    B2 --> B3["Batch 3: Cross-Environment Integration"]
+    Start["run_suite.py"] --> PyPool["Parallel Python Pool<br/>(ThreadPoolExecutor, 9 modules)"]
+    Start --> JsBatch["run_js_batch() (Concurrent)"]
 
-    subgraph B1_Details ["Batch 1 Tests"]
-        T1["test_logging_system.py"]
-        T2["test_robustness.py"]
-        T3["test_repro_crash.py"]
-        T4["test_native_host_boot.py"]
-        T5["test_security_claims.py"]
+    subgraph Py_Details ["PYTHON_TEST_FILES (9 Modules)"]
+        T1["test_logging_system.py, test_robustness.py, test_repro_crash.py"]
+        T2["test_native_host_boot.py, test_security_claims.py, test_storage_locking.py"]
+        T3["test_playback_ipc_concurrency.py, test_server_and_installer.py, test_logging_pipeline.py"]
     end
 
-    subgraph B2_Details ["Batch 2 Tests"]
-        JS1["Node Unit Tests (5 scripts)"]
-        JS2["JS Syntax Check (node --check)"]
-        PY1["Python AST Static Check (No bare excepts)"]
+    subgraph Js_Details ["run_js_batch()"]
+        C1["0. Contract Sync: generate_bridge_contract.py"]
+        JS1["1. Node Unit Tests (auto-discovered test_*.js, 6 scripts)"]
+        JS2["2. JS Syntax (node --check) & Empty/Comment-Only catch {} Gate"]
+        PY1["3. Python AST Gate (bare except: & _is_silent_pass)"]
+        L1["4. Linters when installed: ruff, biome, luac -p"]
     end
 
-    subgraph B3_Details ["Batch 3 Tests"]
-        T6["test_logging_pipeline.py"]
-    end
-
-    B1 --- B1_Details
-    B2 --- B2_Details
-    B3 --- B3_Details
+    PyPool --- Py_Details
+    JsBatch --- Js_Details
 ```
 
 ---
@@ -76,27 +69,29 @@ class MyFeatureTest(BaseTestCase):
 
 ---
 
-## 3. AST Static Analysis Rules (Python)
+## 3. Static Analysis Gates (Python & JS)
 
-`run_suite.py` parses all `.py` files across the project with `ast.parse`:
+`run_suite.py` enforces both Python AST gates and JavaScript regex gates across the project:
 
 > [!CAUTION]
-> **Strict AST Rule: No Bare `except:` Clauses**
-> The AST validator traverses all `ExceptHandler` nodes. Any bare `except:` without an exception type:
+> **Strict AST & Catch-Block Rules:**
+> 1. **No Bare `except:` Clauses:** Bare `except:` intercepts `KeyboardInterrupt` and `SystemExit`. Always catch `Exception` or specific error types.
+> 2. **No Silent `except ...: pass` (`_is_silent_pass`):** Python `ExceptHandler` blocks containing only `pass` (without a `raise` or a function call such as logging) are rejected by the AST gate.
+> 3. **No Empty or Comment-Only `catch {}` (`js_empty_catch_regex`):** JavaScript `catch` blocks that are empty or contain only comments are rejected.
+>
 > ```python
-> # ❌ FORBIDDEN (Will fail run_suite.py):
-> try:
->     do_something()
-> except:
->     pass
-> 
-> # ✅ PERMITTED:
+> # ❌ FORBIDDEN (bare except or silent pass):
 > try:
 >     do_something()
 > except Exception:
 >     pass
+>
+> # ✅ PERMITTED (logs or re-raises):
+> try:
+>     do_something()
+> except Exception as e:
+>     logging.debug(f"Failed: {e}")
 > ```
-> Bare `except:` intercepts `KeyboardInterrupt` and `SystemExit`, breaking graceful termination and crash reporting. Always catch `Exception` or specific error types.
 
 ---
 
@@ -139,7 +134,7 @@ python3 testing_tools/run_suite.py --watch
 
 ---
 
-## 6. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+## 6. Audit Guardrails
 
 ### Every bug fix and hardening change ships with a regression test
 Write the test first and confirm it fails without the fix. Prefer these patterns:
@@ -156,9 +151,9 @@ Write the test first and confirm it fails without the fix. Prefer these patterns
 | Session races | Old waiter thread calling `clear()` after a new `start()` |
 
 ### Harness rules
-1. `ruff` is a declared dependency and a **hard failure** if missing. Never silently skip a linter.
-2. The AST gate must also flag comment-only `catch {}` in JS and `except Exception: pass` without a log. A comment is not handling.
+1. `ruff` (`testing_tools/pyproject.toml`), `biome` (`testing_tools/biome.json`), and `luac -p` (`mpv_scripts/*.lua`) are executed by `run_suite.py` whenever installed (falling back to an info skip when a binary is absent); any lint/syntax error reported by an installed tool is a hard failure.
+2. The static gate flags bare `except:`, silent `except ...: pass` (`_is_silent_pass`) in Python, and empty or comment-only `catch {}` (`js_empty_catch_regex`) in JS. A comment is not handling.
 3. Tests must not mutate global logger state without restoring it. Use fixtures with teardown.
 4. `verify_changes.py` and tests must not leave background processes behind.
 5. Release packaging (`create_release.py`) excludes `*.log`, `native_host_crash.log` and local `data/`.
-6. Add a test asserting that `skills/*.md` claims about allowlists and limits match the code (e.g. a flag the skill calls "rejected" is actually rejected), so that docs and code cannot drift silently.
+6. Keep `testing_tools/scripts/test_security_claims.py` up to date so `.gemini/skills/*/SKILL.md` claims about allowlists and limits match the code (e.g. a flag the skill calls "rejected" is actually rejected), preventing docs and code from drifting silently.

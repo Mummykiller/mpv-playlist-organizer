@@ -64,6 +64,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				minimized: state.minimized,
 				pinned: state.pinned,
 				logVisible: state.logVisible,
+				logFilters: state.logFilters,
 				uiMode: state.uiMode,
 				isFolderActive: state.isFolderActive,
 				lastPlayedId: state.lastPlayedId,
@@ -73,6 +74,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				detected: !!state.detectedUrl,
 				showStub: state.settings.showMinimizedStub,
 				highlight: state.settings.enableActiveItemHighlight,
+				showPlayNewButton: state.settings.showPlayNewButton,
+				enableAnilistIntegration: state.settings.enableAnilistIntegration,
+				lockAnilistPanel: state.settings.lockAnilistPanel,
+				forcePanelAttached: state.settings.forcePanelAttached,
+				anilistAttachOnOpen: state.settings.anilistAttachOnOpen,
 				suppressed: c.suppressedByWatchdog,
 			};
 			const currentHash = JSON.stringify(relevantState);
@@ -375,7 +381,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				full.value = req.folderId;
 				const compact = c.ui.shadowRoot.getElementById("compact-folder-select");
 				if (compact) compact.value = req.folderId;
+				c._updateFolderSubscription(req.folderId);
 				if (req.playlist) {
+					c._lastPlaylistFingerprint = c._getPlaylistFingerprint(req.playlist);
 					c.playlistUI?.render(
 						req.playlist,
 						req.lastPlayedId,

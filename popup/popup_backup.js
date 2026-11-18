@@ -8,6 +8,7 @@ export function createBackupManager(ctx) {
 		uiManager,
 		showStatus,
 		populateFolderDropdowns,
+		refreshPreferences,
 		exportFilenameModal,
 		exportFilenameInput,
 		exportSaveBtn,
@@ -190,16 +191,20 @@ export function createBackupManager(ctx) {
 			};
 
 			showStatus("Exporting all playlists...");
-			chrome.runtime.sendMessage(
-				{ action: "export_all_playlists_separately", options },
-				(response) => {
+			sendMessageAsync({
+				action: "export_all_playlists_separately",
+				options,
+			})
+				.then((response) => {
 					if (response?.success) {
 						showStatus(response.message);
 					} else {
 						showStatus(response?.error || "Export all failed.", true);
 					}
-				},
-			);
+				})
+				.catch((e) => {
+					showStatus("Export all failed: " + e.message, true);
+				});
 			modal.style.display = "none";
 		};
 
@@ -210,16 +215,17 @@ export function createBackupManager(ctx) {
 
 	function handleOpenExportFolder() {
 		showStatus("Requesting to open folder...");
-		chrome.runtime.sendMessage(
-			{ action: "open_export_folder" },
-			(response) => {
+		sendMessageAsync({ action: "open_export_folder" })
+			.then((response) => {
 				if (response?.success) {
 					window.close();
 				} else {
 					showStatus(response?.error || "Could not open folder.", true);
 				}
-			},
-		);
+			})
+			.catch((e) => {
+				showStatus("Could not open folder: " + e.message, true);
+			});
 	}
 
 	async function handleExportSettings() {
@@ -289,17 +295,19 @@ export function createBackupManager(ctx) {
 					.checked,
 			};
 
-			chrome.runtime.sendMessage(
-				{ action: "import_from_file", filename, options },
-				(response) => {
+			sendMessageAsync({ action: "import_from_file", filename, options })
+				.then((response) => {
 					if (response?.success) {
 						showStatus(response.message);
 						populateFolderDropdowns();
+						refreshPreferences?.();
 					} else {
 						showStatus(response?.error || "Import failed.", true);
 					}
-				},
-			);
+				})
+				.catch((e) => {
+					showStatus("Import failed: " + e.message, true);
+				});
 			importSelectionModal.style.display = "none";
 		});
 	}

@@ -4,7 +4,8 @@ description: >-
   Governs the AniList release tracking service, airing schedule panel, GraphQL client,
   and rendering components. Load this skill whenever modifying `anilist_releases.py`,
   `utils/anilist_service.py`, `background/handlers/dependency_anilist.js`,
-  `utils/AniListUI.js`, `utils/anilist_renderer.module.js`, or the `#anilist-panel-host` UI.
+  `utils/AniListUI.js`, `utils/anilist_renderer.module.js`, `popup/popup_anilist.js`,
+  or the `#anilist-panel-host` UI.
 ---
 
 # AniList Release Tracking & Schedule Architecture
@@ -66,9 +67,9 @@ Backend management is handled by `AniListCache` in `utils/anilist_service.py`:
   - Double-click to copy title to clipboard (`enableDblclickCopy`).
   - Panel attachment modes: can be docked adjacent to the MPV controller or unlocked as a free-floating widget (`lockAnilistPanel`, `forcePanelAttached`).
 
-### B. Extension Popup Tab (`utils/anilist_renderer.module.js`)
+### B. Extension Popup Tab (`popup/popup_anilist.js` & `utils/anilist_renderer.module.js`)
 
-- Embedded in the main extension popup window (`popup.html`).
+- Embedded in the main extension popup window (`popup.html`), with popup tab wiring in `popup/popup_anilist.js`.
 - Renders identical release cards using `AniListRenderer` without needing a floating overlay wrapper.
 
 ---

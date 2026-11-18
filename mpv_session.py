@@ -339,6 +339,7 @@ class MpvSessionManager:
                 _url_items_list[playlist_start_index] = start_item_enriched[0]
                 logging.info(f"[PY][Session] Start item enriched: {start_item_enriched[0].get('title')}")
 
+        action_needed = None
         with self.sync_lock:
             logging.info("[PY][Session] start() - Entered sync_lock.")
             is_final_pass = kwargs.get('enriched_items_list') is not None
@@ -346,7 +347,7 @@ class MpvSessionManager:
                 logging.info(f"[PY][Session] Launch for folder '{folder_id}' aborted due to cancellation.")
                 return {"success": False, "error": "Launch cancelled."}
 
-            if is_final_pass and not self.is_alive and not self.pid:
+            if is_final_pass and kwargs.get('had_active_session') and not self.is_alive and not self.pid:
                 logging.info("[PY][Session] Pass 2 detected dead session. Aborting to prevent ghost relaunch.")
                 return {"success": True, "message": "Playback ended by user between passes."}
 
@@ -371,7 +372,7 @@ class MpvSessionManager:
 
                 if not currently_alive:
                     logging.info(f"Session for PID {self.pid} is confirmed dead. Clearing.")
-                    self.clear(mpv_return_code=0)
+                    action_needed = "clear"
                 elif folder_id and self.owner_folder_id and folder_id.lower() == self.owner_folder_id.lower():
                     launch_result = session_ipc_ops.hot_swap_item(
                         self, launch_item, folder_id, settings, _url_items_list
@@ -379,11 +380,25 @@ class MpvSessionManager:
                 else:
                     logging.info(f"[PY][Session] Folder mismatch (Current: {self.owner_folder_id}, Target: {folder_id}). Closing old session.")
                     if ipc_utils.is_pid_running(self.pid):
-                        self.close()
+                        action_needed = "close"
                     else:
-                        self.clear(mpv_return_code=0)
+                        action_needed = "clear"
+
+        if action_needed == "close":
+            self.close()
+        elif action_needed == "clear":
+            self.clear(mpv_return_code=0)
+
+        with self.sync_lock:
+            if getattr(self, 'launch_cancelled', False):
+                logging.info(f"[PY][Session] Launch for folder '{folder_id}' aborted due to cancellation.")
+                return {"success": False, "error": "Launch cancelled."}
 
             if not launch_result.get("already_active"):
+                if self.pid:
+                    logging.warning(f"[PY][Session] Active PID {self.pid} still present after cleanup; aborting duplicate launch.")
+                    return {"success": False, "error": "Another session is already active."}
+
                 self.session_generation += 1
                 self.manual_quit = False
                 self.dispatched_exit_generations.discard(self.session_generation)

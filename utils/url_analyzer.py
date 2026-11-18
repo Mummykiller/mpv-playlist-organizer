@@ -33,6 +33,7 @@ _COOKIES_CACHE = {
     "browser": None,
     "timestamp": 0
 }
+_COOKIES_CACHE_LOCK = threading.Lock()
 
 def is_safe_url(url):
     """
@@ -273,9 +274,13 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
     now = time.time()
     
     # Layer 1: In-memory cache check (1 hour)
-    if not force_refresh and _COOKIES_CACHE["path"] and _COOKIES_CACHE["browser"] == browser and (now - _COOKIES_CACHE["timestamp"] < 3600):
-        if os.path.exists(_COOKIES_CACHE["path"]) and os.path.getsize(_COOKIES_CACHE["path"]) > 0:
-            return _COOKIES_CACHE["path"]
+    with _COOKIES_CACHE_LOCK:
+        cached_path = _COOKIES_CACHE["path"]
+        cached_browser = _COOKIES_CACHE["browser"]
+        cached_ts = _COOKIES_CACHE["timestamp"]
+    if not force_refresh and cached_path and cached_browser == browser and (now - cached_ts < 3600):
+        if os.path.exists(cached_path) and os.path.getsize(cached_path) > 0:
+            return cached_path
 
     try:
         # Use VOLATILE directory
@@ -319,9 +324,10 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
             except OSError as e:
                 logging.debug(f"Failed to chmod temp cookies {temp_path}: {e}")
 
-            _COOKIES_CACHE["path"] = temp_path
-            _COOKIES_CACHE["browser"] = browser
-            _COOKIES_CACHE["timestamp"] = now
+            with _COOKIES_CACHE_LOCK:
+                _COOKIES_CACHE["path"] = temp_path
+                _COOKIES_CACHE["browser"] = browser
+                _COOKIES_CACHE["timestamp"] = now
             logging.info(f"Cookies extracted to volatile storage: {temp_path}")
             return temp_path
         else:
@@ -574,18 +580,33 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         
         logging.info(f"Resolving non-YouTube URL externally: {url} with format {ytdl_format}")
         result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30, env=security.get_scrubbed_env())
-        resolved_url = result.stdout.strip()
+        urls = [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
-        if not resolved_url:
+        if not urls:
             raise ValueError("yt-dlp returned no URL.")
 
-        if not is_safe_url(resolved_url):
-            logging.warning(f"Security: Blocked unsafe resolved stream URL: {resolved_url}")
-            return {"success": False, "error": "Security Block: Resolved stream URL points to restricted network."}
+        for u in urls:
+            if not is_safe_url(u):
+                logging.warning(f"Security: Blocked unsafe resolved stream URL: {u}")
+                return {"success": False, "error": "Security Block: Resolved stream URL points to restricted network."}
+
+        if len(urls) > 1:
+            logging.info(f"yt-dlp returned {len(urls)} URLs (separate video/audio); falling back to MPV ytdl for: {url}")
+            return {
+                "success": True,
+                "url": url,
+                "headers": {"User-Agent": effective_user_agent},
+                "ytdl_raw_options": None,
+                "use_ytdl_mpv": True,
+                "is_youtube": False,
+                "disable_http_persistent": False,
+                "cookies_file": None,
+                "cookies_browser": None
+            }
 
         return {
             "success": True,
-            "url": resolved_url,
+            "url": urls[0],
             "headers": {"User-Agent": effective_user_agent},
             "ytdl_raw_options": None,
             "use_ytdl_mpv": False,

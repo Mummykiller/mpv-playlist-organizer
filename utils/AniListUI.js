@@ -20,6 +20,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.isEnabled = true;
 			this.currentOffset = 0;
 			this._fetchGeneration = 0;
+			this._positionTimer = null;
 		}
 
 		updateDynamicStyles() {
@@ -177,7 +178,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		async fetchReleases(forceRefresh = false, daysOffset = 0) {
 			if (!this.shadowRoot || !this.controller.checkContext()) return;
-			const container = this.shadowRoot.getElementById("anilist-releases-list");
+			const container = this.shadowRoot.getElementById("anilist-releases-container");
 			if (!container) return;
 
 			// --- Update Nav Button States ---
@@ -216,16 +217,22 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			} catch (error) {
 				if (generation !== this._fetchGeneration) return;
 				container.innerHTML = "";
-				const errLi = document.createElement("li");
-				errLi.className = "anilist-error";
-				errLi.textContent = `Error: ${error.message}`;
-				container.appendChild(errLi);
+				const errDiv = document.createElement("div");
+				errDiv.className = "anilist-error";
+				errDiv.textContent = `Error: ${error.message}`;
+				container.appendChild(errDiv);
 			}
 		}
 
 		validatePosition() {
 			if (!this.panelHost || this.panelHost.style.display === "none") return;
-			setTimeout(() => {
+			if (this._positionTimer) {
+				clearTimeout(this._positionTimer);
+				this._positionTimer = null;
+			}
+			this._positionTimer = setTimeout(() => {
+				this._positionTimer = null;
+				if (!this.panelHost || this.panelHost.style.display === "none") return;
 				const { offsetWidth, offsetHeight, offsetLeft, offsetTop } =
 					this.panelHost;
 				if (offsetWidth === 0 || offsetHeight === 0) return;
@@ -245,6 +252,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		destroy() {
+			this._fetchGeneration++;
+			if (this._positionTimer) {
+				clearTimeout(this._positionTimer);
+				this._positionTimer = null;
+			}
 			if (this.draggable) {
 				this.draggable.destroy();
 				this.draggable = null;

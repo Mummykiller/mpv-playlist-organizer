@@ -118,9 +118,11 @@ When the extension reloads or updates, content scripts residing in open browser 
 `Error: Extension context invalidated.`
 
 ### Mandatory Defensive Pattern
-All content script listeners and promise chains must wrap calls with `isExtensionReloadError`:
+All content script listeners and promise chains must wrap calls with `isExtensionReloadError`. In classic content scripts (non-module), access `window.MPV_INTERNAL.isExtensionReloadError` (transpiled from `commUtils.module.js`); ES module `import` applies only in `background/` or `*.module.js`:
 
 ```javascript
+// In classic content scripts: const { isExtensionReloadError } = window.MPV_INTERNAL;
+// In ES modules (background/ or *.module.js):
 import { isExtensionReloadError } from "./commUtils.module.js";
 
 try {
@@ -145,7 +147,7 @@ try {
 
 ---
 
-## 7. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+## 7. Audit Guardrails
 
 > [!IMPORTANT]
 > The historical "Hail Mary" `chrome.runtime.reload()` recovery pattern has been completely removed. It was a known hazard that killed the native port and all in-memory state. Self-healing must never escalate to a global side effect (such as an extension reload). Never call `chrome.runtime.reload()`.

@@ -57,7 +57,7 @@ flowchart TD
 ```
 
 ### Protection Against Stream Flooding
-- **URL Cooldown Map (`autoAddCooldowns`):** Maintained in memory with a 5000ms threshold. Media players often cycle multiple `.m3u8` chunks; the cooldown prevents runaway duplication.
+- **URL Cooldown Map (`autoAddCooldowns` in `background.js`):** Maintained in memory (and persisted across worker restarts) with a 5000ms threshold. Media players often cycle multiple `.m3u8` chunks; the cooldown prevents runaway duplication.
 - **Provisional-to-Final Transition:** If the initial scrape cannot read the page DOM yet, it commits `isProvisional: true` with the tab's page title, then updates the title when the DOM scraper finishes.
 
 ---
@@ -89,7 +89,7 @@ Smart Reorder automatically clusters series into natural seasons and episodes wi
 3. **Ascending Sequence Sorting:**
    - Within each cluster, items are sorted by `(season, episode)` ascending.
 4. **Atomic Storage Refresh:**
-   - `handleGetSmartReorder` **MUST** call `storage.get(true)` to pull the freshest storage state before writing reordered items back to disk to prevent race conditions with concurrent additions.
+   - `utils/playlistManager.js:handleGetSmartReorder` (wired in `background.js`) **MUST** call `storage.get(true)` to pull the freshest storage state before writing reordered items back to disk to prevent race conditions with concurrent additions.
 
 ---
 

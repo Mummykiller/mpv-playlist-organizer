@@ -99,7 +99,7 @@ Located in `testing_tools/scripts/test_robustness.py`:
 - Parses `file_io.py:get_settings()` and extracts all dictionary keys.
 - Parses `utils/storageManager.js:_getDefaultData()` and extracts all keys in `uiPreferences.global`.
 - Converts JS `camelCase` keys to `snake_case`.
-- Asserts that every setting key exists in **both** files (excluding explicit `ui_only_keys`: `minimized`, `mode`, `log_visible`, `pinned`, `position`, `top`, `left`, `right`, `bottom`, `anilist_panel_visible`, `lock_anilist_panel`, `force_panel_attached`, `anilist_attach_on_open`, `minimized_stub_position`, `dependency_status`, `mpv`, `ytdlp`, `ffmpeg`, `node`).
+- Asserts that every setting key exists in **both** files (excluding explicit `ui_only_keys` defined in `testing_tools/scripts/test_robustness.py`, which is the source of truth for UI-only exclusions as new UI keys are added).
 
 > [!CAUTION]
 > **Rule When Adding a New Setting:**
@@ -145,7 +145,7 @@ To guarantee local viewing history is never corrupted or cleared by remote netwo
 
 ---
 
-## 7. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+## 7. Audit Guardrails
 
 1. **No unlocked read-modify-write.** Any `get_*` followed by `save_*` on the same index or shard must happen inside one lock scope. Add and use `update_shard(folder_id, fn)`-style helpers instead of separate get/save calls. Lock order is always INDEX → shard.
 2. **Prefer OS locks.** PID-file locks have stale-detection races and PID-reuse false positives. Prefer `fcntl.flock` (POSIX) / `msvcrt.locking` (Windows), which the OS releases on process death. If the lock falls back to thread-only (EROFS/EACCES), log it loudly.

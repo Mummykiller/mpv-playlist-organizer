@@ -4,6 +4,13 @@
 import {
 	flushPendingSync,
 } from "./background/core_services.js";
+import {
+	syncYtToolsRegistration,
+	setYtToolsEnabled,
+	handleSaveYouTubeLinkToLibrary,
+	initYtToolsActionIconSync,
+	YT_LIBRARY_MENU_ID,
+} from "./background/yt_tools_service.js";
 import { createHandler } from "./background/handler_factory.js";
 import * as dependency_anilist_handlers from "./background/handlers/dependency_anilist.js";
 import * as folder_management_handlers from "./background/handlers/folder_management.js";
@@ -467,6 +474,17 @@ const actionHandlers = {
 		});
 		return response;
 	},
+	get_yt_tools_enabled: async () => {
+		const { shinkuYtToolsEnabled } = await chrome.storage.local.get("shinkuYtToolsEnabled");
+		return { success: true, enabled: Boolean(shinkuYtToolsEnabled) };
+	},
+	set_yt_tools_enabled: async (request) => {
+		const res = await setYtToolsEnabled(Boolean(request.enabled));
+		await updateContextMenus(storage).catch((e) =>
+			logger.debug(`[YT Tools] updateContextMenus skipped: ${e?.message}`),
+		);
+		return res;
+	},
 };
 
 // Centralized Python Log Listener
@@ -637,7 +655,7 @@ startNativeHostHeartbeat();
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 	if (sender.id && sender.id !== chrome.runtime.id) return false;
-	if (request.log && !request.action) return;
+	if (request?.log && !request?.action) return false;
 	if (!request?.action || !Object.hasOwn(actionHandlers, request.action)) {
 		return false;
 	}
@@ -673,9 +691,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 	return false;
 });
 
+initYtToolsActionIconSync();
+
 chrome.runtime.onInstalled.addListener(async () => {
 	try {
 		await storage.initialize();
+		await syncYtToolsRegistration().catch((e) => logger.debug(`[YT Tools] onInstalled sync skipped: ${e?.message}`));
 		await updateContextMenus(storage);
 		chrome.alarms.create("periodic-storage-janitor", { periodInMinutes: 10080 });
 		await reinjectContentScripts();
@@ -688,6 +709,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 if (chrome.runtime.onStartup?.addListener) {
 	chrome.runtime.onStartup.addListener(async () => {
 		try {
+			await syncYtToolsRegistration().catch((e) => logger.debug(`[YT Tools] onStartup sync skipped: ${e?.message}`));
 			await reinjectContentScripts();
 		} catch (e) {
 			logger.error(`[Background] onStartup failed: ${e.message}`, { persist: true, stack: e.stack });
@@ -728,6 +750,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 		const targetUrl = linkUrl || srcUrl || pageUrl;
 		if (!targetUrl || !isValidWebUrl(targetUrl)) {
 			logger.warn(`[Background] Rejected unsafe/invalid context menu URL: ${String(targetUrl || "").slice(0, 128)}`);
+			return;
+		}
+
+		if (menuItemId === YT_LIBRARY_MENU_ID) {
+			await handleSaveYouTubeLinkToLibrary(targetUrl, tab);
 			return;
 		}
 

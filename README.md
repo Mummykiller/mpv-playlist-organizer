@@ -66,7 +66,8 @@ Get up and running in 5 simple steps:
 ### 🎨 Intelligent User Interface
 - **Draggable Controller** — A floating on-page UI that snaps to corners and can be minimized to a discreet button.
 - **AniList Dashboard** — A dedicated, draggable panel showing today's airing anime with integrated search and playback.
-- **Quick Action Bar (A, B, C, ⚡)** — Instant access to beginning-play, detached windows, live drag-and-drop reordering, and smart sync.
+- **Quick Action Bar (⏮️, 🔀, ⚡)** — Instant access to beginning-play / pick-start mode, live drag-and-drop reordering & smart sort, and detached MPV window launches.
+- **YouTube Tools Tab (Opt-In)** — An isolated, built-in YouTube companion (disabled by default) featuring feed & Shorts filtering, anti-distraction controls, custom player enhancements, hover-preview protection, and a Watch Later library.
 - **Popup Playlist Manager** — Quick access to your folders, settings, and full queue from the browser toolbar.
 - **SPA Compatibility** — Native support for modern Single-Page Applications (YouTube, etc.) via MutationObservers.
 
@@ -111,14 +112,18 @@ Get up and running in 5 simple steps:
 
 ### 🎛️ Quick Actions Bar
 The quick actions bar on the controller and popup provides fast-access playback modes:
-* **⏮️ `A` (Start From Beginning):**
+* **⏮️ `Start From Beginning / Pick Start`:**
   * *Left-Click:* Starts playback from the very first item in the playlist.
   * *Right-Click:* Activates **Pick Start Mode**—click any item in the list to begin playback from that specific item.
-* **⭐ `B` (Quick Action Slot):** Secondary quick-action slot for user-defined or upcoming workflows.
-* **🔀 `C` (Live Reorder & Smart Sort):**
+* **🔀 `Live Reorder & Smart Sort`:**
   * *Left-Click:* Enables interactive drag-and-drop playlist reordering that synchronizes live with the running MPV player instance.
   * *Right-Click:* Triggers **Smart Reorder** (natural episode numbering sort).
-* **⚡ `D` (Disconnected / Independent Launch):** Toggles selection mode to launch any chosen video in a separate, detached MPV player instance without affecting your main session.
+* **⚡ `Detached / Independent Launch`:** Toggles selection mode—click any chosen video in the playlist to launch it in a separate, detached MPV player instance without affecting your main session.
+
+### 📺 YouTube Tools (Opt-In)
+Switch to the **YouTube Tools** tab at the top of the browser popup to turn on the built-in YouTube companion (disabled by default so it adds zero overhead unless enabled):
+* **Library:** Bookmark YouTube videos (via the player `+` button, thumbnail quick-save, or right-click **"Save to Shinku YT Library"**), resume from saved timestamps, and track finished videos in the Done folder.
+* **Settings:** Customize **Feed & Card Filtering** (hide Shorts, Lives, Mixes, watched cards, or keyword matches), **Page Layout & Anti-Distraction**, **Video Player & Playback** (preferred quality, speed, wheel volume, custom arrow seeking), **Thumbnails, Titles & Links** (hover-preview protection, tracking-parameter cleanup), and **Watch Later / Library** preferences.
 
 ---
 

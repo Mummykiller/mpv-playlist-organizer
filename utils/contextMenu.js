@@ -5,15 +5,35 @@
 const CONTEXTS = ["link", "video", "audio", "page"];
 const PARENT_MENU_ID = "add-to-mpv-parent";
 const YOUTUBE_PLAYLIST_MENU_ID = "add-youtube-playlist-parent";
+const SHINKU_YT_LIBRARY_MENU_ID = "shinku-yt-save-library";
+
+async function createShinkuYtContextMenu() {
+	const { shinkuYtToolsEnabled } = await chrome.storage.local.get("shinkuYtToolsEnabled");
+	if (shinkuYtToolsEnabled) {
+		chrome.contextMenus.create({
+			id: SHINKU_YT_LIBRARY_MENU_ID,
+			title: "Save to Shinku YT Library",
+			contexts: ["link", "page"],
+			documentUrlPatterns: ["*://*.youtube.com/*"],
+		});
+	}
+}
+
+let _menuUpdateQueue = Promise.resolve();
 
 /**
  * Creates or updates all context menus based on the current folder data.
- * It creates a main menu item "Add to MPV Folder" and a specific one for YouTube playlists.
- * The most recently used folder is placed at the top of the list for quick access.
+ * Serialized through a module-level promise queue so concurrent calls cannot race.
  *
  * @param {import('./storageManager.js').StorageManager} storage - The initialized storage manager instance.
  */
-export async function updateContextMenus(storage) {
+export function updateContextMenus(storage) {
+	const next = _menuUpdateQueue.then(() => _performUpdateContextMenus(storage));
+	_menuUpdateQueue = next.catch(() => {});
+	return next;
+}
+
+async function _performUpdateContextMenus(storage) {
 	// Remove all existing context menus for this extension to ensure a clean slate.
 	await chrome.contextMenus.removeAll();
 
@@ -28,6 +48,7 @@ export async function updateContextMenus(storage) {
 			enabled: false,
 			contexts: CONTEXTS,
 		});
+		await createShinkuYtContextMenu();
 		return;
 	}
 
@@ -90,4 +111,7 @@ export async function updateContextMenus(storage) {
 			contexts: ["link"],
 		});
 	});
+
+	// Optional "Save to Shinku YT Library" menu item when YouTube Tools is enabled
+	await createShinkuYtContextMenu();
 }

@@ -351,7 +351,7 @@ class LauncherService:
         try:
             # 2.5 Generate Metadata Handshake File
             logging.info("[PY][Session] Generating handshake file...")
-            handshake_path, handshake_flag = services.create_handshake_file(
+            handshake_path, _ = services.create_handshake_file(
                 flag_dir=self.session.FLAG_DIR,
                 folder_id=folder_id,
                 script_dir=self.session.SCRIPT_DIR,
@@ -364,8 +364,6 @@ class LauncherService:
                 headers=kwargs.get('headers') or url_item.get('headers'),
                 cookies_browser=kwargs.get('cookies_browser') or url_item.get('cookies_browser')
             )
-            current_custom_flags = kwargs.get('custom_mpv_flags') or ""
-            updated_custom_flags = f"{current_custom_flags} {handshake_flag}".strip()
 
             # 3. Construct Command
             logging.info("[PY][Session] Constructing mpv command...")
@@ -374,7 +372,7 @@ class LauncherService:
                 ytdl_raw_options=kwargs.get('ytdl_raw_options') or url_item.get('ytdl_raw_options'),
                 geometry=kwargs.get('geometry'), 
                 custom_width=kwargs.get('custom_width'),
-                custom_height=kwargs.get('custom_height'), custom_mpv_flags=updated_custom_flags,
+                custom_height=kwargs.get('custom_height'), custom_mpv_flags=kwargs.get('custom_mpv_flags'),
                 automatic_mpv_flags=kwargs.get('automatic_mpv_flags'),
                 headers=kwargs.get('headers') or url_item.get('headers'),
                 disable_http_persistent=kwargs.get('disable_http_persistent', False),
@@ -384,7 +382,8 @@ class LauncherService:
                 force_terminal=kwargs.get('force_terminal', False), settings=settings,
                 flag_dir=self.session.FLAG_DIR, playlist_start_index=0,
                 cookies_browser=kwargs.get('cookies_browser') or url_item.get('cookies_browser'),
-                force_bypass=force_bypass
+                force_bypass=force_bypass,
+                handshake_path=handshake_path
             )
 
             # 4. Spawn Process

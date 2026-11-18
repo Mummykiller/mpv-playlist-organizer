@@ -246,35 +246,35 @@ export const UI_ONLY_KEYS = [
 	"dependencyStatus",
 ];
 
+function extractHttpHostname(url) {
+	if (typeof url !== "string" || (!url.startsWith("http:") && !url.startsWith("https:"))) {
+		return null;
+	}
+	try {
+		const parsed = new URL(url);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+		return parsed.hostname || null;
+	} catch (e) {
+		console.debug("[UiState] Invalid URL:", url, e);
+		return null;
+	}
+}
+
 async function resolveTabDomain(request, sender) {
-	if (sender?.origin && (sender.origin.startsWith("http:") || sender.origin.startsWith("https:"))) {
-		try {
-			return new URL(sender.origin).hostname;
-		} catch (e) {
-			console.debug("[UiState] Invalid sender origin URL:", sender.origin, e);
-		}
-	}
+	const fromOrigin = extractHttpHostname(sender?.origin);
+	if (fromOrigin) return fromOrigin;
 
-	if (sender?.tab?.url) {
-		try {
-			return new URL(sender.tab.url).hostname;
-		} catch (e) {
-			console.debug("[UiState] Invalid sender tab URL:", sender.tab.url, e);
-		}
-	}
+	const fromTab = extractHttpHostname(sender?.tab?.url);
+	if (fromTab) return fromTab;
 
-	if (sender?.url) {
-		try {
-			return new URL(sender.url).hostname;
-		} catch (e) {
-			console.debug("[UiState] Invalid sender URL:", sender.url, e);
-		}
-	}
+	const fromSender = extractHttpHostname(sender?.url);
+	if (fromSender) return fromSender;
 
 	if (request?.tabId) {
 		try {
 			const tab = await chrome.tabs.get(request.tabId);
-			if (tab?.url) return new URL(tab.url).hostname;
+			const fromTabId = extractHttpHostname(tab?.url);
+			if (fromTabId) return fromTabId;
 		} catch (e) {
 			console.debug("[UiState] Failed to get tab URL for tabId:", request.tabId, e);
 		}
@@ -385,8 +385,7 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 	return { success: true, domain, newPreferences, globalPrefs, domainPrefs };
 }, {
 	onSuccess: async (result, { data }) => {
-		const { domain, newPreferences } = result;
-		if (!domain) {
+		if (Object.keys(result.globalPrefs || {}).length > 0) {
 			try {
 				const syncPrefs = {};
 				const globalPrefs = data.settings.uiPreferences.global;
@@ -403,11 +402,9 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 				console.warn("Failed to sync preferences to native host:", e);
 			}
 
-			if (result.globalPrefs && "oneClickAdd" in result.globalPrefs) {
-				updateContextMenus(storage).catch((e) =>
-					console.error("Failed to update context menus:", e),
-				);
-			}
+			updateContextMenus(storage).catch((e) =>
+				console.error("Failed to update context menus:", e),
+			);
 		}
 	}
 });

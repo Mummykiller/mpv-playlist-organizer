@@ -66,14 +66,15 @@ flowchart TD
 The Lead Architect directs specialized worker agents, ensuring they adhere strictly to the codebase invariants.
 
 ### Step 1: Skill & Constraint Mapping
-Before dispatching any task to a subagent, the Architect identifies which of the 13 modular domain skills are relevant and injects their strict constraints into the subagent prompt:
+Before dispatching any task to a subagent, the Architect identifies which of the 14 modular domain skills are relevant and injects their strict constraints into the subagent prompt:
 
 | Architectural Domain | Skills to Inject | Non-Negotiable Worker Invariants |
 | :--- | :--- | :--- |
-| **Frontend UI / Shadow DOM** | `ui-shadow-dom-and-settings`<br/>`js-build-and-verification`<br/>`content-script-lifecycle-and-resilience` | • Edit `utils/*.module.js` ONLY (Golden Build Rule).<br/>• Inject CSS via `<style>` textContent. Never use `<link rel="stylesheet">`.<br/>• Never overwrite `shadowRoot.innerHTML` after styles are applied. |
+| **Frontend UI / Shadow DOM & Popup** | `ui-shadow-dom-and-settings`<br/>`js-build-and-verification`<br/>`content-script-lifecycle-and-resilience` | • Edit `utils/*.module.js` ONLY (Golden Build Rule).<br/>• Inject CSS via `<style>` textContent. Never use `<link rel="stylesheet">`.<br/>• Never overwrite `shadowRoot.innerHTML` after styles are applied.<br/>• Route popup/settings edits to the matching `popup/*.js` module. |
 | **Native Host & Python Backend** | `bridge-and-protocol`<br/>`storage-and-state-sync`<br/>`security-and-diagnostics` | • Action names must remain `snake_case`.<br/>• Key casing auto-converts (`camelCase` ↔ `snake_case`).<br/>• Preserve `request_id`.<br/>• Zero bare `except:` or `except <Any>: pass` (AST Gate). |
 | **MPV Playback & IPC** | `mpv-playback-and-ipc`<br/>`playback-tracking-and-fallback-sync` | • Communicate through JSON-IPC sockets/pipes.<br/>• Use bounded threadpools for stream enrichment.<br/>• Handle process exit code 99 for natural completions. |
 | **Scraping & Site Handlers** | `site-compatibility-and-scraping`<br/>`anilist-integration` | • Scrub subprocess environment variables.<br/>• Safe cookie extraction with temp shadow profiles. |
+| **YouTube Tools Sub-Extension** | `youtube-tools-subextension` | • Isolated opt-in via `shinkuYtToolsEnabled` (disabled by default).<br/>• Dynamic `chrome.scripting` registration in `MAIN`/`ISOLATED` worlds.<br/>• Never use `innerHTML` with video metadata in `popup/popup_youtube.js`. |
 | **Testing & Verification** | `testing-and-test-authoring` | • Keep test runtime under 19 seconds.<br/>• Cover edge cases and stale lock recovery. |
 
 ### Step 2: Strict Subagent Prompting
@@ -111,7 +112,7 @@ When all verification steps pass and the task is complete, deliver a clean, non-
 
 ---
 
-## 5. Audit-Driven Review Checklist (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+## 5. Audit-Driven Review Checklist
 
 Before dispatching or accepting any worker output, check the change against these recurring failure classes. Inject the relevant ones into the subagent prompt.
 
@@ -130,6 +131,6 @@ Before dispatching or accepting any worker output, check the change against thes
 Rules:
 1. **Fixes ship with a regression test** (see `testing-and-test-authoring` section 6). No test, no merge.
 2. **Skill files are part of the deliverable.** If a change alters an invariant, limit, or allowlist, update the matching skill in the same task, and never leave a skill documenting a known-bad pattern without a warning.
-3. **Large-file rule:** do not add features to `MpvController.js`, `popup.js`, `settings.js`, or `MpvSessionManager` without first extracting the touched concern into its own module.
+3. **Large-file rule:** do not add features to `MpvController.js`, `popup.js`, `settings.js`, `playlist_tracker.py`, `background/handlers/playback.js`, or `MpvSessionManager` without first extracting the touched concern into its own module.
 4. **Do not skip warnings from the gate.** A skipped linter counts as a failure.
-5. **Reviewer reports are verified before action.** Items marked "verify" in `CODE_REVIEW.md` must be confirmed by reading the code or reproducing, before fixing.
+5. **Reviewer reports are verified before action.** Claims in audit or review reports must be confirmed by reading the actual code or reproducing before fixing.

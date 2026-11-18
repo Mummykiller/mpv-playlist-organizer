@@ -33,6 +33,17 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.isLiveReorderModeActive = false;
 			this.reorderDebounceTimer = null;
 			this._renderGeneration = 0;
+			this._transientTimers = new Set();
+			this._isDestroyed = false;
+		}
+
+		_scheduleTransientTimer(fn, delayMs) {
+			const id = setTimeout(() => {
+				this._transientTimers.delete(id);
+				if (!this._isDestroyed) fn();
+			}, delayMs);
+			this._transientTimers.add(id);
+			return id;
 		}
 
 		bindEvents() {
@@ -234,8 +245,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						this.controller.handleSmartReorder(e, btn);
 					};
 				} else if (isLast) {
-					btn.textContent = "⚡";
-					btn.title = "Toggle Disconnected Launch (Selection Mode)";
+					btn.id = "btn-osc-quick-d";
+					btn.innerHTML = `
+						<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+						</svg>
+					`;
+					btn.title = "Detached Launch (Selection Mode): Click here, then click any item below to open it in a separate MPV window";
 					btn.classList.add("btn-disconnected-toggle");
 					btn.onclick = (e) => {
 						e.stopPropagation();
@@ -433,7 +449,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 								type: "info",
 							});
 							listItem.classList.add("title-copied");
-							setTimeout(() => listItem.classList.remove("title-copied"), 1500);
+							this._scheduleTransientTimer(() => listItem.classList.remove("title-copied"), 1500);
 						})
 						.catch((err) =>
 							this.controller.addLogEntry({
@@ -450,7 +466,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.fullContainer.addEventListener("dragstart", (e) => {
 				if (e.target.classList.contains("list-item")) {
 					this.draggedItem = e.target;
-					setTimeout(() => this.draggedItem?.classList.add("dragging"), 0);
+					this._scheduleTransientTimer(() => this.draggedItem?.classList.add("dragging"), 0);
 					const url = e.target.dataset.url;
 					if (url) {
 						e.dataTransfer.setData("text/plain", url);
@@ -519,13 +535,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					if (this.reorderDebounceTimer) clearTimeout(this.reorderDebounceTimer);
 					
 					this.reorderDebounceTimer = setTimeout(() => {
+						this.reorderDebounceTimer = null;
+						if (this._isDestroyed || !this.controller.checkContext()) return;
 						const itemIds = newOrder.map(item => item.id);
 						this.controller.sendCommandToBackground("reorder_live", folderId, {
 							new_order: itemIds
 						}).catch((err) => {
 							this.controller.addLogEntry({ text: "[UI]: Live reorder sync failed: " + err.message, type: "error" });
 						});
-						this.reorderDebounceTimer = null;
 					}, 2000);
 				}
 			});
@@ -551,6 +568,20 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (internalItem) Object.assign(internalItem, delta);
 
 			MPV.domUtils.updateItemDelta(itemDiv, delta);
+		}
+
+		destroy() {
+			this._isDestroyed = true;
+			this._renderGeneration++;
+			if (this.reorderDebounceTimer) {
+				clearTimeout(this.reorderDebounceTimer);
+				this.reorderDebounceTimer = null;
+			}
+			for (const id of this._transientTimers) {
+				clearTimeout(id);
+			}
+			this._transientTimers.clear();
+			this.draggedItem = null;
 		}
 	};
 })();

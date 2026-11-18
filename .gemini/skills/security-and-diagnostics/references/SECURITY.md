@@ -9,13 +9,15 @@ Strict enforcement of input sizes prevents Denial of Service (DoS) via memory ex
 
 | Parameter | JS Limit | Python Limit | Description |
 | :--- | :--- | :--- | :--- |
-| **Title Length** | 255 chars | 512 chars | Video/Folder titles. |
-| **URL Length** | 2048 chars | 4096 chars | Maximum length for any URL. |
+| **Title Length** | 512 chars | 512 chars | Video/Folder titles (`MAX_TITLE_LENGTH`). |
+| **URL Length** | 4096 chars | 4096 chars | Maximum length for any URL (`MAX_URL_LENGTH`). |
 | **String Length** | N/A | 100 KB | General payload strings (e.g., data export). |
-| **Playlist Items** | 5,000 | 10,000 | Maximum items per folder/shard. |
+| **Playlist Items** | 10,000 | 10,000 | Maximum items per folder/shard (`MAX_PLAYLIST_ITEMS`). |
+| **Folder Name** | 128 chars | 128 chars | Folder names (`MAX_FOLDER_NAME_LENGTH`). |
+| **Folders Count** | N/A | 2,000 | Maximum number of folders (`MAX_FOLDERS`). |
 | **IPC Message** | N/A | 5 MB in / 900 KB out (`MAX_OUTBOUND_MESSAGE_SIZE`) | Maximum size of a single JSON native messaging payload (5 MB inbound to Python; 900 KB outbound from host to browser). |
 
-**Action:** JS must enforce its stricter limits before sending data to the Native Host. Python must validate incoming payloads against its own limits as a second line of defense.
+**Action:** JS (`utils/security.module.js`) must enforce its limits before sending data to the Native Host. Python (`utils/security.py`) must validate incoming payloads against its own limits as a second line of defense.
 
 ---
 

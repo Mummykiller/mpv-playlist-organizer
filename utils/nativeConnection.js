@@ -141,9 +141,19 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			nativePort.onMessage.addListener((response) => {
 				const { request_id, ...responseData } = response;
-				const normalizedResponse = normalizeKeys(responseData);
+				const pendingRequest = request_id ? requestPromises[request_id] : null;
+				let normalizedResponse;
+				if (pendingRequest?.preserveDataKeys && "data" in responseData) {
+					const { data: rawData, ...rest } = responseData;
+					normalizedResponse = {
+						...normalizeKeys(rest),
+						data: rawData,
+					};
+				} else {
+					normalizedResponse = normalizeKeys(responseData);
+				}
 
-				if (request_id && requestPromises[request_id]) {
+				if (request_id && pendingRequest) {
 					if (normalizedResponse.log) {
 						dispatchNativeEvent("log", {
 							action: "log",
@@ -153,7 +163,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 								: {}),
 						});
 					}
-					requestPromises[request_id].resolve(normalizedResponse);
+					pendingRequest.resolve(normalizedResponse);
 					delete requestPromises[request_id];
 					return;
 				}
@@ -322,6 +332,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						}, DEFAULT_REQUEST_TIMEOUT_MS);
 
 						requestPromises[requestId] = {
+							preserveDataKeys: message.action === "import_from_file",
 							resolve: (data) => {
 								cleanup();
 								resolve(data);

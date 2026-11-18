@@ -22,14 +22,15 @@ To prevent Denial of Service (DoS) via memory exhaustion and buffer overflows, i
 
 | Parameter | JS Frontend Limit | Python Backend Limit | Description |
 | :--- | :--- | :--- | :--- |
-| **Title Length** | 255 chars | 512 chars | Video and playlist titles. |
-| **URL Length** | 2048 chars | 4096 chars | Maximum permissible URL length. |
+| **Title Length** | 512 chars | 512 chars | Video and playlist titles (`MAX_TITLE_LENGTH`). |
+| **URL Length** | 4096 chars | 4096 chars | Maximum permissible URL length (`MAX_URL_LENGTH`). |
 | **String Length** | N/A | 100 KB | General payload strings (e.g., data exports). |
-| **Playlist Items** | 5,000 items | 10,000 items | Maximum items per folder/shard. |
-| **Folder Name** | 100 chars | 128 chars | Folder names. |
+| **Playlist Items** | 10,000 items | 10,000 items | Maximum items per folder/shard (`MAX_PLAYLIST_ITEMS`). |
+| **Folder Name** | 128 chars | 128 chars | Folder names (`MAX_FOLDER_NAME_LENGTH`). |
+| **Folders Count** | N/A | 2,000 folders | Maximum number of folders (`MAX_FOLDERS`). |
 | **IPC Message** | N/A | 5 MB in, ≤900 KB out | Max size of JSON native messaging (Chrome terminates hosts over 1 MiB outbound). |
 
-> **Defense in Depth:** JavaScript (`utils/security.module.js`) enforces tighter limits before transmitting requests. Python (`utils/security.py`) enforces its own limits upon receipt as an independent barrier.
+> **Defense in Depth:** JavaScript (`utils/security.module.js`) validates shared limits before transmitting requests. Python (`utils/security.py`) enforces its own limits upon receipt as an independent barrier.
 
 ---
 
@@ -138,7 +139,7 @@ Runs on application startup and exit to clean up transient artifacts:
 
 ---
 
-## 6. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+## 6. Audit Guardrails
 
 > [!NOTE]
 > **Resolved Audit Findings (PY-H2, PY-H5):** The outbound message guard is enforced at ≤ 900 KB in `native_host.py` (`MAX_OUTBOUND_MESSAGE_SIZE`). Dangerous yt-dlp flags (`proxy`, `ffmpeg-location`, `js-runtimes`, `remote-components`, `alias`, `update`, `print`, `no-check-certificate`) are strictly restricted to trusted settings (`YTDLP_SETTINGS_ONLY_FLAGS`) and stripped from untrusted item payloads by default (`sanitize_ytdlp_options(..., allow_settings_flags=False)`).

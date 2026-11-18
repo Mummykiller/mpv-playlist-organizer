@@ -133,6 +133,7 @@ class PlaybackHandler(BaseHandler):
         self.ctx.sender({"action": "log_from_native_host", "log": {"text": log_text, "type": "info"}})
 
         try:
+            had_active_session = bool(self.mpv_session.is_alive or self.mpv_session.pid)
             logging.info(f"[PY][Handler] Calling mpv_session.start (first pass)...")
             first_call_result = self.mpv_session.start(
                 launch_payload, folder_id, settings, self.file_io,
@@ -178,7 +179,8 @@ class PlaybackHandler(BaseHandler):
                 is_youtube=any(item.get('is_youtube', False) for item in enriched_url_items),
                 disable_http_persistent=first_item.get('disable_http_persistent', False),
                 force_terminal=request.force_terminal,
-                playlist_start_id=request.playlist_start_id
+                playlist_start_id=request.playlist_start_id,
+                had_active_session=had_active_session
             )
         except Exception as e:
             logging.error(f"[PY][Handler] Error during playback orchestration: {e}", exc_info=True)
@@ -522,7 +524,7 @@ class PlaybackHandler(BaseHandler):
         try:
             # 2.5 Generate Metadata Handshake File
             flag_dir = os.path.join(os.path.dirname(self.ctx.temp_playlists_dir), "flags")
-            handshake_path, handshake_flag = self.services.create_handshake_file(
+            handshake_path, _ = self.services.create_handshake_file(
                 flag_dir=flag_dir,
                 folder_id=folder_id,
                 script_dir=self.ctx.script_dir,
@@ -535,7 +537,6 @@ class PlaybackHandler(BaseHandler):
                 headers=headers,
                 cookies_browser=cookies_browser
             )
-            updated_custom_flags = f"{custom_mpv_flags or ''} {handshake_flag}".strip()
 
             # NOTE: We do NOT pass start_time here via CLI args, because it creates a global
             # '--start' flag that applies to ALL videos. We rely on the handshake/Lua for that.
@@ -545,7 +546,7 @@ class PlaybackHandler(BaseHandler):
                 geometry=geometry,
                 custom_width=custom_width, 
                 custom_height=custom_height,
-                custom_mpv_flags=updated_custom_flags, 
+                custom_mpv_flags=custom_mpv_flags, 
                 automatic_mpv_flags=automatic_mpv_flags,
                 settings=settings, 
                 playlist_start_index=0,
@@ -557,7 +558,8 @@ class PlaybackHandler(BaseHandler):
                 use_ytdl_mpv=use_ytdl_mpv,
                 script_dir=self.ctx.script_dir,
                 # metadata_item and temp_dir are now legacy, handshake handles it
-                flag_dir=flag_dir
+                flag_dir=flag_dir,
+                handshake_path=handshake_path
             )
             
             import subprocess

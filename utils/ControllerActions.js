@@ -64,9 +64,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (folderId) {
 				c._updateFolderSubscription(folderId);
 
+				if (!c.checkContext() || !chrome.storage?.local) return;
 				const folderKey = `mpv_folder_data_${folderId}`;
-				chrome.storage.local.get([folderKey, "active_playback_state"], (result) => {
-					if (c.isTearingDown) return;
+				try {
+					chrome.storage.local.get([folderKey, "active_playback_state"], (result) => {
+						if (c.isTearingDown || !c.checkContext() || !result) return;
 					const folderData = result[folderKey] || { playlist: [], lastPlayedId: null };
 					const pbState = result.active_playback_state || {};
 					const list = folderData.playlist || [];
@@ -122,7 +124,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 					// 3. Sync Add Button State
 					c.updateAddButtonState();
-				});
+					});
+				} catch (e) {
+					console.debug("[MPV ControllerActions] storage.local.get failed:", e?.message || e);
+				}
 			}
 		}
 

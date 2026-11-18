@@ -12,7 +12,9 @@
 			"testing_tools/scripts/bridge_contract.js",
 			"node_modules/**",
 			"testing_tools/node_modules/**",
-			"mpv-playlist-organizer-release/**"
+			"mpv-playlist-organizer-release/**",
+			"yt-tools-legacy/**",
+			"yt-tools-standalone/**"
 		]
 	},
 	"formatter": {

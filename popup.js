@@ -12,6 +12,7 @@ import { createFolderManager } from "./popup/popup_folders.js";
 import { createBackupManager } from "./popup/popup_backup.js";
 import { createAniListManager } from "./popup/popup_anilist.js";
 import { createPlaybackManager } from "./popup/popup_playback.js";
+import { createYouTubeToolsManager } from "./popup/popup_youtube.js";
 
 // Global Popup Error Handlers (Forward uncaught exceptions to browser_errors.log)
 window.addEventListener("error", (event) => {
@@ -68,6 +69,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					full: document.getElementById("folder-management-view"),
 				};
 				this.activeMode = null;
+				this.isMpvViewHidden = () => false;
 
 				// Placeholders for shared content
 				this.placeholders = {
@@ -100,8 +102,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 				}
 
 				this.activeMode = mode;
-				this.views.mini.style.display = mode === "mini" ? "flex" : "none";
-				this.views.full.style.display = mode === "full" ? "block" : "none";
+				const hideMpvViews = typeof this.isMpvViewHidden === "function" && this.isMpvViewHidden();
+				this.views.mini.style.display = !hideMpvViews && mode === "mini" ? "flex" : "none";
+				this.views.full.style.display = !hideMpvViews && mode === "full" ? "block" : "none";
 
 				// Move shared elements into the active view's placeholder
 				this.placeholders.settings[mode].appendChild(
@@ -114,6 +117,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 				// Only show settings if it was already visible or if we are in full mode
 				if (mode === "full") {
 					this.sharedElements.settings.style.display = "block";
+				}
+
+				const hideBtn = document.getElementById("btn-hide-on-page-controller");
+				if (hideBtn) {
+					hideBtn.style.display = isCurrentTabHttp && mode === "full" ? "block" : "none";
 				}
 			}
 
@@ -130,6 +138,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			 * @param {boolean} isContentScriptDead - Whether the content script on page is dead/blocked.
 			 */
 			determineAndSetInitialMode(isHttp, uiState, prefs, isContentScriptDead) {
+				const prevMode = this.activeMode;
 				let showMiniView = false;
 				if (isHttp) {
 					// If the content script is dead/blocked, we MUST use the mini-popup view.
@@ -138,7 +147,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 					// On restricted pages (like brave://), use the global preference.
 					showMiniView = prefs?.mode === "minimized";
 				}
-				this.setMode(showMiniView ? "mini" : "full");
+				const nextMode = showMiniView ? "mini" : "full";
+				this.setMode(nextMode);
+				if (prevMode === "full" && nextMode === "mini") {
+					playbackManager?.refreshPlaylist?.(null, true);
+				}
 			}
 
 			// --- Getters for Active Elements ---
@@ -256,6 +269,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		let currentDetectedUrl = null;
 		let cachedPrefs = null;
+		let isCurrentTabHttp = false;
 
 		// Persistent state for UI consistency
 		const popupState = {
@@ -332,6 +346,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			miniAddBtn,
 			miniClearBtn,
 			miniCloseMpvBtn,
+			miniItemCountSpan,
 			playlistContainer,
 			getPlaylistRenderer: () => playlistRenderer,
 			getCachedPrefs: () => cachedPrefs,
@@ -350,10 +365,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 			updateNativeHostStatusUI,
 		} = playbackManager;
 
+		const refreshPreferences = async () => {
+			try {
+				const res = await sendMessageAsync({ action: "get_ui_preferences" });
+				if (res?.success && res.preferences) {
+					cachedPrefs = res.preferences;
+					optionsManager.updateAllPreferencesUI(res.preferences);
+					if (btnMiniToggleStub) {
+						const isStubEnabled = res.preferences.showMinimizedStub ?? true;
+						btnMiniToggleStub.classList.toggle("active-toggle", isStubEnabled);
+					}
+					if (res.preferences.kbOpenPopup) {
+						popupKeybinds.openPopup = res.preferences.kbOpenPopup;
+					}
+				}
+			} catch (err) {
+				console.error("[Popup] Failed to refresh preferences:", err);
+			}
+		};
+
 		const backupManager = createBackupManager({
 			uiManager,
 			showStatus,
 			populateFolderDropdowns,
+			refreshPreferences,
 			exportFilenameModal,
 			exportFilenameInput,
 			exportSaveBtn,
@@ -378,38 +413,44 @@ document.addEventListener("DOMContentLoaded", async () => {
 				
 
 		showOnPageControllerBtn.addEventListener("click", async () => {
-			const activeTab = await getActiveTab();
-			const tabId = activeTab?.id;
+			try {
+				const activeTab = await getActiveTab();
+				const tabId = activeTab?.id;
 
-			sendMessageAsync({
-				action: "set_minimized_state",
-				minimized: false,
-				tabId: tabId
-			}).then((response) => {
+				const response = await sendMessageAsync({
+					action: "set_minimized_state",
+					minimized: false,
+					tabId: tabId,
+				});
 				if (response?.success) {
 					uiManager.setMode("full");
 				} else {
 					showStatus(response?.error || "Could not show controller.", true);
 				}
-			});
+			} catch (err) {
+				showStatus("Could not show controller: " + err.message, true);
+			}
 		});
 
 		hideOnPageControllerBtn.addEventListener("click", async () => {
-			const activeTab = await getActiveTab();
-			const tabId = activeTab?.id;
+			try {
+				const activeTab = await getActiveTab();
+				const tabId = activeTab?.id;
 
-			sendMessageAsync({
-				action: "set_minimized_state",
-				minimized: true,
-				tabId: tabId
-			}).then((response) => {
+				const response = await sendMessageAsync({
+					action: "set_minimized_state",
+					minimized: true,
+					tabId: tabId,
+				});
 				if (response?.success) {
 					uiManager.setMode("mini");
 					refreshPlaylist(null, true);
 				} else {
 					showStatus(response?.error || "Could not hide controller.", true);
 				}
-			});
+			} catch (err) {
+				showStatus("Could not hide controller: " + err.message, true);
+			}
 		});
 		// --- Folder Management Event Listeners (Refactored) ---
 
@@ -503,10 +544,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 				if (cachedPrefs) cachedPrefs.showMinimizedStub = newVal;
 				btnMiniToggleStub.classList.toggle("active-toggle", newVal);
 
-				await sendMessageAsync({
-					action: "set_ui_preferences",
-					preferences: { showMinimizedStub: newVal },
-				});
+				try {
+					const response = await sendMessageAsync({
+						action: "set_ui_preferences",
+						preferences: { showMinimizedStub: newVal },
+					});
+					if (!response?.success) {
+						throw new Error(response?.error || "Failed to update stub preference.");
+					}
+				} catch (err) {
+					if (cachedPrefs) cachedPrefs.showMinimizedStub = currentVal;
+					btnMiniToggleStub.classList.toggle("active-toggle", currentVal);
+					showStatus("Failed to update minimized stub setting.", true);
+				}
 			});
 		}
 
@@ -769,14 +819,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 						// Update native host status (Async)
 						updateNativeHostStatusUI();
 
-						sendMessageAsync({ action: "get_auto_add_state" }).then(res => {
-							if (res?.success) updateAutoAddVisuals(res.active);
-						});
+						sendMessageAsync({ action: "get_auto_add_state" })
+							.then((res) => {
+								if (res?.success) updateAutoAddVisuals(res.active);
+							})
+							.catch((err) => {
+								logger?.debug?.("[Popup] Failed to get auto-add state:", { data: err });
+							});
 
 						// Request deep sync from manager
 						MPV.playbackStateManager.requestSync();
 						const activeTab = await getActiveTab();
 						const isHttp = activeTab?.url?.startsWith("http") ?? false;
+						isCurrentTabHttp = isHttp;
 						const tabId = activeTab?.id;
 
 						// Attempt to 'steal' state from the on-page controller (Ultra Fast Sync)
@@ -978,6 +1033,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 					miniFolderSelect.value = request.folderId;
 					refreshPlaylist(null, true);
 				}
+				if (removeFolderSelect && request.folderId && removeFolderSelect.value.toLowerCase() !== request.folderId.toLowerCase()) {
+					removeFolderSelect.value = request.folderId;
+					updateRemoveButtonState();
+				}
 			}
 
 			// Handle folder data changes (e.g. IDs assigned after playback starts)
@@ -1091,6 +1150,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 		// Start the initialization process
 		optionsManager.initializeEventListeners();
 		initializePopup();
+
+		const youTubeToolsManager = createYouTubeToolsManager({
+			showStatus,
+			onHideMpvView: () => {
+				uiManager.views.mini.style.display = "none";
+				uiManager.views.full.style.display = "none";
+			},
+			onRestoreMpvView: () => {
+				uiManager.setMode(uiManager.activeMode || "full");
+			},
+		});
+		uiManager.isMpvViewHidden = () => youTubeToolsManager.getActiveExtTab() === "yt";
+		youTubeToolsManager.initialize();
 
 		// Periodic Sync: Now replaced by reactive storage listener for better performance.
 		chrome.storage.onChanged.addListener((changes, areaName) => {

@@ -181,7 +181,7 @@ export async function handleItemNaturalCompletion(data) {
 		playbackManager.persistSessions();
 		
 		// Flag this folder so handleMpvExited knows a batch clear is already being managed
-		playbackManager.earlyClearsInProgress.add(actualFolderId.toLowerCase());
+		playbackManager.markEarlyClear(actualFolderId);
 
 		const itemTitle = item.title || item.url || itemId;
 
@@ -205,6 +205,7 @@ export async function handleItemNaturalCompletion(data) {
 			session.completedItemIds.delete(itemId);
 			session.watchedItemIds.delete(itemId);
 			playbackManager.persistSessions();
+			playbackManager.clearEarlyClear(actualFolderId);
 		} else if (clearMode === "confirm") {
 			// Mode: "confirm" -> Visual clear nice + Stacked popup
 			broadcastLog({
@@ -268,7 +269,7 @@ export async function handleMpvQuitting(data) {
 				text: `[Background]: Completion detected for '${actualFolderId}'. (Full: ${isFullFolderComplete}). Mode: ${clearMode}.`,
 				type: "info",
 			});
-			playbackManager.earlyClearsInProgress.add(actualFolderId.toLowerCase());
+			playbackManager.markEarlyClear(actualFolderId);
 
 			const finishedIds = getDirectionalFinishedIds(folder.playlist, playedIds || []);
 
@@ -300,9 +301,8 @@ export async function handleMpvExited(data) {
 	if (!folderId) return;
 
 	// Check if this folder was already handled by the early quitting logic
-	const normalizedFolderId = folderId.toLowerCase();
-	const wasEarlyHandled = playbackManager.earlyClearsInProgress.has(normalizedFolderId);
-	playbackManager.earlyClearsInProgress.delete(normalizedFolderId); // Cleanup for next session
+	const wasEarlyHandled = playbackManager.hasEarlyClear(folderId);
+	playbackManager.clearEarlyClear(folderId); // Cleanup for next session
 
 	const session = playbackManager.findSessionByFolderId(folderId);
 	if (session) {
@@ -586,6 +586,7 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 
 	// CLEAR PERSISTENCE
 	const session = playbackManager.findSessionByFolderId(folderId);
+	const wasQuitting = Boolean(session?.pendingClear?.isQuitting ?? request.isQuitting);
 	if (session) {
 		session.pendingClear = null;
 		playbackManager.persistSessions();
@@ -619,6 +620,9 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 			}
 			playbackManager.persistSessions();
 		}
+		if (!wasQuitting) {
+			playbackManager.clearEarlyClear(folderId);
+		}
 	} else {
 		broadcastLog({
 			text: `[Background]: User declined clearing playlist for '${folderId}'. Items restored.`,
@@ -633,7 +637,7 @@ export const handleClearPlaylistConfirmation = createHandler(async ({ request })
 			await broadcastPlaylistState(folderId);
 		}
 		// Critical: Remove from early clears so next completion isn't blocked
-		playbackManager.earlyClearsInProgress.delete(folderId.toLowerCase());
+		playbackManager.clearEarlyClear(folderId);
 	}
 
 	return { success: true };

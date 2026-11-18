@@ -107,6 +107,7 @@ export function createFolderManager(ctx) {
 				if (response.success) {
 					showStatus(`Folder "${newName}" created!`);
 					inputElement.value = "";
+					inputElement.dispatchEvent(new Event("input"));
 					populateFolderDropdowns();
 				} else {
 					showStatus(response.error || "An unknown error occurred.", true);
@@ -177,6 +178,7 @@ export function createFolderManager(ctx) {
 		}
 		if (oldFolderId === newFolderId) {
 			renameFolderModal.style.display = "none";
+			folderToRename = null;
 			return;
 		}
 
