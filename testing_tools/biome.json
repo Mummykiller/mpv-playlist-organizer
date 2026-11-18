@@ -12,11 +12,11 @@
 			"!**/utils/MpvInterface.js",
 			"!**/utils/domUtils.js",
 			"!**/testing_tools/scripts/bridge_contract.js",
-			"!**/node_modules/**",
-			"!**/testing_tools/node_modules/**",
-			"!**/mpv-playlist-organizer-release/**",
-			"!**/yt-tools-legacy/**",
-			"!**/yt-tools-standalone/**",
+			"!**/node_modules",
+			"!**/testing_tools/node_modules",
+			"!**/mpv-playlist-organizer-release",
+			"!**/yt-tools-legacy",
+			"!**/yt-tools-standalone",
 			"!**/*.md",
 			"!**/*.html"
 		]
