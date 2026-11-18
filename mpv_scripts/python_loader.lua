@@ -113,7 +113,7 @@ mp.register_event("start-file", function()
 end)
 
 -- 2. During Playback: Periodic Time Sync & Mark Watched
-mp.observe_property("time-pos", "number", function(name, val)
+mp.observe_property("time-pos", "number", function(_name, val)
     if not val or not playback_active then return end
     
     if last_time_pos then

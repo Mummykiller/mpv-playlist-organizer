@@ -9,6 +9,7 @@
 Before undertaking work in specific architectural domains, read the corresponding skill:
 - **Lead Architect & Orchestrator**: [.gemini/skills/lead-architect/SKILL.md](.gemini/skills/lead-architect/SKILL.md)
 - **JS Build & Verification**: [.gemini/skills/js-build-and-verification/SKILL.md](.gemini/skills/js-build-and-verification/SKILL.md)
+- **Linting & Static Analysis**: [.gemini/skills/linting-and-static-analysis/SKILL.md](.gemini/skills/linting-and-static-analysis/SKILL.md)
 - **Native Bridge & Protocol**: [.gemini/skills/bridge-and-protocol/SKILL.md](.gemini/skills/bridge-and-protocol/SKILL.md)
 - **UI, Shadow DOM & Settings**: [.gemini/skills/ui-shadow-dom-and-settings/SKILL.md](.gemini/skills/ui-shadow-dom-and-settings/SKILL.md)
 - **Storage & State Sync**: [.gemini/skills/storage-and-state-sync/SKILL.md](.gemini/skills/storage-and-state-sync/SKILL.md)

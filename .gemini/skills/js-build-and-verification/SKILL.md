@@ -98,7 +98,7 @@ python3 verify_changes.py
      - Auto-discovers and runs all `testing_tools/scripts/test_*.js` scripts (`test_bridge_js.js`, `test_bridge_protocol.js`, `test_logger_logic.js`, `test_modular_components.js`, `test_resilience_fixes.js`, `test_ui_sync.js`, `test_yt_tools.js`, `test_yt_tools_standalone.js`).
      - Runs `node --check` syntax validation and the JS empty/comment-only `catch {}` regex gate across all `.js` files.
      - Runs Python AST static checks enforcing syntax, forbidding bare `except:` clauses, and forbidding silent `except ...: pass` (`_is_silent_pass`).
-     - Runs `ruff` (`testing_tools/pyproject.toml`), `biome` (`testing_tools/biome.json`), and `luac -p` (`mpv_scripts/*.lua`) when installed.
+     - Runs `ruff` (`testing_tools/pyproject.toml`), `biome` (`testing_tools/biome.json`), `luac -p` (`mpv_scripts/*.lua`), `luacheck` (`testing_tools/.luacheckrc`), `shellcheck` (`*.sh`), and `pyright` (`testing_tools/pyrightconfig.json`) when installed.
    - Note: `testing_tools/create_release.py` packages release builds; `run_suite.py` excludes `yt-tools-legacy`, `yt-tools-standalone`, and `mpv-playlist-organizer-release` during static scans.
 
 ---

@@ -8,8 +8,8 @@ import logging
 
 # Optional watchdog import with graceful fallback to standard-library polling
 try:
-    from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer  # type: ignore[import-not-found]
+    from watchdog.events import FileSystemEventHandler  # type: ignore[import-not-found]
     HAS_WATCHDOG = True
 except ImportError:
     HAS_WATCHDOG = False

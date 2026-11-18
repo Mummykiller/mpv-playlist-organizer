@@ -245,7 +245,7 @@ local function handle_natural_completion(reason)
     end)
 end
 
-function on_end_file(event)
+local function on_end_file(event)
     last_end_reason = event.reason
     -- Use playlist-pos-1 as a fallback for the item that just finished if pos is gone
     local pos = mp.get_property_number("playlist-pos")
@@ -303,7 +303,7 @@ function on_end_file(event)
 end
 
 -- Also observe idle-active as a fallback
-mp.observe_property("idle-active", "bool", function(name, val)
+mp.observe_property("idle-active", "bool", function(_name, val)
     if val == true and has_started then
         log("Property change: idle-active is true. Checking for completion.")
         -- Use a tiny delay to allow other properties (like playlist-pos) to settle

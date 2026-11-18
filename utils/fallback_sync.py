@@ -8,7 +8,7 @@ import time
 
 # Attempt to import cli_base to setup environment
 try:
-    import cli_base
+    import cli_base  # type: ignore[import-not-found]
 except ImportError:
     # Fallback for when running from root or if utils is a package
     from utils import cli_base

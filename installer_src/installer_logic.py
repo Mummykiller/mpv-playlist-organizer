@@ -492,7 +492,7 @@ class UnixLogic(InstallerLogic):
 
     def uninstall(self):
         browser_paths = self.get_browser_configs()
-        for browser, path in browser_paths.items():
+        for _browser, path in browser_paths.items():
             symlink_path = os.path.join(path, f"{HOST_NAME}.json")
             if os.path.lexists(symlink_path):
                 try:

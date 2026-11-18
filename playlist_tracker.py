@@ -154,7 +154,7 @@ class PlaylistTracker:
         # Optimized: Poll for connection instead of fixed sleep
         self.ipc_manager = ipc_utils.IPCSocketManager()
         connected = False
-        for attempt in range(60): # Try for 4 seconds (60 * 0.067s) for better Windows compatibility
+        for _attempt in range(60): # Try for 4 seconds (60 * 0.067s) for better Windows compatibility
             if self.ipc_manager.connect(self.ipc_path, timeout=0.1):
                 connected = True
                 break

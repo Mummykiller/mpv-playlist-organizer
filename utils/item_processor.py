@@ -176,11 +176,11 @@ class ItemProcessor:
             return None
 
         class SafeRedirectHandler(HTTPRedirectHandler):
-            def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
                 if not is_safe_url(newurl):
                     logging.error(f"SSRF Protection: Blocked unsafe redirect to: {newurl}")
-                    raise HTTPError(newurl, 403, "Blocked unsafe redirect", hdrs, fp)
-                return super().redirect_request(req, fp, code, msg, hdrs, newurl)
+                    raise HTTPError(newurl, 403, "Blocked unsafe redirect", headers, fp)
+                return super().redirect_request(req, fp, code, msg, headers, newurl)
 
         try:
             fetch_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}

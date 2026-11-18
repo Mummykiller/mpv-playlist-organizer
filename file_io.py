@@ -752,7 +752,7 @@ def list_import_files():
             return {"success": True, "files": []}
 
         json_files = []
-        for root, dirs, files in os.walk(EXPORT_DIR):
+        for root, _dirs, files in os.walk(EXPORT_DIR):
             for file in files:
                 if file.endswith('.json'):
                     # Get path relative to EXPORT_DIR
