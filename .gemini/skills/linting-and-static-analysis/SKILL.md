@@ -16,7 +16,7 @@ All linters run automatically inside `testing_tools/run_suite.py` (invoked by `p
 | Domain | Tool | Config File | Automatic Scope |
 | :--- | :--- | :--- | :--- |
 | **Python Linting** | `ruff` | [pyproject.toml](../../testing_tools/pyproject.toml) | All `.py` files (excluding generated standalone/release folders) |
-| **Python Type Checking** | `pyright` | [pyrightconfig.json](../../testing_tools/pyrightconfig.json) | Root + `utils/` + `installer_src/` + `testing_tools/` |
+| **Python Type Checking** | `pyright` | [pyrightconfig.json](../../testing_tools/pyrightconfig.json) | All `.py` files (excluding generated standalone/release folders) |
 | **JS / CSS Linting** | `biome` | [biome.json](../../testing_tools/biome.json) | Hand-written `.js` and `.css` files (excluding 7 generated `utils/*.js` outputs, `.md`, `.html`) |
 | **Lua Syntax & Lint** | `luac -p` + `luacheck` | [.luacheckrc](../../testing_tools/.luacheckrc) | `mpv_scripts/*.lua` |
 | **Shell Scripts** | `shellcheck` | *(CLI flags in `run_suite.py`)* | All `.sh` files (e.g. `run_native_host.sh`) |
