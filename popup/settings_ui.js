@@ -212,6 +212,16 @@ export function applyCategoryFilter(ctx, cat = "all") {
 				}
 			});
 
+			for (const subId of ["ultra-options-container", "anilist-options-container"]) {
+				const sub = section.querySelector(`#${subId}`);
+				if (sub) {
+					const hasFavChild = Array.from(sub.querySelectorAll(".control-group, .setting-item")).some((el) =>
+						el.classList.contains("fav-visible-override"),
+					);
+					sub.style.display = hasFavChild ? "" : "none";
+				}
+			}
+
 			if (sectionFavCount > 0) {
 				section.style.display = "block";
 				section.open = true;
@@ -246,6 +256,17 @@ export function applyCategoryFilter(ctx, cat = "all") {
 				item.style.backgroundColor = "transparent";
 				item.classList.remove("fav-visible-override");
 			});
+
+			const ultraSub = section.querySelector("#ultra-options-container");
+			if (ultraSub) {
+				const profileSelect = document.getElementById("performance-profile-select");
+				ultraSub.style.display = profileSelect?.value === "ultra" ? "" : "none";
+			}
+			const anilistSub = section.querySelector("#anilist-options-container");
+			if (anilistSub) {
+				const anilistCheck = document.getElementById("enable-anilist-integration-checkbox");
+				anilistSub.style.display = (anilistCheck?.checked ?? true) ? "" : "none";
+			}
 
 			const secCat = section.dataset.category || section.dataset.cat;
 			if (ctx.currentCategory === "all") {
@@ -363,6 +384,16 @@ export function handleSettingsSearch(ctx, query) {
 				item.style.backgroundColor = "transparent";
 			}
 		});
+
+		for (const subId of ["ultra-options-container", "anilist-options-container"]) {
+			const sub = section.querySelector(`#${subId}`);
+			if (sub) {
+				const hasVisibleChild = Array.from(sub.querySelectorAll(".control-group, .setting-item")).some(
+					(el) => el.style.display !== "none",
+				);
+				sub.style.display = hasVisibleChild ? "" : "none";
+			}
+		}
 
 		if (sectionMatchCount > 0 || (sectionMatches && !isFavoritesTab)) {
 			section.style.display = "block";

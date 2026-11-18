@@ -30,7 +30,7 @@ flowchart TD
 
     subgraph Js_Details ["run_js_batch()"]
         C1["0. Contract Sync: generate_bridge_contract.py"]
-        JS1["1. Node Unit Tests (auto-discovered test_*.js, 6 scripts)"]
+        JS1["1. Node Unit Tests (auto-discovered test_*.js, 8 scripts)"]
         JS2["2. JS Syntax (node --check) & Empty/Comment-Only catch {} Gate"]
         PY1["3. Python AST Gate (bare except: & _is_silent_pass)"]
         L1["4. Linters when installed: ruff, biome, luac -p"]

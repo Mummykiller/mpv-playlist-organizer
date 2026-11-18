@@ -91,7 +91,7 @@ class EnrichmentService(ItemProcessor):
                 while time.time() - start_wait < 10.0:
                     # --- CANCELLATION & FOLDER CHECK ---
                     if not is_sync_valid():
-                        logging.info(f"[PY][Session] Background Flow aborted: Session dead, cancelled, or folder switched.")
+                        logging.info("[PY][Session] Background Flow aborted: Session dead, cancelled, or folder switched.")
                         return
                     if session.ipc_manager and session.ipc_manager.is_connected():
                         # Optional: Ping to ensure responsiveness

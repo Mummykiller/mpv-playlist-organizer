@@ -17,6 +17,8 @@ IGNORE_PATTERNS = (
     "yt-tools-legacy",
     "yt-tools-standalone",
     "yt-tools-standalone.zip",
+    "export_standalone.py",
+    "port_to_main.py",
     ".gitignore",
     ".gemini*",
     "testing_tools",

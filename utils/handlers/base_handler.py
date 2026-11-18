@@ -1,7 +1,5 @@
 import logging
-import os
 import uuid
-from .. import native_link
 from .context import BackendContext
 
 class BaseHandler:

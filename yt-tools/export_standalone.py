@@ -295,6 +295,25 @@ def build_standalone_css(popup_css_text: str) -> str:
 	return f"{root_block}\n\n{STANDALONE_CSS_BASE}\n{yt_block}".strip() + "\n"
 
 
+def adapt_service_for_standalone(service_src: str) -> str:
+	"""Adapt background/yt_tools_service.js for the standalone extension."""
+	adapted = service_src.replace(
+		'import { logger } from "../utils/SystemLogger.module.js";',
+		"const logger = console;",
+	)
+	adapted = re.sub(
+		r"(const\s+YT_ACTION_ICONS\s*=\s*\{[^}]*\})",
+		lambda m: m.group(1).replace('"yt-tools/icons/icon', '"images/icon'),
+		adapted,
+		count=1,
+	)
+	adapted = adapted.replace(
+		'title: isDominant ? "Shinku\'s YouTube Tools" : "MPV Playlist Organizer",',
+		'title: "Shinku\'s YouTube Tools",',
+	)
+	return adapted
+
+
 def export_standalone(out_dir: Path, make_zip: bool = False) -> Path:
 	"""Build a complete standalone YouTube Tools Chrome extension at `out_dir`."""
 	if out_dir.exists():
@@ -312,13 +331,12 @@ def export_standalone(out_dir: Path, make_zip: bool = False) -> Path:
 	# 2. Copy popup controller
 	shutil.copy2(ROOT_DIR / "popup" / "popup_youtube.js", out_dir / "popup" / "popup_youtube.js")
 
-	# 3. Copy & adapt background/yt_tools_service.js (drop main-repo SystemLogger dependency)
+	# 3. Copy & adapt background/yt_tools_service.js (drop main-repo SystemLogger dependency & update icon paths/title)
 	service_src = (ROOT_DIR / "background" / "yt_tools_service.js").read_text(encoding="utf-8")
-	service_standalone = service_src.replace(
-		'import { logger } from "../utils/SystemLogger.module.js";',
-		"const logger = console;",
+	(out_dir / "background" / "yt_tools_service.js").write_text(
+		adapt_service_for_standalone(service_src),
+		encoding="utf-8",
 	)
-	(out_dir / "background" / "yt_tools_service.js").write_text(service_standalone, encoding="utf-8")
 
 	# 4. Copy dedicated YT Tools icons (falling back to main images/ only if missing)
 	for icon in ICON_FILES:

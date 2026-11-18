@@ -394,7 +394,7 @@ export class OptionsManager {
 			"ultra-options-container",
 		);
 		if (ultraOptionsContainer) {
-			ultraOptionsContainer.style.display = isUltra ? "block" : "none";
+			ultraOptionsContainer.style.display = isUltra ? "" : "none";
 		}
 
 		const videoSyncCheckbox = document.getElementById(
@@ -432,7 +432,7 @@ export class OptionsManager {
 		);
 		if (anilistOptionsContainer) {
 			anilistOptionsContainer.style.display = enableAnilist
-				? "block"
+				? ""
 				: "none";
 		}
 		const sharedAnilistSection = document.getElementById(
@@ -769,7 +769,7 @@ export class OptionsManager {
 				);
 				if (ultraContainer) {
 					ultraContainer.style.display =
-						performanceProfileSelect.value === "ultra" ? "block" : "none";
+						performanceProfileSelect.value === "ultra" ? "" : "none";
 				}
 			});
 		}
@@ -840,7 +840,7 @@ export class OptionsManager {
 					"anilist-options-container",
 				);
 				if (anilistOptionsContainer) {
-					anilistOptionsContainer.style.display = isEnabled ? "block" : "none";
+					anilistOptionsContainer.style.display = isEnabled ? "" : "none";
 				}
 				const sharedAnilistSection = document.getElementById(
 					"shared-anilist-section",

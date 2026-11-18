@@ -241,7 +241,7 @@ def remove_item(session, item_id, folder_id):
     """Removes an item from the active MPV playlist by ID with resilient recovery."""
     with session.sync_lock:
         logging.info(f"[PY][Session] remove() called: item_id='{item_id}', folder_id='{folder_id}'")
-        if not session.is_alive or not session.owner_folder_id or session.owner_folder_id.lower() != folder_id.lower():
+        if not session.is_alive or not session.owner_folder_id or not folder_id or session.owner_folder_id.lower() != folder_id.lower():
             logging.warning(f"[PY][Session] remove() aborted: alive={session.is_alive}, owner='{session.owner_folder_id}', target='{folder_id}'")
             return {"success": False, "message": "Session not active or folder mismatch."}
 
@@ -347,7 +347,7 @@ def clear_live_playlist(session, folder_id):
     with session.sync_lock:
         if not session.ipc_manager:
             return {"success": False, "reason": "No active IPC manager."}
-        if not session.is_alive or not session.owner_folder_id or session.owner_folder_id.lower() != folder_id.lower():
+        if not session.is_alive or not session.owner_folder_id or not folder_id or session.owner_folder_id.lower() != folder_id.lower():
             return {"success": False, "reason": "Session not active or folder mismatch.", "message": "Session not active or folder mismatch."}
 
         logging.info(f"Clearing live MPV playlist for folder '{folder_id}'.")

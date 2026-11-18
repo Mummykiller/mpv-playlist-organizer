@@ -80,7 +80,7 @@ def _get_linux_sudo_command_prefix(ytdlp_path, send_message_func):
         send_message_func({"log": {"text": "[yt-dlp]: Write access denied. Attempting to run with administrator privileges...", "type": "info"}})
         for tool in ["pkexec", "gksu", "kdesu"]:
             if shutil.which(tool):
-                send_message_func({"log": {"text": f"[yt-dlp]: Please enter your password in the dialog to update yt-dlp.", "type": "info"}})
+                send_message_func({"log": {"text": "[yt-dlp]: Please enter your password in the dialog to update yt-dlp.", "type": "info"}})
                 return [tool]
         send_message_func({"log": {"text": "[yt-dlp]: No graphical sudo tool found. Please run `sudo yt-dlp -U` in a terminal.", "type": "error"}})
     return []

@@ -52,17 +52,11 @@ def _generate_user_agent(browser_name, os_name):
         "brave": "Brave Chrome/120.0.0.0",
         "chrome": "Chrome/120.0.0.0",
         "chromium": "Chrome/120.0.0.0",
-        "edge": "Edg/120.0.0.0",
-        "vivaldi": "Vivaldi/6.5.3206.50",
+        "edge": "Edg/120.0.0.0 Chrome/120.0.0.0",
+        "vivaldi": "Vivaldi/6.5.3206.50 Chrome/120.0.0.0",
         "opera": "Opera/100.0.0.0"
     }
     browser_part = browser_map.get(browser_name, "Chrome/120.0.0.0")
-    if browser_name == "brave":
-        browser_part = "Brave Chrome/120.0.0.0"
-    elif browser_name == "vivaldi":
-        browser_part = "Vivaldi/6.5.3206.50 Chrome/120.0.0.0"
-    elif browser_name == "edge":
-        browser_part = "Edg/120.0.0.0 Chrome/120.0.0.0"
 
     return f"{base_ua.format(os_part=os_part)} {browser_part} Safari/537.36"
 
@@ -357,9 +351,9 @@ class WindowsLogic(InstallerLogic):
         python_executable = self._get_console_python()
         wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.bat")
         # Ensure Python path and script path are quoted correctly for Windows batch
-        with open(wrapper_path, 'w') as f:
+        with open(wrapper_path, 'w', encoding='utf-8') as f:
             f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\n"{python_executable}" "%~dp0{SCRIPT_NAME}" %*')
-        self.log(f"Created wrapper script: run_native_host.bat")
+        self.log("Created wrapper script: run_native_host.bat")
 
         # Native messaging manifests MUST use forward slashes or escaped backslashes in JSON, 
         # but the manifest file path itself should be native.
@@ -371,9 +365,13 @@ class WindowsLogic(InstallerLogic):
             "type": "stdio",
             "allowed_origins": [f"chrome-extension://{extension_id}/"]
         }
-        with open(manifest_path, 'w') as f:
+        with open(manifest_path, 'w', encoding='utf-8') as f:
             json.dump(chrome_manifest, f, indent=4)
-        self.log(f"Created manifest: {os.path.relpath(manifest_path, INSTALL_DIR)}")
+        try:
+            display_manifest = os.path.relpath(manifest_path, INSTALL_DIR)
+        except ValueError:
+            display_manifest = manifest_path
+        self.log(f"Created manifest: {display_manifest}")
 
         browsers = self.get_browser_configs()
         
@@ -390,15 +388,6 @@ class WindowsLogic(InstallerLogic):
                 self.log(f"Successfully registered for {browser} at {normalized_key_path}.")
             except OSError as e:
                 self.log(f"Skipping {browser} registry path {full_key_path} (error: {e}).")
-
-        if "Google Chrome" not in browsers:
-            fallback_key_path = f"SOFTWARE\\Google\\Chrome\\NativeMessagingHosts\\{HOST_NAME}"
-            try:
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, fallback_key_path) as key:
-                    winreg.SetValue(key, '', winreg.REG_SZ, native_manifest_path)
-                self.log(f"Successfully registered Chrome fallback at {fallback_key_path}.")
-            except OSError as e:
-                self.log(f"Skipping Chrome fallback registry path {fallback_key_path} (error: {e}).")
 
     def uninstall(self):
         self.log("Uninstalling for Windows...")
@@ -425,7 +414,7 @@ class WindowsLogic(InstallerLogic):
         python_executable = self._get_console_python()
         script_path = os.path.join(INSTALL_DIR, SCRIPT_NAME)
         wrapper_path = os.path.join(INSTALL_DIR, "mpv-cli.bat")
-        with open(wrapper_path, 'w') as f:
+        with open(wrapper_path, 'w', encoding='utf-8') as f:
             f.write(f'@echo off\nset PYTHONDONTWRITEBYTECODE=1\n"{python_executable}" "{script_path}" %*\n')
         self.log("Created Windows CLI wrapper: mpv-cli.bat")
 
@@ -482,7 +471,7 @@ class UnixLogic(InstallerLogic):
 
         wrapper_path = os.path.join(INSTALL_DIR, "run_native_host.sh")
         quoted_py = shlex.quote(sys.executable)
-        with open(wrapper_path, 'w') as f:
+        with open(wrapper_path, 'w', encoding='utf-8') as f:
             f.write(f'#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\n\nexec {quoted_py} "$(dirname "$0")/{SCRIPT_NAME}" "$@"\n')
         os.chmod(wrapper_path, 0o755)
 
@@ -523,7 +512,7 @@ class UnixLogic(InstallerLogic):
         wrapper_path = os.path.join(INSTALL_DIR, "mpv-cli")
         quoted_py = shlex.quote(sys.executable)
         quoted_script = shlex.quote(script_path)
-        with open(wrapper_path, 'w') as f:
+        with open(wrapper_path, 'w', encoding='utf-8') as f:
             f.write(f'#!/bin/sh\nexport PYTHONDONTWRITEBYTECODE=1\n\nexec {quoted_py} {quoted_script} "$@"\n')
         os.chmod(wrapper_path, 0o755)
 

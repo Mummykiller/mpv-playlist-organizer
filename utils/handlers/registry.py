@@ -1,7 +1,5 @@
 import functools
-import logging
-from typing import Dict, Callable, Any, Type, Optional
-from ..native_link.models import BaseRequest
+from typing import Dict, Callable, Any, Optional
 
 class HandlerRegistry:
     """

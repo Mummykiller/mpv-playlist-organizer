@@ -49,17 +49,28 @@ def validate_source_dir(source_dir: Path) -> None:
 
 
 def adapt_service_for_main(service_src: str) -> str:
-	"""Restore the main-extension SystemLogger import in background/yt_tools_service.js."""
+	"""Restore main-extension imports, icon paths, and title in background/yt_tools_service.js."""
 	target_import = 'import { logger } from "../utils/SystemLogger.module.js";'
-	if target_import in service_src:
-		return service_src
-	return re.sub(
-		r"^const logger = console;[ \t]*$",
-		target_import,
-		service_src,
+	adapted = service_src
+	if target_import not in adapted:
+		adapted = re.sub(
+			r"^const logger = console;[ \t]*$",
+			target_import,
+			adapted,
+			count=1,
+			flags=re.MULTILINE,
+		)
+	adapted = re.sub(
+		r"(const\s+YT_ACTION_ICONS\s*=\s*\{[^}]*\})",
+		lambda m: m.group(1).replace('"images/icon', '"yt-tools/icons/icon'),
+		adapted,
 		count=1,
-		flags=re.MULTILINE,
 	)
+	adapted = adapted.replace(
+		'title: "Shinku\'s YouTube Tools",',
+		'title: isDominant ? "Shinku\'s YouTube Tools" : "MPV Playlist Organizer",',
+	)
+	return adapted
 
 
 def _find_settings_panel_span(html: str) -> tuple[int, int] | None:

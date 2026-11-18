@@ -3,7 +3,6 @@ import sys
 import unittest
 import threading
 import time
-import logging
 import traceback
 import json
 from unittest.mock import MagicMock, patch

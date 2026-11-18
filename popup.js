@@ -53,8 +53,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 	}
 
 	try {
-		// This line is intentionally kept for the diff
-
 		// --- Element Definitions ---
 		const sharedAnilistSection = document.getElementById(
 			"shared-anilist-section",
@@ -660,14 +658,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 		function handleGlobalKeydown(e) {
 			if (!popupKeybinds.openPopup) return;
 
-			// Ignore if typing in an input
+			// Ignore if typing in an input (including keybind recording)
 			if (
 				["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName) ||
 				e.target.isContentEditable
 			) {
-				// Special case: recording a new keybind in OptionsManager.
-				// We shouldn't close the popup if the user is literally setting the shortcut.
-				if (e.target.classList.contains("recording-active")) return;
+				return;
 			}
 
 			const modifiers = [];
@@ -892,10 +888,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 							}
 
 							// Update on-page buttons visibility
-							showOnPageControllerBtn.style.display = "block";
+							showOnPageControllerBtn.style.display = isContentScriptDead
+								? "none"
+								: "block";
 							hideOnPageControllerBtn.style.display = uiManager.isMiniView()
 								? "none"
 								: "block";
+						} else {
+							if (showOnPageControllerBtn) {
+								showOnPageControllerBtn.style.display = "none";
+							}
+							if (hideOnPageControllerBtn) {
+								hideOnPageControllerBtn.style.display = "none";
+							}
 						}
 
 						// Update Add button state based on detected URL
@@ -1086,6 +1091,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 						if (response?.success && response.preferences) {
 							cachedPrefs = response.preferences;
 							optionsManager.updateAllPreferencesUI(response.preferences);
+							if (response.preferences.kbOpenPopup) {
+								popupKeybinds.openPopup = response.preferences.kbOpenPopup;
+							}
 						}
 						if (btnMiniToggleStub && response?.preferences) {
 							const isStubEnabled =

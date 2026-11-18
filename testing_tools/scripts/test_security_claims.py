@@ -2,9 +2,6 @@ import os
 import unittest
 import json
 import sys
-import tempfile
-import shutil
-from unittest.mock import patch
 
 # Add project root to path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

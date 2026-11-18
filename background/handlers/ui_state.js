@@ -244,6 +244,14 @@ export const UI_ONLY_KEYS = [
 	"kbSwitchPlaylist",
 	"kbOpenPopup",
 	"dependencyStatus",
+	"streamScannerTimeout",
+	"autofocusNewFolder",
+	"showCopyTitleButton",
+	"enableAnilistIntegration",
+	"disableAnilistCache",
+	"ytdlpUpdateBehavior",
+	"popupWidthLocked",
+	"scraperFilterWords",
 ];
 
 function extractHttpHostname(url) {
@@ -348,8 +356,11 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 		if (DOMAIN_SPECIFIC_KEYS.includes(key)) {
 			if (domain) {
 				domainPrefs[key] = value;
+			} else if (key === "mode") {
+				// Global startup mode saved from popup (no domain context)
+				globalPrefs[key] = value;
 			}
-			// Never let domain-specific keys spill into globalPrefs
+			// Never let other domain-specific keys spill into globalPrefs
 		} else {
 			globalPrefs[key] = value;
 		}

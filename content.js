@@ -135,8 +135,8 @@ window.addEventListener("unhandledrejection", (event) => {
 					}
 				});
 			} catch (e) {
-		console.debug("[MPV Content] safeSendMessage ignored:", e?.message || e);
-	}
+				console.debug("[MPV Content] scanner listener registration failed:", e?.message || e);
+			}
 		}
 	} catch (e) {
 		console.error("[MPV Content Script] Init failed:", e);

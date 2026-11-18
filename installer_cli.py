@@ -61,7 +61,7 @@ class CommandLineApp:
         manifest_path = os.path.join(file_io.DATA_DIR, f"{HOST_NAME}-chrome.json")
         if os.path.exists(manifest_path):
             try:
-                with open(manifest_path, 'r') as f:
+                with open(manifest_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     current_id = data.get("allowed_origins", [""])[0].replace("chrome-extension://", "").replace("/", "")
             except (OSError, json.JSONDecodeError, KeyError, IndexError) as e:
@@ -142,7 +142,7 @@ class CommandLineApp:
             self.logic.install_cli()
             print("\n✅ SUCCESS: mpv-cli installed.")
             if platform.system() != "Windows":
-                print(f"\nManual Step: To use 'mpv-cli', add this to your PATH:")
+                print("\nManual Step: To use 'mpv-cli', add this to your PATH:")
                 print(f'export PATH="$PATH:{INSTALL_DIR}"')
         except Exception as e:
             print(f"\n❌ ERROR: {e}")

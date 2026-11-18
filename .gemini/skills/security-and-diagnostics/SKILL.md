@@ -83,7 +83,7 @@ To prevent the Native Host and extension from being leveraged as an internal int
 
 ### Path Traversal Protection (`validate_safe_path`)
 
-All file operations in `file_io.py` and backend handlers validate candidate paths using `security.validate_safe_path()`:
+Flag, socket, flag-directory, and playlist-file paths in `utils/mpv_command_builder.py` and `utils/item_processor.py` are validated via `file_io.validate_safe_path()` (delegating to `utils/security.py:validate_safe_path()`):
 - Paths are resolved to their absolute canonical form (`os.path.realpath`).
 - Canonical paths **must** reside strictly within authorized directories:
   - `DATA_DIR` (Application configuration and playlists)

@@ -190,7 +190,7 @@ def run_js_batch(verbose=False):
     # 2. All JS & Module JS Syntax and Empty Catch Block Check (parallel)
     js_files = []
     for root_dir, dirs, files in os.walk(PROJECT_ROOT):
-        dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', 'yt-tools-legacy'}]
+        dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', 'yt-tools-legacy', 'yt-tools-standalone', 'mpv-playlist-organizer-release'}]
         for f in sorted(files):
             if f.endswith('.js'):
                 js_files.append(os.path.join(root_dir, f))
@@ -242,7 +242,7 @@ def run_js_batch(verbose=False):
     # 3. Python Static Analysis (Hardened AST Syntax + Bare Except + Silent Pass Check)
     py_files = []
     for root_dir, dirs, files in os.walk(PROJECT_ROOT):
-        dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', 'yt-tools-legacy'}]
+        dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', 'yt-tools-legacy', 'yt-tools-standalone', 'mpv-playlist-organizer-release'}]
         for f in sorted(files):
             if f.endswith('.py'):
                 py_files.append(os.path.join(root_dir, f))

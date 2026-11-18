@@ -407,7 +407,10 @@ ALLOWED_SETTINGS_KEYS = {
     "clear_on_completion", "clear_scope", "enable_dblclick_copy", "anilist_image_height", "popup_width",
     "show_watched_status_gui", "show_minimized_stub", "one_click_add", "restricted_domains",
     "kb_add_playlist", "kb_play_playlist", "kb_toggle_controller", "kb_switch_playlist", "kb_open_popup",
-    "force_terminal", "volume", "speed"
+    "force_terminal", "volume", "speed",
+    "stream_scanner_timeout", "autofocus_new_folder", "show_copy_title_button",
+    "enable_anilist_integration", "disable_anilist_cache", "ytdlp_update_behavior",
+    "popup_width_locked", "scraper_filter_words",
 }
 
 def sanitize_string(s, is_filename=False, is_url=False):

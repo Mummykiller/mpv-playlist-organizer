@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys
 import os
-import platform
 
 # Prevent __pycache__ generation
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'

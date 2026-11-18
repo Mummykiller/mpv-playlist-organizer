@@ -37,5 +37,5 @@ Mark any feature you want to add by putting an `x` inside `[]` (e.g. `[x]`).
 - [x] **Compact Grid Density** — Force 4 or 5 videos per row on Home/Subscriptions.
 
 ## 4. Privacy & Quality of Life
-- [ ] **Strip Tracking Parameters (`?si=`, `&pp=`)** — Automatically clean YouTube URLs when copying or clicking Share.
+- [x] **Strip Tracking Parameters (`?si=`, `&pp=`)** — Automatically clean YouTube URLs when copying or clicking Share.
 - [x] **Prevent "Are you still watching?" Pause** — Auto-dismiss YouTube's idle confirmation popup during long sessions.

@@ -95,11 +95,11 @@ python3 verify_changes.py
    - **Parallel Python Pool (`PYTHON_TEST_FILES`):** Runs all 9 Python test modules (`test_logging_system.py`, `test_robustness.py`, `test_repro_crash.py`, `test_native_host_boot.py`, `test_security_claims.py`, `test_storage_locking.py`, `test_playback_ipc_concurrency.py`, `test_server_and_installer.py`, `test_logging_pipeline.py`) in parallel via `ThreadPoolExecutor`.
    - **Concurrent `run_js_batch()`:**
      - Synchronizes bridge contract via `testing_tools/generate_bridge_contract.py`.
-     - Auto-discovers and runs all `testing_tools/scripts/test_*.js` scripts (`test_bridge_js.js`, `test_bridge_protocol.js`, `test_logger_logic.js`, `test_modular_components.js`, `test_resilience_fixes.js`, `test_ui_sync.js`).
+     - Auto-discovers and runs all `testing_tools/scripts/test_*.js` scripts (`test_bridge_js.js`, `test_bridge_protocol.js`, `test_logger_logic.js`, `test_modular_components.js`, `test_resilience_fixes.js`, `test_ui_sync.js`, `test_yt_tools.js`, `test_yt_tools_standalone.js`).
      - Runs `node --check` syntax validation and the JS empty/comment-only `catch {}` regex gate across all `.js` files.
      - Runs Python AST static checks enforcing syntax, forbidding bare `except:` clauses, and forbidding silent `except ...: pass` (`_is_silent_pass`).
      - Runs `ruff` (`testing_tools/pyproject.toml`), `biome` (`testing_tools/biome.json`), and `luac -p` (`mpv_scripts/*.lua`) when installed.
-   - Note: `testing_tools/create_release.py` packages release builds; if `mpv-playlist-organizer-release/` is present in the repo root, `run_suite.py` walks it as well.
+   - Note: `testing_tools/create_release.py` packages release builds; `run_suite.py` excludes `yt-tools-legacy`, `yt-tools-standalone`, and `mpv-playlist-organizer-release` during static scans.
 
 ---
 

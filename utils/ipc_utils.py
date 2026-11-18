@@ -722,7 +722,7 @@ def is_process_alive(pid, ipc_path):
     elif actual_pid is not None:
         ipc_logger.debug(f"[PY][IPC] is_process_alive: PID mismatch. Expected {pid}, got {actual_pid}. (Socket is alive)")
     else:
-        ipc_logger.debug(f"[PY][IPC] is_process_alive: Failed to get PID from MPV.")
+        ipc_logger.debug("[PY][IPC] is_process_alive: Failed to get PID from MPV.")
             
     return False
 
