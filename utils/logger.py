@@ -84,13 +84,13 @@ def initialize(data_dir: str, script_dir: str = None, level=logging.DEBUG):
             try:
                 os.makedirs(data_dir, exist_ok=True)
                 if not os.access(data_dir, os.W_OK):
-                    raise OSError("Directory not writable")
+                    raise OSError("Directory not writable") from None
             except OSError:
                 import tempfile
                 data_dir = os.path.join(tempfile.gettempdir(), "MPVPlaylistOrganizer")
                 os.makedirs(data_dir, exist_ok=True)
                 if not os.access(data_dir, os.W_OK):
-                    raise OSError("Directory not writable")
+                    raise OSError("Directory not writable") from None
                 formatter.data_dir = data_dir
 
             main_log_file = os.path.join(data_dir, "native_host.log")
@@ -226,7 +226,7 @@ def _send_ui_notification(text, log_type):
 
 def set_ui_sender(send_func):
     """Injects the bridge's send_message function for UI notifications."""
-    setattr(sys.modules[__name__], '_ui_send_func', send_func)
+    sys.modules[__name__]._ui_send_func = send_func
 
 # --- Decorators ---
 

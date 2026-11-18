@@ -8,7 +8,7 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
+select = ["E", "F", "W", "B"]
 # E402 is ignored intentionally because entry points (cli.py, native_host.py, installer.py)
 # set sys.dont_write_bytecode = True and PYTHONDONTWRITEBYTECODE before importing modules.
 ignore = ["E402", "E501", "E701"]

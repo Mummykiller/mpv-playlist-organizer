@@ -321,6 +321,7 @@ class TestNativeHostBoot(BaseTestCase):
         registry = native_host.build_handler_registry()
         ping_handler = registry.get_handler("ping")
         self.assertIsNotNone(ping_handler, "ping handler must be registered by build_handler_registry()")
+        assert ping_handler is not None
 
         req = native_link.translate({"action": "ping", "request_id": "unit-ping-1"})
         resp = ping_handler(req)

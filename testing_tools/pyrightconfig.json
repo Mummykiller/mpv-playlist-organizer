@@ -1,0 +1,32 @@
+{
+  "include": [
+    ".."
+  ],
+  "exclude": [
+    "../node_modules",
+    "../testing_tools/node_modules",
+    "../yt-tools-standalone",
+    "../yt-tools-legacy",
+    "../mpv-playlist-organizer-release",
+    "../.git",
+    "../__pycache__"
+  ],
+  "extraPaths": [
+    "..",
+    "../testing_tools",
+    "../testing_tools/scripts"
+  ],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "error",
+  "reportUndefinedVariable": "error",
+  "reportIncompatibleMethodOverride": "error",
+  "reportOperatorIssue": "error",
+  "reportAttributeAccessIssue": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportArgumentType": "none",
+  "reportAssignmentType": "none",
+  "reportReturnType": "none",
+  "reportCallIssue": "none",
+  "reportPossiblyUnboundVariable": "none"
+}

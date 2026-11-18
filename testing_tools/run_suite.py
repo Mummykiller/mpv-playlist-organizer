@@ -385,6 +385,89 @@ def run_js_batch(verbose=False):
     elif verbose and not luac_bin:
         print(f"  {CYAN}ℹ️  luac not installed (skipping Lua syntax check).{RESET}")
 
+    # 6. Luacheck (mpv_scripts/*.lua via testing_tools/.luacheckrc when available)
+    luacheck_bin = shutil.which("luacheck")
+    if luacheck_bin and lua_files:
+        luacheck_cmd = [luacheck_bin]
+        luacheck_cfg = os.path.join(TESTING_TOOLS_DIR, ".luacheckrc")
+        if os.path.isfile(luacheck_cfg):
+            luacheck_cmd.extend(["--config", luacheck_cfg])
+        luacheck_cmd.extend(lua_files)
+        lc_res = subprocess.run(
+            luacheck_cmd,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if lc_res.returncode == 0:
+            if verbose:
+                print(f"  {GREEN}✅ Luacheck: Clean ({len(lua_files)}/{len(lua_files)} files){RESET}")
+        else:
+            print(f"\n  {RED}{BOLD}❌ Luacheck violations detected:{RESET}")
+            if lc_res.stdout:
+                print(f"{RED}{lc_res.stdout.strip()}{RESET}")
+            if lc_res.stderr:
+                print(f"{RED}{lc_res.stderr.strip()}{RESET}")
+            all_success = False
+    elif verbose and not luacheck_bin:
+        print(f"  {CYAN}ℹ️  Luacheck not installed (skipping).{RESET}")
+
+    # 7. ShellCheck (*.sh scripts when available)
+    shellcheck_bin = shutil.which("shellcheck")
+    sh_files = []
+    for root_dir, dirs, files in os.walk(PROJECT_ROOT):
+        dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', 'yt-tools-legacy', 'yt-tools-standalone', 'mpv-playlist-organizer-release'}]
+        for f in sorted(files):
+            if f.endswith('.sh'):
+                sh_files.append(os.path.join(root_dir, f))
+    if shellcheck_bin and sh_files:
+        sc_res = subprocess.run(
+            [shellcheck_bin, *sh_files],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if sc_res.returncode == 0:
+            if verbose:
+                print(f"  {GREEN}✅ ShellCheck: Clean ({len(sh_files)}/{len(sh_files)} files){RESET}")
+        else:
+            print(f"\n  {RED}{BOLD}❌ ShellCheck violations detected:{RESET}")
+            if sc_res.stdout:
+                print(f"{RED}{sc_res.stdout.strip()}{RESET}")
+            if sc_res.stderr:
+                print(f"{RED}{sc_res.stderr.strip()}{RESET}")
+            all_success = False
+    elif verbose and not shellcheck_bin:
+        print(f"  {CYAN}ℹ️  ShellCheck not installed (skipping).{RESET}")
+
+    # 8. Pyright (Python type checker via testing_tools/pyrightconfig.json when available)
+    pyright_bin = shutil.which("pyright")
+    if pyright_bin:
+        pyright_cmd = [pyright_bin]
+        pyright_cfg = os.path.join(TESTING_TOOLS_DIR, "pyrightconfig.json")
+        if os.path.isfile(pyright_cfg):
+            pyright_cmd.extend(["-p", pyright_cfg])
+        else:
+            pyright_cmd.append(".")
+        pr_res = subprocess.run(
+            pyright_cmd,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if pr_res.returncode == 0:
+            if verbose:
+                print(f"  {GREEN}✅ Pyright Type Check: Clean{RESET}")
+        else:
+            print(f"\n  {RED}{BOLD}❌ Pyright violations detected:{RESET}")
+            if pr_res.stdout:
+                print(f"{RED}{pr_res.stdout.strip()}{RESET}")
+            if pr_res.stderr:
+                print(f"{RED}{pr_res.stderr.strip()}{RESET}")
+            all_success = False
+    elif verbose:
+        print(f"  {CYAN}ℹ️  Pyright not installed (skipping).{RESET}")
+
     return all_success, total_passed, total_checks, syntax_ok, len(js_files), py_ok, len(py_files)
 
 
@@ -447,7 +530,7 @@ def run_all_tests(verbose=False):
     py_all_ok = True
     py_pass = 0
     py_total = 0
-    for test_file, ok, passed, total, stdout_text, stderr_text in py_results:
+    for _test_file, ok, passed, total, stdout_text, stderr_text in py_results:
         py_pass += passed
         py_total += total
         if not ok:
@@ -473,8 +556,8 @@ def run_all_tests(verbose=False):
 def start_watch_mode():
     """Monitors files and re-runs tests on change."""
     try:
-        from watchdog.observers import Observer
-        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer  # type: ignore[import-not-found]
+        from watchdog.events import FileSystemEventHandler  # type: ignore[import-not-found]
     except ImportError:
         print(f"{RED}❌ Error: 'watchdog' package required for watch mode.{RESET}")
         print("   Install it with: pip install watchdog")

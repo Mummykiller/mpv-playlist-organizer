@@ -297,7 +297,7 @@ def is_safe_url(url, web_only=False):
                     if not sockaddr:
                         continue
                     ip_str = sockaddr[0]
-                    if "%" in ip_str:
+                    if isinstance(ip_str, str) and "%" in ip_str:
                         ip_str = ip_str.split("%", 1)[0]
                     ip = ipaddress.ip_address(ip_str)
                     if _is_unsafe_ip(ip):

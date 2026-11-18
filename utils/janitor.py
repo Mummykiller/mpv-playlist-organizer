@@ -59,7 +59,7 @@ class Janitor:
 
         # Use topdown=False to allow cleaning empty directories after their content
         for scan_dir in scan_dirs:
-            for root, dirs, files in os.walk(scan_dir, topdown=False):
+            for root, _dirs, files in os.walk(scan_dir, topdown=False):
                 for filename in files:
                     file_path = os.path.join(root, filename)
                     matched = False

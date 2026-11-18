@@ -727,11 +727,11 @@ def is_process_alive(pid, ipc_path):
     return False
 
 
-IPC_DIR_LINUX = os.environ.get("XDG_RUNTIME_DIR")
-if not IPC_DIR_LINUX:
+_xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
+if not _xdg_runtime:
     IPC_DIR_LINUX = os.path.join(os.path.expanduser("~"), ".mpv_playlist_organizer_ipc")
 else:
-    IPC_DIR_LINUX = os.path.join(IPC_DIR_LINUX, "mpv_playlist_organizer_ipc")
+    IPC_DIR_LINUX = os.path.join(_xdg_runtime, "mpv_playlist_organizer_ipc")
 
 PIPE_NAME_WINDOWS = "mpv-playlist-organizer-ipc"
 

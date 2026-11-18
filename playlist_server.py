@@ -37,7 +37,9 @@ class PlaylistHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         # --- Host Header Validation ---
-        actual_port = self.server.server_address[1]
+        server_addr = self.server.server_address
+        assert isinstance(server_addr, tuple)
+        actual_port = server_addr[1]
         host_header = self.headers.get('Host', '')
         allowed_hosts = {f"127.0.0.1:{actual_port}", f"localhost:{actual_port}"}
         if host_header not in allowed_hosts:
