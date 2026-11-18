@@ -211,7 +211,17 @@ export function createYouTubeToolsManager(ctx = {}) {
 			const defVal = defaults[cat];
 			const srcVal = src[cat];
 			if (defVal && typeof defVal === "object" && !Array.isArray(defVal)) {
-				merged[cat] = { ...defVal, ...(srcVal && typeof srcVal === "object" ? srcVal : {}) };
+				const catObj = { ...defVal, ...(srcVal && typeof srcVal === "object" ? srcVal : {}) };
+				if (
+					cat === "video-player-settings" &&
+					Object.prototype.hasOwnProperty.call(catObj, "Video-settings")
+				) {
+					if (!Object.prototype.hasOwnProperty.call(srcVal || {}, "video-settings")) {
+						catObj["video-settings"] = catObj["Video-settings"];
+					}
+					delete catObj["Video-settings"];
+				}
+				merged[cat] = catObj;
 			} else {
 				merged[cat] = srcVal !== undefined ? srcVal : defVal;
 			}

@@ -590,7 +590,7 @@ async function testPopupYoutube() {
 		shinkuYtToolsEnabled: false,
 		shinkuExtensionSettings: {
 			"video-player-settings": {
-				"Video-settings": true,
+				"video-settings": true,
 				"seek-override": 10,
 			},
 		},
@@ -613,7 +613,7 @@ async function testPopupYoutube() {
 			"video-player-settings": {
 				id: "video-player-settings",
 				title: "Video Player Settings",
-				masterKey: "Video-settings",
+				masterKey: "video-settings",
 				controls: [
 					{ key: "seek-override", label: "Seek Seconds", type: "number", min: 1, max: 300 },
 					{ key: "pause", label: "Auto-Pause", type: "toggle" },
@@ -633,7 +633,7 @@ async function testPopupYoutube() {
 
 		const seekInput = document.getElementById("yt-setting-seek-override");
 		assert.ok(seekInput, "Object-schema controls rendered");
-		assert.ok(document.getElementById("yt-setting-Video-settings"), "Object-schema masterKey auto-inserted");
+		assert.ok(document.getElementById("yt-setting-video-settings"), "Object-schema masterKey auto-inserted");
 		assert.strictEqual(seekInput.value, "10");
 
 		// Clicking section header collapse button minimizes children without disabling master toggle
@@ -645,7 +645,7 @@ async function testPopupYoutube() {
 		collapseBtn.click();
 		assert.strictEqual(childrenEl.classList.contains("collapsed"), true, "Header click minimizes section");
 		assert.strictEqual(
-			document.getElementById("yt-setting-Video-settings").checked,
+			document.getElementById("yt-setting-video-settings").checked,
 			true,
 			"Minimizing section does not disable master toggle"
 		);
@@ -675,7 +675,7 @@ async function testPopupYoutube() {
 		await mock.chrome.storage.local.set({
 			shinkuExtensionSettings: {
 				"video-player-settings": {
-					"Video-settings": true,
+					"video-settings": true,
 					"seek-override": 15,
 					pause: false,
 				},
@@ -1152,7 +1152,7 @@ async function testYtExtendedSettingsFeatures() {
 		settings["frame-removal-settings"]["blocked-keywords"] = "";
 		// Turning off overarching category masters cleanly disables everything inside each submenu
 		settings["distraction-settings"]["distraction-master"] = false;
-		settings["video-player-settings"]["Video-settings"] = false;
+		settings["video-player-settings"]["video-settings"] = false;
 		settings["thumbnail-title-settings"]["thumbnail-master"] = false;
 		dom.window.dispatchEvent(
 			new dom.window.MessageEvent("message", {

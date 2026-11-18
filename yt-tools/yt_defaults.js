@@ -36,7 +36,7 @@
       "hide-sidebar-explore": false
     },
     "video-player-settings": {
-      "Video-settings": true,
+      "video-settings": true,
       "button": true,
       "force-seek-to-saved": true,
       "pause": true,
@@ -176,7 +176,7 @@
     {
       id: "video-player-settings",
       title: "Video Player & Playback",
-      masterKey: "Video-settings",
+      masterKey: "video-settings",
       controls: [
         {
           key: "quality-selection",

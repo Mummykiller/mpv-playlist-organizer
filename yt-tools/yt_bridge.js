@@ -54,6 +54,14 @@
       for (const key of Object.keys(defCat)) {
         if (savedCat && Object.prototype.hasOwnProperty.call(savedCat, key) && savedCat[key] !== undefined) {
           merged[category][key] = savedCat[key];
+        } else if (
+          key === "video-settings" &&
+          savedCat &&
+          Object.prototype.hasOwnProperty.call(savedCat, "Video-settings") &&
+          savedCat["Video-settings"] !== undefined
+        ) {
+          merged[category][key] = savedCat["Video-settings"];
+          changed = true;
         } else {
           merged[category][key] = defCat[key];
           changed = true;
