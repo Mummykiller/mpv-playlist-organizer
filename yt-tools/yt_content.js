@@ -109,7 +109,7 @@
   }
 
   function isPlayerMasterOn() {
-    return toolsEnabled && Boolean(getPlayerSettings()["Video-settings"]);
+    return toolsEnabled && Boolean(getPlayerSettings()["video-settings"]);
   }
 
   function isFrameMasterOn() {
