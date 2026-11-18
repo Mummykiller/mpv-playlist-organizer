@@ -154,7 +154,7 @@ Browsers and desktop environments often launch native hosts with a stripped `PAT
 
 ---
 
-## 6. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+## 6. Audit Guardrails
 
 > [!NOTE]
 > **Resolved Audit Findings (PY-H1, PY-L4, PY-L5):** CLI mode now injects a text logger / no-op sender (`send_message_cli`), completely bypassing binary length-prefixed framing on terminal stdout. Extension ID is validated against `^[a-p]{32}$` in `installer_logic.py` and `installer_cli.py`. Wrapper scripts quote executable and script paths via `shlex.quote`. All Firefox manifest references have been removed.

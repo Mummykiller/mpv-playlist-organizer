@@ -408,6 +408,7 @@ export class OptionsManager {
 		}
 
 		this.preferenceMappings.forEach((mapping) => {
+			if (mapping.type === "custom") return;
 			const el = document.getElementById(mapping.elementId);
 			if (el) {
 				const value = prefs[mapping.key];
@@ -485,7 +486,7 @@ export class OptionsManager {
 
 		this._updateAnilistImageSize(prefs.anilistImageHeight || 126);
 		this._updatePopupWidth(prefs.popupWidth || 600);
-		this._updatePopupWidthLock(prefs.popupWidthLocked || false);
+		this._updatePopupWidthLock(prefs.popupWidthLocked === true);
 
 		this._renderScraperFilterList(prefs.scraperFilterWords || []);
 		this._renderRestrictedDomainsList(prefs.restrictedDomains || []);
@@ -547,6 +548,7 @@ export class OptionsManager {
 		const preferences = {};
 
 		this.preferenceMappings.forEach((mapping) => {
+			if (mapping.type === "custom") return;
 			const el = document.getElementById(mapping.elementId);
 			if (el) {
 				let value;
@@ -598,11 +600,16 @@ export class OptionsManager {
 		this.sendMessageAsync({
 			action: "set_ui_preferences",
 			preferences: preferences,
-		}).then((response) => {
-			if (!response?.success) {
+		})
+			.then((response) => {
+				if (!response?.success) {
+					this.showStatus("Failed to save settings.", true);
+				}
+			})
+			.catch((err) => {
+				console.error("[SettingsManager] Failed to save settings:", err);
 				this.showStatus("Failed to save settings.", true);
-			}
-		});
+			});
 	}
 
 	_updateAnilistImageSize(height) {
@@ -800,18 +807,26 @@ export class OptionsManager {
 		const lockBtn = document.getElementById("btn-lock-popup-width");
 		if (lockBtn) {
 			lockBtn.addEventListener("click", async () => {
-				const response = await this.sendMessageAsync({
-					action: "get_ui_preferences",
-				});
-				const currentlyLocked =
-					response?.preferences?.popupWidthLocked || false;
-				const newLockedState = !currentlyLocked;
+				try {
+					const response = await this.sendMessageAsync({
+						action: "get_ui_preferences",
+					});
+					const currentlyLocked =
+						response?.preferences?.popupWidthLocked === true;
+					const newLockedState = !currentlyLocked;
 
-				await this.sendMessageAsync({
-					action: "set_ui_preferences",
-					preferences: { popupWidthLocked: newLockedState },
-				});
-				this._updatePopupWidthLock(newLockedState);
+					await this.sendMessageAsync({
+						action: "set_ui_preferences",
+						preferences: { popupWidthLocked: newLockedState },
+					});
+					this._updatePopupWidthLock(newLockedState);
+				} catch (err) {
+					console.error(
+						"[SettingsManager] Failed to toggle popup width lock:",
+						err,
+					);
+					this.showStatus("Failed to update popup width lock.", true);
+				}
 			});
 		}
 
@@ -854,7 +869,13 @@ export class OptionsManager {
 		if (manualYtdlpBtn) {
 			manualYtdlpBtn.addEventListener("click", () => {
 				this.showStatus("Starting yt-dlp update...");
-				this.sendMessageAsync({ action: "manual_ytdlp_update" });
+				this.sendMessageAsync({ action: "manual_ytdlp_update" }).catch((err) => {
+					console.error(
+						"[SettingsManager] Failed to start yt-dlp update:",
+						err,
+					);
+					this.showStatus("Failed to start yt-dlp update.", true);
+				});
 			});
 		}
 

@@ -15,6 +15,7 @@ export function createPlaybackManager(ctx) {
 		miniAddBtn,
 		miniClearBtn,
 		miniCloseMpvBtn,
+		miniItemCountSpan,
 		playlistContainer,
 		getPlaylistRenderer,
 		getCachedPrefs,
@@ -114,6 +115,12 @@ export function createPlaybackManager(ctx) {
 			completedIds: effectiveCompletedIds,
 			preventScroll,
 		});
+
+		const renderedCount =
+			playlistRenderer.lastRenderedIds?.size ?? effectivePlaylist.length;
+		if (miniItemCountSpan) {
+			miniItemCountSpan.textContent = String(renderedCount);
+		}
 
 		if (miniPlayBtn) {
 			const visual = domUtils.getPlayButtonVisual({
@@ -234,7 +241,8 @@ export function createPlaybackManager(ctx) {
 		const diagEl = document.querySelector(
 			"#diag-native-host-status .dependency-value",
 		);
-		if (!diagEl) return;
+		const setupBanner = document.getElementById("native-host-setup-banner");
+		if (!diagEl && !setupBanner) return;
 
 		try {
 			const response = await sendMessageAsync({
@@ -242,23 +250,37 @@ export function createPlaybackManager(ctx) {
 			});
 			if (response?.success) {
 				const status = response.status || "unknown";
-				diagEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+				if (diagEl) {
+					diagEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+				}
 
 				if (status === "online") {
-					diagEl.style.color = "var(--accent-positive)";
-					if (response.info?.python) {
-						diagEl.title = `Python: ${response.info.python}\nPlatform: ${response.info.platform}`;
+					if (diagEl) {
+						diagEl.style.color = "var(--accent-positive)";
+						if (response.info?.python) {
+							diagEl.title = `Python: ${response.info.python}\nPlatform: ${response.info.platform}`;
+						}
 					}
-				} else if (status === "offline") {
-					diagEl.style.color = "var(--accent-danger)";
-					diagEl.title = "Native host is not running or not installed.";
+					if (setupBanner) setupBanner.style.display = "none";
+				} else if (status === "offline" || status === "error") {
+					if (diagEl) {
+						diagEl.style.color = "var(--accent-danger)";
+						diagEl.title = "Native host is not running or not installed.";
+					}
+					if (setupBanner) setupBanner.style.display = "block";
 				} else {
-					diagEl.style.color = "var(--text-secondary)";
+					if (diagEl) {
+						diagEl.style.color = "var(--text-secondary)";
+					}
+					if (setupBanner) setupBanner.style.display = "none";
 				}
 			}
 		} catch (e) {
-			diagEl.textContent = "Error";
-			diagEl.style.color = "var(--accent-danger)";
+			if (diagEl) {
+				diagEl.textContent = "Error";
+				diagEl.style.color = "var(--accent-danger)";
+			}
+			if (setupBanner) setupBanner.style.display = "block";
 		}
 	}
 
@@ -321,7 +343,7 @@ export function createPlaybackManager(ctx) {
 
 				setTimeout(() => {
 					addBtn.innerHTML = originalIcon;
-					addBtn.disabled = false;
+					addBtn.disabled = !addBtn.classList.contains("stream-present");
 				}, 2000);
 			} else {
 				showStatus(addResponse.error || "Failed to add URL.", true);
@@ -482,7 +504,7 @@ export function createPlaybackManager(ctx) {
 					MpvInterface.play(miniFolderSelect.value, {
 						urlItem: fullItem,
 						playlistStartId: fullItem.id,
-					});
+					}).catch((err) => showStatus("Playback error: " + err.message, true));
 					isPickStartModeActive = false;
 					refreshQuickActionsBar();
 				}
@@ -499,7 +521,7 @@ export function createPlaybackManager(ctx) {
 						urlItem: fullItem,
 						playNewInstance: true,
 						folderId: miniFolderSelect.value,
-					});
+					}).catch((err) => showStatus("Playback error: " + err.message, true));
 
 					isSelectionModeActive = false;
 					playlistContainer.classList.remove("selection-mode-active");
@@ -571,9 +593,13 @@ export function createPlaybackManager(ctx) {
 		miniAddBtn.addEventListener("click", handleMiniAdd);
 		miniAddBtn.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
-			sendMessageAsync({ action: "toggle_auto_add" }).then((res) => {
-				if (res?.success) updateAutoAddVisuals(res.active);
-			});
+			sendMessageAsync({ action: "toggle_auto_add" })
+				.then((res) => {
+					if (res?.success) updateAutoAddVisuals(res.active);
+				})
+				.catch((err) =>
+					showStatus("Failed to toggle auto-add: " + err.message, true),
+				);
 		});
 
 		miniPlayBtn.addEventListener("click", () =>
@@ -607,7 +633,9 @@ export function createPlaybackManager(ctx) {
 						MpvInterface.play(miniFolderSelect.value, {
 							urlItem: firstItem,
 							playlistStartId: firstItem.id,
-						});
+						}).catch((err) =>
+							showStatus("Playback error: " + err.message, true),
+						);
 					} else {
 						showStatus("Cannot play from start - Playlist is empty.", true);
 					}
@@ -679,8 +707,10 @@ export function createPlaybackManager(ctx) {
 						.catch((err) => showStatus("Reorder error: " + err.message, true));
 				};
 			} else if (isLast) {
-				btn.textContent = "⚡";
-				btn.title = "Toggle Disconnected Launch (Selection Mode)";
+				if (!btn.querySelector("svg")) {
+					btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>`;
+				}
+				btn.title = "Detached Launch (Selection Mode): Click here, then click any item below to open it in a separate MPV window";
 				btn.classList.add("btn-disconnected-toggle");
 
 				btn.onclick = (e) => {

@@ -3,8 +3,8 @@ name: ui-shadow-dom-and-settings
 description: >-
   Governs the frontend presentation layer, Shadow DOM style injection, and Settings UI architecture.
   Load this skill whenever modifying `content.js`, `content.css`, `popup.html`, `popup.js`, `popup.css`,
-  `shared.css`, `utils/UIManager.js`, `utils/MpvController.js`, `utils/PlaylistUI.js`,
-  `utils/PlaylistRenderer.js`, or the Settings UI in `utils/settings.js`.
+  `popup/*.js`, `shared.css`, `utils/UIManager.js`, `utils/ControllerView.js`, `utils/MpvController.js`,
+  `utils/PlaylistUI.js`, `utils/PlaylistRenderer.js`, or the Settings UI in `utils/settings.js`.
 ---
 
 # UI, Shadow DOM & Settings Architecture
@@ -24,12 +24,27 @@ The frontend renders across two distinct surfaces:
 ├────────────────────────────────────────┤       ├────────────────────────────────────────┤
 │ • Runs in extension context.           │       │ • Injected into target web pages.      │
 │ • Uses shared.css + popup.css.         │       │ • Uses shared.css + content.css.       │
-│ • Renders via PlaylistRenderer.js.     │       │ • Renders via PlaylistUI / MpvControl. │
+│ • Renders via PlaylistRenderer.js.     │       │ • Renders via PlaylistUI / ControllerView / MpvController. │
 │ • Completely reloads on every open.    │       │ • Encapsulated inside isolated Shadow  │
 │ • Full management view, AniList tab,   │       │   DOM roots to prevent page CSS leaks. │
 │   and collapsible settings controls.   │       │ • Minimized stub & quick-actions bar.  │
 └────────────────────────────────────────┘       └────────────────────────────────────────┘
 ```
+
+### Popup & Settings Module Map (`popup/*.js`)
+
+To avoid bloating `popup.js` and `utils/settings.js` (per `lead-architect`'s large-file rule), popup and settings concerns are split across `popup/`:
+
+| Module | Owned Concern |
+| :--- | :--- |
+| `popup/popup_anilist.js` | AniList popup tab wiring & schedule rendering |
+| `popup/popup_backup.js` | Data export/import & backup restore controls |
+| `popup/popup_folders.js` | Folder management, creation, renaming, & item list rendering |
+| `popup/popup_playback.js` | Popup playback controls & active session status |
+| `popup/popup_youtube.js` | YouTube Tools sub-extension popup tab (see `youtube-tools-subextension`) |
+| `popup/settings_diagnostics.js` | Diagnostics report, log viewer, & dependency status UI |
+| `popup/settings_lists.js` | URL/domain rules, custom headers, & list-based settings |
+| `popup/settings_ui.js` | Simple/Advanced mode, category tabs, search, & presets UI helpers |
 
 ---
 

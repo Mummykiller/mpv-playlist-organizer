@@ -149,8 +149,8 @@ def restore_session(session):
                 "was_stale": False,
                 "folder_id": session.owner_folder_id,
                 "last_played_id": getattr(session, 'last_played_id_cache', None),
-                "is_paused": getattr(session, "is_paused", False),
-                "is_idle": getattr(session, "is_idle", False),
+                "is_paused": bool(session.get_pause_state()),
+                "is_idle": bool(session.get_idle_state()),
                 "token": getattr(session, 'current_token', None),
                 "playlist": session.playlist
             })

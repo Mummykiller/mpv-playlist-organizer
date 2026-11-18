@@ -94,7 +94,7 @@ async function testAniListUIFetchReleasesGenerationGuard() {
 			<button id="btn-anilist-prev"></button>
 			<button id="btn-anilist-next"></button>
 			<button id="btn-anilist-today">Today</button>
-			<ul id="anilist-releases-list"></ul>
+			<div id="anilist-releases-container"></div>
 		</div>
 	</body></html>`);
 	global.window = dom.window;

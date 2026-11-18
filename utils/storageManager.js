@@ -31,8 +31,12 @@ export class StorageManager {
 				await this._migrateToCamelCaseSettings();
 				await this._runDataMigrations(true);
 				await this.runJanitorTasks(true);
-			} finally {
 				this._initComplete = true;
+			} catch (e) {
+				this._initPromise = null;
+				this.initPromise = null;
+				this._initComplete = false;
+				throw e;
 			}
 		})();
 		this.initPromise = this._initPromise;
@@ -166,10 +170,12 @@ export class StorageManager {
 	}
 
 	async set(data, folderId = null) {
-		this.writeQueue = this.writeQueue.then(async () => {
+		const writePromise = this.writeQueue.then(async () => {
 			try {
 				// 0. Change-Aware Optimization: Get existing data to compare
-				const keysToFetch = folderId ? [`mpv_folder_data_${folderId}`, "mpv_settings"] : ["mpv_settings", "mpv_folder_index"];
+				const keysToFetch = folderId
+					? [`mpv_folder_data_${folderId}`, "mpv_settings", "mpv_folder_index"]
+					: ["mpv_settings", "mpv_folder_index"];
 				const existing = await chrome.storage.local.get(keysToFetch);
 
 				// If folderId is provided, we only validate and save that specific folder
@@ -180,7 +186,17 @@ export class StorageManager {
 					const folderChanged = JSON.stringify(data.folders[folderId]) !== JSON.stringify(existing[folderKey]);
 					const settingsChanged = JSON.stringify(data.settings) !== JSON.stringify(existing.mpv_settings);
 
-					if (!folderChanged && !settingsChanged) {
+					const currentOrder = Array.isArray(data.folderOrder)
+						? [...data.folderOrder]
+						: Array.isArray(existing.mpv_folder_index)
+							? [...existing.mpv_folder_index]
+							: [];
+					if (!currentOrder.includes(folderId)) {
+						currentOrder.push(folderId);
+					}
+					const indexChanged = JSON.stringify(currentOrder) !== JSON.stringify(existing.mpv_folder_index || []);
+
+					if (!folderChanged && !settingsChanged && !indexChanged) {
 						this._cache = data;
 						return;
 					}
@@ -188,13 +204,7 @@ export class StorageManager {
 					const update = {};
 					if (folderChanged) update[folderKey] = data.folders[folderId];
 					if (settingsChanged) update.mpv_settings = data.settings;
-
-					// Also ensure folder is in index
-					const currentOrder = data.folderOrder || [];
-					if (!currentOrder.includes(folderId)) {
-						currentOrder.push(folderId);
-						update["mpv_folder_index"] = currentOrder;
-					}
+					if (indexChanged) update["mpv_folder_index"] = currentOrder;
 
 					await chrome.storage.local.set(update);
 					this._cache = data;
@@ -227,9 +237,11 @@ export class StorageManager {
 						text: `[Storage]: Write failed: ${e.message}`,
 						type: "error",
 					});
+				throw e;
 			}
 		});
-		return this.writeQueue;
+		this.writeQueue = writePromise.catch(() => {});
+		return writePromise;
 	}
 
 	_validateFolder(id, folder) {

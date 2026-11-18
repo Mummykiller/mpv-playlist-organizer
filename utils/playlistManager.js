@@ -10,6 +10,7 @@ import { broadcastLog } from "../background/messaging.js";
 import { normalizeYouTubeUrl, getActiveTab, promptUserConfirmation } from "./commUtils.module.js";
 import { nativeLink } from "./nativeLink.js";
 import { storage } from "../background/storage_instance.js";
+import { playbackManager } from "../background/playback_manager.js";
 import { processPlaylistItem } from "./item_processor.js";
 
 // Keep track of URLs currently being processed to avoid concurrent duplicates
@@ -108,6 +109,7 @@ async function addUrlToFolder(
 		});
 
 		// Check for live append or broadcast playlist change
+		await playbackManager.initPromise;
 		const isActive = isFolderActive(actualFolderId);
 		if (isActive && data.settings.uiPreferences.global.autoAppendOnAdd) {
 			nativeLink
@@ -453,6 +455,7 @@ export async function handleGetPlaylist(request) {
 	}
 
 	const isProcessRunning = !!finalStatus?.isRunning;
+	await playbackManager.initPromise;
 	const isManagerActive = isFolderActive(request.folderId);
 	let isActive = (isProcessRunning || isManagerActive) && (finalStatus?.folderId?.toLowerCase() === request.folderId?.toLowerCase() || !finalStatus?.folderId);
 	let needsAppend = false;

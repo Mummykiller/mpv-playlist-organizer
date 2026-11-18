@@ -3,8 +3,9 @@ name: mpv-playback-and-ipc
 description: >-
   Governs the MPV player lifecycle, launch modes, JSON-IPC bidirectional control,
   temporary handshake file mechanism, and Lua script behaviors. Load this skill whenever
-  modifying `mpv_session.py`, `utils/ipc_utils.py`, `utils/mpv_command_builder.py`,
-  `services.py` (create_handshake_file), `utils/m3u_server.py`, or Lua scripts in `mpv_scripts/`.
+  modifying `mpv_session.py`, `utils/session_ipc_ops.py`, `utils/session_health.py`,
+  `utils/ipc_utils.py`, `utils/mpv_command_builder.py`, `services.py` (create_handshake_file),
+  `utils/m3u_server.py`, or Lua scripts in `mpv_scripts/`.
 ---
 
 # MPV Playback Engine & JSON-IPC Architecture
@@ -89,6 +90,10 @@ Primary MPV sessions are controlled in real time over mpv's JSON-IPC interface u
 - **Linux / macOS:** Unix domain socket created in `/dev/shm` or `~/.mpv_playlist_organizer_ipc/` with strict `0600` permissions (owner read/write only).
 - **Windows:** Named pipe format: `\\.\pipe\mpv-playlist-organizer-ipc-<pid>`.
 
+- **Extracted Session Modules:**
+  - `utils/session_ipc_ops.py` owns live IPC playlist operations extracted from `mpv_session.py`: `generate_m3u_content`, `sync_playlist_from_mpv`, `perform_cookie_fallback`, `append_batch_internal`, `remove_item`, `reorder_playlist`, `clear_live_playlist`, and `hot_swap_item`.
+  - `utils/session_health.py` owns `start_health_watcher`, `persist_session_atomic`, `trim_oversized_reply`, and `restore_session`.
+
 ### The Event Reader Thread
 
 - `_event_reader_loop()` runs in a daemon thread, continuously reading newline-delimited JSON packets from the socket.
@@ -144,7 +149,7 @@ Tracks playback completion and cleanly notifies the Python backend:
 
 ---
 
-## Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+## Audit Guardrails
 
 1. **Stale-socket detection:** only `ConnectionRefusedError` / `FileNotFoundError` mean stale. A timeout means *busy*, not dead, so never unlink on timeout. Clean up only inside the app's own IPC dir, never scan `/tmp` or other hosts' sockets.
 2. **Process identity before kill:** trust a saved PID only after IPC returns the same `pid` (or `/proc/<pid>/cmdline` matches mpv plus our socket). Persist process start time in `session.json`.

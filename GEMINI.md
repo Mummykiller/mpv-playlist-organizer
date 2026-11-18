@@ -21,3 +21,5 @@ Before undertaking work in specific architectural domains, read the correspondin
 - **Native Host Installer & CLI**: [.gemini/skills/native-host-installer-and-cli/SKILL.md](.gemini/skills/native-host-installer-and-cli/SKILL.md)
 - **AniList Integration**: [.gemini/skills/anilist-integration/SKILL.md](.gemini/skills/anilist-integration/SKILL.md)
 - **Testing & Test Authoring**: [.gemini/skills/testing-and-test-authoring/SKILL.md](.gemini/skills/testing-and-test-authoring/SKILL.md)
+- **YouTube Tools Sub-Extension**: [.gemini/skills/youtube-tools-subextension/SKILL.md](.gemini/skills/youtube-tools-subextension/SKILL.md)
+- **Skills Maintenance**: [.gemini/skills/skills-maintenance/SKILL.md](.gemini/skills/skills-maintenance/SKILL.md)

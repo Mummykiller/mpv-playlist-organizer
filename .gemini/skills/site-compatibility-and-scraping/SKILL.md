@@ -3,9 +3,9 @@ name: site-compatibility-and-scraping
 description: >-
   Governs brand-based site compatibility overrides, source swapping header management,
   browser cookie SQLite shadow copying, stream resolution routing, and in-page video scraping.
-  Load this skill whenever modifying `SITE_COMPATIBILITY_SYSTEM.md`, `testing_tools/SOURCE_SWAPPING_GUIDE.md`,
+  Load this skill whenever modifying `testing_tools/SOURCE_SWAPPING_GUIDE.md`,
   `utils/url_analyzer.py`, `services.py` (force_sanitize_headers, construct_lua_options),
-  `utils/metadata_cache.py`, `utils/PageScraper.js`, `background/handlers/m3u8_scanner.js`,
+  `utils/native_link/metadata_cache.py`, `utils/PageScraper.js`, `background/handlers/m3u8_scanner.js`,
   `data/Site_Compatibility.json`, or diagnosing streaming CDN reconnection loops, cookie database locks, and 403 Forbidden errors.
 ---
 
@@ -109,7 +109,7 @@ Stream URLs must be classified and sanitized before passing them to MPV:
 
 ---
 
-## 5. Domain-Sharded Metadata Caching (`utils/metadata_cache.py`)
+## 5. Domain-Sharded Metadata Caching (`utils/native_link/metadata_cache.py`)
 
 To eliminate repeated external network lookups for titles, stream URLs, and headers:
 - Metadata is cached per-domain in persistent files under `data/metadata_cache/<domain>.json`.

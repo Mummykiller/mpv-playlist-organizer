@@ -16,8 +16,10 @@ export function createAniListManager(ctx) {
 	} = ctx;
 
 	let currentAnilistOffset = 0;
+	let activeFetchId = 0;
 
 	async function fetchAniListReleases(forceRefresh = false, offset = 0) {
+		const fetchId = ++activeFetchId;
 		if (anilistNavControls) anilistNavControls.style.display = "flex";
 
 		const existingList = anilistReleasesContent.querySelector(
@@ -56,6 +58,7 @@ export function createAniListManager(ctx) {
 				forceRefresh,
 				offset,
 			);
+			if (fetchId !== activeFetchId) return;
 			spinner.style.display = "none";
 			AniListRenderer.render(anilistReleasesContent, releases, offset);
 
@@ -66,6 +69,7 @@ export function createAniListManager(ctx) {
 				}, 50);
 			}
 		} catch (error) {
+			if (fetchId !== activeFetchId) return;
 			spinner.style.display = "none";
 			const errorElement = document.createElement("div");
 			errorElement.className = "anilist-error";
@@ -130,7 +134,7 @@ export function createAniListManager(ctx) {
 				noteElement.textContent =
 					"Note: There may be a 30 minute to 3 hour delay on release times.";
 
-				fetchAniListReleases();
+				fetchAniListReleases(false, currentAnilistOffset);
 
 				setTimeout(() => {
 					const container = document.getElementById("scrollable-content");

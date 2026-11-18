@@ -125,6 +125,7 @@ All native actions are mapped to typed Python dataclasses in `utils/native_link/
 - `DataSyncRequest`: `export_data`, `export_playlists`, `export_all_playlists_separately`, `import_from_file`, `set_ui_preferences`, `get_unified_diagnostics`, `get_smart_reorder`, `get_metadata_cache`, `cancel_task`.
 - `ServiceRequest`: `get_anilist_releases`, `check_dependencies`.
 - `LogRequest` & `LogBrowserErrorRequest`: `log_event`, `log_browser_error`.
+- **Background Tasks (`utils/native_link/task_manager.py`):** Manages cancellable long-running host tasks, paired with `cancel_task` requests and `task_update` unsolicited events.
 
 ### Bridge Contract Synchronization
 
@@ -179,7 +180,7 @@ The Background Service Worker coordinates UI updates across all active browser t
 
 ---
 
-## 8. Audit Guardrails (added after the Nov 2026 code review; see `CODE_REVIEW.md`)
+## 8. Audit Guardrails
 
 ### MV3 service worker rules
 The service worker is killed after about 30s idle. **Any in-memory variable is a cache, not state.**

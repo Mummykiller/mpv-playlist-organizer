@@ -40,7 +40,7 @@ Chrome Content Scripts cannot natively use ES Module `import` statements across 
 Only the **7 files** listed in the table above are generated from `utils/*.module.js` (and marked with `// AUTO-GENERATED from <Module>.module.js. DO NOT EDIT MANUALLY.`).
 
 All other `utils/*.js` files are **hand-written sources** and are safe to edit directly:
-- **Classic content-script / UI helpers (`window.MPV_INTERNAL`):** `AniListUI.js`, `ContentState.js`, `ControllerActions.js`, `ControllerTimers.js`, `Draggable.js`, `MessageBridge.js`, `MpvController.js`, `NavigationObserver.js`, `PageScraper.js`, `PlaybackStateManager.js`, `PlaylistRenderer.js`, `PlaylistUI.js`, `Resizable.js`, `UIManager.js`, `janitor.js`.
+- **Classic content-script / UI helpers (`window.MPV_INTERNAL`):** `AniListUI.js`, `ContentState.js`, `ControllerActions.js`, `ControllerTimers.js`, `ControllerView.js`, `Draggable.js`, `MessageBridge.js`, `MpvController.js`, `NavigationObserver.js`, `PageScraper.js`, `PlaybackStateManager.js`, `PlaylistRenderer.js`, `PlaylistUI.js`, `Resizable.js`, `UIManager.js`, `janitor.js`.
 - **ES modules (background / popup):** `contextMenu.js`, `item_processor.js`, `nativeLink.js`, `playlistManager.js`, `settings.js`, `storageManager.js`.
 
 ### Transpilation Mechanism
@@ -88,18 +88,18 @@ python3 verify_changes.py
 
 ### Verification Execution Stages
 
-`verify_changes.py` executes sequentially:
+`verify_changes.py` runs:
 1. **Pycache Watchdog Check:** Verifies or starts `testing_tools/pycache_watchdog.py`.
 2. **JS Build:** Rebuilds all `utils/*.js` targets from `utils/*.module.js`.
-3. **Batch 1: Backend Logic & Robustness:**
-   - Runs `test_logging_system.py`, `test_robustness.py`, `test_repro_crash.py`, `test_native_host_boot.py`, and `test_security_claims.py`.
-4. **Batch 2: Frontend Logic & Bridge:**
-   - Synchronizes bridge contract via `testing_tools/generate_bridge_contract.py`.
-   - Runs Node unit tests (`test_bridge_js.js`, `test_bridge_protocol.js`, `test_logger_logic.js`, `test_modular_components.js`, `test_ui_sync.js`).
-   - Runs `node --check` syntax validation across all `.js` files.
-   - Runs Python AST static checks enforcing syntax and forbidding bare `except:` clauses.
-5. **Batch 3: Cross-Environment Integration:**
-   - Runs `test_logging_pipeline.py`.
+3. **Concurrent Test & Static Suite (`testing_tools/run_suite.py`):**
+   - **Parallel Python Pool (`PYTHON_TEST_FILES`):** Runs all 9 Python test modules (`test_logging_system.py`, `test_robustness.py`, `test_repro_crash.py`, `test_native_host_boot.py`, `test_security_claims.py`, `test_storage_locking.py`, `test_playback_ipc_concurrency.py`, `test_server_and_installer.py`, `test_logging_pipeline.py`) in parallel via `ThreadPoolExecutor`.
+   - **Concurrent `run_js_batch()`:**
+     - Synchronizes bridge contract via `testing_tools/generate_bridge_contract.py`.
+     - Auto-discovers and runs all `testing_tools/scripts/test_*.js` scripts (`test_bridge_js.js`, `test_bridge_protocol.js`, `test_logger_logic.js`, `test_modular_components.js`, `test_resilience_fixes.js`, `test_ui_sync.js`).
+     - Runs `node --check` syntax validation and the JS empty/comment-only `catch {}` regex gate across all `.js` files.
+     - Runs Python AST static checks enforcing syntax, forbidding bare `except:` clauses, and forbidding silent `except ...: pass` (`_is_silent_pass`).
+     - Runs `ruff` (`testing_tools/pyproject.toml`), `biome` (`testing_tools/biome.json`), and `luac -p` (`mpv_scripts/*.lua`) when installed.
+   - Note: `testing_tools/create_release.py` packages release builds; if `mpv-playlist-organizer-release/` is present in the repo root, `run_suite.py` walks it as well.
 
 ---
 

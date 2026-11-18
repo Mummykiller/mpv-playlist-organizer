@@ -48,6 +48,7 @@ class PlaylistTracker:
         self.clear_behavior = settings.get('playlist_clear_behavior', 'full_on_completion') # 'full_on_completion' or 'on_item_finish'
         self.is_naturally_completed = False
         self.lock = threading.Lock()
+        self._commit_lock = threading.Lock()
         self._stop_event = threading.Event()
         self.current_id = None
         self.last_played_id = None
@@ -63,10 +64,11 @@ class PlaylistTracker:
         """
         Starts tracking the playlist in a separate thread.
         """
-        self.is_tracking = True
-        self._quitting_notified = False
-        self._stopped = False
-        self._stop_event.clear()
+        with self.lock:
+            self.is_tracking = True
+            self._quitting_notified = False
+            self._stopped = False
+            self._stop_event.clear()
         self._start_heartbeat()
         self.tracking_thread = threading.Thread(target=self._track)
         self.tracking_thread.daemon = True
@@ -77,15 +79,15 @@ class PlaylistTracker:
         """
         Stops tracking and returns stats about what was played.
         """
-        if self._stopped or (not self.is_tracking and not self._quitting_notified):
-            return {}
-
-        self._stopped = True
-        self.is_tracking = False
-        self._stop_event.set()
-        
         # Capture stats before joining under lock (PY-M14)
         with self.lock:
+            if self._stopped or (not self.is_tracking and not self._quitting_notified):
+                return {}
+
+            self._stopped = True
+            self.is_tracking = False
+            self._stop_event.set()
+
             played_ids = list(self.played_item_ids)
             watched_ids = list(self.threshold_met_ids)
             session_ids = list(self.session_item_ids)
@@ -585,91 +587,92 @@ class PlaylistTracker:
 
     def _commit_to_disk(self):
         """Performs an atomic read-modify-write to the playlist shard with all cached changes (PY-M5, PY-M6)."""
-        self.last_commit_time = time.time()
-        
-        # 1. Thread-Safe Snapshot and Clear
-        with self.lock:
-            if not self.folder_id or (not self.resume_cache and not self.watched_status_cache and not self.watched_cache and not self.dirty_last_played_id):
-                return
+        with self._commit_lock:
+            self.last_commit_time = time.time()
             
-            res_snap = dict(self.resume_cache)
-            stat_snap = dict(self.watched_status_cache)
-            watch_snap = dict(self.watched_cache)
-            last_played_snap = self.dirty_last_played_id
-            if last_played_snap:
-                self.confirmed_playing_id = last_played_snap
-            confirmed_id = last_played_snap or self.confirmed_playing_id
-            
-            self.resume_cache.clear()
-            self.watched_status_cache.clear()
-            self.watched_cache.clear()
-            self.dirty_last_played_id = None
+            # 1. Thread-Safe Snapshot and Clear
+            with self.lock:
+                if not self.folder_id or (not self.resume_cache and not self.watched_status_cache and not self.watched_cache and not self.dirty_last_played_id):
+                    return
+                
+                res_snap = dict(self.resume_cache)
+                stat_snap = dict(self.watched_status_cache)
+                watch_snap = dict(self.watched_cache)
+                last_played_snap = self.dirty_last_played_id
+                if last_played_snap:
+                    self.confirmed_playing_id = last_played_snap
+                confirmed_id = last_played_snap or self.confirmed_playing_id
+                
+                self.resume_cache.clear()
+                self.watched_status_cache.clear()
+                self.watched_cache.clear()
+                self.dirty_last_played_id = None
 
-        commit_success = False
-        try:
-            logging.debug(f"[PY][Tracker] Committing throttled updates to disk for folder '{self.folder_id}'...")
-            
-            def shard_updater(playlist, index_entry):
-                changed = False
-                if last_played_snap and index_entry is not None:
-                    if index_entry.get("last_played_id") != last_played_snap:
-                        index_entry["last_played_id"] = last_played_snap
-                        changed = True
+            commit_success = False
+            try:
+                logging.debug(f"[PY][Tracker] Committing throttled updates to disk for folder '{self.folder_id}'...")
+                
+                def shard_updater(playlist, index_entry):
+                    changed = False
+                    if last_played_snap and index_entry is not None:
+                        if index_entry.get("last_played_id") != last_played_snap:
+                            index_entry["last_played_id"] = last_played_snap
+                            changed = True
 
-                if playlist:
-                    for item in playlist:
-                        item_id = item.get("id")
-                        
-                        # Mutually Exclusive 'currently_playing'
-                        if confirmed_id:
-                            is_current = (item_id == confirmed_id)
-                            if item.get("currently_playing") != is_current:
-                                item["currently_playing"] = is_current
+                    if playlist:
+                        for item in playlist:
+                            item_id = item.get("id")
+                            
+                            # Mutually Exclusive 'currently_playing'
+                            if confirmed_id:
+                                is_current = (item_id == confirmed_id)
+                                if item.get("currently_playing") != is_current:
+                                    item["currently_playing"] = is_current
+                                    item["last_modified"] = int(time.time() * 1000)
+                                    changed = True
+                            
+                            # Sync from Snapshots
+                            if item_id in res_snap:
+                                item["resume_time"] = res_snap[item_id]
                                 item["last_modified"] = int(time.time() * 1000)
                                 changed = True
-                        
-                        # Sync from Snapshots
-                        if item_id in res_snap:
-                            item["resume_time"] = res_snap[item_id]
-                            item["last_modified"] = int(time.time() * 1000)
-                            changed = True
 
-                        if item_id in stat_snap:
-                            item["marked_as_watched"] = stat_snap[item_id]
-                            item["last_modified"] = int(time.time() * 1000)
-                            changed = True
-                        
-                        if item_id in watch_snap:
-                            item["watched"] = watch_snap[item_id]
-                            item["last_modified"] = int(time.time() * 1000)
-                            changed = True
+                            if item_id in stat_snap:
+                                item["marked_as_watched"] = stat_snap[item_id]
+                                item["last_modified"] = int(time.time() * 1000)
+                                changed = True
+                            
+                            if item_id in watch_snap:
+                                item["watched"] = watch_snap[item_id]
+                                item["last_modified"] = int(time.time() * 1000)
+                                changed = True
 
-                return True if changed else None
+                    return True if changed else None
 
-            # Atomically update shard and index while holding locks (INDEX -> Shard order)
-            commit_success = self.file_io.update_shard(self.folder_id, shard_updater, update_index=False)
-            if commit_success:
-                logging.info(f"[PY][Tracker] Throttled shard commit complete for '{self.folder_id}'.")
-            else:
-                logging.warning(f"[PY][Tracker] Shard update returned False for '{self.folder_id}'. Restoring snapshot cache.")
-        except Exception as e:
-            logging.error(f"[PY][Tracker] Throttled disk commit failed: {e}")
-            commit_success = False
-        finally:
-            if not commit_success:
-                # PY-M6: Restore snapshots back into memory so we never lose progress on disk failure
-                with self.lock:
-                    for k, v in res_snap.items():
-                        if k not in self.resume_cache:
-                            self.resume_cache[k] = v
-                    for k, v in stat_snap.items():
-                        if k not in self.watched_status_cache:
-                            self.watched_status_cache[k] = v
-                    for k, v in watch_snap.items():
-                        if k not in self.watched_cache:
-                            self.watched_cache[k] = v
-                    if last_played_snap and not self.dirty_last_played_id:
-                        self.dirty_last_played_id = last_played_snap
+                # Atomically update shard and index while holding locks (INDEX -> Shard order)
+                commit_success = self.file_io.update_shard(self.folder_id, shard_updater, update_index=False)
+                if commit_success:
+                    logging.info(f"[PY][Tracker] Throttled shard commit complete for '{self.folder_id}'.")
+                else:
+                    logging.warning(f"[PY][Tracker] Shard update returned False for '{self.folder_id}'. Restoring snapshot cache.")
+            except Exception as e:
+                logging.error(f"[PY][Tracker] Throttled disk commit failed: {e}")
+                commit_success = False
+            finally:
+                if not commit_success:
+                    # PY-M6: Restore snapshots back into memory so we never lose progress on disk failure
+                    with self.lock:
+                        for k, v in res_snap.items():
+                            if k not in self.resume_cache:
+                                self.resume_cache[k] = v
+                        for k, v in stat_snap.items():
+                            if k not in self.watched_status_cache:
+                                self.watched_status_cache[k] = v
+                        for k, v in watch_snap.items():
+                            if k not in self.watched_cache:
+                                self.watched_cache[k] = v
+                        if last_played_snap and not self.dirty_last_played_id:
+                            self.dirty_last_played_id = last_played_snap
 
     def _update_marked_as_watched(self, item_id, marked_status=None, watched_status=None, persist=True):
         """Notifies extension and queues status for disk commit. Supports partial updates."""

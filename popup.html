@@ -128,6 +128,19 @@
 
     <h1>MPV Playlist Organizer</h1>
 
+    <div id="popup-extension-tabs" class="popup-extension-tabs" role="tablist" aria-label="Extension Views">
+        <button type="button" class="ext-tab-btn active" data-ext-tab="mpv" role="tab" aria-selected="true">MPV Organizer</button>
+        <button type="button" class="ext-tab-btn" data-ext-tab="yt" role="tab" aria-selected="false">
+            <img src="yt-tools/icons/icon16.png" alt="" class="yt-tab-icon" width="14" height="14">
+            <span>YouTube Tools</span>
+            <span id="yt-tools-status-dot" class="yt-status-dot" title="YouTube Tools Disabled"></span>
+        </button>
+    </div>
+
+    <div id="native-host-setup-banner" class="native-host-setup-banner" style="display: none;" role="status">
+        <strong>Setup Required:</strong> Companion app not connected. Run <code>installer.py</code> (or <code>installer_cli.py</code>) and restart your browser to play videos in MPV.
+    </div>
+
     <!-- View 1: Mini Controller (shown when on-page UI is minimized) -->
     <div id="mini-controller-view" style="display: none;">
         <div class="control-group">
@@ -178,7 +191,11 @@
                     <line x1="3" y1="18" x2="21" y2="18"></line>
                 </svg>
             </button>
-            <button class="quick-action-btn" title="Placeholder D">D</button>
+            <button class="quick-action-btn btn-disconnected-toggle" id="btn-quick-d" title="Detached Launch (Selection Mode): Click here, then click any item below to open it in a separate MPV window">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+            </button>
         </div>
 
         <div id="playlist-container" class="playlist-container">
@@ -638,24 +655,24 @@
                         <label for="enable-anilist-integration-checkbox" class="settings-label">Enable Integration <span class="help-icon" title="Master switch for the AniList airing dashboard and releases section.">?</span>:</label>
                         <input type="checkbox" id="enable-anilist-integration-checkbox" class="settings-checkbox">
                     </div>
-                    <div id="anilist-options-container" class="settings-section-content setting-advanced" style="border-top: none; padding-top: 0; padding-bottom: 0;">
+                    <div id="anilist-options-container" class="settings-section-content" style="border-top: none; padding-top: 0; padding-bottom: 0;">
                         <hr class="settings-compact-separator sep-advanced">
-                        <div class="control-group" data-setting-name="lock panel anilist dragging">
+                        <div class="control-group setting-advanced" data-setting-name="lock panel anilist dragging">
                             <label for="lock-anilist-panel-checkbox" class="settings-label">Lock Panel Position <span class="adv-badge">Adv</span> <span class="help-icon" title="Prevents the AniList dashboard from being dragged, locking it in place.">?</span>:</label>
                             <input type="checkbox" id="lock-anilist-panel-checkbox" class="settings-checkbox">
                         </div>
                         <hr class="settings-compact-separator sep-advanced">
-                        <div class="control-group" data-setting-name="force panel attached anilist controller">
+                        <div class="control-group setting-advanced" data-setting-name="force panel attached anilist controller">
                             <label for="force-panel-attached-checkbox" class="settings-label">Force Attached <span class="adv-badge">Adv</span> <span class="help-icon" title="Snaps the AniList panel to the on-page controller and hides it when minimized.">?</span>:</label>
                             <input type="checkbox" id="force-panel-attached-checkbox" class="settings-checkbox">
                         </div>
                         <hr class="settings-compact-separator sep-advanced">
-                        <div class="control-group" data-setting-name="attach on open anilist snap">
+                        <div class="control-group setting-advanced" data-setting-name="attach on open anilist snap">
                             <label for="anilist-attach-on-open-checkbox" class="settings-label">Snap on Open <span class="adv-badge">Adv</span> <span class="help-icon" title="If the panel is free-floating, it will snap back to the side of the controller whenever the page reloads.">?</span>:</label>
                             <input type="checkbox" id="anilist-attach-on-open-checkbox" class="settings-checkbox">
                         </div>
                         <hr class="settings-compact-separator sep-advanced">
-                        <div class="control-group stacked-control" data-setting-name="cover image size anilist thumbnail">
+                        <div class="control-group stacked-control setting-advanced" data-setting-name="cover image size anilist thumbnail">
                             <label for="anilist-image-height-slider" class="settings-label">Cover Image Size <span class="adv-badge">Adv</span> <span class="help-icon" title="Slide to adjust the size of anime posters in the dashboard.">?</span>:</label>
                             <div class="input-group">
                                 <input type="range" id="anilist-image-height-slider" min="40" max="200" step="2">
@@ -663,7 +680,7 @@
                             </div>
                         </div>
                         <hr class="settings-compact-separator sep-advanced">
-                        <div class="control-group" data-setting-name="disable cache anilist debug">
+                        <div class="control-group setting-advanced" data-setting-name="disable cache anilist debug">
                             <label for="disable-anilist-cache-checkbox" class="settings-label">Disable API Cache <span class="adv-badge">Adv</span> <span class="help-icon" title="Forces the extension to fetch fresh data from AniList every time. Useful for debugging.">?</span>:</label>
                             <input type="checkbox" id="disable-anilist-cache-checkbox" class="settings-checkbox">
                         </div>
@@ -751,7 +768,7 @@
                         <input type="text" id="override-display-fps-input" class="settings-input networking-small-input" placeholder="e.g. 60" style="width: 80px;">
                     </div>
 
-                    <div id="ultra-options-container" class="settings-section-content setting-advanced" style="border-top: none; padding-top: 0; padding-bottom: 0; display: none;">
+                    <div id="ultra-options-container" class="settings-section-content" style="border-top: none; padding-top: 0; padding-bottom: 0; display: none;">
                         <hr class="settings-compact-separator sep-advanced">
                         <div class="settings-group-header group-advanced">Ultra Quality Options</div>
                         <div class="control-group setting-advanced" data-setting-name="ultra scalers lanczos">
@@ -1047,6 +1064,43 @@
         </div>
     </div>
 
+    <!-- View 3: YouTube Tools (isolated extension-within-extension) -->
+    <div id="youtube-tools-view" style="display: none;">
+        <div class="yt-tools-header">
+            <label class="yt-master-toggle-label" for="yt-tools-master-enable">
+                <span class="yt-master-toggle-text">Enable YouTube Tools</span>
+                <span class="yt-toggle-switch">
+                    <input type="checkbox" id="yt-tools-master-enable">
+                    <span class="yt-toggle-slider"></span>
+                </span>
+            </label>
+            <div class="yt-subview-tabs" role="tablist" aria-label="YouTube Tools Sections">
+                <button type="button" class="yt-subview-btn active" data-yt-subview="library" aria-selected="true">Library</button>
+                <button type="button" class="yt-subview-btn" data-yt-subview="settings" aria-selected="false">Settings</button>
+            </div>
+        </div>
+
+        <div id="yt-tools-disabled-notice" class="yt-disabled-notice">
+            YouTube Tools is currently <strong>off</strong> and injects nothing on YouTube until enabled.
+        </div>
+
+        <div id="yt-tools-library-panel" class="yt-tools-panel">
+            <div id="yt-library-list" class="yt-library-list"></div>
+            <div id="yt-library-empty" class="yt-library-empty" style="display: none;">
+                No saved YouTube videos yet. Enable YouTube Tools and watch videos on YouTube to track progress here.
+            </div>
+            <div id="yt-library-done-folder" class="yt-done-folder" style="display: none;"></div>
+        </div>
+
+        <div id="yt-tools-settings-panel" class="yt-tools-panel" style="display: none;">
+            <div id="yt-frame-removal-settings" class="yt-settings-group"></div>
+            <div id="yt-distraction-settings" class="yt-settings-group"></div>
+            <div id="yt-video-player-settings" class="yt-settings-group"></div>
+            <div id="yt-thumbnail-title-settings" class="yt-settings-group"></div>
+            <div id="yt-playlist-manager-settings" class="yt-settings-group"></div>
+        </div>
+    </div>
+
         </div> <!-- END scrollable-content -->
         <div id="fixed-log-footer">
             <div id="status-message"></div>
@@ -1056,6 +1110,7 @@
     <script src="utils/security.js"></script>
     <script src="utils/ContentState.js"></script>
     <script src="utils/PlaybackStateManager.js"></script>
+    <script src="yt-tools/yt_defaults.js"></script>
     <script src="popup.js" type="module"></script>
 </body>
 </html>

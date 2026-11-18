@@ -55,11 +55,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		static render(container, releases, offset = 0) {
 			if (!container) return;
 
-			// Find existing list and remove it (to preserve nav controls)
-			const oldList = container.querySelector(
-				".anilist-releases-list, .anilist-empty-message",
-			);
-			if (oldList) oldList.remove();
+			// Find existing list/state elements and remove them (to preserve nav controls)
+			container
+				.querySelectorAll(
+					".anilist-releases-list, .anilist-empty-message, .anilist-error, .loading-spinner",
+				)
+				.forEach((el) => el.remove());
 
 			if (!releases || !releases.releases || releases.releases.length === 0) {
 				const emptyMsg = document.createElement("div");

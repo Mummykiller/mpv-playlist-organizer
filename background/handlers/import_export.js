@@ -1,6 +1,6 @@
 // background/handlers/import_export.js
 
-import { sanitizeString, promptUserConfirmation } from "../../utils/commUtils.module.js";
+import { sanitizeString, promptUserConfirmation, normalizeKeys } from "../../utils/commUtils.module.js";
 import { nativeLink } from "../../utils/nativeLink.js";
 import { createHandler } from "../handler_factory.js";
 import { processPlaylist } from "../../utils/item_processor.js";
@@ -56,22 +56,29 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 
 	// --- Detection: Single Folder or Full Backup? ---
 	if (Array.isArray(importedData)) {
+		const normalizedItems = normalizeKeys(importedData);
 		foldersToImport[baseFolderName] = {
-			playlist: processPlaylist(importedData, processorOptions),
+			playlist: processPlaylist(normalizedItems, processorOptions),
 		};
 	} else if (importedData && Array.isArray(importedData.playlist)) {
-		const folder = { playlist: processPlaylist(importedData.playlist, processorOptions) };
-		if (options.preserveLastPlayed && importedData.lastPlayedId) {
-			if (folder.playlist.some((i) => i.id === importedData.lastPlayedId)) {
-				folder.lastPlayedId = importedData.lastPlayedId;
+		const normalizedFolder = normalizeKeys(importedData);
+		const folder = { playlist: processPlaylist(normalizedFolder.playlist, processorOptions) };
+		if (options.preserveLastPlayed && normalizedFolder.lastPlayedId) {
+			if (folder.playlist.some((i) => i.id === normalizedFolder.lastPlayedId)) {
+				folder.lastPlayedId = normalizedFolder.lastPlayedId;
 			}
 		}
 		foldersToImport[baseFolderName] = folder;
 	} else if (typeof importedData === "object" && importedData !== null) {
-		const source = importedData.folders || importedData;
+		const source =
+			importedData.folders && typeof importedData.folders === "object" && !Array.isArray(importedData.folders)
+				? importedData.folders
+				: importedData;
 		for (const key in source) {
-			const folderContent = source[key];
-			if (folderContent && Array.isArray(folderContent.playlist)) {
+			if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+			const rawFolderContent = source[key];
+			if (rawFolderContent && Array.isArray(rawFolderContent.playlist)) {
+				const folderContent = normalizeKeys(rawFolderContent);
 				const folder = { playlist: processPlaylist(folderContent.playlist, processorOptions) };
 				if (options.preserveLastPlayed && folderContent.lastPlayedId) {
 					if (folder.playlist.some((i) => i.id === folderContent.lastPlayedId)) {

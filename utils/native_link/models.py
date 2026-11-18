@@ -30,8 +30,8 @@ class SettingsOverrides:
     os_platform: Optional[str] = None
     ffmpeg_path: Optional[str] = None
     ytdlp_path: Optional[str] = None
-    clear_on_completion: bool = False
-    clear_on_item_finish: bool = False
+    clear_on_completion: Optional[bool] = None
+    clear_on_item_finish: Optional[bool] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SettingsOverrides':

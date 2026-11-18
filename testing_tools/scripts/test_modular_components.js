@@ -1,4 +1,6 @@
 const assert = require("node:assert").strict;
+const fs = require("node:fs");
+const path = require("node:path");
 const { JSDOM } = require("jsdom");
 
 /**
@@ -882,6 +884,77 @@ async function testNativeConnection() {
 	console.log("  [OK] NativeConnection (Timeouts, Listener Isolation, LogBroadcaster)");
 }
 
+function testQuickActionsAndSetupBanner() {
+	console.log("Testing Quick Actions SVG polish & Setup Banner...");
+
+	const popupHtmlPath = path.join(__dirname, "../../popup.html");
+	const popupHtml = fs.readFileSync(popupHtmlPath, "utf8");
+	assert.strictEqual(
+		popupHtml.includes("Placeholder D"),
+		false,
+		"popup.html must not contain obsolete Placeholder D text"
+	);
+
+	const popupDom = new JSDOM(popupHtml);
+	const popupDoc = popupDom.window.document;
+
+	const quickDBtn = popupDoc.getElementById("btn-quick-d");
+	assert.ok(quickDBtn, "popup.html must define #btn-quick-d");
+	assert.ok(
+		quickDBtn.classList.contains("btn-disconnected-toggle"),
+		"#btn-quick-d must have btn-disconnected-toggle class"
+	);
+	assert.ok(quickDBtn.querySelector("svg"), "#btn-quick-d must render an SVG icon");
+	assert.ok(
+		quickDBtn.title.includes("Detached Launch"),
+		"#btn-quick-d must have clear Detached Launch tooltip"
+	);
+
+	const setupBanner = popupDoc.getElementById("native-host-setup-banner");
+	assert.ok(setupBanner, "popup.html must include #native-host-setup-banner");
+	assert.strictEqual(
+		setupBanner.style.display,
+		"none",
+		"#native-host-setup-banner must be hidden by default"
+	);
+
+	const mockRoot = document.createElement("div");
+	mockRoot.innerHTML =
+		'<div id="quick-actions-bar"></div><div id="playlist-container"></div>';
+	mockRoot.getElementById = (id) => mockRoot.querySelector(`#${id}`);
+
+	const mockController = {
+		state: { state: { settings: {} }, update: () => {} },
+		checkContext: () => true,
+		sendCommandToBackground: () => Promise.resolve({ success: true }),
+		handleSmartReorder: () => {},
+		addLogEntry: () => {},
+		updateAddButtonState: () => {},
+	};
+
+	const playlistUI = new MPV.PlaylistUI(mockController, { shadowRoot: mockRoot });
+	playlistUI._renderQuickActions();
+
+	const oscBtns = mockRoot.querySelectorAll("#quick-actions-bar .quick-action-btn");
+	assert.strictEqual(oscBtns.length, 3, "PlaylistUI must render 3 quick action buttons");
+	oscBtns.forEach((btn, idx) => {
+		assert.ok(btn.querySelector("svg"), `Quick action button ${idx} must render an SVG icon`);
+	});
+
+	const oscQuickD = mockRoot.querySelector("#btn-osc-quick-d");
+	assert.ok(oscQuickD, "PlaylistUI must render #btn-osc-quick-d");
+	assert.ok(
+		oscQuickD.classList.contains("btn-disconnected-toggle"),
+		"#btn-osc-quick-d must have btn-disconnected-toggle class"
+	);
+	assert.ok(
+		oscQuickD.title.includes("Detached Launch"),
+		"#btn-osc-quick-d must have clear Detached Launch tooltip"
+	);
+
+	console.log("  [OK] Quick Actions SVG polish & Setup Banner");
+}
+
 (async () => {
 	try {
 		testTranspilationIntegrity();
@@ -897,6 +970,7 @@ async function testNativeConnection() {
 		await testMpvControllerInit();
 		await testDraggableComponent();
 		await testNativeConnection();
+		testQuickActionsAndSetupBanner();
 		console.log("\nALL MODULAR COMPONENT TESTS PASSED (JSDOM)! 📦✨");
 	} catch (err) {
 		console.error("\nTEST FAILED! ❌");

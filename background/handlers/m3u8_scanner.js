@@ -160,7 +160,8 @@ function setupListeners() {
 		},
 	);
 
-	chrome.tabs.onRemoved.addListener((tabId) => {
+	chrome.tabs.onRemoved.addListener(async (tabId) => {
+		await scannerInitPromise;
 		delete _detectedUrlsState[tabId];
 		delete lastDetectedUrls[tabId];
 		persistScannerState();
@@ -169,13 +170,17 @@ function setupListeners() {
 		}
 	});
 
-	chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-		if (changeInfo.url) {
+	chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+		const changedUrl = changeInfo?.url;
+		const status = changeInfo?.status;
+		const tabUrl = tab?.url;
+		await scannerInitPromise;
+		if (changedUrl) {
 			clearDetectedUrl(tabId);
 		} else if (
-			changeInfo.status === "loading" &&
-			tab.url &&
-			!tab.url.startsWith("chrome")
+			status === "loading" &&
+			tabUrl &&
+			!tabUrl.startsWith("chrome")
 		) {
 			const now = Date.now();
 			const lastData = lastDetectedUrls[tabId];

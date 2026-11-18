@@ -60,20 +60,38 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 				// Always request styles from background service worker to prevent
 				// cross-origin security violations (e.g. "Unsafe attempt to load URL... Domains, protocols and ports must match")
-				if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+				let canSend = false;
+				try {
+					canSend = typeof chrome !== "undefined" && !!chrome.runtime?.id && !!chrome.runtime?.sendMessage;
+				} catch (e) {
+					canSend = false;
+				}
+				if (canSend) {
 					MPV._cachedStylesPromise = new Promise((resolve) => {
-						chrome.runtime.sendMessage({ action: "get_extension_styles" }, (response) => {
-							if (chrome.runtime.lastError || !response?.success) {
-								const errMsg = chrome.runtime.lastError?.message || response?.error || "Unknown error";
-								MPV.logger?.error?.(`[UIManager] Failed to get extension styles: ${errMsg}`, { persist: true });
-								resolve("");
-							} else {
-								resolve(response.css || "");
-							}
-						});
+						try {
+							chrome.runtime.sendMessage({ action: "get_extension_styles" }, (response) => {
+								let lastErr = null;
+								try {
+									lastErr = chrome.runtime?.lastError;
+								} catch (e) {
+									lastErr = e;
+								}
+								if (lastErr || !response?.success) {
+									const errMsg = lastErr?.message || response?.error || "Unknown error";
+									MPV.logger?.error?.(`[UIManager] Failed to get extension styles: ${errMsg}`, { persist: true });
+									MPV._cachedStylesPromise = null;
+									resolve("");
+								} else {
+									resolve(response.css || "");
+								}
+							});
+						} catch (e) {
+							MPV._cachedStylesPromise = null;
+							resolve("");
+						}
 					});
 				} else {
-					MPV._cachedStylesPromise = Promise.resolve("");
+					return Promise.resolve("");
 				}
 			}
 			return MPV._cachedStylesPromise;
@@ -88,10 +106,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 			if (!isTopFrame) return null;
 
-			if (
-				!chrome.runtime?.id ||
-				document.getElementById("m3u8-controller-host")
-			)
+			let hasRuntime = false;
+			try {
+				hasRuntime = !!chrome?.runtime?.id;
+			} catch (e) {
+				hasRuntime = false;
+			}
+			if (!hasRuntime || document.getElementById("m3u8-controller-host"))
 				return;
 
 			const isScanner = window.location.search.includes(
@@ -187,7 +208,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
                     </button>
                 </div>
 
-                <div id="anilist-releases-container"><ul id="anilist-releases-list" class="anilist-releases-list"></ul></div>
+                <div id="anilist-releases-container"></div>
                 <div id="anilist-resize-handle" title="Resize Panel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="20" y1="14" x2="14" y2="20"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg></div>
             `;
 			this.anilistShadowRoot.appendChild(anilistPanelWrapper);

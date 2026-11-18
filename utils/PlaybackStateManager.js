@@ -32,36 +32,83 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				health: "ok",
 			};
 			this.listeners = new Set();
+			this._isDestroyed = false;
+			this._storageListener = null;
+			this._messageListener = null;
 			this._initStorageListener();
 			this._loadInitialState();
 		}
 
+		_hasContext() {
+			try {
+				return typeof chrome !== "undefined" && !!chrome.runtime?.id;
+			} catch (e) {
+				return false;
+			}
+		}
+
 		async _loadInitialState() {
-			if (!chrome?.storage?.local?.get) return;
-			const data = await chrome.storage.local.get("active_playback_state");
-			if (data?.active_playback_state) {
-				this.update(data.active_playback_state);
+			if (!this._hasContext() || !chrome.storage?.local?.get) return;
+			try {
+				const data = await chrome.storage.local.get("active_playback_state");
+				if (!this._isDestroyed && data?.active_playback_state) {
+					this.update(data.active_playback_state);
+				}
+			} catch (e) {
+				console.debug("[MPV PlaybackStateManager] Chrome API call failed:", e?.message || e);
 			}
 		}
 
 		_initStorageListener() {
+			if (!this._hasContext()) return;
 			// PROACTIVE: Listen to storage changes instead of broadcast messages
 			if (chrome?.storage?.onChanged?.addListener) {
-				chrome.storage.onChanged.addListener((changes, area) => {
-					if (area === "local" && changes.active_playback_state) {
+				this._storageListener = (changes, area) => {
+					if (!this._isDestroyed && area === "local" && changes.active_playback_state) {
 						this.update(changes.active_playback_state.newValue);
 					}
-				});
+				};
+				try {
+					chrome.storage.onChanged.addListener(this._storageListener);
+				} catch (e) {
+					this._storageListener = null;
+				}
 			}
 
 			// FALLBACK: Still keep message listener for legacy/direct triggers
 			if (chrome?.runtime?.onMessage?.addListener) {
-				chrome.runtime.onMessage.addListener((msg) => {
-					if (msg.action === "playback_state_changed") {
+				this._messageListener = (msg) => {
+					if (!this._isDestroyed && msg?.action === "playback_state_changed") {
 						this.update(msg.state);
 					}
-				});
+				};
+				try {
+					chrome.runtime.onMessage.addListener(this._messageListener);
+				} catch (e) {
+					this._messageListener = null;
+				}
 			}
+		}
+
+		destroy() {
+			this._isDestroyed = true;
+			if (this._storageListener) {
+				try {
+					chrome?.storage?.onChanged?.removeListener(this._storageListener);
+				} catch (e) {
+				console.debug("[MPV PlaybackStateManager] Chrome API call failed:", e?.message || e);
+			}
+				this._storageListener = null;
+			}
+			if (this._messageListener) {
+				try {
+					chrome?.runtime?.onMessage?.removeListener(this._messageListener);
+				} catch (e) {
+				console.debug("[MPV PlaybackStateManager] Chrome API call failed:", e?.message || e);
+			}
+				this._messageListener = null;
+			}
+			this.listeners.clear();
 		}
 
 		/**

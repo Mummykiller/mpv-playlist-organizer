@@ -3,9 +3,9 @@ name: playback-tracking-and-fallback-sync
 description: >-
   Governs MPV playback progress monitoring, watch threshold detection, health state machines,
   dual-mode detached fallback sync, and asynchronous playlist enrichment. Load this skill whenever
-  modifying `playlist_tracker.py`, `mpv_session.py` (health watcher, error handling),
-  `utils/session_services.py` (LauncherService, EnrichmentService), `utils/PlaybackStateManager.js`,
-  `mpv_scripts/python_loader.lua`, or `utils/fallback_sync.py`.
+  modifying `playlist_tracker.py`, `utils/session_health.py` (health watcher, session restore),
+  `mpv_session.py`, `utils/session_services.py` (LauncherService, EnrichmentService),
+  `utils/PlaybackStateManager.js`, `mpv_scripts/python_loader.lua`, or `utils/fallback_sync.py`.
 ---
 
 # Playback Tracking, Health Monitoring & Fallback Synchronization
@@ -39,9 +39,9 @@ flowchart TD
 
 ---
 
-## 2. Session Health State Machine (`mpv_session.py`)
+## 2. Session Health State Machine (`utils/session_health.py`)
 
-The native host maintains an active health monitor thread (`_start_health_watcher`) polling MPV every 500ms:
+The native host maintains an active health monitor thread (`start_health_watcher(session)`) polling MPV every 500ms, guarded by `session_generation` token checks (`current_gen != gen`) so stale health watchers cannot mutate a newer session:
 
 ```
 [OK] ──(1-2 IPC timeouts)──> [STALE] ──(3rd timeout)──> [DEAD]

@@ -846,16 +846,25 @@ def get_settings():
 
     # --- NEW: Auto-sync Automatic MPV Flags ---
     if "automatic_mpv_flags" in current_settings:
-        current_flags = {f["flag"]: f for f in current_settings["automatic_mpv_flags"]}
-        updated_flags = []
-        
-        for default_f in default_settings["automatic_mpv_flags"]:
-            if default_f["flag"] in current_flags:
-                updated_flags.append(current_flags[default_f["flag"]])
-            else:
-                updated_flags.append(default_f)
-        
-        settings["automatic_mpv_flags"] = updated_flags
+        raw_flags = current_settings["automatic_mpv_flags"]
+        if isinstance(raw_flags, list):
+            current_flags = {
+                f["flag"]: f
+                for f in raw_flags
+                if isinstance(f, dict) and isinstance(f.get("flag"), str)
+            }
+            updated_flags = []
+            
+            for default_f in default_settings["automatic_mpv_flags"]:
+                if default_f["flag"] in current_flags:
+                    updated_flags.append(current_flags[default_f["flag"]])
+                else:
+                    updated_flags.append(default_f)
+            
+            settings["automatic_mpv_flags"] = updated_flags
+        else:
+            logging.warning("[PY][IO] Malformed automatic_mpv_flags in config; using defaults.")
+            settings["automatic_mpv_flags"] = [dict(f) for f in DEFAULT_AUTOMATIC_MPV_FLAGS]
 
     # Ensure mpv_path default is platform-appropriate and absolute if found
     if settings.get("mpv_path") is None:
@@ -905,6 +914,20 @@ def set_settings(settings_dict):
                 if str(settings_dict['ytdl_quality']) not in valid_qualities:
                     logging.warning(f"[PY][SEC] Invalid ytdl_quality '{settings_dict['ytdl_quality']}' ignored.")
                     del settings_dict['ytdl_quality']
+
+            if 'automatic_mpv_flags' in settings_dict:
+                raw_flags = settings_dict['automatic_mpv_flags']
+                if not isinstance(raw_flags, list):
+                    logging.warning("[PY][SEC] Invalid automatic_mpv_flags type; expected list. Ignoring.")
+                    del settings_dict['automatic_mpv_flags']
+                else:
+                    valid_flags = [
+                        f for f in raw_flags
+                        if isinstance(f, dict) and isinstance(f.get('flag'), str) and f['flag'].strip()
+                    ]
+                    if len(valid_flags) != len(raw_flags):
+                        logging.warning("[PY][SEC] Filtered malformed entries from automatic_mpv_flags.")
+                    settings_dict['automatic_mpv_flags'] = valid_flags
 
             # --- NEW: Normalize Buffer Settings & Align Cache/Readahead ---
             

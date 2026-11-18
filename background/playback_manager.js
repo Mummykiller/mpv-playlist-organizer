@@ -6,6 +6,7 @@ import { broadcastLog } from "./messaging.js";
 import { broadcastPlaylistState } from "./ui_broadcaster.js";
 
 const SESSIONS_STORAGE_KEY = "mpv_playback_sessions";
+const EARLY_CLEARS_STORAGE_KEY = "mpv_early_clears_in_progress";
 
 const getSessionStorage = () => {
 	if (typeof chrome !== "undefined" && chrome?.storage?.session) {
@@ -170,10 +171,31 @@ export class PlaybackManager {
 					};
 				}
 			}
-			store.set({ [SESSIONS_STORAGE_KEY]: serialized }).catch(() => {});
+			store.set({
+				[SESSIONS_STORAGE_KEY]: serialized,
+				[EARLY_CLEARS_STORAGE_KEY]: Array.from(this.earlyClearsInProgress),
+			}).catch(() => {});
 		} catch (e) {
 			console.debug("[PlaybackManager] Failed to persist sessions:", e);
 		}
+	}
+
+	markEarlyClear(folderId) {
+		if (!folderId) return;
+		this.earlyClearsInProgress.add(folderId.toLowerCase());
+		this.persistSessions();
+	}
+
+	clearEarlyClear(folderId) {
+		if (!folderId) return;
+		if (this.earlyClearsInProgress.delete(folderId.toLowerCase())) {
+			this.persistSessions();
+		}
+	}
+
+	hasEarlyClear(folderId) {
+		if (!folderId) return false;
+		return this.earlyClearsInProgress.has(folderId.toLowerCase());
 	}
 
 	async _initFromCache() {
@@ -181,8 +203,19 @@ export class PlaybackManager {
 			const store = getSessionStorage();
 			const [localRes, sessionRes] = await Promise.all([
 				chrome.storage.local.get("mpv_playback_cache").catch(() => ({})),
-				store ? store.get(SESSIONS_STORAGE_KEY).catch(() => ({})) : Promise.resolve({}),
+				store
+					? store.get([SESSIONS_STORAGE_KEY, EARLY_CLEARS_STORAGE_KEY]).catch(() => ({}))
+					: Promise.resolve({}),
 			]);
+
+			const savedEarlyClears = sessionRes?.[EARLY_CLEARS_STORAGE_KEY];
+			if (Array.isArray(savedEarlyClears)) {
+				for (const id of savedEarlyClears) {
+					if (typeof id === "string" && id) {
+						this.earlyClearsInProgress.add(id.toLowerCase());
+					}
+				}
+			}
 
 			const savedSessions = sessionRes?.[SESSIONS_STORAGE_KEY];
 			if (savedSessions && typeof savedSessions === "object") {

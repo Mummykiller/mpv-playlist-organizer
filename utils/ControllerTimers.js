@@ -107,10 +107,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 		}
 
-		scheduleTimeout(fn, delayMs) {
+		scheduleTimeout(fn, delayMs, { allowDuringTeardown = false } = {}) {
 			const id = setTimeout(() => {
 				this._timeouts.delete(id);
-				if (!this.controller.isTearingDown) {
+				if (allowDuringTeardown || !this.controller.isTearingDown) {
 					fn();
 				}
 			}, delayMs);

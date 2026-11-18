@@ -37,12 +37,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				onNavigation: (url) => this._handleNavigation(url),
 				onMutation: () => this._handleDomMutation(),
 				onValidate: () => {
-					if (
-						!document.getElementById("m3u8-controller-host") &&
-						!this.isTearingDown
-					) {
-						this.teardown();
-						this.timers.scheduleTimeout(() => this.init(), 100);
+					if (!document.getElementById("m3u8-controller-host")) {
+						this._recoverFromHostRemoval();
 					}
 				},
 			});
@@ -285,10 +281,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		_initStorageObservation() {
 			if (this._storageListener) {
-				chrome.storage.onChanged.removeListener(this._storageListener);
+				try {
+					chrome.storage?.onChanged?.removeListener(this._storageListener);
+				} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
+				}
 			}
 			this._storageListener = (changes, area) => {
-				if (area !== "local") return;
+				if (area !== "local" || this.isTearingDown) return;
 
 				// 1. Settings Channel: Sync Layout & UI Prefs
 				if (changes.mpv_settings) {
@@ -349,7 +349,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					}
 				}
 			};
-			chrome.storage.onChanged.addListener(this._storageListener);
+			if (this.checkContext() && chrome.storage?.onChanged) {
+				try {
+					chrome.storage.onChanged.addListener(this._storageListener);
+				} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
+				}
+			}
 		}
 
 		_getPlaylistFingerprint(playlist) {
@@ -363,14 +369,24 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		_initTaskObservation() {
 			if (this._taskListener) {
-				chrome.storage.onChanged.removeListener(this._taskListener);
+				try {
+					chrome.storage?.onChanged?.removeListener(this._taskListener);
+				} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
+				}
 			}
 			this._taskListener = (changes, area) => {
-				if (area === "local" && changes.mpv_active_tasks) {
+				if (area === "local" && changes.mpv_active_tasks && !this.isTearingDown) {
 					this._updateTaskUI(changes.mpv_active_tasks.newValue);
 				}
 			};
-			chrome.storage.onChanged.addListener(this._taskListener);
+			if (this.checkContext() && chrome.storage?.onChanged) {
+				try {
+					chrome.storage.onChanged.addListener(this._taskListener);
+				} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
+				}
+			}
 		}
 
 		_updateTaskUI(tasks) { return this.view.updateTaskUI(tasks); }
@@ -387,10 +403,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			} catch (e) {
 				isTopFrame = false;
 			}
-			if (!isTopFrame) return;
+			if (!isTopFrame || !this.checkContext()) return;
 
 			// Revive state & modules if re-initializing after teardown()
 			this.isTearingDown = false;
+			this._initialStateApplied = false;
 			this._lastUpdateHash = "";
 			if (this.bridge) this.bridge.isDestroyed = false;
 			if (this.state) this.state.isDestroyed = false;
@@ -403,13 +420,24 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// Setup message listener before awaiting get_ui_preferences so ping succeeds
 			if (this.messageListener) {
-				chrome.runtime.onMessage.removeListener(this.messageListener);
+				try {
+					chrome.runtime?.onMessage?.removeListener(this.messageListener);
+				} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
+				}
 			}
 			this.messageListener = (req, sender, send) =>
 				this.handleMessage(req, sender, send);
-			chrome.runtime.onMessage.addListener(this.messageListener);
+			if (this.checkContext() && chrome.runtime?.onMessage) {
+				try {
+					chrome.runtime.onMessage.addListener(this.messageListener);
+				} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
+				}
+			}
 
 			const initialPrefs = await this.bridge.send("get_ui_preferences");
+			if (this.isTearingDown || !this.checkContext()) return;
 			const restrictedDomains =
 				initialPrefs?.preferences?.restrictedDomains || [];
 			const currentHostname = window.location.hostname;
@@ -442,11 +470,17 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this._bindControllerEvents();
 
 			// Check for any active tasks now that the UI shadowRoot exists
-			chrome.storage.local.get("mpv_active_tasks", (data) => {
-				if (data.mpv_active_tasks) {
-					this._updateTaskUI(data.mpv_active_tasks);
+			if (this.checkContext() && chrome.storage?.local) {
+				try {
+					chrome.storage.local.get("mpv_active_tasks", (data) => {
+						if (!this.isTearingDown && data?.mpv_active_tasks) {
+							this._updateTaskUI(data.mpv_active_tasks);
+						}
+					});
+				} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
 				}
-			});
+			}
 
 			// 3. Start Observation Modules
 			this.nav.init();
@@ -454,9 +488,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// 4. Initial Sync
 			await this.applyInitialState();
+			if (this.isTearingDown || !this.checkContext()) return;
+			this._initialStateApplied = true;
 			await this.updateFolderDropdowns();
+			if (this.isTearingDown || !this.checkContext()) return;
 
 			await this.bridge.send("content_script_init");
+			if (this.isTearingDown || !this.checkContext()) return;
 
 			// 5. Fullscreen & Visibility Watchdog
 			this._initFullscreenSettleCheck();
@@ -532,11 +570,19 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.playbackUnsubscribe = null;
 			}
 			if (this._storageListener) {
-				chrome.storage.onChanged.removeListener(this._storageListener);
+				try {
+					chrome.storage?.onChanged?.removeListener(this._storageListener);
+				} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
+				}
 				this._storageListener = null;
 			}
 			if (this._taskListener) {
-				chrome.storage.onChanged.removeListener(this._taskListener);
+				try {
+					chrome.storage?.onChanged?.removeListener(this._taskListener);
+				} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
+				}
 				this._taskListener = null;
 			}
 			this.bridge.destroy();
@@ -562,12 +608,17 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			window.removeEventListener("keydown", this.handleGlobalKeydown, true);
 			window.removeEventListener("mousedown", this.handleMouseDown, true);
 			this.ui.teardown();
+			this.playlistUI?.destroy?.();
 			if (this.anilistUI?.destroy) this.anilistUI.destroy();
 			if (this.draggableController) this.draggableController.destroy();
 			if (this.draggableMinimized) this.draggableMinimized.destroy();
 			window.mpvControllerInitialized = false;
 			if (this.messageListener) {
-				chrome.runtime.onMessage.removeListener(this.messageListener);
+				try {
+					chrome.runtime?.onMessage?.removeListener(this.messageListener);
+				} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
+				}
 				this.messageListener = null;
 			}
 		}
@@ -600,35 +651,40 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		// --- Message Logic Handlers ---
 
-		_handleInitState(req) {
-			if (!this.ui.controllerHost) return;
+		async _handleInitState(req) {
+			if (!this.ui.controllerHost || this.isTearingDown || !this.checkContext()) return;
 			this.tabId = req.tabId;
 			this.bridge.tabId = req.tabId;
 
-			this.applyInitialState().then(() => {
-				this.setMinimizedState(req.shouldBeMinimized, false);
-				if (req.detectedUrl) {
-					this.state.update({ detectedUrl: req.detectedUrl });
-				}
-				if (req.folderId) {
-					// Proactively seed the state
-					MPV.playbackStateManager.update({
-						folderId: req.folderId,
-						lastPlayedId: req.lastPlayedId,
-						isRunning: req.isFolderActive,
-						isPaused: req.isPaused,
-						needsAppend: req.needsAppend
-					});
+			if (!this._initialStateApplied) {
+				await this.applyInitialState();
+				if (this.isTearingDown || !this.checkContext()) return;
+				this._initialStateApplied = true;
+			}
 
-					this.updateFolderDropdowns(
-						req.folderId,
-						req.lastPlayedId,
-						req.isFolderActive,
-						req.isPaused,
-						req.needsAppend
-					);
-				}
-			});
+			this.setMinimizedState(req.shouldBeMinimized, false);
+			if (req.detectedUrl) {
+				this.state.update({ detectedUrl: req.detectedUrl });
+			}
+			if (req.folderId) {
+				// Proactively seed the state
+				MPV.playbackStateManager.update({
+					folderId: req.folderId,
+					lastPlayedId: req.lastPlayedId,
+					isRunning: req.isFolderActive,
+					isPaused: req.isPaused,
+					needsAppend: req.needsAppend
+				});
+
+				await this.updateFolderDropdowns(
+					req.folderId,
+					req.lastPlayedId,
+					req.isFolderActive,
+					req.isPaused,
+					req.needsAppend
+				);
+				if (this.isTearingDown || !this.checkContext()) return;
+			}
 		}
 
 		async _handleYtdlpUpdateConfirm() {
@@ -636,8 +692,12 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				const confirmed = await this.showPageLevelConfirmation(
 					"YouTube playback failed. This is often caused by an outdated yt-dlp. Would you like to attempt to automatically update it now?",
 				);
-				if (confirmed) {
-					chrome.runtime.sendMessage({ action: "user_confirmed_ytdlp_update" });
+				if (confirmed && this.checkContext()) {
+					try {
+						chrome.runtime.sendMessage({ action: "user_confirmed_ytdlp_update" });
+					} catch (e) {
+					console.debug("[MPV Controller] Chrome API call failed:", e?.message || e);
+				}
 				}
 			} catch (e) {
 				MPV.logger?.warn?.("[Controller] Ytdlp update confirm error:", { data: e });
@@ -651,12 +711,21 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.updateAddButtonState();
 		}
 
+		_recoverFromHostRemoval() {
+			if (this.isTearingDown || !this.checkContext()) return;
+			this.teardown();
+			this.timers.scheduleTimeout(
+				() => {
+					if (this.checkContext()) this.init();
+				},
+				100,
+				{ allowDuringTeardown: true },
+			);
+		}
+
 		_handleDomMutation() {
 			if (!document.getElementById("m3u8-controller-host")) {
-				if (!this.isTearingDown) {
-					this.teardown();
-					this.timers.scheduleTimeout(() => this.init(), 100);
-				}
+				this._recoverFromHostRemoval();
 				return;
 			}
 			this._reportCurrentUrl();
@@ -793,7 +862,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		checkContext() {
-			return !!chrome.runtime?.id;
+			try {
+				return !!chrome?.runtime?.id;
+			} catch (e) {
+				return false;
+			}
 		}
 	};
 })();
