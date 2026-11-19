@@ -35,7 +35,8 @@ All playlist items across JavaScript and Python must conform to a standardized s
 ### Invariants for Item Processing
 1. **URL & Title Sanitization:** Always sanitize input strings using `sanitizeString()` and `normalizeYouTubeUrl()` to prevent control character injection in `.m3u` files.
 2. **Deterministic ID Preservation:** Never overwrite an existing `item.id` during title updates or reordering unless `forceNewId: true` is explicitly specified.
-3. **Backend Enrichment (`utils/item_processor.py`):** On the Python side, `ItemProcessor.enrich_single_item` verifies `original_url`, queries the global metadata cache, and applies bypass headers before queueing for MPV.
+3. **Backend Enrichment & Playlist Expansion (`utils/item_processor.py`, `mpv_session.py`):** `ItemProcessor.enrich_single_item` verifies `original_url`, queries the global metadata cache, and expands dedicated YouTube playlist URLs (`url_analyzer.is_youtube_playlist_url`). When `MpvSessionManager.start` enriches the starting item, it splices the returned slice (`_url_items_list[playlist_start_index:playlist_start_index + 1] = start_item_enriched`) so multi-item playlist expansions replace the placeholder entry cleanly.
+4. **Context Menu Playlist Canonicalization (`utils/contextMenu.js`, `background.js`):** "Add Playlist to MPV" context menu items match both `*://*.youtube.com/playlist?list=*` and `*://*.youtube.com/watch?*list=*`. When invoked on a `/watch?...&list=<id>` link, `background.js` extracts `list` and canonicalizes the target URL to `https://www.youtube.com/playlist?list=<id>` before calling `playlistManager.handleAddFromContextMenu`.
 
 ---
 

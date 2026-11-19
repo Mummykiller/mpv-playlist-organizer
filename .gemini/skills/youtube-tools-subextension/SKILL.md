@@ -9,15 +9,19 @@ An isolated, opt-in "extension within the extension" for YouTube playback comfor
 
 ## Core Architecture
 - **Disabled by default in main extension**: Controlled by `shinkuYtToolsEnabled` (boolean, default `false` in main extension; defaults to `true` on install in standalone `yt-tools-standalone/`).
-- **Dynamic Registration** (`background/yt_tools_service.js`):
-  - Uses `chrome.scripting.registerContentScripts` / `unregisterContentScripts` (`persistAcrossSessions: true`) without modifying `manifest.json` or reloading the extension.
+- **Dynamic Registration & Tab Icon Sync** (`background/yt_tools_service.js`):
+  - Uses `chrome.scripting.registerContentScripts` / `unregisterContentScripts` (`persistAcrossSessions: true`, serialized via `registrationQueue`) without modifying `manifest.json` or reloading the extension.
   - Registers `yt-tools/yt_defaults.js` + `yt-tools/yt_bridge.js` in `ISOLATED` world, and `yt-tools/yt_content.js` in `MAIN` world on `*://*.youtube.com/*`.
   - Also injects into already-open matching tabs via `injectIntoOpenMatchingTabs()` when enabled or on extension reload.
-- **Context Menu** (`utils/contextMenu.js`, `background.js`):
+  - **Dominant Action Icon (`initYtToolsActionIconSync`, `syncTabActionIcon`, `syncAllTabActionIcons`):** When `shinkuYtToolsEnabled` and `playlist-manager["yt-dominant-on-youtube"]` are enabled, switches the browser toolbar icon and title to `YT_ACTION_ICONS` (`"Shinku's YouTube Tools"`) on YouTube tabs and restores `MPV_ACTION_ICONS` (`"MPV Playlist Organizer"`) on non-YouTube tabs.
+- **Context Menu & Live Library Save** (`utils/contextMenu.js`, `background.js`, `background/yt_tools_service.js:handleSaveYouTubeLinkToLibrary`):
   - Adds `"Save to Shinku YT Library"` (`shinku-yt-save-library`) on YouTube pages/links when `shinkuYtToolsEnabled` is true.
+  - Validates video IDs via `extractYouTubeVideoId` (`VALID_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/`, blocking `FORBIDDEN_KEYS`), queries the active watch tab first (`action: "shinku_yt_save_current_video"`) so `yt_content.js` captures live `currentTime`/`duration`, falls back to YouTube oEmbed (`https://www.youtube.com/oembed`), and serializes writes via `libraryWriteQueue`.
+- **Settings Backup & Restore Integration** (`background/handlers/import_export.js:handleExportSettings`, `_importSettingsLogic`):
+  - Settings backups (`mpv_playlist_organizer_settings`) automatically export and restore `youtubeTools: { enabled, settings, library }` (`shinkuYtToolsEnabled`, `shinkuExtensionSettings`, `shinkuLibrary`), with `SUBTREE_PRESERVE_KEYS` in `utils/native_link/translator.py` and `responder.py` preserving hyphenated keys and video IDs verbatim.
 - **Popup UI & Overarching Settings Categories** (`popup.html`, `popup.css`, `popup.js`, `popup/popup_youtube.js`):
   - Top-level tab bar (`#popup-extension-tabs`): **MPV Organizer** | **YouTube Tools** (with `yt-tools/icons/icon16.png` and `#yt-tools-status-dot`). Persists `popupActiveExtTab` and `popupYtSubview` in `chrome.storage.local`.
-  - `UIModeManager` in `popup.js` respects `isMpvViewHidden` so async MPV syncs don't overwrite `#youtube-tools-view`.
+  - `UIModeManager` in `popup.js` respects `isMpvViewHidden` so async MPV syncs and status-bar logs don't overwrite `#youtube-tools-view`, and `onHideMpvView` automatically cancels active keybinding recording (`optionsManager.stopRecording()`) and playlist reorder mode (`cancelReorderMode()`).
   - Library renders `shinkuLibrary` safely using `createElement` + `textContent` (never `innerHTML` with video metadata).
   - Settings render from `SHINKU_YT_UI_SCHEMA` (`yt-tools/yt_defaults.js`) across overarching categories, each with a header master switch that enables/disables all child features plus an independent collapse chevron:
     1. `frame-removal-settings` (`#yt-frame-removal-settings`, master: `frame-removal`)

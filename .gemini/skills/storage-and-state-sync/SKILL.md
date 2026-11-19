@@ -19,8 +19,10 @@ This skill defines the dual browser/native persistence architecture, cross-proce
 ## 1. Dual-Layer Storage Architecture
 
 - **Browser Storage (`utils/storageManager.js:StorageManager`):** Authoritative source of truth for the extension UI and playlist membership (item additions/deletions). Partitions data across granular `chrome.storage.local` buckets (`mpv_folder_index`, `mpv_folder_data_<folderId>`, `mpv_settings`, `mpv_meta_cache_<domain>`) and serializes writes through `this.writeQueue`.
+- **Debounced Native Sync (`background/core_services.js:debouncedSyncToNativeHostFile`):** Chains `syncInitPromise.then(() => persistPendingSyncState())` before persisting pending sync flags in `chrome.storage.local` and schedules `SYNC_ALARM_NAME`, clearing pending flags only inside `_syncToNativeHostFile` after snapshotting.
 - **Native Disk Storage (`file_io.py`, `utils/file_lock.py:FileLock`):** Local disk backup and IPC state mirror inside `file_io.DATA_DIR`. Uses sharded playlists (`DATA_DIR/playlists/<folderId>.json`), `FileLock` advisory locking, and `_atomic_json_dump` (`.tmp` → `fsync` → validated `.bak` → `os.replace`).
 - **Last-Write-Wins Merge (`file_io.py:_merge_playlists`):** Reconciles item-level metadata (`resume_time`, `watched`, `marked_as_watched`, `title`) using `last_modified` millisecond timestamps while respecting browser playlist membership.
+- **Settings & YouTube Tools Backup/Restore (`background/handlers/import_export.js`, `utils/handlers/data_handler.py:handle_import_from_file`):** Settings exports bundle `youtubeTools: { enabled, settings, library }` alongside `settings`, and `import_from_file` returns `preserve_data_keys=True` (`preserveDataKeys` in `callNativeHost`) so folder names, domain overrides, and YouTube Tools keys are restored without case mutation.
 
 ---
 

@@ -90,20 +90,22 @@ To eliminate repeated external network lookups for titles, stream URLs, and head
 
 ---
 
-## 6. URL Normalization & Deduplication (`utils/url_analyzer.py:normalize_url`, `utils/commUtils.module.js:normalizeYouTubeUrl`)
+## 6. URL Normalization, Playlist Detection & oEmbed (`utils/url_analyzer.py`, `utils/commUtils.module.js`, `utils/playlistManager.js`)
 
-### Tracking Parameter Stripping
-To guarantee reliable deduplication and resume position matching, video URLs (especially YouTube) are normalized before storage:
-- Strips non-essential tracking parameters: `t`, `index`, `start`, `ab_channel`, `attr_tag`, `si`, `feature`, `pp`.
-- Retains essential identity parameters: `v`, `list` (for playlist context). Python's `normalize_url` also strips URL fragments and sorts remaining query keys.
+### Tracking Parameter Stripping & Host Validation
+- **Strict Host Validation (`utils/commUtils.module.js:isYouTubeUrl`, `utils/url_analyzer.py:YOUTUBE_RE`):** Parses URLs with `new URL()` / anchored regex to verify `http:`/`https:` scheme and exact `youtube.com`, `*.youtube.com`, or `youtu.be` hostnames (never loose substring `.includes()`).
+- **Normalization (`utils/url_analyzer.py:normalize_url`, `utils/commUtils.module.js:normalizeYouTubeUrl`):** Normalizes `/watch`, `/shorts/`, `/live/`, `/playlist`, and `youtu.be` links by stripping non-essential tracking parameters (`t`, `index`, `start`, `ab_channel`, `attr_tag`, `si`, `feature`, `pp`) while retaining essential identity parameters (`v`, `list`). Python's `normalize_url` also strips URL fragments and sorts remaining query keys.
+- **Dedicated YouTube Playlist Detection (`utils/url_analyzer.py:is_youtube_playlist_url`):** Returns `True` **only** when `parsed.path.rstrip("/").lower() == "/playlist"` and the `list` query parameter is non-empty—never for single `/watch?v=...&list=...` URLs. `utils/mpv_command_builder.py:MpvCommandBuilder.build` uses `is_youtube_playlist_url` to automatically pass `no-playlist=` for single videos while allowing true `/playlist?list=` URLs to expand (using `line.rsplit('|', 1)` so titles containing `|` do not corrupt URLs).
+- **Safe oEmbed Construction (`utils/playlistManager.js:buildYouTubeOEmbedUrl`):** Builds URL-encoded oEmbed requests for both `/playlist?list=` and single video URLs (`/watch`, `/shorts/`, `/live/`, `/embed/`, `/v/`, `youtu.be`), validating video IDs against `/^[a-zA-Z0-9_-]{1,64}$/`.
 
 ---
 
 ## 7. In-Page Scraping & Scanner Engine
 
-### DOM Scraping (`utils/PageScraper.js`)
-- Inspects active DOM for `<video>`, `<source>`, and `<iframe>` elements.
-- Extracts video titles, stream URLs, and page metadata while ignoring tracking pixels or ad iframes.
+### DOM Scraping & YouTube Card Extraction (`utils/PageScraper.js`, `utils/ControllerView.js`, `utils/ControllerActions.js`)
+- `PageScraper.js` inspects active DOM for `<video>`, `<source>`, and `<iframe>` elements, extracting titles and stream URLs while ignoring tracking pixels or ad iframes.
+- `ControllerView.getEffectiveAddUrl()` centralizes target URL resolution for `#btn-add`, `#btn-compact-add`, and the minimized stub one-click add (preferring `detectedUrl` and falling back to `window.location.href` on YouTube `/watch`, `/shorts/`, or `/live/` pages).
+- Right-click capture in `ControllerView.js` supports both classic YouTube renderers (`ytd-rich-item-renderer`, `ytd-video-renderer`, `ytd-grid-video-renderer`, `ytd-compact-video-renderer`) and modern lockup view models (`yt-lockup-view-model`, `a.yt-lockup-view-model__content-image`, `.yt-lockup-metadata-view-model__title`, `.yt-content-metadata-view-model__metadata-text`).
 
 ### Background M3U8 Scanner (`background/handlers/m3u8_scanner.js`)
 - Automatically detects streaming URLs on pages opened with query parameter `mpv_playlist_scanner=true`.

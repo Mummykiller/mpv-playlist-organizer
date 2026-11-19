@@ -43,6 +43,9 @@ Settings management is coordinated by `OptionsManager` in `utils/settings.js` al
    - Filters section titles (`.settings-section-title`), labels, and tooltips (`.setting-help-text`), auto-expanding matching sections and updating `#settings-search-status`.
 6. **Collapsible Full-View Settings (`#full-settings-controls`):**
    - Toggled via `#btn-full-toggle-settings` in `#folder-management-view` and persisted in `localStorage:mpv_full_settings_open`.
+7. **Keybinding Recorder Lifecycle (`popup/settings_ui.js:startRecording`, `stopRecording`, `utils/settings.js:OptionsManager.stopRecording`):**
+   - Pressing `Escape` while recording a shortcut restores `activeRecorder.originalValue` and calls `stopRecording(ctx)`.
+   - Switching to the YouTube Tools tab in `popup.js` (`onHideMpvView`) invokes `optionsManager.stopRecording()` and `cancelReorderMode()` so active listeners never leak across tabs.
 
 ---
 
