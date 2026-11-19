@@ -10,161 +10,56 @@ description: >-
 
 # Native Host Installer, CLI & Dependency Architecture
 
-This skill defines cross-platform Native Messaging Host registration, extension ID synchronization, dual GUI/CLI installer workflows, standalone terminal playback commands, and automated dependency management.
+This skill defines cross-platform Native Messaging Host registration, extension ID validation, dual GUI/CLI installer workflows, standalone terminal CLI playback, and dependency management.
+
+> [!IMPORTANT]
+> For per-OS browser manifest paths, Windows registry keys, manifest JSON schema, and generated wrapper script templates (`run_native_host.*`, `mpv-cli*`), see [references/INSTALLER_PATHS_AND_WRAPPERS.md](references/INSTALLER_PATHS_AND_WRAPPERS.md).
 
 ---
 
-## 1. Cross-Platform Manifest Registration (`installer_src/installer_logic.py`)
+## 1. Native Host Registration & Extension ID Validation (`installer_src/installer_logic.py`)
 
-Chrome Native Messaging requires a JSON host manifest (`com.mpv_playlist_organizer.handler.json`) placed in platform-specific configuration directories (on Linux and macOS, the installer writes the canonical manifest to `data/com.mpv_playlist_organizer.handler-chrome.json` and symlinks it into each detected browser's `NativeMessagingHosts` directory):
-
-```
-Linux (Symlinks to data/com.mpv_playlist_organizer.handler-chrome.json):
-~/.config/<browser>/NativeMessagingHosts/com.mpv_playlist_organizer.handler.json
-(Browsers: google-chrome, chromium, BraveSoftware/Brave-Browser, microsoft-edge, vivaldi, opera)
-
-macOS (Symlinks to data/com.mpv_playlist_organizer.handler-chrome.json):
-~/Library/Application Support/<browser>/NativeMessagingHosts/com.mpv_playlist_organizer.handler.json
-(Browsers: Google/Chrome, Chromium, BraveSoftware/Brave-Browser, Microsoft Edge, Vivaldi, com.operasoftware.Opera)
-
-Windows:
-Registry: HKCU\SOFTWARE\<Browser>\NativeMessagingHosts\com.mpv_playlist_organizer.handler
-Default Value: C:\path\to\data\com.mpv_playlist_organizer.handler-chrome.json
-```
-
-### Runner Wrapper Scripts (`run_native_host.sh` & `run_native_host.bat`)
-To ensure `PYTHONDONTWRITEBYTECODE=1` and the exact Python interpreter are used when the browser spawns the Native Host, the installer generates a platform wrapper script and registers it in the manifest `path` field:
-
-```sh
-# Linux / macOS: run_native_host.sh
-#!/bin/sh
-export PYTHONDONTWRITEBYTECODE=1
-
-exec '/usr/bin/python3' "$(dirname "$0")/native_host.py" "$@"
-```
-
-```bat
-:: Windows: run_native_host.bat
-@echo off
-set PYTHONDONTWRITEBYTECODE=1
-"<python_executable>" "%~dp0native_host.py" %*
-```
-
-### Extension ID Synchronization Invariant
-The extension ID is validated against `^[a-p]{32}$` (`validate_extension_id`) before writing manifests. The manifest `allowed_origins` array must match the installed Chrome extension ID:
-```json
-{
-    "name": "com.mpv_playlist_organizer.handler",
-    "description": "MPV Playlist Organizer Native Host",
-    "path": "/path/to/run_native_host.sh",
-    "type": "stdio",
-    "allowed_origins": [
-        "chrome-extension://<EXTENSION_ID>/"
-    ]
-}
-```
-When reinstalling or updating IDs, the installer updates the manifest and links/registers across all detected browsers simultaneously.
+- **Extension ID Validation (`validate_extension_id`):** Enforces `EXTENSION_ID_PATTERN = re.compile(r"^[a-p]{32}$")` before writing `"allowed_origins": [f"chrome-extension://{extension_id}/"]` into `DATA_DIR/com.mpv_playlist_organizer.handler-chrome.json`.
+- **Auto-Detection (`InstallerLogic.find_extension_id`):** Scans Chromium browser profile `Preferences` files (`Default`, `Guest Profile`, `Profile 1..30`) and matches `extensions.settings.<ext_id>.path` against `INSTALL_DIR` via `os.path.samefile` / `os.path.realpath`.
+- **Multi-Browser Registration:** Links or registers the manifest across all detected Chromium-family browsers (Chrome, Chromium, Brave, Edge, Vivaldi, Opera) under user-scoped directories/registry (`HKEY_CURRENT_USER` on Windows; `~/.config/` or `~/Library/Application Support/` symlinks on Linux/macOS).
 
 ---
 
-## 2. Dual GUI / CLI Installer Lifecycle (`installer.py`)
-
-The installer seamlessly adapts to headless and desktop environments:
+## 2. Dual GUI / CLI Installer Lifecycle (`installer.py` & `installer_cli.py`)
 
 ```mermaid
 flowchart TD
     Start["python3 installer.py"] --> WinCheck{"Windows & python.exe?"}
     WinCheck -- Yes --> Relaunch["Relaunch via pythonw.exe (hide console) & exit"]
     WinCheck -- No --> TkCheck{"import tkinter successful?"}
-    TkCheck -- No --> Headless["Force CLI: CommandLineApp()"]
-    TkCheck -- Yes --> ArgCheck{"--cli argument passed?"}
-    ArgCheck -- Yes --> Headless
-    ArgCheck -- No --> LaunchGUI["Launch Tkinter GUI: HostManagerApp()"]
+    TkCheck -- No --> Headless["Fallback to installer_cli.py"]
+    TkCheck -- Yes --> LaunchGUI["Launch Tkinter GUI: installer_src/installer_ui.py"]
 ```
 
-### Guardrails
-1. **Silent Windows Detachment:** When double-clicked or executed via `python.exe` on Windows, `installer.py` immediately re-spawns itself via `pythonw.exe` to suppress unwanted persistent terminal windows.
-2. **Headless Linux Resilience:** If `tkinter` is not installed (standard on minimal Linux servers or containers), the installer degrades gracefully to `CommandLineApp` without throwing an unhandled `ImportError`.
+- **Windows Console Detachment (`installer.py` / `WindowsLogic._get_console_python`):** `installer.py` detaches from the console window on Windows, while `WindowsLogic._get_console_python()` ensures `run_native_host.bat` and `mpv-cli.bat` always target `python.exe` (never `pythonw.exe`, which lacks `stdin`/`stdout` handles required for stdio native messaging).
+- **Headless Terminal Installer (`installer_cli.py`):** Provides full install, uninstall, ID detection, CLI wrapper creation, PATH setup, and diagnostics without requiring `tkinter`.
 
 ---
 
-## 3. Standalone Terminal CLI Mode (`cli.py` & `mpv-cli`)
+## 3. Standalone Terminal CLI Mode (`cli.py`, `native_host.py`)
 
-The Native Host script can be executed directly from a terminal to manage and play playlists without opening the browser:
-
-### CLI Wrapper Script (`mpv-cli` & `mpv-cli.bat`)
-```bash
-# Linux / macOS wrapper (generated by UnixLogic.install_cli using shlex.quote)
-#!/bin/sh
-export PYTHONDONTWRITEBYTECODE=1
-
-exec '/usr/bin/python3' '/path/to/native_host.py' "$@"
-
-# Or repo portable wrapper:
-#!/bin/sh
-export PYTHONDONTWRITEBYTECODE=1
-exec python3 "$(dirname "$(readlink -f "$0")")/native_host.py" "$@"
-
-# Windows wrapper: mpv-cli.bat (generated by WindowsLogic.install_cli)
-@echo off
-set PYTHONDONTWRITEBYTECODE=1
-"<python_executable>" "<script_path>" %*
-```
-
-### Terminal Commands
-- **List Folders:**
-  ```bash
-  ./mpv-cli list
-  # or: python3 native_host.py list
-  ```
-  Parses `data/index.json` and outputs all folder IDs and item counts.
-- **Play Folder:**
-  ```bash
-  ./mpv-cli play <folder_id>
-  ```
-  Resolves folder items, prepares the MPV launch command, starts playback, blocks until player exit, and gracefully handles `KeyboardInterrupt`.
-
-### Framing Bypass
-When invoked from the command line, `native_host.py` switches the active bridge sender to `send_message_cli` (via `set_active_sender`) and `cli.handle_cli()` returns `True`, preventing `native_host.py` from entering the binary 32-bit length-prefixed Native Messaging loop or emitting binary frames to terminal stdout.
+`native_host.py` can be invoked directly from a terminal via `mpv-cli` (`mpv-cli list`, `mpv-cli play "<folder_id>"`):
+- **Binary Framing Bypass (`native_host.py:send_message_cli`):** When not launched by a browser (`is_browser == False`), `native_host.py` calls `set_active_sender(send_message_cli)` and delegates to `cli.handle_cli()`, preventing binary 32-bit length-prefixed native messaging frames from being written to terminal `stdout`.
 
 ---
 
-## 4. Automated Dependency Management (`utils/dependency_manager.py`)
+## 4. Dependency Management (`utils/dependency_manager.py`, `native_host.py`)
 
-The system verifies and maintains external executables: `mpv`, `yt-dlp`, `ffmpeg`, and `node`.
-
-### Status Caching
-`check_mpv_and_ytdlp_status` caches executable availability, paths, and version strings for **5 minutes** (`CACHE_EXPIRY_SECONDS = 300`) to avoid spawning redundant shell processes on frequent UI requests.
-
-### yt-dlp Auto-Updater (`update_ytdlp`)
-- Windows/macOS: Executes `yt-dlp -U`.
-- Linux: Checks if the binary resides in a system path requiring elevation (`/usr/bin`, `/usr/local/bin`). If so, prompts via `pkexec` or `sudo -A` before running the update command.
-
-### PATH Injection Guard
-Browsers and desktop environments often launch native hosts with a stripped `PATH` (missing `~/.local/bin`, `/usr/local/bin`, or Homebrew paths). The runtime explicitly appends standard user bin paths to `os.environ["PATH"]` during initialization.
+- **5-Minute Status Cache (`check_mpv_and_ytdlp_status`):** Caches availability, resolved paths, and version strings for `mpv`, `yt-dlp`, `ffmpeg`, and `node` for `CACHE_EXPIRY_SECONDS = 300`.
+- **`yt-dlp` Auto-Updater (`update_ytdlp`):** Runs `<ytdlp_path> -U` with `security.get_scrubbed_env()`. On Linux, if `os.access(ytdlp_path, os.W_OK)` is false, `_get_linux_sudo_command_prefix` checks for graphical privilege elevation tools (`pkexec`, `gksu`, `kdesu`) or instructs the user to run `sudo yt-dlp -U`.
+- **Environment `PATH` Augmentation (`native_host.py:_configure_environment_paths`):** Appends standard system/user binary directories (`~/.local/bin`, `~/bin`, `/usr/local/bin`) and configured `ffmpeg_path`/`node_path` directories to `os.environ["PATH"]` at startup.
 
 ---
 
-## 5. Anti-Patterns & Common Traps
+## 5. Audit Guardrails
 
-- ❌ **Registering Chrome-only manifests on Linux:** Fails for users on Brave, Vivaldi, Chromium, or Edge. Always register across all detected browser config directories.
-- ❌ **Hardcoding python interpreter path on Windows:** Always probe `sys.executable` and distinguish between `python.exe` (CLI) and `pythonw.exe` (GUI / background).
-- ❌ **Leaving `allowed_origins` empty or wild-carded:** Chrome rejects Native Messaging manifests that lack an exact extension ID in `allowed_origins`.
-
-
----
-
-## 6. Audit Guardrails
-
-> [!NOTE]
-> **Resolved Audit Findings (PY-H1, PY-L4, PY-L5):** CLI mode now injects a text logger / no-op sender (`send_message_cli`), completely bypassing binary length-prefixed framing on terminal stdout. Extension ID is validated against `^[a-p]{32}$` in `installer_logic.py` and `installer_cli.py`. Wrapper scripts quote executable and script paths via `shlex.quote`. All Firefox manifest references have been removed.
-
-1. **Validate the extension ID** against `^[a-p]{32}$` before writing manifests.
-2. **Quote paths in generated wrappers** (`shlex.quote` for `.sh`, proper quoting for `.bat`). Never embed raw `sys.executable` or script paths.
-3. **Importing installer modules must have no side effects** (no data-dir creation at import time).
-4. **Do not let the installer dirty tracked files.** `run_native_host.sh` is regenerated, so either gitignore the generated copy or generate it elsewhere.
-5. **Document supported browsers.** Chromium-family only. Firefox needs `allowed_extensions` and a different manifest.
-6. **Degrade gracefully on read-only data dirs.** `logger.initialize` must fall back to temp or stderr-only logging instead of crashing (see `native_host_crash.log`).
-7. **Pin the mpv path after install.** Don't search the project dir or Python dir before PATH, and don't prepend them to PATH.
-8. **Centralize** `PYTHONDONTWRITEBYTECODE` and the host version string in one place.
-9. Windows uninstall removes the fallback registry key independently of Chrome's key.
+1. **Validate the extension ID** via `validate_extension_id` (`^[a-p]{32}$`) before writing manifests.
+2. **Quote paths in generated wrappers** (`shlex.quote` in `UnixLogic.install` / `install_cli`; double-quoted paths in `WindowsLogic`). Never embed raw unquoted `sys.executable` or script paths.
+3. **Import-safe installer modules:** Importing `installer_src/installer_logic.py` or `installer_cli.py` must not trigger side effects at import time.
+4. **CLI sender isolation:** Terminal CLI execution must always use `send_message_cli` so no binary frames reach terminal `stdout`.
+5. **Read-only `DATA_DIR` resilience:** `utils/logger.py:initialize` and `file_io.py:get_user_data_dir` must fall back to `tempfile.gettempdir()` or `stderr` logging if the user data directory is unwritable.

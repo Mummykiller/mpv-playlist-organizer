@@ -78,10 +78,11 @@ User preferences dictate duplicate resolution via `settings.uiPreferences.global
 
 Smart Reorder automatically clusters series into natural seasons and episodes without manual sorting:
 
-### Algorithm Stages
-1. **Title Normalization:**
-   - Strips season indicators using `SEASON_REGEX`: `(?:Season\s*(\d+)|S(\d+))`.
-   - Strips episode indicators using `EPISODE_REGEX`: `(?:e(\d+)|Episode\s*(\d+)|(?:\s|^)(\d+)(?:\s|$))`.
+### Algorithm Stages (`SmartReorder`)
+1. **Title Normalization (`SmartReorder.normalize_title` & `extract_metadata`):**
+   - Strips season indicators using `SEASON_REGEX`: `(?:Season\s*(\d+)|(?<![a-zA-Z0-9])S(\d+))`.
+   - Extracts and strips explicit episode indicators first using `EXPLICIT_EPISODE_REGEX`: `(?<![a-zA-Z])(?:e|ep\.?|episode)\s*(\d+(?:\.\d+)?)`.
+   - If no explicit episode tag is present, matches standalone numbers via `STANDALONE_EPISODE_REGEX`: `(?:^|[\s\-_.,|\[\]()])(\d+(?:\.\d+)?)(?=$|[\s\-_.,|\[\]()])`—stripping only the *last* standalone number when multiple numbers appear so numbered show titles (`"86 - 05"`, `"Mob Psycho 100 - 05"`) are preserved.
    - Cleans delimiters and punctuation to form a base normalized string.
 2. **Similarity Clustering:**
    - Compares normalized titles using `difflib.SequenceMatcher(threshold=0.85)`.

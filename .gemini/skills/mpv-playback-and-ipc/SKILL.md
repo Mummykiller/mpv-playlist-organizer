@@ -10,153 +10,44 @@ description: >-
 
 # MPV Playback Engine & JSON-IPC Architecture
 
-This skill defines the MPV launch modes, cookie management, command-line construction, bidirectional JSON-IPC pipe communication, temporary handshake files, and custom Lua script hooks.
+This skill defines MPV launch modes, command-line construction, bidirectional JSON-IPC socket/pipe control, temporary handshake files, and Lua script hooks.
 
-> [!NOTE]
-> For playback progress tracking, watch duration mathematics, health monitoring, and detached fallback synchronization, see the companion skill: [../playback-tracking-and-fallback-sync/SKILL.md](../playback-tracking-and-fallback-sync/SKILL.md).
-
----
-
-## 1. Playback Launch Modes
-
-The application orchestrates MPV playback in two primary operational modes:
-
-### Mode A: Stream Resolution (YouTube, Twitch, Video Portals)
-
-- **Extractor:** Handled by `yt-dlp`. `utils/url_analyzer.py` detects platform compatibility.
-- **Cookie Management & Volatile Cookie Extraction (`VolatileCookieManager`):**
-  - By default, direct browser cookie access (`--cookies-from-browser <browser>`) is passed to `yt-dlp` / MPV.
-  - For playlist expansion or when browser SQLite cookie databases are locked on disk, `VolatileCookieManager` creates a per-session volatile directory via `tempfile.mkdtemp(prefix=f"mpv_cookies_{os.getpid()}_", ...)` with `0o700` permissions (in `/dev/shm` on Linux or `TEMP_DIR` on Windows/macOS) and extracts cookies using an unlocked SQLite shadow copy (`--cookies-file`).
-  - Per-session volatile cookie directories are cleaned up upon session termination (`cleanup_volatile_dir` / `atexit`) and startup sweeps by the janitor.
-- **Python Environment Isolation (`utils/security.py:get_scrubbed_env`):**
-  - Strips `PYTHONPATH`, `PYTHONHOME`, `PYTHONIOENCODING`, `PYTHONDONTWRITEBYTECODE`, and `PYTHONUNBUFFERED` from the subprocess environment.
-  - Prevents the native host's Python runtime from contaminating standalone/frozen `yt-dlp` executables, eliminating "Failed to start embedded python interpreter" crashes on Windows.
-
-### Mode B: Direct Stream (AnimePahe, HLS/m3u8, Direct Media URLs)
-
-- **Header Injection:** Custom HTTP headers (`Referer`, `User-Agent`) are passed via command arguments and dynamically reinforced by `adaptive_headers.lua`.
-- **Local M3U Streaming Server (`utils/m3u_server.py`):**
-  - For complex playlists with per-item headers or large queues, the backend hosts a local loopback HTTP server (`playlist_server.py`).
-  - Generates `#EXTM3U` playlists pointing to internal endpoints protected with a randomized session token (`?token=...`).
-
-### Mode C: Unmanaged Launch (⚡ Quick Action / Play New)
-
-- Spawns an independent, detached MPV instance.
-- Bypasses the primary IPC socket connection to allow multiple concurrent video players without state collision.
-- Generates a dedicated `handshake_unmanaged_<uuid>.json` file.
+> [!IMPORTANT]
+> - For handshake JSON schemas, `session_ipc_ops.py` / `session_health.py` method tables, and Lua hook details (`adaptive_headers.lua`, `on_completion.lua`), see [references/IPC_AND_LUA_HOOKS.md](references/IPC_AND_LUA_HOOKS.md).
+> - For playback progress math, health monitoring, and detached fallback sync, see [../playback-tracking-and-fallback-sync/SKILL.md](../playback-tracking-and-fallback-sync/SKILL.md).
 
 ---
 
-## 2. Temporary JSON Handshake File Mechanism
+## 1. Playback Launch Modes (`mpv_session.py`, `utils/handlers/playback_handler.py`)
 
-Passing complex settings, headers, and folder metadata across process boundaries via shell arguments is vulnerable to shell metacharacter injection and command length limits (especially on Windows 8192-character limits).
-
-### The Handshake Workflow (`services.create_handshake_file`)
-
-```
-1. Python creates temporary JSON: data/flags/handshake_<uuid>.json
-2. Windows backslashes normalized to forward slashes (C:/path/to/data/...)
-3. MPV launched with flag: --script-opts=mpv_organizer-handshake=<normalized_path>
-4. Lua scripts (mpv_scripts/*.lua) load the file synchronously using mp.utils.parse_json()
-```
-
-### Handshake Payload Structure
-
-```json
-{
-  "folder_id": "Anime",
-  "project_root": "/path/to/project",
-  "flag_dir": "/path/to/data/flags",
-  "playlist_start_index": 0,
-  "is_youtube": false,
-  "use_ytdl_mpv": false,
-  "title": "Episode 1",
-  "id": "item_123",
-  "original_url": "https://example.com/watch",
-  "headers": { "Referer": "https://kwik.cx/" },
-  "cookies_browser": "chrome",
-  "is_unmanaged": false
-}
-```
+1. **Mode A: Extractor-Backed Streams (YouTube, Portals, Kwik Landing Pages)**
+   - Resolved via `yt-dlp` (`use_ytdl_mpv=True`).
+   - Passes `--cookies-from-browser <browser>` directly to MPV for single videos; uses `utils/url_analyzer.py:VolatileCookieManager` (`0700` per-PID `/dev/shm` directory + SQLite shadow copy fallback) only when Python-side playlist expansion or cookie fallback is required.
+   - Subprocesses run with `utils/security.py:get_scrubbed_env()` to prevent Python runtime variables from contaminating standalone `yt-dlp` binaries.
+2. **Mode B: Direct Streams & Local M3U Server (HLS `.m3u8`, Direct Media)**
+   - Direct vault streams (`owocdn.top`, `uwucdn.top`) and media files use `use_ytdl_mpv=False` with headers enforced by `services.py:force_sanitize_headers` and `mpv_scripts/adaptive_headers.lua`.
+   - Multi-item M3U payloads are served via `utils/m3u_server.py:M3UServer` (`playlist_server.py`) on `127.0.0.1:0` with `MPV_PLAYLIST_TOKEN` authentication.
+3. **Mode C: Unmanaged / Detached Launch (`play_new_instance` / ⚡ Quick Action)**
+   - Spawns an independent MPV process (`PlaybackHandler._launch_unmanaged_mpv`) without binding the primary session's IPC socket, using `handshake_unmanaged_<uuid>.json` (cleaned up after 10s).
 
 ---
 
-## 3. Bidirectional JSON-IPC Socket Communication (`utils/ipc_utils.py`)
+## 2. IPC Socket & Handshake Lifecycle (`utils/ipc_utils.py`, `services.py`)
 
-Primary MPV sessions are controlled in real time over mpv's JSON-IPC interface using `IPCSocketManager`.
-
-### Socket Location & Permissions
-
-- **Linux / macOS:** Unix domain socket created in `/dev/shm` or `~/.mpv_playlist_organizer_ipc/` with strict `0600` permissions (owner read/write only).
-- **Windows:** Named pipe format: `\\.\pipe\mpv-playlist-organizer-ipc-<pid>`.
-
-- **Extracted Session Modules:**
-  - `utils/session_ipc_ops.py` owns live IPC playlist operations extracted from `mpv_session.py`: `generate_m3u_content`, `sync_playlist_from_mpv`, `perform_cookie_fallback`, `append_batch_internal`, `remove_item`, `reorder_playlist`, `clear_live_playlist`, and `hot_swap_item`.
-  - `utils/session_health.py` owns `start_health_watcher`, `persist_session_atomic`, `trim_oversized_reply`, and `restore_session`.
-
-### The Event Reader Thread
-
-- `_event_reader_loop()` runs in a daemon thread, continuously reading newline-delimited JSON packets from the socket.
-- Routes responses to waiting caller promises via `request_id`.
-- Routes unsolicited MPV events (`property-change`, `end-file`, `playback-restart`) to registered handlers.
-- Monitored properties: `time-pos`, `pause`, `duration`, `playlist-pos`, `media-title`.
+- **IPC Path & Permissions (`ipc_utils.get_ipc_path`):**
+  - **Linux / macOS:** Unix socket in `XDG_RUNTIME_DIR/mpv_playlist_organizer_ipc/mpv-socket-<pid>` (or `~/.mpv_playlist_organizer_ipc/mpv-socket-<pid>` fallback) with directory mode `0700` and socket mode `0600`.
+  - **Windows:** Named pipe at `\\.\pipe\mpv-playlist-organizer-ipc-<pid>`.
+- **Handshake File (`services.create_handshake_file`):** Writes initial metadata and `construct_lua_options` output to `DATA_DIR/flags/handshake_<uuid>.json` (forward-slash normalized on Windows) and passes `--script-opts=mpv_organizer-handshake=<path>` via `MpvCommandBuilder`.
+- **Natural Completion (`mpv_scripts/on_completion.lua`):** Writes `mpv_natural_completion_<pid>.flag` in `DATA_DIR/flags` and exits with code `99` (`quit 99`) when the final queue item reaches EOF.
 
 ---
 
-## 4. Custom Lua Scripts Architecture (`mpv_scripts/`)
+## 3. Audit Guardrails
 
-### `adaptive_headers.lua` (Header Isolation & Source Swapping)
-
-Manages transitions between high-security sources (e.g., swapping between YouTube and AnimePahe within the same MPV playlist):
-
-1. **Hook Priority (`priority -100`):**
-   - Configured with `mp.add_hook("on_load", -100, ...)`.
-   - Runs well before MPV's built-in `ytdl-hook` (which runs at priority 15), ensuring headers and options are applied before stream extraction begins.
-2. **State Reset (Anti-Poisoning):**
-   - MPV global properties persist across playlist items. If YouTube flags leak into an AnimePahe request, servers return `403 Forbidden`.
-   - On every `on_load`, the script resets `user-agent` and `referrer` to baseline, clears `http-header-fields`, and resets `ytdl-raw-options`.
-3. **Dynamic Source Detection & `force_sanitize_headers` (`services.py`):**
-   - Detects YouTube URLs and sets `ytdl=yes`.
-   - Detects AnimePahe / Kwik (`owocdn.top`, `uwucdn.top`, `kwik.cx`) and auto-injects `Referer: https://kwik.cx/` and sets `ytdl=no` (backed on the Python side by `services.py:force_sanitize_headers`).
-4. **Hot Swap Manifest:**
-   - Reads `user-data/hot-swap-options` synchronously during `on_load` when the user force-plays an item from the browser, avoiding race conditions with asynchronous IPC messages.
-
-### `on_completion.lua` (Natural Completion & Exit Code 99)
-
-Tracks playback completion and cleanly notifies the Python backend:
-
-1. **Completion Detection:** Listens to `end-file` events where `event.reason == "eof"`.
-2. **Completion Flag:** Immediately writes a natural completion flag file (`mpv_natural_completion_<pid>.flag`) inside `user-data/flag-dir` (resolved from handshake `flag_dir` / `mp.get_opt("flag_dir")`).
-3. **Exit Code 99 (`MPV_PLAYLIST_COMPLETED_EXIT_CODE`):**
-   - When the final item in the playlist queue reaches EOF naturally, the script waits 0.5s (to allow flag flushing) and executes:
-     ```lua
-     mp.command("quit 99")
-     ```
-   - The Python backend inspects the process exit code; code `99` signals that the playlist concluded naturally, preventing the backend from treating player close as an unexpected crash or abort.
-
----
-
-## 5. Playback Troubleshooting Checklist
-
-- **AnimePahe / Stream returns 403 Forbidden:**
-  - Verify that `adaptive_headers.lua` is loaded at hook priority `-100`.
-  - Check whether a previous YouTube stream leaked `ytdl-raw-options`. The reset hook must clear `http-header-fields` on every file load.
-- **Handshake File Not Found by Lua:**
-  - On Windows, verify that backslashes in `--script-opts=mpv_organizer-handshake=<path>` were converted to forward slashes. Backslashes can be corrupted by shell escaping.
-- **Zombie IPC Sockets:**
-  - If MPV crashes hard, stale socket files may remain in `/dev/shm` or temp directories. `native_host.py` registers cleanup handlers in `cleanup_ipc_socket()` and startup sweeps in `utils/janitor.py`.
-
-
----
-
-## Audit Guardrails
-
-1. **Stale-socket detection:** only `ConnectionRefusedError` / `FileNotFoundError` mean stale. A timeout means *busy*, not dead, so never unlink on timeout. Clean up only inside the app's own IPC dir, never scan `/tmp` or other hosts' sockets.
-2. **Process identity before kill:** trust a saved PID only after IPC returns the same `pid` (or `/proc/<pid>/cmdline` matches mpv plus our socket). Persist process start time in `session.json`.
-3. **Restore failure must reset state** (`pid`, `ipc_path`, `owner_folder_id`, IPC manager) and keep `session.json` unless the process is truly gone.
-4. **Never hold `sync_lock` across slow IPC loops.** Batch `set_url_options` / `playlist-move` with `expect_response=False`, or run them off-lock. IPC reads must have a timeout on every platform (Windows pipes included).
-5. **Index mapping:** after prepend or reorder, re-send index-keyed metadata *after* the moves, never before.
-6. **Per-item options must not leak globally.** Hot-swap that sets global mpv properties must restore them or be scoped per item.
-7. **Use the shared bounded `EnrichmentService` executor**, never a new `ThreadPoolExecutor` per call.
-8. **Cookie dirs are per-session** (`mkdtemp`, owned, 0700). Cleanup deletes only this session's files, never a shared fixed directory.
-9. **Check IPC results** for `playlist-move` and `set_property`. Partial failure must be logged.
+1. **Stale-socket detection (`IPCSocketManager._is_socket_stale`):** Only `ConnectionRefusedError` / `FileNotFoundError` (`ECONNREFUSED` / `ENOENT`) indicate a stale socket. A socket timeout means MPV is *busy*, never dead—never unlink on timeout. `cleanup_stale_sockets` scans only `IPC_DIR_LINUX`, never `/tmp`.
+2. **Verify PID identity before signaling (`ipc_utils.verify_mpv_process`):** Confirm PID ownership via IPC `pid` property probe, `/proc/<pid>/cmdline`, `psutil`, Windows `QueryFullProcessImageNameW`, or `ps` before sending `SIGTERM`/`SIGKILL`/`taskkill`.
+3. **Restore failure cleanup (`session_health.restore_session`):** If persistent IPC attachment fails during restore, reset in-memory session state (`pid`, `ipc_path`, `owner_folder_id`, `ipc_manager`) and preserve `session.json` on disk if `verify_mpv_process` confirms the MPV process is still alive.
+4. **Never hold `sync_lock` across slow IPC loops:** Batch `set_url_options` or `playlist-move` commands, or release the lock around blocking IPC calls. All IPC reads must enforce a timeout on both Unix (`select.select`) and Windows (`PeekNamedPipe`).
+5. **Re-index Lua metadata after moves:** After prepending or reordering playlist items in MPV, re-send `script-message set_url_options` with updated global indices *after* the moves complete.
+6. **Prevent global property leakage:** `adaptive_headers.lua` (`on_load` priority `-100`) must reset `user-agent`, `referrer`, `http-header-fields`, and `ytdl-raw-options` on every track transition, and `LauncherService._sync_initial_state` must not leave `user-data/hot-swap-options` set after initial load.
+7. **Shared bounded executor:** Background playlist enrichment must use `EnrichmentService.executor` (bounded `ThreadPoolExecutor`), never unbounded per-item threads.

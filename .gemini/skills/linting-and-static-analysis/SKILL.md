@@ -15,10 +15,10 @@ All linters run automatically inside `testing_tools/run_suite.py` (invoked by `p
 
 | Domain | Tool | Config File | Automatic Scope |
 | :--- | :--- | :--- | :--- |
-| **Python Linting** | `ruff` | [pyproject.toml](../../testing_tools/pyproject.toml) | All `.py` files (excluding generated standalone/release folders) |
-| **Python Type Checking** | `pyright` | [pyrightconfig.json](../../testing_tools/pyrightconfig.json) | All `.py` files (excluding generated standalone/release folders) |
-| **JS / CSS Linting** | `biome` | [biome.json](../../testing_tools/biome.json) | Hand-written `.js` and `.css` files (excluding 7 generated `utils/*.js` outputs, `.md`, `.html`) |
-| **Lua Syntax & Lint** | `luac -p` + `luacheck` | [.luacheckrc](../../testing_tools/.luacheckrc) | `mpv_scripts/*.lua` |
+| **Python Linting** | `ruff` | [pyproject.toml](../../../testing_tools/pyproject.toml) | All `.py` files (excluding generated standalone/release folders) |
+| **Python Type Checking** | `pyright` | [pyrightconfig.json](../../../testing_tools/pyrightconfig.json) | All `.py` files (excluding generated standalone/release folders) |
+| **JS / CSS Linting** | `biome` | [biome.json](../../../testing_tools/biome.json) | Hand-written `.js` and `.css` files (excluding generated `utils/*.js` outputs, `.md`, `.html`) |
+| **Lua Syntax & Lint** | `luac -p` + `luacheck` | [.luacheckrc](../../../testing_tools/.luacheckrc) | `mpv_scripts/*.lua` |
 | **Shell Scripts** | `shellcheck` | *(CLI flags in `run_suite.py`)* | All `.sh` files (e.g. `run_native_host.sh`) |
 
 ---
@@ -63,7 +63,7 @@ shellcheck run_native_host.sh
 
 3. **Biome (`testing_tools/biome.json`)**:
    - Targets Biome `2.6.8` schema (`files.includes` with `!` negations).
-   - **Never lint generated files**: excludes the 7 transpiled `utils/*.js` outputs (`SystemLogger.js`, `anilist_renderer.js`, `commUtils.js`, `security.js`, `nativeConnection.js`, `MpvInterface.js`, `domUtils.js`) and `testing_tools/scripts/bridge_contract.js`. Fix issues in `utils/*.module.js` instead.
+   - **Never lint generated files**: excludes the transpiled `utils/*.js` outputs (`SystemLogger.js`, `anilist_renderer.js`, `commUtils.js`, `security.js`, `nativeConnection.js`, `MpvInterface.js`, `domUtils.js`) and `testing_tools/scripts/bridge_contract.js`. Fix issues in `utils/*.module.js` instead.
    - Disables formatter, `assist`, `.md`, and `.html` checks so `biome check` acts strictly as a JS/CSS correctness linter without failing on formatting or SVG/button HTML rules.
 
 4. **Luacheck (`testing_tools/.luacheckrc`)**:

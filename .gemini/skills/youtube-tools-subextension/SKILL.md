@@ -15,14 +15,14 @@ An isolated, opt-in "extension within the extension" for YouTube playback comfor
   - Also injects into already-open matching tabs via `injectIntoOpenMatchingTabs()` when enabled or on extension reload.
 - **Context Menu** (`utils/contextMenu.js`, `background.js`):
   - Adds `"Save to Shinku YT Library"` (`shinku-yt-save-library`) on YouTube pages/links when `shinkuYtToolsEnabled` is true.
-- **Popup UI & 5 Overarching Settings Categories** (`popup.html`, `popup.css`, `popup.js`, `popup/popup_youtube.js`):
+- **Popup UI & Overarching Settings Categories** (`popup.html`, `popup.css`, `popup.js`, `popup/popup_youtube.js`):
   - Top-level tab bar (`#popup-extension-tabs`): **MPV Organizer** | **YouTube Tools** (with `yt-tools/icons/icon16.png` and `#yt-tools-status-dot`). Persists `popupActiveExtTab` and `popupYtSubview` in `chrome.storage.local`.
   - `UIModeManager` in `popup.js` respects `isMpvViewHidden` so async MPV syncs don't overwrite `#youtube-tools-view`.
   - Library renders `shinkuLibrary` safely using `createElement` + `textContent` (never `innerHTML` with video metadata).
-  - Settings render from `SHINKU_YT_UI_SCHEMA` (`yt-tools/yt_defaults.js`) across 5 overarching categories, each with a header master switch that enables/disables all child features plus an independent collapse chevron:
+  - Settings render from `SHINKU_YT_UI_SCHEMA` (`yt-tools/yt_defaults.js`) across overarching categories, each with a header master switch that enables/disables all child features plus an independent collapse chevron:
     1. `frame-removal-settings` (`#yt-frame-removal-settings`, master: `frame-removal`)
     2. `distraction-settings` (`#yt-distraction-settings`, master: `distraction-master`)
-    3. `video-player-settings` (`#yt-video-player-settings`, master: `Video-settings`)
+    3. `video-player-settings` (`#yt-video-player-settings`, master: `video-settings`, with automatic migration from legacy `Video-settings`)
     4. `thumbnail-title-settings` (`#yt-thumbnail-title-settings`, master: `thumbnail-master`)
     5. `playlist-manager` (`#yt-playlist-manager-settings`, master: `playlist-manager`)
 
@@ -42,7 +42,7 @@ YouTube Tools can be developed independently in `yt-tools-standalone/` (loaded d
 - **Live Sub-Extension (Main Repo)**:
   - `yt-tools/yt_defaults.js` — `SHINKU_YT_DEFAULTS`, `SHINKU_YT_QUALITIES`, `SHINKU_YT_SPEEDS`, `SHINKU_YT_CODECS`, `SHINKU_YT_UI_SCHEMA`
   - `yt-tools/yt_bridge.js` — `ISOLATED` world storage/message bridge, invalidation cleanup, & SPA navigation detector
-  - `yt-tools/yt_content.js` — `MAIN` world features across all 5 categories, hover-preview shield, and Watch Later bookmarking/sync
+  - `yt-tools/yt_content.js` — `MAIN` world features across all schema categories, hover-preview shield, and Watch Later bookmarking/sync
   - `yt-tools/icons/icon{16,32,48,128}.png` — Dedicated YouTube Tools icons
   - `yt-tools/port_to_main.py` — Auto-porter from standalone extension into the main extension
   - `yt-tools/export_standalone.py` — Exporter from main extension to standalone extension + zip

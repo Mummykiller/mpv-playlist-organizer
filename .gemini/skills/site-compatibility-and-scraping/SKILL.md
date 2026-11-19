@@ -84,18 +84,18 @@ Stream URLs must be classified and sanitized before passing them to MPV:
 ## 5. Domain-Sharded Metadata Caching (`utils/native_link/metadata_cache.py`)
 
 To eliminate repeated external network lookups for titles, stream URLs, and headers:
-- Metadata is cached per-domain in persistent files under `data/metadata_cache/<domain>.json`.
+- Metadata is cached per-domain in persistent files under `DATA_DIR/metadata_cache/<domain>.json`.
 - Synchronized to browser `chrome.storage.local` under the `mpv_meta_cache_<domain>` bucket.
 - High-frequency lookups hit in-memory LRU cache before checking disk.
 
 ---
 
-## 6. URL Normalization & Deduplication
+## 6. URL Normalization & Deduplication (`utils/url_analyzer.py:normalize_url`, `utils/commUtils.module.js:normalizeYouTubeUrl`)
 
 ### Tracking Parameter Stripping
 To guarantee reliable deduplication and resume position matching, video URLs (especially YouTube) are normalized before storage:
-- Strips non-essential tracking parameters: `t`, `index`, `si`, `feature`, `pp`.
-- Retains essential identity parameters: `v`, `list` (for playlist context).
+- Strips non-essential tracking parameters: `t`, `index`, `start`, `ab_channel`, `attr_tag`, `si`, `feature`, `pp`.
+- Retains essential identity parameters: `v`, `list` (for playlist context). Python's `normalize_url` also strips URL fragments and sorts remaining query keys.
 
 ---
 

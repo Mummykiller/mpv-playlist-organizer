@@ -10,196 +10,62 @@ description: >-
 
 # Bridge & Native Messaging Protocol Architecture
 
-This skill defines the communication protocol, serialization rules, automatic case-translation boundaries, and tab-broadcasting mechanisms between the Chrome Extension (JavaScript) and the Native Messaging Host (Python).
+This skill defines the communication protocol, automatic case-translation boundaries, background handler factory, and tab-broadcasting rules between the Chrome Extension and the Python Native Host.
+
+> [!IMPORTANT]
+> For binary framing details, request/response envelopes, preserved-key matrices, and the full `models.py` dataclass action catalog, see [references/PROTOCOL_SPEC.md](references/PROTOCOL_SPEC.md).
 
 ---
 
-## 1. Native Messaging Protocol & Framing
+## 1. Core Protocol & Case-Translation Architecture
 
-Communication occurs over standard streams (`stdin` / `stdout`) using Chrome's 32-bit native messaging framing protocol:
-
-```
-[4 Bytes: Message Length (Little-Endian Uint32)] [N Bytes: UTF-8 Encoded JSON]
-```
-
-### Protocol Constraints & Security
-
-- **Python Receiver (`native_host.py:get_message`):**
-  - Reads the 4-byte length header: `struct.unpack('@I', raw_length)[0]`.
-  - Enforces `MAX_IPC_MESSAGE_SIZE` (5 MB limit) before reading payload to prevent DoS via memory exhaustion.
-  - EOF on `stdin` indicates browser exit; Native Host terminates gracefully.
-- **Python Sender (`native_host.py:send_message`):**
-  - Masks paths recursively (`mask_path`) before transmission to prevent local path disclosure.
-  - Translates `snake_case` keys to `camelCase` via `responder._translate_keys`.
-  - Writes 4-byte length prefix: `struct.pack('@I', len(encoded_content))` followed by payload.
-  - Enforces synchronized write access with `print_lock = threading.Lock()` and flushes immediately: `sys.stdout.buffer.flush()`.
-
----
-
-## 2. Message Envelope & Request Correlation
-
-### Request Envelope (JS → Python)
-
-```javascript
-{
-  action: "play",           // ALWAYS snake_case
-  request_id: "req_123",    // Preserved verbatim (matches Promise)
-  folder_id?: "Default",    // Optional folder identifier
-  ...data                   // Remaining payload fields in camelCase
-}
-```
-
-### Response Envelope (Python → JS)
-
-```javascript
-{
-  success: true,            // Operation status boolean
-  request_id: "req_123",    // Preserved verbatim
-  result?: { ... },         // Optional payload result
-  error?: "Error message",  // Error string if success is false
-  log?: {                   // Optional log object
-    text: "...",
-    type: "info" | "error"
-  }
-}
-```
-
-### Unsolicited Native Events (Python → JS)
-
-The Native Host pushes asynchronous status events directly over stdout without an initiating browser request (e.g., player lifecycle events):
-- Common actions: `mpv_exited`, `update_last_played`, `update_item_resume_time`, `update_item_marked_as_watched`, `playback_status_changed`, `playback_health_changed`, `item_natural_completion`, `session_restored`, `task_update`, `log`.
-- Dispatched via `addNativeListener(action, callback)` in `utils/nativeConnection.module.js`.
-- Payload keys are automatically converted to `camelCase` before dispatching to frontend callbacks.
-
----
-
-## 3. Automated Case Translation Architecture
-
-The system maintains a bidirectional, recursive translation layer. **Never manually patch casing in individual logic handlers.**
+The system maintains a bidirectional, recursive key-translation layer across Chrome's 32-bit length-prefixed native messaging pipe (`stdin`/`stdout`). **Never manually patch key casing inside individual feature handlers.**
 
 ```mermaid
-flowchart TD
-    subgraph Browser ["Chrome Extension (JavaScript)"]
-        UI["UI / Popup / Content Script<br/><code>camelCase</code>"]
-        HF["Handler Factory / CommUtils<br/><code>background/handler_factory.js</code>"]
-        NC["Native Connection<br/><code>utils/nativeConnection.module.js</code>"]
-    end
-
-    subgraph Host ["Native Host (Python)"]
-        TRANS["Translator Layer<br/><code>utils/native_link/translator.py</code>"]
-        HANDLERS["Python Request Handlers<br/><code>utils/handlers/*.py (snake_case)</code>"]
-        RESP["Responder Layer<br/><code>utils/native_link/responder.py</code>"]
-    end
-
-    UI -->|Incoming Request| HF
-    HF -->|Normalized camelCase| NC
-    NC -->|Native Message| TRANS
-    TRANS -->|Normalized snake_case Models| HANDLERS
-    HANDLERS -->|Data Dicts| RESP
-    RESP -->|Normalized camelCase| NC
-    NC -->|Resolved Promise / Events| UI
+flowchart LR
+    UI["UI / Popup / Content Script<br/>(camelCase)"] --> HF["background/handler_factory.js<br/>normalizeKeys()"]
+    HF --> NC["utils/nativeConnection.module.js<br/>callNativeHost()"]
+    NC --> TRANS["utils/native_link/translator.py<br/>translate() -> snake_case Dataclasses"]
+    TRANS --> HANDLERS["utils/handlers/*.py<br/>(snake_case)"]
+    HANDLERS --> RESP["utils/native_link/responder.py<br/>_translate_keys() -> camelCase"]
+    RESP --> NC
 ```
 
-### Rules & Whitelists
-
-1. **Python Backend:** Write idiomatic `snake_case` for all variables, dictionary keys, and methods.
-2. **JavaScript Frontend:** Write idiomatic `camelCase` for all object properties, variables, and functions.
-3. **Action Key:** The `action` name **ALWAYS** remains `snake_case` (e.g., `"play"`, `"get_ui_preferences"`, `"remove_item_live"`, `"log_event"`, `"export_data"`).
-4. **Preserved Keys Whitelist:**
-   - `request_id`, `url`, `m3u8` are strictly excluded from case conversion in both directions.
-
-### Translation Points in Code
-
-- **Incoming to Background:** `background/handler_factory.js` invokes `normalizeKeys(rawRequest)` from `utils/commUtils.module.js`.
-- **Incoming to Native Host:** `utils/native_link/translator.py:translate(message)` recursively converts all incoming keys to `snake_case` before constructing strongly typed dataclasses.
-- **Outgoing to Browser:** `utils/native_link/responder.py:_translate_keys(data)` and `success()` / `failure()` recursively convert `snake_case` keys back to `camelCase`.
+### Non-Negotiable Casing & Framing Invariants
+1. **Action Names:** `action` values **ALWAYS** remain `snake_case` (e.g., `"play_batch"`, `"get_ui_preferences"`, `"remove_item_live"`).
+2. **Language Idioms:** Write `camelCase` in JavaScript and `snake_case` in Python.
+3. **Preserved Keys:** `request_id`, `url`, `m3u8` (plus map containers like `folders`, `domains`, `headers`, `customNames`, and `SUBTREE_PRESERVE_KEYS` for YouTube Tools backups) are excluded from key-casing conversion (see [references/PROTOCOL_SPEC.md](references/PROTOCOL_SPEC.md)).
+4. **Contract Synchronization:** Adding a new action or request field requires updating `utils/native_link/models.py` and `utils/native_link/translator.py`. `testing_tools/generate_bridge_contract.py` auto-generates `testing_tools/scripts/bridge_contract.js` during verification.
 
 ---
 
-## 4. Request Dataclass Models & Contract Sync
+## 2. Background Handler Factory & Tab Broadcasting
 
-All native actions are mapped to typed Python dataclasses in `utils/native_link/models.py`:
+### `background/handler_factory.js:createHandler(logic, options)`
+Wraps background message handlers with standardized validation, storage persistence, and UI broadcasting:
+- `requireFolder`: Validates `folderId` presence before running `logic`.
+- `syncToNative` / `syncImmediate`: Triggers debounced or immediate native disk backup.
+- `broadcastFolders` / `broadcastPlaylist` / `broadcastPreferences`: Pushes state updates via `background/ui_broadcaster.js`.
+- `updateMenus`: Rebuilds browser context menus (`utils/contextMenu.js`).
+- `manualPersistence`: Skips automatic storage writes for read-only or export-only handlers.
 
-- `PlaybackRequest`: `play`, `play_batch`, `play_m3u`, `append`, `play_new_instance`.
-- `LiveUpdateRequest`: `remove_item_live`, `remove_items_live`, `reorder_live`, `clear_live`, `update_item_marked_as_watched`, `is_mpv_running`, `get_playback_status`, `close_mpv`.
-- `DataSyncRequest`: `export_data`, `export_playlists`, `export_all_playlists_separately`, `import_from_file`, `set_ui_preferences`, `get_unified_diagnostics`, `get_smart_reorder`, `get_metadata_cache`, `cancel_task`.
-- `ServiceRequest`: `get_anilist_releases`, `check_dependencies`.
-- `LogRequest` & `LogBrowserErrorRequest`: `log_event`, `log_browser_error`.
-- **Background Tasks (`utils/native_link/task_manager.py`):** Manages cancellable long-running host tasks, paired with `cancel_task` requests and `task_update` unsolicited events.
-
-### Bridge Contract Synchronization
-
-To prevent contract drift between Python dataclasses and JavaScript tests:
-- `testing_tools/generate_bridge_contract.py` reads `models.py` and `ACTION_MAP` to generate `testing_tools/scripts/bridge_contract.js`.
-- When adding or changing fields in `models.py`, the contract script must be re-run (executed automatically during `python3 verify_changes.py`).
+### Tab Broadcasting (`background/messaging.js`, `background/ui_broadcaster.js`)
+- `broadcastToTabs(message)`: Sends to internal extension views (`chrome.runtime.sendMessage`) and queries `{ active: true }` tabs (`chrome.tabs.sendMessage`) so background tabs are not unnecessarily woken up.
+- `broadcastPlaylistState(folderId)`: Pushes `action: "playlistUpdated"` for the target shard.
+- `broadcastLog(logObject)`: Resolves optional `itemId`/`folderId` titles and broadcasts UI log notifications.
 
 ---
 
-## 5. Background Handler Factory Pipeline
+## 3. Audit Guardrails
 
-`background/handler_factory.js:createHandler(logic, options)` wraps background actions with standard side-effects:
+### MV3 Service Worker Lifecycle
+The service worker terminates after ~30s of inactivity. **In-memory variables are caches, never authoritative state:**
+1. Persist state that must survive worker suspension (Auto-Add toggles, pending clears, queued appends, scanner state) in `chrome.storage.session` or `chrome.storage.local`, and rehydrate on worker startup.
+2. Use `chrome.alarms` (created in `onInstalled`/`onStartup` or guarded with `alarms.get`) for timers longer than a few seconds; reserve `setTimeout` for sub-second debouncing.
 
-```javascript
-export const handleAddUrl = createHandler(async ({ request, data, folderId }) => {
-    // Core action logic...
-    return { success: true, folderId };
-}, {
-    requireFolder: true,         // Validates folderId presence
-    syncToNative: true,          // Triggers debounced disk backup
-    syncImmediate: false,        // If true, bypasses debouncing
-    broadcastFolders: false,     // Broadcasts folder changes to all tabs
-    broadcastPlaylist: true,     // Broadcasts updated playlist items to all tabs
-    broadcastPreferences: false, // Broadcasts preference updates
-    updateMenus: true            // Updates context menus
-});
-```
-
----
-
-## 6. Tab Broadcasting Architecture
-
-The Background Service Worker coordinates UI updates across all active browser tabs:
-
-- **`background/messaging.js:broadcastToTabs(message)`:** Iterates through active tabs querying `{}` and transmits via `chrome.tabs.sendMessage()`.
-- **`background/ui_broadcaster.js:broadcastPlaylistState(folderId)`:** Fetches the specified playlist shard and pushes `action: "playlistUpdated"` to all content scripts.
-- **`broadcastLog({ text, type })`:** Pushes communication log events to all open UI surfaces (Popup and on-page controller).
-
----
-
-## 7. Bridge Troubleshooting Checklist
-
-- **"Bridge call timeout / receiving end does not exist":**
-  1. The Python Native Host failed to boot or crashed immediately upon launch.
-  2. Check `data/native_host.log` or the emergency crash log (`~/.local/share/MPVPlaylistOrganizer/native_host_crash.log`) for tracebacks.
-  3. Ensure execution permissions on `run_native_host.sh` or Python host binary.
-- **"Access Denied / Specified native messaging host not found":**
-  - Run `python3 installer.py` to register the native messaging host JSON manifest in Chrome's native messaging directory (`~/.config/google-chrome/NativeMessagingHosts/com.mpv_playlist_organizer.handler.json`).
-- **Silent Parameter Drops:**
-  - If a parameter passed from JS disappears before reaching Python handler logic, check whether the key was included in the dataclass inside `utils/native_link/models.py`. Keys not declared in the model are dropped during `translator.py` instantiation.
-
-
----
-
-## 8. Audit Guardrails
-
-### MV3 service worker rules
-The service worker is killed after about 30s idle. **Any in-memory variable is a cache, not state.**
-1. State that must survive (Auto-Add on/off, pending clears, queued appends, scanner promises) goes in `chrome.storage.session` or `.local`, and is rehydrated on worker start.
-2. Use `chrome.alarms` for anything longer than a few seconds. `setTimeout` is only for sub-second debouncing.
-3. Create alarms in `onInstalled`/`onStartup`, or guard with `alarms.get`. Never unconditionally at module top level. Throttle expensive wake-up work (metadata sync) by stored timestamp.
-4. Every state toggle that the popup displays must be readable back from persisted state.
-
-### Native call rules (`nativeConnection.module.js`)
-1. Every `callNativeHost` request has a timeout (default about 30s) that deletes its `requestPromises` entry and rejects. The connect handshake has its own timeout.
-2. `dispatchNativeEvent` wraps **each** listener in try/catch. One bad listener must not starve the rest.
-3. Do not keep cross-message closure state (`lastRestoredIsPaused`). Put it on the event.
-4. Utility modules must not import from `background/`. Inject callbacks through setters (as `logger.setNativeSender` does).
-
-### Message size and framing (Python → browser)
-1. `send_message` must check the encoded size (limit about 900 KB, Chrome's hard limit is 1 MiB). If exceeded, return a failure or paged result with the same `request_id`. Never silently swallow the send error.
-2. Large payloads (`restore_session` playlists, enriched items, AniList caches) must be paged or referenced by id.
-3. **CLI mode must never use the native-messaging writer.** Inject a text/no-op sender based on `is_browser`, so no binary frames reach a terminal.
-4. Handlers must be importable and unit-testable. Do not define them inside `main()`.
-
-### Broadcast rules
-`broadcastToTabs` only reaches active tabs, so on `tabs.onActivated` always send a state refresh. Do not rely on event delivery alone.
+### Native Connection & Framing (`utils/nativeConnection.module.js`, `native_host.py`)
+1. **Timeouts & Isolation:** Every `callNativeHost` call enforces `DEFAULT_REQUEST_TIMEOUT_MS` (30s) and cleans up its `requestPromises[requestId]` entry on timeout or disconnect. `dispatchNativeEvent` wraps each listener in `try/catch` so one failing callback cannot starve others.
+2. **No Upward Imports:** `utils/*.module.js` must never import from `background/`; inject callbacks via setters (`setLogBroadcaster`, `logger.setNativeSender`).
+3. **Outbound Size Guard:** `native_host.py:send_message_binary` soft-trims optional preview fields above `800 KB` (`SAFE_OUTBOUND_PAYLOAD_SIZE`) and hard-blocks payloads above `900 KB` (`MAX_OUTBOUND_MESSAGE_SIZE`), returning a structured failure with the same `request_id`.
+4. **CLI Mode Separation:** Terminal CLI invocations must use `send_message_cli` (`set_active_sender`) so binary native-messaging frames never reach a terminal.
+5. **Active-Tab Refresh:** Because `broadcastToTabs` only targets active tabs, always push a state refresh on `chrome.tabs.onActivated`.

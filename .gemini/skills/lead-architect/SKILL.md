@@ -66,16 +66,16 @@ flowchart TD
 The Lead Architect directs specialized worker agents, ensuring they adhere strictly to the codebase invariants.
 
 ### Step 1: Skill & Constraint Mapping
-Before dispatching any task to a subagent, the Architect identifies which of the 14 modular domain skills are relevant and injects their strict constraints into the subagent prompt:
+Before dispatching any task to a subagent, the Architect identifies which of the active skills listed in `GEMINI.md` are relevant and injects their strict constraints into the subagent prompt:
 
 | Architectural Domain | Skills to Inject | Non-Negotiable Worker Invariants |
 | :--- | :--- | :--- |
-| **Frontend UI / Shadow DOM & Popup** | `ui-shadow-dom-and-settings`<br/>`js-build-and-verification`<br/>`content-script-lifecycle-and-resilience` | • Edit `utils/*.module.js` ONLY (Golden Build Rule).<br/>• Inject CSS via `<style>` textContent. Never use `<link rel="stylesheet">`.<br/>• Never overwrite `shadowRoot.innerHTML` after styles are applied.<br/>• Route popup/settings edits to the matching `popup/*.js` module. |
-| **Native Host & Python Backend** | `bridge-and-protocol`<br/>`storage-and-state-sync`<br/>`security-and-diagnostics` | • Action names must remain `snake_case`.<br/>• Key casing auto-converts (`camelCase` ↔ `snake_case`).<br/>• Preserve `request_id`.<br/>• Zero bare `except:` or `except <Any>: pass` (AST Gate). |
+| **Frontend UI / Shadow DOM & Popup** | `ui-shadow-dom-and-settings`<br/>`js-build-and-verification`<br/>`content-script-lifecycle-and-resilience`<br/>`playlist-operations-and-reordering` | • Edit `utils/*.module.js` ONLY (Golden Build Rule).<br/>• Inject CSS via `<style>` textContent. Never use `<link rel="stylesheet">`.<br/>• Never overwrite `shadowRoot.innerHTML` after styles are applied.<br/>• Route popup/settings edits to the matching `popup/*.js` module. |
+| **Native Host, Installer & Backend** | `bridge-and-protocol`<br/>`storage-and-state-sync`<br/>`security-and-diagnostics`<br/>`native-host-installer-and-cli` | • Action names must remain `snake_case`.<br/>• Key casing auto-converts (`camelCase` ↔ `snake_case`).<br/>• Preserve `request_id`.<br/>• Zero bare `except:` or `except <Any>: pass` (AST Gate). |
 | **MPV Playback & IPC** | `mpv-playback-and-ipc`<br/>`playback-tracking-and-fallback-sync` | • Communicate through JSON-IPC sockets/pipes.<br/>• Use bounded threadpools for stream enrichment.<br/>• Handle process exit code 99 for natural completions. |
 | **Scraping & Site Handlers** | `site-compatibility-and-scraping`<br/>`anilist-integration` | • Scrub subprocess environment variables.<br/>• Safe cookie extraction with temp shadow profiles. |
 | **YouTube Tools Sub-Extension** | `youtube-tools-subextension` | • Isolated opt-in via `shinkuYtToolsEnabled` (disabled by default).<br/>• Dynamic `chrome.scripting` registration in `MAIN`/`ISOLATED` worlds.<br/>• Never use `innerHTML` with video metadata in `popup/popup_youtube.js`. |
-| **Testing & Verification** | `testing-and-test-authoring` | • Keep test runtime under 19 seconds.<br/>• Cover edge cases and stale lock recovery. |
+| **Testing, Linting & Skills Sync** | `testing-and-test-authoring`<br/>`linting-and-static-analysis`<br/>`skills-maintenance` | • Keep test runtime under 19 seconds.<br/>• Cover edge cases and stale lock recovery.<br/>• Cite `file:symbol` (never line numbers) and skip `verify_changes.py` for docs-only tasks. |
 
 ### Step 2: Strict Subagent Prompting
 When invoking a subagent via `invoke_subagent`:

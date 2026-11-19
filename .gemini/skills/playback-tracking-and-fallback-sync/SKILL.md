@@ -96,8 +96,8 @@ Launching large playlists (100+ items) with synchronous stream extraction create
    - `EnrichmentService` runs in the background, promoting the launch to a full folder session.
 2. **Batched Streaming to MPV:**
    - Future and history items are enriched and appended to MPV's live playlist queue in **batches of 5 items** (`batch_size = 5`).
-3. **Restored Process Watcher:**
-   - Detects natural completion flag files (`mpv_natural_completion_<pid>.flag`) in `FLAG_DIR`, the IPC directory, or `/tmp`.
+3. **Restored Process Watcher (`LauncherService.start_restored_process_watcher`):**
+   - Detects natural completion flag files (`mpv_natural_completion_<pid>.flag`) in `session.FLAG_DIR` (`DATA_DIR/flags`) via `_safe_read_flag_file` (`os.O_RDONLY | os.O_NOFOLLOW`, 256-byte cap).
    - Preserves exit code `99` unless a manual user quit was detected.
 
 ---
