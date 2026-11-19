@@ -900,6 +900,21 @@ export function createYouTubeToolsManager(ctx = {}) {
 					if (item.step !== undefined) input.step = String(item.step);
 					const currentVal = getSettingValue(group.groupId, key);
 					input.value = currentVal !== undefined ? String(currentVal) : "";
+					input.addEventListener("input", () => {
+						const trimmed = input.value.trim();
+						if (trimmed === "") return;
+						const num = Number(trimmed);
+						if (!Number.isFinite(num)) return;
+						if (item.min !== undefined && Number.isFinite(Number(item.min)) && num < Number(item.min)) {
+							return;
+						}
+						if (item.max !== undefined && Number.isFinite(Number(item.max)) && num > Number(item.max)) {
+							return;
+						}
+						if (num !== getSettingValue(group.groupId, key)) {
+							saveSetting(group.groupId, key, num);
+						}
+					});
 					input.addEventListener("change", () => {
 						const trimmed = input.value.trim();
 						if (trimmed === "") {
@@ -931,7 +946,23 @@ export function createYouTubeToolsManager(ctx = {}) {
 					if (item.placeholder) input.placeholder = String(item.placeholder);
 					const currentVal = getSettingValue(group.groupId, key);
 					input.value = currentVal !== undefined ? String(currentVal) : "";
-					input.addEventListener("change", () => saveSetting(group.groupId, key, input.value));
+					let textDebounceTimer = null;
+					input.addEventListener("input", () => {
+						if (textDebounceTimer !== null) {
+							clearTimeout(textDebounceTimer);
+						}
+						textDebounceTimer = setTimeout(() => {
+							textDebounceTimer = null;
+							saveSetting(group.groupId, key, input.value);
+						}, 200);
+					});
+					input.addEventListener("change", () => {
+						if (textDebounceTimer !== null) {
+							clearTimeout(textDebounceTimer);
+							textDebounceTimer = null;
+						}
+						saveSetting(group.groupId, key, input.value);
+					});
 					controlEl = input;
 				} else {
 					const checkbox = document.createElement("input");

@@ -817,6 +817,7 @@ async function testYtFeedFilterAndHoverGuard() {
 	const dom = new JSDOM(
 		`<!DOCTYPE html><html><body>
 			<div id="movie_player">
+				<video id="main-player-vid"></video>
 				<ytd-thumbnail id="player-non-endscreen-thumb"><a id="thumbnail" href="/watch?v=main0001"></a></ytd-thumbnail>
 				<div class="ytp-fullscreen-grid">
 					<div class="ytp-fullscreen-grid-stills-container">
@@ -838,6 +839,7 @@ async function testYtFeedFilterAndHoverGuard() {
 					</div>
 				</div>
 			</div>
+			<ytd-video-preview><video id="inline-preview-vid"></video></ytd-video-preview>
 			<ytd-rich-section-renderer id="playables-section">
 				<ytd-rich-shelf-renderer><h2 id="title">YouTube Playables</h2></ytd-rich-shelf-renderer>
 			</ytd-rich-section-renderer>
@@ -959,14 +961,54 @@ async function testYtFeedFilterAndHoverGuard() {
 		const classicShield = classicThumb.querySelector(".shinku-hover-shield");
 		assert.ok(classicShield, "Hover shield attached to classic ytd-thumbnail");
 		assert.ok(doc.querySelector("#modern-thumb .shinku-hover-shield"), "Hover shield attached to yt-thumbnail-view-model");
+		assert.strictEqual(
+			doc.documentElement.classList.contains("shinku-hover-guard-locked"),
+			true,
+			"Hover guard lock class is set on documentElement while locked"
+		);
+		assert.ok(doc.getElementById("shinku-hover-guard-style"), "Hover guard lock style tag injected");
 
-		// Verify hover events are blocked from bubbling to classicThumb while locked
+		// Verify hover & pointer/mousemove events are blocked while locked (except active drag with buttons !== 0)
 		let thumbMouseoverCount = 0;
+		let thumbMoveCount = 0;
 		classicThumb.addEventListener("mouseover", () => {
 			thumbMouseoverCount++;
 		});
+		classicThumb.addEventListener("mousemove", () => {
+			thumbMoveCount++;
+		});
+		classicThumb.addEventListener("pointermove", () => {
+			thumbMoveCount++;
+		});
 		classicShield.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true }));
 		assert.strictEqual(thumbMouseoverCount, 0, "mouseover blocked from reaching thumbnail while shield is active");
+		classicShield.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, buttons: 0 }));
+		classicShield.dispatchEvent(new dom.window.MouseEvent("pointermove", { bubbles: true, buttons: 0 }));
+		assert.strictEqual(thumbMoveCount, 0, "mousemove/pointermove blocked when buttons === 0");
+		classicShield.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, buttons: 1 }));
+		assert.strictEqual(thumbMoveCount, 1, "mousemove allowed through when dragging (buttons === 1)");
+
+		// Inline preview video play is paused while locked, main #movie_player video is never paused
+		const inlineVid = doc.getElementById("inline-preview-vid");
+		const mainVid = doc.getElementById("main-player-vid");
+		let inlinePaused = false;
+		let inlinePauseCount = 0;
+		let mainPaused = false;
+		let mainPauseCount = 0;
+		Object.defineProperty(inlineVid, "paused", { get: () => inlinePaused, configurable: true });
+		inlineVid.pause = () => {
+			inlinePaused = true;
+			inlinePauseCount++;
+		};
+		Object.defineProperty(mainVid, "paused", { get: () => mainPaused, configurable: true });
+		mainVid.pause = () => {
+			mainPaused = true;
+			mainPauseCount++;
+		};
+		inlineVid.dispatchEvent(new dom.window.Event("play"));
+		assert.ok(inlinePauseCount >= 1 && inlinePaused, "Inline preview video paused while guard is locked");
+		mainVid.dispatchEvent(new dom.window.Event("play"));
+		assert.strictEqual(mainPauseCount, 0, "Main #movie_player video is never paused by hover guard");
 
 		// Leaving before delay cancels timer and keeps shield active
 		classicShield.dispatchEvent(new dom.window.MouseEvent("mouseenter", { bubbles: false }));
@@ -981,11 +1023,75 @@ async function testYtFeedFilterAndHoverGuard() {
 		assert.strictEqual(classicShield.style.display, "none", "Shield hidden after hover delay");
 		assert.strictEqual(classicShield.style.pointerEvents, "none", "Shield pointerEvents disabled after hover delay");
 		assert.ok(thumbMouseoverCount > 0, "Synthetic mouseover dispatched to thumbnail after delay");
+		assert.strictEqual(
+			doc.documentElement.classList.contains("shinku-hover-guard-locked"),
+			false,
+			"Hover guard lock class removed after delay unlocks shield"
+		);
+		inlinePaused = false;
+		inlinePauseCount = 0;
+		inlineVid.dispatchEvent(new dom.window.Event("play"));
+		assert.strictEqual(inlinePauseCount, 0, "Inline preview video allowed to play after delay unlocks");
 
-		// Moving mouse elsewhere on the page restores the shield for future hovers
+		// Moving mouse elsewhere on the page restores the shield and lock state for future hovers
 		doc.body.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true }));
 		assert.strictEqual(classicShield.style.display, "block", "Shield restored when pointer moves away");
 		assert.strictEqual(classicShield.style.pointerEvents, "auto", "Shield pointerEvents restored when pointer moves away");
+		assert.strictEqual(
+			doc.documentElement.classList.contains("shinku-hover-guard-locked"),
+			true,
+			"Hover guard lock class restored when pointer moves away"
+		);
+		inlinePaused = false;
+		inlinePauseCount = 0;
+		inlineVid.dispatchEvent(new dom.window.Event("play"));
+		assert.ok(inlinePauseCount >= 1 && inlinePaused, "Inline preview video paused again once re-locked");
+
+		// Empty string or null hover-preview-delay must fall back to 3000ms (never 0ms)
+		for (const badDelay of ["", null]) {
+			settings["thumbnail-title-settings"]["hover-preview-delay"] = badDelay;
+			dom.window.dispatchEvent(
+				new dom.window.MessageEvent("message", {
+					data: { type: "SHINKU__updateUserSetting", data: settings },
+					source: dom.window,
+					origin: dom.window.location.origin,
+				})
+			);
+			classicShield.dispatchEvent(new dom.window.MouseEvent("mouseenter", { bubbles: false, clientX: 10, clientY: 20 }));
+			await new Promise((r) => origSetTimeout(r, 40));
+			assert.notStrictEqual(
+				classicShield.style.display,
+				"none",
+				`hover-preview-delay=${JSON.stringify(badDelay)} must not unlock immediately (3000ms fallback)`
+			);
+			classicShield.dispatchEvent(new dom.window.MouseEvent("mouseleave", { bubbles: false }));
+		}
+
+		// Updating hover-preview-delay to a longer duration (0.12s = 120ms) is respected dynamically
+		settings["thumbnail-title-settings"]["hover-preview-delay"] = 0.12;
+		dom.window.dispatchEvent(
+			new dom.window.MessageEvent("message", {
+				data: { type: "SHINKU__updateUserSetting", data: settings },
+				source: dom.window,
+				origin: dom.window.location.origin,
+			})
+		);
+		classicShield.dispatchEvent(new dom.window.MouseEvent("mouseenter", { bubbles: false, clientX: 10, clientY: 20 }));
+		await new Promise((r) => origSetTimeout(r, 60));
+		assert.notStrictEqual(classicShield.style.display, "none", "Shield stays locked at 60ms when delay is 120ms");
+		await new Promise((r) => origSetTimeout(r, 100));
+		assert.strictEqual(classicShield.style.display, "none", "Shield unlocks after full 120ms delay");
+		doc.body.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true }));
+
+		// Restore 50ms test delay for subsequent endscreen assertions
+		settings["thumbnail-title-settings"]["hover-preview-delay"] = 0.05;
+		dom.window.dispatchEvent(
+			new dom.window.MessageEvent("message", {
+				data: { type: "SHINKU__updateUserSetting", data: settings },
+				source: dom.window,
+				origin: dom.window.location.origin,
+			})
+		);
 
 		// End-of-video recommendation tiles overlaid inside #movie_player MUST be shielded
 		const modernEndscreenStill = doc.getElementById("modern-endscreen-still");
@@ -1067,6 +1173,16 @@ async function testYtFeedFilterAndHoverGuard() {
 			})
 		);
 		assert.strictEqual(doc.querySelectorAll(".shinku-hover-shield").length, 0, "All shields removed when disabled");
+		assert.strictEqual(
+			doc.documentElement.classList.contains("shinku-hover-guard-locked"),
+			false,
+			"Hover guard lock class removed when disabled"
+		);
+		assert.strictEqual(
+			doc.getElementById("shinku-hover-guard-style"),
+			null,
+			"Hover guard lock style removed when disabled"
+		);
 	} finally {
 		for (const id of timeouts) origClearTimeout(id);
 		dom.window.close();
@@ -1730,8 +1846,14 @@ async function testYtIntegrationAndRegressionFixes() {
 
 		let docMouseMoves = 0;
 		doc.addEventListener("mousemove", () => { docMouseMoves++; });
-		shield.dispatchEvent(new win.MouseEvent("mousemove", { bubbles: true, cancelable: true }));
-		assert.strictEqual(docMouseMoves, 1, "mousemove reaches document-level Draggable/Resizable over shield");
+		shield.dispatchEvent(new win.MouseEvent("mousemove", { bubbles: true, cancelable: true, buttons: 0 }));
+		assert.strictEqual(docMouseMoves, 0, "Idle mousemove over shield is blocked while locked");
+		shield.dispatchEvent(new win.MouseEvent("mousemove", { bubbles: true, cancelable: true, buttons: 1 }));
+		assert.strictEqual(docMouseMoves, 1, "mousemove reaches document-level Draggable/Resizable over shield when dragging (buttons: 1)");
+		doc.body.classList.add("mpv-controller-dragging");
+		shield.dispatchEvent(new win.MouseEvent("mousemove", { bubbles: true, cancelable: true, buttons: 0 }));
+		doc.body.classList.remove("mpv-controller-dragging");
+		assert.strictEqual(docMouseMoves, 2, "mousemove reaches document-level Draggable/Resizable over shield when drag class active");
 
 		// 3. Shadow DOM hijackedSeek does not steal ArrowRight from focused Shadow DOM <select>
 		seekCalls.length = 0; // ignore initial applyFastResume seek to 30s
@@ -1995,6 +2117,29 @@ async function testYtIntegrationAndRegressionFixes() {
 		await new Promise((r) => setTimeout(r, 80));
 		assert.strictEqual(popupMock.localData.shinkuExtensionSettings["frame-removal-settings"]["shorts-removal"], false);
 		assert.strictEqual(popupMock.localData.shinkuExtensionSettings["frame-removal-settings"]["live-removal"], false);
+
+		// Number input saves on "input" immediately without requiring blur/"change", and does not clobber mid-typing out-of-range values
+		const delayInput = popupDom.window.document.getElementById("yt-setting-hover-preview-delay");
+		const boostInput = popupDom.window.document.getElementById("yt-setting-volume-boost-level");
+		assert.ok(delayInput && boostInput, "Number inputs for hover-preview-delay and volume-boost-level rendered");
+		delayInput.value = "5";
+		delayInput.dispatchEvent(new popupDom.window.Event("input"));
+		await new Promise((r) => setTimeout(r, 80));
+		assert.strictEqual(
+			popupMock.localData.shinkuExtensionSettings["thumbnail-title-settings"]["hover-preview-delay"],
+			5,
+			"hover-preview-delay saved immediately on input without blur"
+		);
+		const prevBoost = popupMock.localData.shinkuExtensionSettings["video-player-settings"]["volume-boost-level"];
+		boostInput.value = "1";
+		boostInput.dispatchEvent(new popupDom.window.Event("input"));
+		await new Promise((r) => setTimeout(r, 40));
+		assert.strictEqual(boostInput.value, "1", "Out-of-range intermediate input value not overwritten during typing");
+		assert.strictEqual(
+			popupMock.localData.shinkuExtensionSettings["video-player-settings"]["volume-boost-level"],
+			prevBoost,
+			"Out-of-range intermediate input value not saved to storage"
+		);
 	} finally {
 		global.window = origWin2;
 		global.document = origDoc2;

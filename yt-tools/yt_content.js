@@ -152,7 +152,11 @@
   }
 
   function getHoverGuardDelayMs() {
-    const raw = Number(getThumbnailSettings()["hover-preview-delay"]);
+    const val = getThumbnailSettings()["hover-preview-delay"];
+    if (val === undefined || val === null || val === "") {
+      return 3000;
+    }
+    const raw = Number(val);
     const seconds = Number.isFinite(raw) && raw >= 0 ? raw : 3;
     return Math.round(seconds * 1000);
   }
@@ -1949,7 +1953,12 @@
   // ---------------------------------------------------------------------------
 
   const HOVER_SHIELD_CLASS = "shinku-hover-shield";
-  const THUMBNAIL_SELECTOR = "ytd-thumbnail, yt-thumbnail-view-model, ytd-playlist-thumbnail";
+  const HOVER_GUARD_STYLE_ID = "shinku-hover-guard-style";
+  const HOVER_GUARD_LOCKED_CLASS = "shinku-hover-guard-locked";
+  const INLINE_PREVIEW_CONTAINER_SELECTOR =
+    "ytd-video-preview, #video-preview, #inline-preview-player, .ytp-inline-preview-ui, .ytp-modern-videowall-still-preview";
+  const THUMBNAIL_SELECTOR =
+    "ytd-thumbnail, yt-thumbnail-view-model, yt-collection-thumbnail-view-model, ytd-playlist-thumbnail";
   const PLAYER_ENDSCREEN_OVERLAY_SELECTOR =
     ".html5-endscreen, .ytp-endscreen-content, .ytp-fullscreen-grid, .ytp-fullscreen-grid-stills-container";
   const PLAYER_ENDSCREEN_STILL_SELECTOR =
@@ -1973,6 +1982,88 @@
   let unlockedShieldEntry = null; // { shield, container, card }
   let hoverCaptureAttached = false;
   let isDispatchingSyntheticHover = false;
+
+  function isInlinePreviewVideo(el) {
+    if (!el || el.tagName !== "VIDEO" || typeof el.closest !== "function") {
+      return false;
+    }
+    if (el.closest(INLINE_PREVIEW_CONTAINER_SELECTOR)) {
+      return true;
+    }
+    if (el.closest("#movie_player") && !el.closest(PLAYER_ENDSCREEN_OVERLAY_SELECTOR)) {
+      return false;
+    }
+    return Boolean(el.closest(THUMBNAIL_SELECTOR));
+  }
+
+  function pauseActiveInlinePreviews() {
+    const videos = document.querySelectorAll(
+      "ytd-video-preview video, #video-preview video, #inline-preview-player video, .ytp-inline-preview-ui video, .ytp-modern-videowall-still-preview video"
+    );
+    for (const v of videos) {
+      if (!v.paused && typeof v.pause === "function") {
+        try {
+          v.pause();
+        } catch (_err) {
+          console.debug("[Shinku YT] Failed to pause inline preview video:", _err?.message || _err);
+        }
+      }
+    }
+  }
+
+  function syncHoverGuardLockState() {
+    const root = document.documentElement;
+    if (!root) return;
+    if (isHoverGuardOn()) {
+      const styleTarget = document.head || root;
+      const lockCss = `
+html.${HOVER_GUARD_LOCKED_CLASS} ytd-video-preview,
+html.${HOVER_GUARD_LOCKED_CLASS} #video-preview,
+html.${HOVER_GUARD_LOCKED_CLASS} #inline-preview-player,
+html.${HOVER_GUARD_LOCKED_CLASS} ytd-moving-thumbnail-renderer,
+html.${HOVER_GUARD_LOCKED_CLASS} .ytp-inline-preview-ui,
+html.${HOVER_GUARD_LOCKED_CLASS} .ytp-modern-videowall-still-preview {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}`;
+      let styleEl = document.getElementById(HOVER_GUARD_STYLE_ID);
+      if (!styleEl && styleTarget) {
+        styleEl = document.createElement("style");
+        styleEl.id = HOVER_GUARD_STYLE_ID;
+        styleEl.textContent = lockCss;
+        styleTarget.appendChild(styleEl);
+      } else if (styleEl && styleEl.textContent !== lockCss) {
+        styleEl.textContent = lockCss;
+      }
+      if (!unlockedShieldEntry) {
+        root.classList.add(HOVER_GUARD_LOCKED_CLASS);
+        pauseActiveInlinePreviews();
+      } else {
+        root.classList.remove(HOVER_GUARD_LOCKED_CLASS);
+      }
+    } else {
+      root.classList.remove(HOVER_GUARD_LOCKED_CLASS);
+      const existing = document.getElementById(HOVER_GUARD_STYLE_ID);
+      if (existing) {
+        existing.remove();
+      }
+    }
+  }
+
+  function handleInlinePreviewPlay(e) {
+    if (isHoverGuardOn() && !unlockedShieldEntry && isInlinePreviewVideo(e.target)) {
+      if (typeof e.target.pause === "function") {
+        try {
+          e.target.pause();
+        } catch (_err) {
+          console.debug("[Shinku YT] Failed to pause preview play event:", _err?.message || _err);
+        }
+      }
+      e.stopImmediatePropagation();
+    }
+  }
 
   function clearEndscreenGuardTimer() {
     if (endscreenGuardTimer !== null) {
@@ -2037,6 +2128,7 @@
       shield.style.display = "block";
       shield.style.pointerEvents = "auto";
     }
+    syncHoverGuardLockState();
   }
 
   function isPointerStillOverUnlocked(activeTarget) {
@@ -2089,11 +2181,26 @@
       }
     }
 
-    if (!container && (e.type === "mouseenter" || e.type === "pointerenter")) {
+    if (
+      !container &&
+      (e.type === "mouseenter" ||
+        e.type === "pointerenter" ||
+        e.type === "mouseover" ||
+        e.type === "pointerover")
+    ) {
       const card =
         target.closest(CARD_SELECTOR) || (target.matches?.(CARD_SELECTOR) ? target : null);
       if (card) {
-        const thumb = card.querySelector("[data-shinku-hover-guarded]");
+        let thumb = card.querySelector("[data-shinku-hover-guarded]");
+        if (!thumb && typeof e.clientX === "number" && typeof e.clientY === "number") {
+          const candidate = card.querySelector(HOVER_GUARD_SELECTOR);
+          if (candidate && isPointInRect(e.clientX, e.clientY, candidate.getBoundingClientRect())) {
+            attachHoverGuard(candidate);
+            thumb = candidate.hasAttribute("data-shinku-hover-guarded")
+              ? candidate
+              : candidate.querySelector("[data-shinku-hover-guarded]");
+          }
+        }
         if (thumb && typeof e.clientX === "number" && typeof e.clientY === "number") {
           if (isPointInRect(e.clientX, e.clientY, thumb.getBoundingClientRect())) {
             container = thumb;
@@ -2174,6 +2281,7 @@
 
         const parentCard = container.closest(CARD_SELECTOR);
         unlockedShieldEntry = { shield, container, card: parentCard };
+        syncHoverGuardLockState();
 
         const under =
           (typeof document.elementFromPoint === "function"
@@ -2189,10 +2297,7 @@
       }, delayMs);
     }
 
-    // Do not swallow mousemove/pointermove so document-level drag/resize handlers keep receiving events.
-    if (e.type !== "mousemove" && e.type !== "pointermove") {
-      e.stopImmediatePropagation();
-    }
+    e.stopImmediatePropagation();
   }
 
   function handlePageMouseLeave() {
@@ -2205,6 +2310,8 @@
     for (const evtName of HOVER_CAPTURE_EVENTS) {
       window.addEventListener(evtName, handleHoverCapture, true);
     }
+    document.addEventListener("play", handleInlinePreviewPlay, true);
+    document.addEventListener("playing", handleInlinePreviewPlay, true);
     document.addEventListener("mouseleave", handlePageMouseLeave);
     hoverCaptureAttached = true;
   }
@@ -2214,6 +2321,8 @@
     for (const evtName of HOVER_CAPTURE_EVENTS) {
       window.removeEventListener(evtName, handleHoverCapture, true);
     }
+    document.removeEventListener("play", handleInlinePreviewPlay, true);
+    document.removeEventListener("playing", handleInlinePreviewPlay, true);
     document.removeEventListener("mouseleave", handlePageMouseLeave);
     hoverCaptureAttached = false;
   }
@@ -2223,6 +2332,7 @@
     clearActiveHoverTimer();
     clearEndscreenGuardTimer();
     restoreUnlockedShield();
+    syncHoverGuardLockState();
     const leftovers = document.querySelectorAll(`.${HOVER_SHIELD_CLASS}`);
     for (const el of leftovers) {
       el.remove();
@@ -2634,6 +2744,7 @@
       return;
     }
     ensureHoverCaptureListeners();
+    syncHoverGuardLockState();
     const thumbnails = document.querySelectorAll(HOVER_GUARD_SELECTOR);
     for (const thumb of thumbnails) {
       attachHoverGuard(thumb);
