@@ -393,11 +393,11 @@ class PlaybackHandler(BaseHandler):
         if is_running and not self.ipc_utils.is_pid_running(pid):
             is_running = False
 
-        # 2. Socket check if PID seems alive
+        # 2. Socket check if PID seems alive (a slow IPC reply must not tear down a live session)
         if is_running:
             if ipc_manager and ipc_manager.is_connected():
                 if ipc_manager.get_property("pid", timeout=0.3) is None:
-                    is_running = False
+                    logging.debug("[PY][Handler] IPC ping timed out but PID is alive; keeping session.")
             else:
                 is_running = self.ipc_utils.is_process_alive(pid, ipc_path)
 
@@ -570,15 +570,17 @@ class PlaybackHandler(BaseHandler):
 
             # Handshake cleanup for unmanaged instances needs a small delay or a thread
             def delayed_cleanup(path, proc):
-                # Unmanaged sessions don't have a manager to clear them,
-                # so we wait for the process to end or a reasonable timeout for the handshake to be read.
-                # Actually, MPV reads script-opts at startup. 5 seconds is plenty.
+                # MPV reads script-opts at startup; remove the handshake shortly after, then reap the child.
                 time.sleep(10)
                 try:
                     if os.path.exists(path):
                         os.remove(path)
                 except OSError as e:
                     logging.debug(f"[PY][PlaybackHandler] Failed to remove unmanaged handshake file {path}: {e}")
+                try:
+                    proc.wait()
+                except OSError as e:
+                    logging.debug(f"[PY][PlaybackHandler] Failed to reap unmanaged mpv process: {e}")
 
             threading.Thread(target=delayed_cleanup, args=(handshake_path, process), daemon=True).start()
 

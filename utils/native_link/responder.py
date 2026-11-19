@@ -19,11 +19,17 @@ SUBTREE_PRESERVE_KEYS = {
 }
 
 
-FORBIDDEN_KEYS = {"__proto__", "constructor", "prototype"}
+FORBIDDEN_KEYS = {"__proto__"}
+
+
+class PreservedKeys(dict):
+    """Marker dict whose keys must NOT be re-translated (e.g. raw imported JSON)."""
 
 
 def _translate_keys(data: Any, parent_key: Optional[str] = None, preserve_subtree: bool = False) -> Any:
     """Recursively translates snake_case keys to camelCase for JS."""
+    if isinstance(data, PreservedKeys):
+        return data
     if isinstance(data, dict):
         new_dict = {}
         preserve_immediate_keys = preserve_subtree or parent_key in (
@@ -65,7 +71,7 @@ def success(result: Any = None, preserve_data_keys: bool = False, **kwargs) -> D
     if preserve_data_keys and "data" in response:
         raw_data = response.pop("data")
         translated = _translate_keys(response)
-        translated["data"] = raw_data
+        translated["data"] = PreservedKeys(raw_data) if isinstance(raw_data, dict) else raw_data
         return translated
     return _translate_keys(response)
 

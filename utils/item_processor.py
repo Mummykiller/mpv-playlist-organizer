@@ -60,6 +60,11 @@ class ItemProcessor:
             disable_http, cookies_file, mark_watched, ytdl_fmt, cookies_browser
         ) = res
 
+        if not processed_url and not entries:
+            logging.warning(f"[ItemProcessor] Item blocked by security checks; skipping: {item.get('title') or 'untitled'}")
+            if not quiet:
+                self.send_message({"action": "log_from_native_host", "log": {"text": "Item blocked: URL failed security validation.", "type": "error"}})
+            return []
         if entries:
             processed_entries = []
             for entry in entries:

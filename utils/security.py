@@ -233,7 +233,9 @@ def is_safe_url(url, web_only=False):
                 return not web_only
             return False
 
-        clean_host = hostname.strip("[]").lower()
+        clean_host = hostname.strip("[]").lower().rstrip('.')
+        if not clean_host:
+            return False
         if "%" in clean_host:
             clean_host = clean_host.split("%", 1)[0]
 
@@ -322,11 +324,26 @@ ALLOWED_COOKIE_BROWSERS = {
     'vivaldi', 'opera', 'safari', 'whale'
 }
 
+ALLOWED_COOKIE_BROWSERS.update({'librewolf', 'zen', 'waterfox'})
+
+# yt-dlp syntax: BROWSER[+KEYRING][:PROFILE][::CONTAINER]
+_COOKIE_BROWSER_RE = re.compile(
+    r'^(?P<name>[a-z]+)(?:\+[a-zA-Z0-9]{1,32})?'
+    r'(?::[A-Za-z0-9 _.\-/\\]{1,100})?(?:::[A-Za-z0-9 _.\-]{1,100})?$'
+)
+
 def is_safe_cookie_browser(browser: str) -> bool:
-    """Validates that a cookie browser name matches the approved browser allowlist."""
+    """Validates a cookie browser spec (BROWSER[+KEYRING][:PROFILE][::CONTAINER]) against the allowlist."""
     if not browser or not isinstance(browser, str):
         return False
-    return browser.strip().lower() in ALLOWED_COOKIE_BROWSERS
+    spec = browser.strip()
+    if len(spec) > 256:
+        return False
+    m = _COOKIE_BROWSER_RE.match(spec)
+    if not m or m.group('name').lower() not in ALLOWED_COOKIE_BROWSERS:
+        logging.warning("Security: Rejected unsupported cookie browser spec.")
+        return False
+    return True
 
 def is_safe_cookie_file(path: str, data_dir=None, script_dir=None, temp_dir=None) -> bool:
     """

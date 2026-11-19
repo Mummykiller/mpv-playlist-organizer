@@ -376,8 +376,8 @@ async function testSecurityComponent() {
 	const normPayload = MPV.normalizeKeys(rawPayload);
 	assert.strictEqual(normPayload.snakeKey, 1);
 	assert.strictEqual(Object.prototype.hasOwnProperty.call(normPayload, "__proto__"), false);
-	assert.strictEqual(Object.prototype.hasOwnProperty.call(normPayload, "constructor"), false);
-	assert.strictEqual(Object.prototype.hasOwnProperty.call(normPayload, "prototype"), false);
+	assert.strictEqual(normPayload.constructor, "bad");
+	assert.strictEqual(normPayload.prototype, "bad");
 	assert.strictEqual(({}).polluted, undefined);
 
 	// Native bridge URL pre-validation for non-HTTP schemes with SSRF targets

@@ -154,7 +154,7 @@ mp.register_event("end-file", function(event)
 end)
 
 -- 4. Fast Shutdown Signal: Block browser retries instantly
-mp.register_event("quit", function()
+mp.register_event("shutdown", function()
     debug_log("Shutdown detected. Signaling browser...")
     mp.commandv("script-message", "mpv_quitting")
 end)

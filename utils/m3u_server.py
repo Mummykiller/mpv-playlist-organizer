@@ -142,6 +142,7 @@ class M3UServer:
                     logging.debug(f"[M3U_SERVER] Error terminating server process: {term_err}")
                     try:
                         self.process.kill()
+                        self.process.wait(timeout=2)
                     except (subprocess.SubprocessError, OSError) as kill_err:
                         logging.debug(f"[M3U_SERVER] Error killing server process: {kill_err}")
                 self.process = None

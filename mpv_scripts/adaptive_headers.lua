@@ -340,6 +340,8 @@ local function apply_adaptive_settings()
     -- 7. TARGETED BYPASS CHECK
     local targeted = opts.targeted_defaults or "none"
     local is_yt = path:find("youtube%.com") or path:find("youtu%.be")
+        or (opts.original_url and (opts.original_url:find("youtube%.com") or opts.original_url:find("youtu%.be")))
+        or opts.is_youtube
     local bypass_active = false
 
     -- ACCURATE SEEKING (Fixes AAC "illegal icc" / "iid_mode 6" errors in Anime)

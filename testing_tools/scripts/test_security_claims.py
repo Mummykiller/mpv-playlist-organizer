@@ -553,15 +553,27 @@ class TestSecurityClaims(BaseTestCase):
         ok2, msg2 = fallback_sync.mark_video_as_watched("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "chrome;rm -rf /")
         self.assertFalse(ok2)
 
-        polluted = {"action": "ping", "__proto__": {"polluted": True}, "constructor": "bad", "prototype": "bad"}
+        polluted = {"action": "ping", "__proto__": {"polluted": True}, "constructor": "keep", "prototype": "keep"}
         norm = translator._normalize_message(polluted)
         self.assertNotIn("__proto__", norm)
-        self.assertNotIn("constructor", norm)
-        self.assertNotIn("prototype", norm)
+        self.assertEqual(norm.get("constructor"), "keep")
         trans = responder._translate_keys(polluted)
         self.assertNotIn("__proto__", trans)
-        self.assertNotIn("constructor", trans)
-        self.assertNotIn("prototype", trans)
+        self.assertEqual(trans.get("prototype"), "keep")
+
+        # Trailing-dot FQDN SSRF bypass
+        self.assertFalse(security.is_safe_url("http://127.0.0.1./"))
+        self.assertFalse(security.is_safe_url("http://metadata.google.internal./x"))
+
+        # yt-dlp cookie browser specs: valid forms pass, injection fails
+        for ok_spec in ("chrome", "firefox:default-release", "chrome+gnomekeyring", "chrome:Profile 1", "firefox::Work"):
+            self.assertTrue(security.is_safe_cookie_browser(ok_spec), ok_spec)
+        for bad_spec in ("chrome,proxy=http://x", "chrome;rm", "evil", "chrome:a,b", ""):
+            self.assertFalse(security.is_safe_cookie_browser(bad_spec), bad_spec)
+
+        # Preserved data keys survive a second translation pass
+        res = responder.success(data={"my_anime_list": 1}, preserve_data_keys=True)
+        self.assertIn("my_anime_list", responder._translate_keys(res)["data"])
 
 if __name__ == '__main__':
     unittest.main()

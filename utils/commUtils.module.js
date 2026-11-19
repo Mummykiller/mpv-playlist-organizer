@@ -162,7 +162,9 @@ export function normalizeKeys(data, preserveChildKeys = false) {
 		);
 	};
 
-	const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+	// Only "__proto__" can mutate the prototype chain via assignment; "constructor"/"prototype"
+	// are harmless own keys and must survive (e.g. user folders with those names).
+	const FORBIDDEN_KEYS = new Set(["__proto__"]);
 	const normalized = {};
 	for (const key in data) {
 		if (Object.prototype.hasOwnProperty.call(data, key)) {

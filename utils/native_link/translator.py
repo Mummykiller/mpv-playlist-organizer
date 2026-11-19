@@ -67,7 +67,7 @@ SUBTREE_PRESERVE_KEYS = {
 }
 
 
-FORBIDDEN_KEYS = {"__proto__", "constructor", "prototype"}
+FORBIDDEN_KEYS = {"__proto__"}
 
 
 def _normalize_message(data: Any, parent_key: Optional[str] = None, preserve_subtree: bool = False) -> Any:

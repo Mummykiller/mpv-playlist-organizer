@@ -145,9 +145,11 @@ class Janitor:
                                 is_socket_responsive = False
                                 try:
                                     manager = IPCSocketManager()
-                                    if manager.connect(item_path, timeout=0.5):
-                                        mpv_pid = manager.get_property("pid", timeout=0.5)
-                                        manager.close()
+                                    if manager.connect(item_path, timeout=0.5, start_event_reader=False):
+                                        try:
+                                            mpv_pid = manager.get_property("pid", timeout=0.5)
+                                        finally:
+                                            manager.close()
                                         if mpv_pid and is_pid_running(mpv_pid):
                                             is_socket_responsive = True
                                 except (OSError, ValueError, TimeoutError) as e:
@@ -231,6 +233,7 @@ class Janitor:
     def run_startup_sweep(self):
         """Executes a full cleanup suite on startup with concurrency protection."""
         lock_file = os.path.join(self.data_dir, ".janitor.lock")
+        lock_acquired = False
         try:
             # Simple lock: If lock file is older than 5 minutes, assume it's stale
             if os.path.exists(lock_file) and (time.time() - os.path.getmtime(lock_file)) < 300:
@@ -239,6 +242,7 @@ class Janitor:
 
             with open(lock_file, 'w') as f:
                 f.write(str(os.getpid()))
+            lock_acquired = True
 
             self.clean_temp_dir()
             self.cleanup_stale_ipc()
@@ -246,7 +250,7 @@ class Janitor:
         except Exception as e:
             logging.warning(f"Janitor: Startup sweep encountered an error: {e}")
         finally:
-            if os.path.exists(lock_file):
+            if lock_acquired and os.path.exists(lock_file):
                 try:
                     os.remove(lock_file)
                 except OSError as e:

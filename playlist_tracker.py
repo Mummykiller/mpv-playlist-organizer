@@ -650,7 +650,7 @@ class PlaylistTracker:
                     return True if changed else None
 
                 # Atomically update shard and index while holding locks (INDEX -> Shard order)
-                commit_success = self.file_io.update_shard(self.folder_id, shard_updater, update_index=False)
+                commit_success = self.file_io.update_shard(self.folder_id, shard_updater, update_index=bool(last_played_snap))
                 if commit_success:
                     logging.info(f"[PY][Tracker] Throttled shard commit complete for '{self.folder_id}'.")
                 else:

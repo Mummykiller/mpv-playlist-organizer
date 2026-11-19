@@ -721,7 +721,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				// Priority for initial folder:
 				// 1. If MPV is running (active/not idle), show THAT folder instantly.
 				// 2. Otherwise use last used folder.
-				const isCacheActive = playbackCache.folderId && (playbackCache.isRunning || !playbackCache.isIdle);
+				const isCacheActive = playbackCache.folderId && ((playbackCache.isRunning === true || playbackCache.isIdle === false));
 				const lastUsedFolderId = (isCacheActive ? playbackCache.folderId : (initialStorage.mpv_settings?.lastUsedFolderId || folderIds[0]));
 
 				// Get initial playlist for the target folder instantly
@@ -756,7 +756,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 				// Seed the playback manager with the cache instantly
 				MPV.playbackStateManager.update({
 					folderId: playbackCache.folderId,
-					isRunning: playbackCache.isRunning || !playbackCache.isIdle,
+					isRunning: (playbackCache.isRunning === true || playbackCache.isIdle === false),
 					isPaused: playbackCache.isPaused,
 					isIdle: playbackCache.isIdle,
 					lastPlayedId: playbackCache.lastPlayedId,
@@ -769,7 +769,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					const isFolderMatch = playbackCache.folderId && lastUsedFolderId && playbackCache.folderId.toLowerCase() === lastUsedFolderId.toLowerCase();
 					const isFolderActive =
 						isFolderMatch &&
-						(playbackCache.isRunning || !playbackCache.isIdle);
+						((playbackCache.isRunning === true || playbackCache.isIdle === false));
 					const isPaused = (playbackCache.isPaused || playbackCache.isIdle) || false;
 
 					// Priority for lastPlayedId: Cache (real-time) > Storage (backup)

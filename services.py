@@ -170,6 +170,7 @@ def construct_lua_options(item, settings, script_dir, index=None):
         "ffmpeg_path": settings.get('ffmpeg_path'),
         "original_url": item_url,
         "cookies_file": safe_cookies_file,
+        "enable_cache": settings.get('enable_cache', True),
         "cookies_browser": safe_cookies_browser,
         "disable_http_persistent": item.get('disable_http_persistent', False),
         "disable_network_overrides": settings.get('disable_network_overrides', False),

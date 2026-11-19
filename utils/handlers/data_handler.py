@@ -80,7 +80,7 @@ class DataHandler(BaseHandler):
         system_info = {
             "python_version": sys.version,
             "platform": platform.platform(),
-            "data_dir": self.ctx.data_dir
+            "data_dir": "<DATA_DIR>"
         }
 
         diag_collector = getattr(self.ctx, 'diagnostic_collector', None)

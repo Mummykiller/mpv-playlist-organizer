@@ -62,7 +62,7 @@ class PlaylistHandler(http.server.BaseHTTPRequestHandler):
             logging.warning(f"[PY][SEC] Blocked unauthorized request from {self.client_address[0]}")
             return
 
-        if self.path.startswith('/playlist.m3u'):
+        if urlparse(self.path).path == '/playlist.m3u':
             m3u_file_path = self.m3u_serve_file
             if os.path.exists(m3u_file_path):
                 try:
@@ -78,12 +78,13 @@ class PlaylistHandler(http.server.BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(content)
                     self.wfile.flush()
-                    logging.info(f"Served {m3u_file_path} ({len(content)} bytes) to {self.client_address[0]}")
+                    logging.info(f"Served playlist ({len(content)} bytes) to {self.client_address[0]}")
                 except Exception as e:
-                    self.send_error(500, f"Error reading playlist: {e}")
+                    logging.error(f"Error reading playlist: {e}")
+                    self.send_error(500, "Error reading playlist")
             else:
-                self.send_error(404, f"M3U playlist not found: {m3u_file_path}")
-                logging.warning(f"M3U playlist file not found at {m3u_file_path}")
+                self.send_error(404, "M3U playlist not found")
+                logging.warning("M3U playlist file not found.")
         else:
             # Reject any other path to avoid exposing arbitrary files from the working directory
             self.send_error(404, "Not Found")

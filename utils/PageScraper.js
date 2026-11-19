@@ -291,11 +291,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				.replace(/\s+/g, " ")
 				.trim();
 
-			const episodePrefix = season
+			const episodePrefix = season && episode
 				? `s${season}e${episode}`
-				: episode
-					? `e${episode}`
-					: "";
+				: season
+					? `s${season}`
+					: episode
+						? `e${episode}`
+						: "";
 			const finalTitle = episodePrefix
 				? `${episodePrefix} - ${cleanTitle}`.trim()
 				: cleanTitle;
