@@ -46,11 +46,12 @@ This skill defines the high-level security invariants, validation entry points, 
 
 1. **Shell-Free Execution & `--` Delimiters:** Always pass discrete argument arrays to `subprocess.Popen` / `subprocess.run` (never `shell=True` or `sh -c`). Always insert `'--'` before target URLs in `MpvCommandBuilder.build`, `utils/url_analyzer.py`, and `utils/fallback_sync.py`.
 2. **Environment Scrubbing (`utils/security.py:get_scrubbed_env`):** Strips Python runtime variables (`PYTHON_ENV_VARS_TO_SCRUB`), enforces `POSIX_ALLOWED_ENV_VARS` (+ `LC_*`, `XDG_*`) on Linux/macOS, and strips `WINDOWS_SENSITIVE_ENV_PREFIXES` on Windows.
-3. **Settings, Binary & Flag Allowlists:**
+3. **Cookie, URL & Script-Opts Hardening:** `cookies_browser` → `is_safe_cookie_browser`; `cookies_file` → `is_safe_cookie_file`; custom `--script-opts=` is dropped; `MpvCommandBuilder.with_url`, `apply_bypass_script`, and `parse_m3u` all enforce `is_safe_url`; secret files are `0o600`.
+4. **Settings, Binary & Flag Allowlists:**
    - Settings updates (`file_io.py:set_settings`) filter keys against `ALLOWED_SETTINGS_KEYS` and verify binaries (`mpv_path`, `ytdlp_path`, `ffmpeg_path`, `node_path`, `terminal_emulator`) via `is_safe_executable_path` (`APPROVED_BINARY_NAMES`, `FORBIDDEN_PATH_CHARS`, `os.X_OK`).
    - `yt-dlp` options use a two-tier allowlist (`sanitize_ytdlp_options`): untrusted item payloads are restricted to `YTDLP_SAFE_FLAGS_ALLOWLIST` (`allow_settings_flags=False`), while `YTDLP_SETTINGS_ONLY_FLAGS` (`proxy`, `ffmpeg-location`, `js-runtimes`, `remote-components`, etc.) are restricted to trusted settings (`allow_settings_flags=True`).
    - MPV flags are filtered against `SAFE_MPV_FLAGS_ALLOWLIST` in `MpvCommandBuilder.build`, which also merges custom `--script-opts=` safely so internal handshake options cannot be overwritten.
-4. **PID Identity & Executor Isolation:** Verify reconnected MPV processes via `utils/ipc_utils.py:verify_mpv_process` before signaling. Keep `CONTROL_ACTIONS` on `control_executor` in `native_host.py:select_executor`.
+5. **PID Identity & Executor Isolation:** Verify reconnected MPV processes via `utils/ipc_utils.py:verify_mpv_process` before signaling. Keep `CONTROL_ACTIONS` on `control_executor` in `native_host.py:select_executor`.
 
 ---
 

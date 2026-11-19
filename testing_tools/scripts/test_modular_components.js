@@ -356,13 +356,37 @@ async function testSecurityComponent() {
 	assert.strictEqual(SECURITY.isSafeUrl("http://2852039166/metadata"), false);
 	assert.strictEqual(SECURITY.isSafeUrl("http://[::1]/status"), false);
 	assert.strictEqual(SECURITY.isSafeUrl("http://[fe80::1]/test"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://[fd12:3456:789a::1]/data"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://[ff02::1]/multicast"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("udp://[ff02::1]:1234"), true);
 	assert.strictEqual(SECURITY.isSafeUrl("http://[::ffff:127.0.0.1]/test"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://127.1/admin"), false);
+	assert.strictEqual(SECURITY.isSafeUrl("http://169.254.43518/meta"), false);
 	assert.strictEqual(SECURITY.isSafeUrl("file:///home/user/video.mkv", { allowLocal: true }), true);
+	assert.strictEqual(SECURITY.isSafeUrl("file://localhost/etc/passwd", { allowLocal: true }), false);
+	assert.strictEqual(SECURITY.isSafeUrl("file://127.0.0.1/etc/passwd", { allowLocal: true }), false);
 	assert.strictEqual(SECURITY.isSafeUrl("file:///home/user/video.mkv", { allowLocal: false }), false);
 
 	assert.strictEqual(SECURITY.isSafeWebUrl("https://youtube.com/watch?v=abc"), true);
 	assert.strictEqual(SECURITY.isSafeWebUrl("http://127.0.0.1"), false);
 	assert.strictEqual(SECURITY.isSafeWebUrl("file:///home/user/video.mkv"), false);
+
+	// Prototype pollution guard in commUtils.normalizeKeys
+	const rawPayload = JSON.parse('{"snake_key": 1, "__proto__": {"polluted": true}, "constructor": "bad", "prototype": "bad"}');
+	const normPayload = MPV.normalizeKeys(rawPayload);
+	assert.strictEqual(normPayload.snakeKey, 1);
+	assert.strictEqual(Object.prototype.hasOwnProperty.call(normPayload, "__proto__"), false);
+	assert.strictEqual(Object.prototype.hasOwnProperty.call(normPayload, "constructor"), false);
+	assert.strictEqual(Object.prototype.hasOwnProperty.call(normPayload, "prototype"), false);
+	assert.strictEqual(({}).polluted, undefined);
+
+	// Native bridge URL pre-validation for non-HTTP schemes with SSRF targets
+	const blockedFileHost = await MPV.callNativeHost({ action: "play", url: "file://localhost/etc/passwd" });
+	assert.strictEqual(blockedFileHost.success, false);
+	assert.ok(blockedFileHost.error.includes("Security Block"));
+	const blockedRtspLoopback = await MPV.callNativeHost({ action: "play", url: "rtsp://127.0.0.1:8554/live" });
+	assert.strictEqual(blockedRtspLoopback.success, false);
+	assert.ok(blockedRtspLoopback.error.includes("Security Block"));
 
 	console.log("  [OK] Security Protocol Validation & SSRF Isolation");
 }

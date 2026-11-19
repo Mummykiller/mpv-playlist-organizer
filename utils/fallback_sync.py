@@ -23,8 +23,8 @@ def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
     """Uses yt-dlp to mark a YouTube video as watched."""
     if not url or not cookies_info:
         return False, "Missing URL or cookies info"
-    if not str(url).lower().startswith(('http://', 'https://')):
-        return False, "Invalid URL protocol for mark-watched"
+    if not security.is_safe_web_url(str(url)):
+        return False, "Invalid or unsafe URL for mark-watched"
 
     settings = file_io.get_settings()
     ytdlp_path = settings.get("ytdlp_path") or shutil.which("yt-dlp") or "yt-dlp"
@@ -41,9 +41,15 @@ def mark_video_as_watched(url, cookies_info, user_agent=None, timeout=30):
     ]
 
     if os.path.exists(cookies_info):
+        if not security.is_safe_cookie_file(cookies_info):
+            logging.warning(f"[PY][Sync] Rejected unvalidated cookies file path: {cookies_info}")
+            return False, "Unsafe cookies file path"
         cmd.extend(["--cookies", cookies_info])
     else:
-        cmd.extend(["--cookies-from-browser", cookies_info])
+        if not security.is_safe_cookie_browser(cookies_info):
+            logging.warning(f"[PY][Sync] Rejected unapproved cookie browser: {cookies_info}")
+            return False, "Invalid cookie browser name"
+        cmd.extend(["--cookies-from-browser", cookies_info.strip()])
 
     if user_agent:
         cmd.extend(["--user-agent", user_agent])

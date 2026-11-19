@@ -67,6 +67,9 @@ SUBTREE_PRESERVE_KEYS = {
 }
 
 
+FORBIDDEN_KEYS = {"__proto__", "constructor", "prototype"}
+
+
 def _normalize_message(data: Any, parent_key: Optional[str] = None, preserve_subtree: bool = False) -> Any:
     """Recursively normalizes camelCase keys to snake_case for Python logic."""
     if isinstance(data, dict):
@@ -75,10 +78,14 @@ def _normalize_message(data: Any, parent_key: Optional[str] = None, preserve_sub
             "data", "folders", "domains", "headers", "http_headers", "httpHeaders", "custom_names", "customNames"
         )
         for k, v in data.items():
+            if isinstance(k, str) and k in FORBIDDEN_KEYS:
+                continue
             if preserve_immediate_keys or not isinstance(k, str):
                 new_key = k
             else:
                 new_key = _camel_to_snake(k)
+            if isinstance(new_key, str) and new_key in FORBIDDEN_KEYS:
+                continue
 
             next_preserve_subtree = preserve_subtree or (k in SUBTREE_PRESERVE_KEYS) or (new_key in SUBTREE_PRESERVE_KEYS)
             # Determine child parent_key so nested item dicts inside folder maps are still normalized

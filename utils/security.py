@@ -316,6 +316,38 @@ def is_safe_web_url(url):
     """Convenience helper enforcing web-only HTTP/HTTPS protocol with SSRF validation."""
     return is_safe_url(url, web_only=True)
 
+# --- Approved Cookie Browsers & Volatile Cookie File Validation ---
+ALLOWED_COOKIE_BROWSERS = {
+    'chrome', 'brave', 'edge', 'firefox', 'chromium',
+    'vivaldi', 'opera', 'safari', 'whale'
+}
+
+def is_safe_cookie_browser(browser: str) -> bool:
+    """Validates that a cookie browser name matches the approved browser allowlist."""
+    if not browser or not isinstance(browser, str):
+        return False
+    return browser.strip().lower() in ALLOWED_COOKIE_BROWSERS
+
+def is_safe_cookie_file(path: str, data_dir=None, script_dir=None, temp_dir=None) -> bool:
+    """
+    Validates that a cookies_file path resides inside the sandboxed volatile/temp directories
+    and uses the expected mpv_cookies_ prefix.
+    """
+    if not path or not isinstance(path, str):
+        return False
+    if any(c in FORBIDDEN_PATH_CHARS for c in path):
+        return False
+    base_name = os.path.basename(path)
+    if not base_name.startswith("mpv_cookies_") or not base_name.endswith(".txt"):
+        return False
+    if data_dir is None or script_dir is None or temp_dir is None:
+        fio = sys.modules.get("file_io")
+        if fio is not None:
+            data_dir = data_dir or getattr(fio, "DATA_DIR", None)
+            script_dir = script_dir or getattr(fio, "SCRIPT_DIR", None)
+            temp_dir = temp_dir or getattr(fio, "TEMP_DIR", None)
+    return validate_safe_path(path, data_dir, script_dir, temp_dir, allow_user_content=False) is not None
+
 # --- Approved Binary Names & Executable Path Validation ---
 APPROVED_BINARY_NAMES = {
     'mpv_path': {'mpv', 'mpv.exe', 'mpv.com'},
@@ -605,4 +637,6 @@ def mask_path(text, data_dir=None, script_dir=None, home_dir=None):
     # Replace longest paths first to avoid partial masking
     for original, placeholder in sorted(replacements, key=lambda x: len(x[0]), reverse=True):
         if original: text = text.replace(original, placeholder)
+    # Redact any M3U server authentication tokens embedded in URLs
+    text = re.sub(r'([?&]token=)[^&\s\'"]+', r'\1[REDACTED]', text)
     return text

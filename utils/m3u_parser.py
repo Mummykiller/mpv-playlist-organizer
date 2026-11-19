@@ -9,6 +9,7 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
 from typing import List, Dict, Optional
 import file_io
+from . import security
 
 def parse_m3u(m3u_content: str) -> List[Dict]:
     """
@@ -75,14 +76,29 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
             # This is a URL - sanitize it
             sanitized_url = file_io.sanitize_string(line, is_url=True)
 
-            # --- Basic Validation ---
-            # Prevent "Ghost" items from malformed files (must have a scheme or look like a path)
-            # We enforce that a URL must not contain spaces (unless it's a local path) and must look like a resource.
-            is_valid_url = re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', sanitized_url)
-            is_valid_path = sanitized_url.startswith(('/', './', '../')) or (len(sanitized_url) > 2 and (sanitized_url[1:3] == ':\\' or sanitized_url[1:3] == ':/'))
+            # --- Security & Format Validation ---
+            # Prevent "Ghost" items from malformed files and enforce protocol allowlist + SSRF checks on URLs.
+            has_scheme = bool(re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', sanitized_url))
+            has_traversal = (
+                sanitized_url.startswith('../')
+                or sanitized_url.startswith('..\\')
+                or '/../' in sanitized_url
+                or '\\..\\' in sanitized_url
+                or sanitized_url.endswith('/..')
+                or sanitized_url.endswith('\\..')
+            )
+            is_valid_url = has_scheme and security.is_safe_url(sanitized_url)
+            is_valid_path = (
+                not has_scheme
+                and not has_traversal
+                and (
+                    sanitized_url.startswith(('/', './'))
+                    or (len(sanitized_url) > 2 and (sanitized_url[1:3] == ':\\' or sanitized_url[1:3] == ':/'))
+                )
+            )
 
             if not (is_valid_url or is_valid_path) or (' ' in sanitized_url and not is_valid_path):
-                logging.debug(f"M3U Parser: Skipping invalid URL/Path: {sanitized_url}")
+                logging.debug(f"M3U Parser: Skipping invalid or unsafe URL/Path: {sanitized_url}")
                 current_title = None
                 current_headers = {}
                 current_ytdl_options = []
@@ -95,11 +111,18 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
             if id_match:
                 extracted_id = id_match.group(1)
 
+            raw_ytdl_opts = ','.join(current_ytdl_options) if current_ytdl_options else None
+            sanitized_ytdl_opts = (
+                security.sanitize_ytdlp_options(raw_ytdl_opts, allow_settings_flags=False)
+                if raw_ytdl_opts
+                else None
+            )
+
             url_item = {
                 'url': sanitized_url,
                 'title': current_title if current_title else sanitized_url,
                 'headers': current_headers if current_headers else None,
-                'ytdl_raw_options': ','.join(current_ytdl_options) if current_ytdl_options else None,
+                'ytdl_raw_options': sanitized_ytdl_opts if sanitized_ytdl_opts else None,
                 'use_ytdl_mpv': False,
                 'is_youtube': 'youtube.com/' in sanitized_url or 'youtu.be/' in sanitized_url
             }

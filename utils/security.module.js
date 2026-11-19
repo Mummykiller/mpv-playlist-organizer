@@ -124,11 +124,11 @@ export function isSafeUrl(urlString, options = {}) {
 		const protocol = parsed.protocol.toLowerCase();
 
 		if (protocol === "file:") {
-			return allowLocal;
+			return allowLocal && !parsed.hostname && !/^file:\/\/[^/]/i.test(urlString.trim());
 		}
 
 		let hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-		if (!hostname) return allowLocal;
+		if (!hostname) return false;
 
 		// Strip IPv6 zone ID if present (e.g., fe80::1%eth0)
 		if (hostname.includes("%")) {
@@ -157,51 +157,63 @@ export function isSafeUrl(urlString, options = {}) {
 			return false;
 		};
 
-		// 1. Dotted IPv4 (including octal and hex octets)
+		// 1. Dotted & Dword IPv4 (1, 2, 3, or 4 parts; decimal, octal, or hex)
 		const ipv4Parts = hostname.split(".");
-		if (ipv4Parts.length === 4 && ipv4Parts.every((p) => /^(0x[0-9a-f]+|0[0-7]*|\d+)$/i.test(p))) {
-			try {
-				const octets = ipv4Parts.map((p) => {
-					if (p.toLowerCase().startsWith("0x")) return parseInt(p, 16);
-					if (p.startsWith("0") && p.length > 1) return parseInt(p, 8);
-					return parseInt(p, 10);
-				});
-				if (octets.every((n) => !isNaN(n) && n >= 0 && n <= 255)) {
-					if (isPrivateIpv4(octets[0], octets[1], octets[2], octets[3])) return false;
+		if (
+			ipv4Parts.length >= 1 &&
+			ipv4Parts.length <= 4 &&
+			ipv4Parts.every((p) => /^(0x[0-9a-f]+|0[0-7]*|\d+)$/i.test(p))
+		) {
+			const nums = [];
+			let validParts = true;
+			for (const p of ipv4Parts) {
+				const pLower = p.toLowerCase();
+				let n;
+				if (pLower.startsWith("0x")) {
+					n = parseInt(pLower, 16);
+				} else if (pLower.startsWith("0") && pLower.length > 1) {
+					if (!/^0[0-7]+$/.test(pLower)) {
+						validParts = false;
+						break;
+					}
+					n = parseInt(pLower, 8);
+				} else {
+					n = parseInt(pLower, 10);
 				}
-			} catch (e) {
-				return false;
+				if (Number.isNaN(n) || n < 0) {
+					validParts = false;
+					break;
+				}
+				nums.push(n);
+			}
+			if (validParts) {
+				let ipv4Int = null;
+				if (nums.length === 4 && nums.every((n) => n <= 255)) {
+					ipv4Int = ((nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3]) >>> 0;
+				} else if (nums.length === 3 && nums[0] <= 255 && nums[1] <= 255 && nums[2] <= 0xffff) {
+					ipv4Int = ((nums[0] << 24) | (nums[1] << 16) | nums[2]) >>> 0;
+				} else if (nums.length === 2 && nums[0] <= 255 && nums[1] <= 0xffffff) {
+					ipv4Int = ((nums[0] << 24) | nums[1]) >>> 0;
+				} else if (nums.length === 1 && nums[0] <= 0xffffffff) {
+					ipv4Int = nums[0] >>> 0;
+				}
+				if (ipv4Int !== null) {
+					const a = (ipv4Int >>> 24) & 255;
+					const b = (ipv4Int >>> 16) & 255;
+					const c = (ipv4Int >>> 8) & 255;
+					const d = ipv4Int & 255;
+					if (isPrivateIpv4(a, b, c, d)) return false;
+				}
 			}
 		}
 
-		// 2. Integer or Hex Dword IP literal (e.g., 2130706433 or 0x7f000001)
-		if (/^\d+$/.test(hostname)) {
-			const val = parseInt(hostname, 10);
-			if (val >= 0 && val <= 0xffffffff) {
-				const a = (val >>> 24) & 255;
-				const b = (val >>> 16) & 255;
-				const c = (val >>> 8) & 255;
-				const d = val & 255;
-				if (isPrivateIpv4(a, b, c, d)) return false;
-			}
-		} else if (/^0x[0-9a-f]+$/i.test(hostname)) {
-			const val = parseInt(hostname, 16);
-			if (val >= 0 && val <= 0xffffffff) {
-				const a = (val >>> 24) & 255;
-				const b = (val >>> 16) & 255;
-				const c = (val >>> 8) & 255;
-				const d = val & 255;
-				if (isPrivateIpv4(a, b, c, d)) return false;
-			}
-		}
-
-		// 3. IPv6 loopback, unspecified, and private ranges
+		// 2. IPv6 loopback, unspecified, link-local (fe80::/10), unique-local (fc00::/7), and multicast (ff00::/8)
 		if (
 			hostname === "::1" ||
 			hostname === "::" ||
-			hostname.startsWith("fe80:") ||
-			hostname.startsWith("fc00:") ||
-			hostname.startsWith("fd00:")
+			/^fe[89ab][0-9a-f]:/i.test(hostname) ||
+			/^(fc|fd)[0-9a-f]{2}:/i.test(hostname) ||
+			(/^ff[0-9a-f]{2}:/i.test(hostname) && protocol !== "udp:")
 		) {
 			return false;
 		}

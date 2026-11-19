@@ -270,15 +270,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			});
 		}
 		if (!isValidUrl(target)) return false;
-		try {
-			const protocol = new URL(target).protocol.toLowerCase();
-			if (protocol === "http:" || protocol === "https:") {
-				return isSafeUrl(target, { allowLocal: true });
-			}
-			return true;
-		} catch {
-			return false;
-		}
+		return isSafeUrl(target, { allowLocal: true });
 	}
 
 	/**

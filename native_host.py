@@ -205,6 +205,10 @@ try:
                     message_content = dict(message_content)
                     if "log" in message_content:
                         message_content["log"] = mask_recursive(message_content["log"])
+                    if "error" in message_content:
+                        message_content["error"] = mask_recursive(message_content["error"])
+                    if message_content.get("success") is False and "message" in message_content:
+                        message_content["message"] = mask_recursive(message_content["message"])
 
                 translated_content = native_link.responder._translate_keys(message_content)
                 encoded_content = json.dumps(translated_content).encode('utf-8')

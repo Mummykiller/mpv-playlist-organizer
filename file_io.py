@@ -467,7 +467,8 @@ def _atomic_json_dump(data, filepath):
             os.makedirs(dirname, exist_ok=True)
 
         # 1. Write to temporary file
-        with open(tmp_file, 'w', encoding='utf-8') as f:
+        tmp_fd = os.open(tmp_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
             f.flush()
             os.fsync(f.fileno()) # Force write to disk

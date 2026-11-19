@@ -198,8 +198,9 @@ def append_batch_internal(session, items, mode="append", folder_id=None, quiet=F
 
     temp_path = os.path.join(session.TEMP_PLAYLISTS_DIR, f"batch_{uuid.uuid4().hex[:8]}.m3u")
     try:
-        os.makedirs(session.TEMP_PLAYLISTS_DIR, exist_ok=True)
-        with open(temp_path, 'w', encoding='utf-8') as f:
+        os.makedirs(session.TEMP_PLAYLISTS_DIR, mode=0o700, exist_ok=True)
+        fd = os.open(temp_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(session._generate_m3u_content(items_to_add))
 
         res = session.ipc_manager.send({"command": ["loadlist", temp_path, "append"]}, expect_response=True, timeout=5.0)
@@ -420,8 +421,9 @@ def hot_swap_item(session, launch_item, folder_id, settings, url_items_list):
     raw_opts = launch_item.get('ytdl_raw_options')
     if raw_opts:
         raw_opts = security.sanitize_ytdlp_options(raw_opts, allow_settings_flags=False)
-    if launch_item.get('cookies_browser'):
-        browser_opt = f"cookies-from-browser={launch_item['cookies_browser']}"
+    raw_cookies_browser = launch_item.get('cookies_browser')
+    if security.is_safe_cookie_browser(raw_cookies_browser):
+        browser_opt = f"cookies-from-browser={raw_cookies_browser.strip()}"
         raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
     final_item_raw_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags, allow_settings_flags=True)
 
@@ -435,8 +437,9 @@ def hot_swap_item(session, launch_item, folder_id, settings, url_items_list):
     session.ipc_manager.send({"command": ["set_property", "ytdl", "yes" if launch_item.get('is_youtube') or launch_item.get('use_ytdl_mpv') else "no"]})
     session.ipc_manager.send({"command": ["set_property", "ytdl-raw-options", final_item_raw_opts]})
 
-    if launch_item.get('cookies_file'):
-        session.ipc_manager.send({"command": ["set_property", "cookies-file", launch_item['cookies_file']]})
+    raw_cookies_file = launch_item.get('cookies_file')
+    if raw_cookies_file and security.is_safe_cookie_file(raw_cookies_file):
+        session.ipc_manager.send({"command": ["set_property", "cookies-file", raw_cookies_file]})
 
     if lua_options.get('headers') and isinstance(lua_options['headers'], dict):
         ua = lua_options['headers'].get('User-Agent')

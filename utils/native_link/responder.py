@@ -19,6 +19,9 @@ SUBTREE_PRESERVE_KEYS = {
 }
 
 
+FORBIDDEN_KEYS = {"__proto__", "constructor", "prototype"}
+
+
 def _translate_keys(data: Any, parent_key: Optional[str] = None, preserve_subtree: bool = False) -> Any:
     """Recursively translates snake_case keys to camelCase for JS."""
     if isinstance(data, dict):
@@ -27,10 +30,14 @@ def _translate_keys(data: Any, parent_key: Optional[str] = None, preserve_subtre
             "folders", "headers", "http_headers", "httpHeaders", "domains"
         )
         for k, v in data.items():
+            if isinstance(k, str) and k in FORBIDDEN_KEYS:
+                continue
             if preserve_immediate_keys or not isinstance(k, str) or "://" in k:
                 new_key = k
             else:
                 new_key = _snake_to_camel(k)
+            if isinstance(new_key, str) and new_key in FORBIDDEN_KEYS:
+                continue
 
             next_preserve_subtree = preserve_subtree or (k in SUBTREE_PRESERVE_KEYS) or (new_key in SUBTREE_PRESERVE_KEYS)
             if parent_key in ("folders", "domains") and new_key not in ("folders", "domains"):

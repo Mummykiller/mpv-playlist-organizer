@@ -60,7 +60,8 @@ def create_handshake_file(flag_dir, folder_id, script_dir, item, settings,
     if platform.system() == "Windows":
         handshake_path = handshake_path.replace("\\", "/")
 
-    with open(handshake_path, 'w', encoding='utf-8') as f:
+    fd = os.open(handshake_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
         json.dump(handshake_data, f)
 
     handshake_flag = f"--script-opts=mpv_organizer-handshake={handshake_path}"
@@ -130,13 +131,17 @@ def construct_lua_options(item, settings, script_dir, index=None):
 
     # Strip dangerous settings-only flags from untrusted item payload BEFORE merging
     if raw_opts:
-        import utils.security as security
         raw_opts = security.sanitize_ytdlp_options(raw_opts, allow_settings_flags=False)
 
-    # Support Direct Browser Access
-    if item.get('cookies_browser'):
-         browser_opt = f"cookies-from-browser={item['cookies_browser']}"
-         raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
+    # Support Direct Browser Access (validated against approved cookie browser allowlist)
+    raw_cookies_browser = item.get('cookies_browser')
+    safe_cookies_browser = raw_cookies_browser.strip() if security.is_safe_cookie_browser(raw_cookies_browser) else None
+    if safe_cookies_browser:
+        browser_opt = f"cookies-from-browser={safe_cookies_browser}"
+        raw_opts = f"{raw_opts},{browser_opt}" if raw_opts else browser_opt
+
+    raw_cookies_file = item.get('cookies_file')
+    safe_cookies_file = raw_cookies_file if security.is_safe_cookie_file(raw_cookies_file) else None
 
     final_opts = file_io.merge_ytdlp_options(raw_opts, essential_flags, allow_settings_flags=True)
 
@@ -164,8 +169,8 @@ def construct_lua_options(item, settings, script_dir, index=None):
         "ytdl_format": item.get('ytdl_format'),
         "ffmpeg_path": settings.get('ffmpeg_path'),
         "original_url": item_url,
-        "cookies_file": item.get('cookies_file'),
-        "cookies_browser": item.get('cookies_browser'),
+        "cookies_file": safe_cookies_file,
+        "cookies_browser": safe_cookies_browser,
         "disable_http_persistent": item.get('disable_http_persistent', False),
         "disable_network_overrides": settings.get('disable_network_overrides', False),
         "http_persistence": settings.get('http_persistence', 'auto'),
@@ -266,6 +271,10 @@ def apply_bypass_script(url_item, send_message_func, settings=None, session=None
 
     is_youtube = "youtube.com/" in original_url or "youtu.be/" in original_url
     default_return_tuple = (original_url, None, None, False, is_youtube, None, False, None, False, None, None)
+
+    if original_url and "://" in original_url and not security.is_safe_url(original_url):
+        logging.warning(f"Security: Blocked unsafe URL in apply_bypass_script: {original_url}")
+        return ("", None, None, False, False, None, False, None, False, None, None)
 
     if not enable_url_analysis:
         return default_return_tuple

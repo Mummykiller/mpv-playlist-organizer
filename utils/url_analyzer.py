@@ -295,6 +295,10 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
     import shutil
 
     url = file_io.sanitize_string(url, is_filename=False)
+    if not browser or not security.is_safe_cookie_browser(browser):
+        logging.warning(f"Security: Rejected unapproved cookie browser '{browser}' in get_cookies_file")
+        return None
+    browser = browser.strip()
     now = time.time()
 
     # Layer 1: In-memory cache check (1 hour)
@@ -381,11 +385,18 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
         }
 
     # --- SSRF Protection ---
-    if url.lower().startswith(('http://', 'https://')) and not is_safe_url(url):
+    if not is_safe_url(url):
         return {
             "success": False,
             "error": "Security Block: Access to private/local networks is not allowed."
         }
+
+    if browser and browser != "None":
+        if security.is_safe_cookie_browser(browser):
+            browser = browser.strip()
+        else:
+            logging.warning(f"Security: Rejected unapproved cookie browser '{browser}' in run_bypass_logic")
+            browser = None
 
     # Use provided UA or a reasonable Chrome-like default
     effective_user_agent = user_agent_str if user_agent_str else "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

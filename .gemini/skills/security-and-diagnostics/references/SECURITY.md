@@ -25,7 +25,7 @@ Strict enforcement of input sizes and payload structures prevents Denial of Serv
 ### 1.1 Defense-in-Depth Validation Pipeline
 - **Frontend Pre-Validation Gate (`utils/security.module.js`, `utils/nativeConnection.module.js:callNativeHost`):**
   - `isValidUrl`, `isValidWebUrl`, `areValidUrls`, `isSafeUrl`, and `isSafeWebUrl` validate both single strings and batch arrays of strings or `{ url }` objects, failing closed (`false`) if `new URL()` throws.
-  - Before posting any message over the native port, `callNativeHost` validates `message.url`, `message.urlItem.url`, `message.urls`, `message.urlItems`, `message.playlist`, and `message.m3uData.value` (when `m3uData.type === "items"`) via `isAllowedNativeUrl`, which enforces `isValidUrl` for all schemes and `isSafeUrl(..., { allowLocal: true })` for `http:` / `https:` targets.
+  - Before posting any message over the native port, `callNativeHost` validates `message.url`, `message.urlItem.url`, `message.urls`, `message.urlItems`, `message.playlist`, and `message.m3uData.value` (when `m3uData.type === "items"`) via `isAllowedNativeUrl`, which enforces `isValidUrl` and `isSafeUrl(..., { allowLocal: true })` for **all** allowed schemes (so `file://localhost/...` or `rtsp://127.0.0.1/...` are blocked at the bridge).
   - Enforces a 30-second handshake timeout (`restore_session`) and a 30-second per-request timeout (`DEFAULT_REQUEST_TIMEOUT_MS = 30000`).
 - **Inbound Native Host Gate (`native_host.py:get_message`, `utils/security.py:validate_payload`):**
   - `get_message()` rejects raw native frames exceeding `MAX_IPC_MESSAGE_SIZE` (5 MB) before reading the payload buffer.
@@ -40,7 +40,7 @@ Strict enforcement of input sizes and payload structures prevents Denial of Serv
 ### 2.1 Protocol Allowlist & Web Scraper Isolation
 - **Global Permitted Schemes (`ALLOWED_PROTOCOLS`):** `http://`, `https://`, `file://`, `udp://`, `rtmp://`, `rtsp://`, `mms://`
 - **Web Scraper Protocol Isolation (`ALLOWED_WEB_PROTOCOLS` / `isValidWebUrl` / `isSafeWebUrl` / `is_safe_web_url`):** Content scripts, context menus, YouTube Tools, and automated page scrapers (`utils/PageScraper.js`, `utils/item_processor.js`, `utils/fallback_sync.py:mark_video_as_watched`) strictly permit `http:` and `https:`. Local system schemes (`file:`) and raw streaming protocols (`rtmp:`, `udp:`, `rtsp:`, `mms:`) are blocked from automated web ingestion and reserved exclusively for explicit user actions (`allowLocal: true` in JS / `web_only=False` in Python).
-- **`file://` Hostname Restriction:** In `utils/security.py:is_safe_url`, `file://` URLs are only permitted when `parsed.hostname` is empty (local paths such as `file:///path/to/video.mkv`) and `web_only` is `False`. Any `file://` URL specifying a hostname (e.g., `file://localhost/...` or `file://127.0.0.1/...`) falls through to the hostname/IP SSRF checks and is rejected. In `utils/security.module.js:isSafeUrl`, `file:` returns `Boolean(options.allowLocal)`.
+- **`file://` Hostname Restriction:** In `utils/security.py:is_safe_url`, `file://` URLs are only permitted when `parsed.hostname` is empty (local paths such as `file:///path/to/video.mkv`) and `web_only` is `False`. Any `file://` URL specifying a hostname (e.g., `file://localhost/...` or `file://127.0.0.1/...`) falls through to the hostname/IP SSRF checks and is rejected. `utils/security.module.js:isSafeUrl` enforces the same rule (`file:` is allowed only with `allowLocal` and an empty hostname). JS parity also covers 1/2/3/4-part dotted/dword IPv4 (decimal/octal/hex), full IPv6 `fc00::/7`, `fe80::/10`, and `ff00::/8` (multicast, except `udp:`).
 - **`udp://` Multicast Rule:** Multicast IP ranges (`224.0.0.0/4` in IPv4 and `ip_obj.is_multicast` in Python) are blocked for all protocols except `udp://` streams.
 
 ### 2.2 SSRF Protection, Redirect Guard & Obfuscation Defense (`is_safe_url` / `isSafeUrl`)
@@ -51,6 +51,7 @@ To prevent the Native Host and extension from being used as an internal network 
 - **IP Obfuscation Defenses (`utils/security.py:parse_obscured_ip`):** Detects and normalizes integer/dword literals (e.g., `http://2130706433/`), hex dwords (`http://0x7f000001/`), and 1/2/3/4-part classful dotted octal/hex/decimal variations (`http://0177.0.0.1/`, `http://0x7f.0.0.1/`, `http://017700000001/`).
 - **DNS Resolution Inspection:** Resolves candidate hostnames via `socket.getaddrinfo` and verifies every returned IP record against `_is_unsafe_ip()`, with graceful `socket.gaierror` handling when offline or in a network-isolated test sandbox.
 - **HTTP Redirect SSRF Verification (`utils/item_processor.py:ItemProcessor._fetch_remote_m3u`):** Uses a custom `SafeRedirectHandler(HTTPRedirectHandler)` with a 10-second timeout that re-validates every redirect target `newurl` via `is_safe_url(newurl)` and raises `HTTPError(..., 403, "Blocked unsafe redirect")` if a remote M3U URL redirects to an internal/private address.
+- **Universal Enforcement Points:** `services.py:apply_bypass_script` runs `is_safe_url` *before* the `enable_url_analysis` short-circuit (disabling analysis never bypasses SSRF); `utils/mpv_command_builder.py:MpvCommandBuilder.with_url` drops any URL failing `is_safe_url` (only the exact local M3U server URL `http://127.0.0.1:<port>/playlist.m3u?token=<hex>` is exempt); `utils/m3u_parser.py:parse_m3u` rejects unsafe schemes/SSRF hosts and `..` traversal paths and sanitizes per-item yt-dlp options with `allow_settings_flags=False`; `utils/fallback_sync.py:mark_video_as_watched` requires `is_safe_web_url`.
 - **Stream Output Verification (`utils/url_analyzer.py:run_bypass_logic`):** Every stream URL resolved externally by `yt-dlp --get-url` must pass `is_safe_url()` before being returned or passed to MPV.
 
 ### 2.3 URL Normalization & CDN Header Enforcement
@@ -82,6 +83,7 @@ To prevent the Native Host and extension from being used as an internal network 
 - **Dual-World Privilege Separation (`MAIN` vs. `ISOLATED`):**
   - `yt-tools/yt_content.js` runs in the `MAIN` world (required for YouTube player API control) and has **no access** to `chrome.*` extension APIs.
   - `yt-tools/yt_bridge.js` runs in the `ISOLATED` world and mediates all `chrome.storage.local` and `chrome.runtime` access. It validates `window.postMessage` events (`event.source === window && event.origin === window.location.origin`), restricts messages to the `SHINKU__*` namespace, serializes storage writes via `libraryWriteQueue`, and automatically tears down listeners/intervals (`teardownInvalidatedBridge`) if the extension context is invalidated.
+- **Prototype Pollution Guard on the Bridge:** `utils/commUtils.module.js:normalizeKeys`, `utils/native_link/translator.py:_normalize_message`, and `utils/native_link/responder.py:_translate_keys` drop `__proto__`, `constructor`, and `prototype` keys.
 - **Prototype Pollution & Video ID Validation:** `yt_bridge.js`, `yt_tools_service.js`, and `background/handlers/import_export.js` block prototype-polluting keys (`FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"])`). `yt_tools_service.js` validates YouTube video IDs against `VALID_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/` before indexing `shinkuLibrary` or fetching YouTube oEmbed metadata.
 
 ---
@@ -133,7 +135,8 @@ All JSON state writes (`index.json`, playlist shards, `config.json`, `anilist_ca
 - **DNS Rebinding Defense (`PlaylistHandler.do_GET`):** Validates the HTTP `Host` header against `{127.0.0.1:<port>, localhost:<port>}`.
 - **Fail-Closed Token Auth:** Passes `MPV_PLAYLIST_TOKEN` (`secrets.token_hex(16)`) via the scrubbed subprocess environment (never CLI arguments) and verifies `?token=` using constant-time `hmac.compare_digest`. Missing or unconfigured tokens always deny (`403`).
 - **Path Restriction & Lifecycle Guard:** Serves only `/playlist.m3u` (`404` for all other paths) and runs a daemon `suicide_watch` thread that terminates the server (`os._exit(0)`) if the parent Native Host PID exits.
-- **Token Redaction:** `utils/mpv_command_builder.py:MpvCommandBuilder.build` redacts `([?&]token=)[^&\s\'"]+` to `\1[REDACTED]` before logging or writing `last_mpv_command.txt`.
+- **Private Artifacts:** `server_<pid>.m3u` (`M3UServer.start`), `batch_*.m3u` (`session_ipc_ops.append_batch_internal`), and `handshake_*.json` (`services.py:create_handshake_file`) are created via `os.open(..., 0o600)`; temp playlist dirs use `0o700`.
+- **Token Redaction:** `security.mask_path` redacts `token=` query values everywhere it is applied (including `M3UServer.start` timeout errors), and `utils/mpv_command_builder.py:MpvCommandBuilder.build` redacts `([?&]token=)[^&\s\'"]+` to `\1[REDACTED]` before logging or writing `last_mpv_command.txt`.
 
 ---
 
@@ -143,7 +146,9 @@ All JSON state writes (`index.json`, playlist shards, `config.json`, `anilist_ca
 - **End-of-Options `--` Delimiter:** `MpvCommandBuilder.build()` always inserts `'--'` before appending target URLs (`args + (['--'] + urls)`). All `yt-dlp` invocations in `utils/url_analyzer.py` (`get_cookies_file`, `extract_with_shadow_copy`, `run_bypass_logic`) and `utils/fallback_sync.py` (`mark_video_as_watched`) likewise pass `'--'` before the target URL so a URL or filename starting with `-` can never be parsed as an option flag.
 - **Custom Flag Tokenization & `--script-opts` Protection (`MpvCommandBuilder.build`):**
   - Tokenizes user `custom_mpv_flags` via `shlex.split(..., posix=not is_windows)`.
-  - Extracts any `--script-opts=` values from custom flags and merges them into the internal `final_script_opts` list so user flags cannot overwrite internal script options (`mpv_organizer-handshake`, `on_completion-flag_dir`, `on_completion-clear_on_item_finish`).
+  - **Drops** any `--script-opts=` token from custom flags entirely; only internal `script_opts` (`mpv_organizer-handshake`, `on_completion-flag_dir`, `on_completion-clear_on_item_finish`) reach mpv, so users cannot smuggle script options (e.g. `ytdl_hook-ytdl_path`).
+  - Re-sanitizes pre-existing `ytdl_raw_options` via `sanitize_ytdlp_options` before building `--ytdl-raw-options`.
+  - **Cookie inputs:** `cookies_browser` must pass `security.is_safe_cookie_browser` (`ALLOWED_COOKIE_BROWSERS`), and `cookies_file` must pass `security.is_safe_cookie_file` (sandboxed path, `mpv_cookies_*.txt`); enforced in `services.py:construct_lua_options`, `MpvCommandBuilder.build`, `utils/session_ipc_ops.py` hot-swap, `utils/url_analyzer.py:run_bypass_logic`/`get_cookies_file`, and `utils/fallback_sync.py`.
   - Filters all remaining custom and automatic flags against `SAFE_MPV_FLAGS_ALLOWLIST`.
 - **Platform-Aware Diagnostic Quoting (`_smart_quote` & `_windows_quote`):** Diagnostic command strings logged to `native_host.log` and `DATA_DIR/last_mpv_command.txt` are formatted with `shlex.quote` on POSIX and `_windows_quote` on Windows (which preserves backslashes and escapes embedded double quotes as `""`), checked against the 7,500-character Windows CLI length ceiling, and token-redacted.
 
@@ -175,7 +180,7 @@ All JSON state writes (`index.json`, playlist shards, `config.json`, `anilist_ca
 ## 7. Unified Logging, Error Sanitization & Maintenance
 ### 7.1 Non-Blocking Logging & Path Masking (`utils/logger.py`, `utils/security.py:mask_path`, `native_host.py`)
 - **Non-Blocking Queue Pipeline:** Log records are tagged with `[Req: <request_id>]` via `ContextVar` (`ContextQueueHandler`) and written asynchronously by a background `QueueListener` across three size-capped `RotatingFileHandler` logs (`native_host.log` 5 MB × 2, `ipc_events.log` 5 MB × 1, `browser_errors.log` 2 MB × 2), degrading gracefully to `TEMP_DIR/MPVPlaylistOrganizer` or `stderr` if `DATA_DIR` is unwritable.
-- **Path Masking (`mask_path`):** Replaces sensitive system paths in log files, `DiagnosticCollector.add_error`, unhandled task exceptions (`native_host.py:task_wrapper`), and the `"log"` field of outbound `send_message_binary` payloads (replacing longest paths first so nested paths are masked cleanly while leaving functional settings/file fields intact):
+- **Path Masking (`mask_path`):** Replaces sensitive system paths in log files, `DiagnosticCollector.add_error`, unhandled task exceptions (`native_host.py:task_wrapper`), and the `"log"`, `"error"`, and (on `success: false`) `"message"` fields of outbound `send_message_binary` payloads (replacing longest paths first so nested paths are masked cleanly while leaving functional settings/file fields intact):
   - `data_dir` -> `<DATA_DIR>`
   - `script_dir` -> `<APP_DIR>`
   - `home_dir` (`/home/<user>`) -> `<HOME>`

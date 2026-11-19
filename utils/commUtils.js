@@ -166,10 +166,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			);
 		};
 
+		const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 		const normalized = {};
 		for (const key in data) {
 			if (Object.prototype.hasOwnProperty.call(data, key)) {
+				if (FORBIDDEN_KEYS.has(key)) continue;
 				const outKey = preserveChildKeys ? key : snakeToCamel(key);
+				if (FORBIDDEN_KEYS.has(outKey)) continue;
 				const shouldPreserveGrandchildren =
 					!preserveChildKeys &&
 					(PRESERVE_MAP_KEYS.has(key) || PRESERVE_MAP_KEYS.has(outKey));

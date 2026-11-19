@@ -31,11 +31,12 @@ class M3UServer:
             if not self.server_token:
                 self.server_token = secrets.token_hex(16)
 
-            os.makedirs(self.temp_playlists_dir, exist_ok=True)
+            os.makedirs(self.temp_playlists_dir, mode=0o700, exist_ok=True)
             if not self.temp_file:
                 self.temp_file = os.path.join(self.temp_playlists_dir, f"{SERVER_PREFIX}{os.getpid()}{SERVER_EXT}")
 
-            with open(self.temp_file, 'w', encoding='utf-8') as f:
+            fd = os.open(self.temp_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(m3u_content)
 
             if self.process and self.process.poll() is None and self.port:
@@ -121,11 +122,12 @@ class M3UServer:
                     time.sleep(0.1)
 
                 if not server_ready:
-                    raise RuntimeError(f"Server timeout waiting for response at {fetch_url}")
+                    redacted_url = security.mask_path(fetch_url)
+                    raise RuntimeError(f"Server timeout waiting for response at {redacted_url}")
 
                 return fetch_url
             except Exception as e:
-                logging.error(f"Failed to start M3U server: {e}")
+                logging.error(f"Failed to start M3U server: {security.mask_path(str(e))}")
                 self.stop()
                 return None
 

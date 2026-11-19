@@ -82,6 +82,16 @@ class MpvCommandBuilder:
         self.ipc_path = file_io.validate_safe_path(ipc_path)
         return self
 
+    _LOCAL_M3U_SERVER_RE = re.compile(r'^http://127\.0\.0\.1:\d+/playlist\.m3u\?token=[a-fA-F0-9]+$')
+
+    @classmethod
+    def _is_allowed_command_url(cls, sanitized_url):
+        if not sanitized_url or not isinstance(sanitized_url, str):
+            return False
+        if cls._LOCAL_M3U_SERVER_RE.match(sanitized_url):
+            return True
+        return security.is_safe_url(sanitized_url)
+
     def with_url(self, url):
         if url:
             if isinstance(url, list):
@@ -91,7 +101,7 @@ class MpvCommandBuilder:
                     target_url = u.get('url') if isinstance(u, dict) else u
                     if target_url:
                         sanitized = file_io.sanitize_string(target_url, is_filename=False)
-                        if sanitized.lower().startswith(ALLOWED_PROTOCOLS):
+                        if self._is_allowed_command_url(sanitized):
                             sanitized_urls.append(sanitized)
                 self.url = sanitized_urls
             else:
@@ -99,7 +109,7 @@ class MpvCommandBuilder:
                 target_url = url.get('url') if isinstance(url, dict) else url
                 if target_url:
                     sanitized = file_io.sanitize_string(target_url, is_filename=False)
-                    if sanitized.lower().startswith(ALLOWED_PROTOCOLS):
+                    if self._is_allowed_command_url(sanitized):
                         self.url = sanitized
         return self
 
@@ -203,15 +213,9 @@ class MpvCommandBuilder:
             except (ValueError, TypeError) as e:
                 logging.debug(f"[MPV_CMD] Failed to parse custom flags: {e}")
 
-        # Merge script-opts from custom flags into our internal list
+        # Custom flags must never inject --script-opts; only internal self.script_opts are permitted
         final_script_opts = list(self.script_opts)
-        filtered_custom = []
-        for a in parsed_custom:
-            if a.startswith('--script-opts='):
-                val = a.split('=', 1)[1]
-                if val: final_script_opts.append(val)
-            else:
-                filtered_custom.append(a)
+        filtered_custom = [a for a in parsed_custom if not a.startswith('--script-opts=')]
 
         args = [self.mpv_exe]
         if self.ipc_path: args.append(f'--input-ipc-server={self.ipc_path}')
@@ -321,8 +325,13 @@ class MpvCommandBuilder:
                 ytdl_opts_list.append("js-runtimes=node")
 
         # Cookies
-        if self.cookies_browser and self.cookies_browser != "None" and "cookies-from-browser" not in existing_raw:
-            ytdl_opts_list.append(f"cookies-from-browser={self.cookies_browser}")
+        if (
+            self.cookies_browser
+            and self.cookies_browser != "None"
+            and security.is_safe_cookie_browser(self.cookies_browser)
+            and "cookies-from-browser" not in existing_raw
+        ):
+            ytdl_opts_list.append(f"cookies-from-browser={self.cookies_browser.strip()}")
 
         # User-Agent (Sync with MPV to prevent 403)
         if self.headers:
@@ -335,10 +344,12 @@ class MpvCommandBuilder:
                 safe_ua = str(ua).replace(",", "")
                 ytdl_opts_list.append(f"user-agent={safe_ua}")
 
-        # Combine: Existing options first, then our injected essentials
+        # Combine: Existing options first (sanitized), then our injected essentials
         final_list = []
         if self.ytdl_raw_options:
-            final_list.append(self.ytdl_raw_options)
+            sanitized_existing = security.sanitize_ytdlp_options(self.ytdl_raw_options, allow_settings_flags=True)
+            if sanitized_existing:
+                final_list.append(sanitized_existing)
         final_list.extend(ytdl_opts_list)
 
         final_ytdl_raw = ",".join(final_list)
@@ -352,7 +363,7 @@ class MpvCommandBuilder:
         if self.start_time is not None:
             args.append(f"--start={self.start_time}")
 
-        if self.cookies_file:
+        if self.cookies_file and security.is_safe_cookie_file(self.cookies_file):
             args.append(f"--cookies-file={self.cookies_file}")
 
         if self.use_ytdl_mpv or (self.is_youtube and not self.is_youtube_override):

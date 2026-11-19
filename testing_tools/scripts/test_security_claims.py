@@ -464,5 +464,104 @@ class TestSecurityClaims(BaseTestCase):
         self.assertNotIn("-c", cmd)
         self.assertNotIn("bash", cmd)
 
+    def test_script_opts_smuggling_and_command_url_ssrf_blocked(self):
+        """Verifies custom --script-opts smuggling is blocked and MpvCommandBuilder enforces SSRF checks."""
+        import services
+        cmd, _ = services.construct_mpv_command(
+            mpv_exe="mpv",
+            url=[
+                "https://example.com/safe.mp4",
+                "http://169.254.169.254/latest/meta-data",
+                "file://localhost/etc/passwd",
+                "http://127.0.0.1:43210/playlist.m3u?token=deadbeefcafe1234",
+            ],
+            custom_mpv_flags="--fullscreen --script-opts=ytdl_hook-ytdl_path=/bin/sh",
+            cookies_browser="chrome,ffmpeg-location=/bin/sh",
+            cookies_file="/etc/passwd",
+            ytdl_raw_options="format=best,exec=rm -rf /",
+        )
+        cmd_str = " ".join(cmd)
+        self.assertIn("https://example.com/safe.mp4", cmd)
+        self.assertIn("http://127.0.0.1:43210/playlist.m3u?token=deadbeefcafe1234", cmd)
+        self.assertNotIn("169.254.169.254", cmd_str)
+        self.assertNotIn("file://localhost", cmd_str)
+        self.assertNotIn("ytdl_hook-ytdl_path", cmd_str)
+        self.assertNotIn("ffmpeg-location=/bin/sh", cmd_str)
+        self.assertNotIn("/etc/passwd", cmd_str)
+        self.assertNotIn("exec=", cmd_str)
+
+    def test_cookies_browser_and_cookie_file_smuggling_blocked(self):
+        """Verifies construct_lua_options blocks flag smuggling via cookies_browser and outside-sandbox cookies_file."""
+        import services
+        malicious_item = {
+            "id": "itm-1",
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "title": "Test",
+            "cookies_browser": "chrome,ffmpeg-location=/bin/sh,proxy=http://127.0.0.1:8080",
+            "cookies_file": "/etc/shadow",
+        }
+        lua_opts, _ = services.construct_lua_options(malicious_item, {}, PROJECT_ROOT)
+        self.assertIsNone(lua_opts.get("cookies_browser"))
+        self.assertIsNone(lua_opts.get("cookies_file"))
+        self.assertNotIn("ffmpeg-location=/bin/sh", lua_opts.get("ytdl_raw_options", ""))
+        self.assertNotIn("proxy=", lua_opts.get("ytdl_raw_options", ""))
+
+    def test_m3u_parser_ssrf_and_ytdl_options_sanitization(self):
+        """Verifies parse_m3u rejects unsafe protocols, SSRF IPs, path traversal, and sanitizes EXT-X-YTDL-OPTIONS."""
+        from utils.m3u_parser import parse_m3u
+        m3u_text = "\n".join([
+            "#EXTM3U",
+            "#EXTINF:-1,Safe Item",
+            "#EXT-X-YTDL-OPTIONS:format=best|exec=rm -rf /|proxy=http://evil.com",
+            "https://example.com/video.mp4",
+            "#EXTINF:-1,SSRF Item",
+            "http://169.254.169.254/latest/meta-data",
+            "#EXTINF:-1,JS Scheme",
+            "javascript://alert(1)",
+            "#EXTINF:-1,Traversal Path",
+            "../../../etc/passwd",
+        ])
+        items = parse_m3u(m3u_text)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["url"], "https://example.com/video.mp4")
+        self.assertEqual(items[0]["ytdl_raw_options"], "format=best")
+
+    def test_handshake_permissions_and_token_masking(self):
+        """Verifies handshake files use 0600 permissions, token redaction in mask_path, and prototype pollution guards."""
+        import platform
+        import services
+        from utils import fallback_sync
+        from utils.native_link import translator, responder
+
+        flag_dir = os.path.join(self.test_dir, "flags")
+        os.makedirs(flag_dir, exist_ok=True)
+        h_path, _ = services.create_handshake_file(
+            flag_dir, "Default", PROJECT_ROOT,
+            {"id": "1", "url": "https://example.com/v.mp4", "title": "V"},
+            {}
+        )
+        if platform.system() != "Windows":
+            mode = os.stat(h_path).st_mode & 0o777
+            self.assertEqual(mode, 0o600)
+
+        masked_token = security.mask_path("Timeout at http://127.0.0.1:9999/playlist.m3u?token=secret123456&foo=1")
+        self.assertNotIn("secret123456", masked_token)
+        self.assertIn("token=[REDACTED]", masked_token)
+
+        ok, msg = fallback_sync.mark_video_as_watched("http://127.0.0.1:8080/video", "chrome")
+        self.assertFalse(ok)
+        ok2, msg2 = fallback_sync.mark_video_as_watched("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "chrome;rm -rf /")
+        self.assertFalse(ok2)
+
+        polluted = {"action": "ping", "__proto__": {"polluted": True}, "constructor": "bad", "prototype": "bad"}
+        norm = translator._normalize_message(polluted)
+        self.assertNotIn("__proto__", norm)
+        self.assertNotIn("constructor", norm)
+        self.assertNotIn("prototype", norm)
+        trans = responder._translate_keys(polluted)
+        self.assertNotIn("__proto__", trans)
+        self.assertNotIn("constructor", trans)
+        self.assertNotIn("prototype", trans)
+
 if __name__ == '__main__':
     unittest.main()
