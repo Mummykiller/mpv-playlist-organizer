@@ -154,7 +154,7 @@ class DataHandler(BaseHandler):
             with open(filepath, 'r', encoding='utf-8') as f:
                 import json
                 data = json.load(f)
-                return native_link.success(data=data)
+                return native_link.success(data=data, preserve_data_keys=True)
         except Exception as e:
             msg = f"Failed to read or parse file: {e}"
             return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})

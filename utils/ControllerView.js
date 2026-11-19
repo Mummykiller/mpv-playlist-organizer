@@ -407,16 +407,18 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					? window.MPV_SECURITY.isValidWebUrl(href)
 					: href.startsWith("http://") || href.startsWith("https://");
 
+			const host = window.location.hostname.toLowerCase();
+			const isYouTubeHost = host === "youtube.com" || host.endsWith(".youtube.com");
 			if (
-				window.location.hostname.includes("youtube.com") &&
+				isYouTubeHost &&
 				c.lastRightClickedElement
 			) {
 				const videoContainer = c.lastRightClickedElement.closest(
-					"ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer",
+					"ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, yt-lockup-view-model",
 				);
 				if (videoContainer) {
 					const linkEl = videoContainer.querySelector(
-						"a#video-title-link, a#thumbnail, a.yt-simple-endpoint",
+						"a#video-title-link, a#thumbnail, a.yt-lockup-view-model__content-image, a.yt-lockup-metadata-view-model__title, a.yt-simple-endpoint",
 					);
 					if (linkEl && linkEl.href && isSafeWebUrl(linkEl.href)) {
 						url = linkEl.href;
@@ -424,6 +426,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 					const titleSelectors = [
 						"#video-title",
+						".yt-lockup-metadata-view-model__title",
+						"h3",
 						"#title-text",
 						"span#video-title",
 						".ytp-title-link",
@@ -432,13 +436,14 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						"#channel-name .yt-formatted-string",
 						".ytd-channel-name .yt-formatted-string",
 						"#byline-container .yt-formatted-string",
+						".yt-content-metadata-view-model__metadata-text",
 						"#owner-name a",
 					];
 
 					let videoTitle = null;
 					for (const selector of titleSelectors) {
 						const el = videoContainer.querySelector(selector);
-						if (el) {
+						if (el && el.textContent?.trim()) {
 							videoTitle = el.textContent.trim();
 							break;
 						}
@@ -447,7 +452,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					let channelName = null;
 					for (const selector of channelSelectors) {
 						const el = videoContainer.querySelector(selector);
-						if (el) {
+						if (el && el.textContent?.trim()) {
 							channelName = el.textContent.trim();
 							break;
 						}
@@ -463,7 +468,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				const linkElement = c.lastRightClickedElement.closest("a");
 				if (linkElement && linkElement.href && isSafeWebUrl(linkElement.href)) {
 					url = linkElement.href;
-					title = linkElement.textContent.trim();
+					const clone = linkElement.cloneNode(true);
+					clone.querySelectorAll?.(".shinku-hover-shield, .shinku-thumb-bookmark-btn").forEach((el) => el.remove());
+					title = clone.textContent.trim();
 				}
 			}
 
@@ -583,6 +590,21 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			statusBanner.classList.toggle("detected", isSuccess);
 		}
 
+		isYouTubeWatchPage() {
+			const host = window.location.hostname.toLowerCase();
+			const path = window.location.pathname;
+			const isYouTubeHost = host === "youtube.com" || host.endsWith(".youtube.com");
+			return (
+				isYouTubeHost &&
+				(path === "/watch" || path.startsWith("/shorts/") || path.startsWith("/live/"))
+			);
+		}
+
+		getEffectiveAddUrl() {
+			const c = this.controller;
+			return c.state.state.detectedUrl || (this.isYouTubeWatchPage() ? window.location.href : null);
+		}
+
 		updateAddButtonState() {
 			const c = this.controller;
 			if (!c.ui.shadowRoot) return;
@@ -593,12 +615,8 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				"m3u8-minimized-stub",
 			);
 
-			const hostname = window.location.hostname;
-			const isYouTube =
-				hostname.includes("youtube.com") &&
-				window.location.pathname.includes("/watch");
-			const url =
-				c.state.state.detectedUrl || (isYouTube ? window.location.href : null);
+			const isYouTube = this.isYouTubeWatchPage();
+			const url = this.getEffectiveAddUrl();
 
 			[addBtn, compactAddBtn, minimizedStub].forEach((btn) => {
 				btn?.classList.remove("url-in-playlist", "stream-present");
@@ -815,11 +833,31 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			);
 		}
 
+		_isEditableElement(el) {
+			if (!el) return false;
+			if (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) return true;
+			return Boolean(el.isContentEditable);
+		}
+
+		_getDeepActiveElement() {
+			let active = document.activeElement;
+			while (active?.shadowRoot?.activeElement) {
+				active = active.shadowRoot.activeElement;
+			}
+			return active;
+		}
+
 		handleGlobalKeydown(e) {
+			if (document.getElementById("movie_player")?.dataset?.shinkuWheelKey === "1") {
+				return;
+			}
 			const c = this.controller;
+			const composedTarget = typeof e.composedPath === "function" ? e.composedPath()[0] : null;
+			const deepActive = this._getDeepActiveElement();
 			if (
-				["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName) ||
-				e.target.isContentEditable
+				this._isEditableElement(e.target) ||
+				this._isEditableElement(composedTarget) ||
+				this._isEditableElement(deepActive)
 			) {
 				return;
 			}
@@ -838,9 +876,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				e.preventDefault();
 				e.stopPropagation();
 				const folderId = c.ui.shadowRoot?.getElementById("folder-select")?.value;
-				if (folderId && state.detectedUrl) {
+				const targetUrl = this.getEffectiveAddUrl();
+				if (folderId && targetUrl) {
 					c.sendCommandToBackground("add", folderId, {
-						data: c.pageScraper.scrapePageDetails(state.detectedUrl),
+						data: c.pageScraper.scrapePageDetails(targetUrl),
 					});
 				}
 			} else if (

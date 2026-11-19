@@ -359,5 +359,58 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
         self.assertEqual(len(primed_calls), 1)
         self.assertEqual(primed_calls[0][0][0]["command"][2], "42")
 
+    def test_start_splices_expanded_youtube_playlist_items(self):
+        """Regression: MpvSessionManager.start() splices all expanded items from a YouTube /playlist?list= entry."""
+        from mpv_session import MpvSessionManager
+
+        expanded = [
+            {"id": "ep1", "url": "https://www.youtube.com/watch?v=ep1", "title": "Episode 1"},
+            {"id": "ep2", "url": "https://www.youtube.com/watch?v=ep2", "title": "Episode 2"},
+            {"id": "ep3", "url": "https://www.youtube.com/watch?v=ep3", "title": "Episode 3"},
+        ]
+
+        mock_enricher = MagicMock()
+        mock_enricher.resolve_input_items.return_value = (
+            [{"id": "pl1", "url": "https://www.youtube.com/playlist?list=PL_TEST", "title": "YT Playlist"}],
+            True,
+        )
+        mock_enricher.enrich_single_item.return_value = expanded
+
+        captured = {}
+
+        def fake_launch(launch_item, folder_id, settings, file_io_mod, full_playlist=None, **kwargs):
+            captured["launch_item"] = launch_item
+            captured["full_playlist"] = full_playlist
+            return {"success": True, "handled_directly": True}
+
+        mock_launcher = MagicMock()
+        mock_launcher.launch.side_effect = fake_launch
+
+        deps = {
+            'get_all_folders_from_file': lambda: {},
+            'get_mpv_executable': lambda: 'mpv',
+            'log_stream': MagicMock(),
+            'send_message': MagicMock(),
+            'SCRIPT_DIR': self.test_dir,
+            'TEMP_PLAYLISTS_DIR': os.path.join(self.test_dir, 'temp_playlists'),
+            'metadata_cache': None,
+            'task_manager': None,
+        }
+        mgr = MpvSessionManager(os.path.join(self.test_dir, "session.json"), deps)
+        mgr.enricher = mock_enricher
+        mgr.launcher = mock_launcher
+        mgr._start_health_watcher = MagicMock()
+        mgr.register_ipc_callbacks = MagicMock()
+
+        res = mgr.start(
+            [{"id": "pl1", "url": "https://www.youtube.com/playlist?list=PL_TEST", "title": "YT Playlist"}],
+            "WatchLater",
+            {"enable_smart_resume": False},
+            MagicMock(),
+        )
+        self.assertTrue(res.get("success"))
+        self.assertEqual(len(captured["full_playlist"]), 3)
+        self.assertEqual([i["title"] for i in captured["full_playlist"]], ["Episode 1", "Episode 2", "Episode 3"])
+
 if __name__ == '__main__':
     unittest.main()

@@ -710,6 +710,7 @@ if (chrome.runtime.onStartup?.addListener) {
 	chrome.runtime.onStartup.addListener(async () => {
 		try {
 			await syncYtToolsRegistration().catch((e) => logger.debug(`[YT Tools] onStartup sync skipped: ${e?.message}`));
+			await updateContextMenus(storage);
 			await reinjectContentScripts();
 		} catch (e) {
 			logger.error(`[Background] onStartup failed: ${e.message}`, { persist: true, stack: e.stack });
@@ -773,9 +774,19 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 				menuItemId.startsWith("add-playlist-to-folder-") ||
 				menuItemId === "add-playlist-to-last-used"
 			) {
+				let playlistTargetUrl = targetUrl;
+				try {
+					const parsedTarget = new URL(targetUrl);
+					const listId = parsedTarget.searchParams.get("list");
+					if (listId) {
+						playlistTargetUrl = `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`;
+					}
+				} catch (e) {
+					logger.debug(`[Background] Playlist URL parse fallback: ${e?.message}`);
+				}
 				await playlistManager.handleAddFromContextMenu(
 					folderId,
-					targetUrl,
+					playlistTargetUrl,
 					"YouTube Playlist",
 					tab,
 				);

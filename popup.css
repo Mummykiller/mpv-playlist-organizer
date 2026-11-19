@@ -2112,6 +2112,7 @@ button.btn-closing::after {
 	font-size: 16px;
 	line-height: 1;
 	cursor: pointer;
+	box-shadow: none;
 	transition: background-color var(--transition-speed) ease, color var(--transition-speed) ease;
 }
 
@@ -2146,6 +2147,7 @@ button.btn-closing::after {
 	font-weight: 600;
 	cursor: pointer;
 	text-align: left;
+	box-shadow: none;
 	transition: background-color var(--transition-speed) ease;
 }
 

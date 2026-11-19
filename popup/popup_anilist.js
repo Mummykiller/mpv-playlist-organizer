@@ -64,6 +64,8 @@ export function createAniListManager(ctx) {
 
 			if (anilistReleasesSection.open) {
 				setTimeout(() => {
+					const ytView = document.getElementById("youtube-tools-view");
+					if (ytView && ytView.style.display !== "none") return;
 					const container = document.getElementById("scrollable-content");
 					if (container) domUtils.smoothScrollTo(container, container.scrollHeight, 400);
 				}, 50);
@@ -137,6 +139,8 @@ export function createAniListManager(ctx) {
 				fetchAniListReleases(false, currentAnilistOffset);
 
 				setTimeout(() => {
+					const ytView = document.getElementById("youtube-tools-view");
+					if (ytView && ytView.style.display !== "none") return;
 					const container = document.getElementById("scrollable-content");
 					if (container) domUtils.smoothScrollTo(container, container.scrollHeight, 400);
 				}, 50);

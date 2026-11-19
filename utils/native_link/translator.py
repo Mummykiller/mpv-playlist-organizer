@@ -57,12 +57,22 @@ def _camel_to_snake(camel_str: str) -> str:
     s1 = re.sub(r'([a-zA-Z0-9])([A-Z][a-z]+)', r'\1_\2', camel_str)
     return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
-def _normalize_message(data: Any, parent_key: Optional[str] = None) -> Any:
+SUBTREE_PRESERVE_KEYS = {
+    "youtube_tools",
+    "youtubeTools",
+    "shinku_library",
+    "shinkuLibrary",
+    "shinku_extension_settings",
+    "shinkuExtensionSettings",
+}
+
+
+def _normalize_message(data: Any, parent_key: Optional[str] = None, preserve_subtree: bool = False) -> Any:
     """Recursively normalizes camelCase keys to snake_case for Python logic."""
     if isinstance(data, dict):
         new_dict = {}
-        preserve_immediate_keys = parent_key in (
-            "data", "folders", "headers", "http_headers", "httpHeaders", "custom_names", "customNames"
+        preserve_immediate_keys = preserve_subtree or parent_key in (
+            "data", "folders", "domains", "headers", "http_headers", "httpHeaders", "custom_names", "customNames"
         )
         for k, v in data.items():
             if preserve_immediate_keys or not isinstance(k, str):
@@ -70,18 +80,19 @@ def _normalize_message(data: Any, parent_key: Optional[str] = None) -> Any:
             else:
                 new_key = _camel_to_snake(k)
 
+            next_preserve_subtree = preserve_subtree or (k in SUBTREE_PRESERVE_KEYS) or (new_key in SUBTREE_PRESERVE_KEYS)
             # Determine child parent_key so nested item dicts inside folder maps are still normalized
-            if parent_key in ("data", "folders") and new_key != "folders":
+            if parent_key in ("data", "folders", "domains") and new_key not in ("folders", "domains"):
                 child_parent_key = None
             elif parent_key in ("headers", "http_headers", "httpHeaders"):
                 child_parent_key = None
             else:
                 child_parent_key = new_key if isinstance(new_key, str) else None
 
-            new_dict[new_key] = _normalize_message(v, parent_key=child_parent_key)
+            new_dict[new_key] = _normalize_message(v, parent_key=child_parent_key, preserve_subtree=next_preserve_subtree)
         return new_dict
     elif isinstance(data, list):
-        return [_normalize_message(i, parent_key=None) for i in data]
+        return [_normalize_message(i, parent_key=None, preserve_subtree=preserve_subtree) for i in data]
     return data
 
 def translate(message: Dict[str, Any]) -> BaseRequest:

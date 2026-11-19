@@ -68,18 +68,24 @@ STANDALONE_BACKGROUND_JS = """import {
 	YT_LIBRARY_MENU_ID,
 } from "./background/yt_tools_service.js";
 
-async function syncContextMenu() {
-	if (!chrome?.contextMenus) return;
-	await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
-	const { shinkuYtToolsEnabled } = await chrome.storage.local.get("shinkuYtToolsEnabled");
-	if (shinkuYtToolsEnabled) {
-		chrome.contextMenus.create({
-			id: YT_LIBRARY_MENU_ID,
-			title: "Save to Shinku YT Library",
-			contexts: ["link", "page"],
-			documentUrlPatterns: ["*://*.youtube.com/*"],
-		});
-	}
+let _menuSyncQueue = Promise.resolve();
+
+function syncContextMenu() {
+	const next = _menuSyncQueue.then(async () => {
+		if (!chrome?.contextMenus) return;
+		await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
+		const { shinkuYtToolsEnabled } = await chrome.storage.local.get("shinkuYtToolsEnabled");
+		if (shinkuYtToolsEnabled) {
+			chrome.contextMenus.create({
+				id: YT_LIBRARY_MENU_ID,
+				title: "Save to Shinku YT Library",
+				contexts: ["link", "page"],
+				documentUrlPatterns: ["*://*.youtube.com/*"],
+			});
+		}
+	});
+	_menuSyncQueue = next.catch(() => {});
+	return next;
 }
 
 async function initExtension() {
@@ -129,11 +135,16 @@ if (chrome.contextMenus?.onClicked) {
 	chrome.contextMenus.onClicked.addListener((info, tab) => {
 		if (info.menuItemId !== YT_LIBRARY_MENU_ID) return;
 		const targetUrl = info.linkUrl || info.pageUrl || tab?.url;
-		if (targetUrl) {
-			handleSaveYouTubeLinkToLibrary(targetUrl, tab).catch((err) =>
-				console.error("[YT Tools] Context menu save failed:", err)
-			);
+		if (!targetUrl) return;
+		try {
+			const parsed = new URL(targetUrl);
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return;
+		} catch (_err) {
+			return;
 		}
+		handleSaveYouTubeLinkToLibrary(targetUrl, tab).catch((err) =>
+			console.error("[YT Tools] Context menu save failed:", err)
+		);
 	});
 }
 """

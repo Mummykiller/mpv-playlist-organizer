@@ -67,7 +67,10 @@ async function _performUpdateContextMenus(storage) {
 			id: "add-playlist-to-last-used",
 			title: `Add Playlist to MPV (${lastUsedFolderId})`,
 			contexts: ["link"],
-			targetUrlPatterns: ["*://*.youtube.com/playlist?list=*"],
+			targetUrlPatterns: [
+				"*://*.youtube.com/playlist?list=*",
+				"*://*.youtube.com/watch?*list=*",
+			],
 		});
 	}
 
@@ -83,7 +86,10 @@ async function _performUpdateContextMenus(storage) {
 		id: YOUTUBE_PLAYLIST_MENU_ID,
 		title: "Add Playlist to MPV Folder",
 		contexts: ["link"],
-		targetUrlPatterns: ["*://*.youtube.com/playlist?list=*"],
+		targetUrlPatterns: [
+			"*://*.youtube.com/playlist?list=*",
+			"*://*.youtube.com/watch?*list=*",
+		],
 	});
 
 	// Reorder folders to place the last used one at the top for convenience.

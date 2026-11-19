@@ -544,6 +544,20 @@ async function testYtToolsService() {
 		await svc.syncTabActionIcon(43, "https://example.com/");
 		assert.strictEqual(iconCalls[1].path[16], "images/icon16.png", "Uses MPV icon on non-YouTube pages");
 		assert.strictEqual(titleCalls[1].title, "MPV Playlist Organizer");
+
+		// Dominant icon is gated on playlist-manager master switch
+		await mock.chrome.storage.local.set({
+			shinkuExtensionSettings: {
+				"playlist-manager": { "playlist-manager": false, "yt-dominant-on-youtube": true },
+			},
+		});
+		await svc.syncTabActionIcon(44, "https://www.youtube.com/watch?v=abc");
+		assert.strictEqual(
+			iconCalls[2].path[16],
+			"images/icon16.png",
+			"Uses MPV icon when playlist-manager master is disabled"
+		);
+		assert.strictEqual(titleCalls[2].title, "MPV Playlist Organizer");
 	} finally {
 		global.chrome = origChrome;
 		global.fetch = origFetch;
@@ -775,6 +789,19 @@ async function testPopupYoutube() {
 			"yt",
 			"Opens YT tab automatically on YouTube when yt-dominant-on-youtube is enabled"
 		);
+
+		// Dominant-on-YouTube is gated on playlist-manager master switch
+		mock.localData.popupActiveExtTab = "mpv";
+		mock.localData.shinkuExtensionSettings = {
+			"playlist-manager": { "playlist-manager": false, "yt-dominant-on-youtube": true },
+		};
+		const manager4 = createYouTubeToolsManager({});
+		await manager4.initialize();
+		assert.strictEqual(
+			manager4.getActiveExtTab(),
+			"mpv",
+			"Does not switch to YT tab when playlist-manager master is disabled"
+		);
 	} finally {
 		global.window = origWindow;
 		global.document = origDocument;
@@ -789,7 +816,28 @@ async function testPopupYoutube() {
 async function testYtFeedFilterAndHoverGuard() {
 	const dom = new JSDOM(
 		`<!DOCTYPE html><html><body>
-			<div id="movie_player"><ytd-thumbnail><a id="thumbnail" href="/watch?v=main0001"></a></ytd-thumbnail></div>
+			<div id="movie_player">
+				<ytd-thumbnail id="player-non-endscreen-thumb"><a id="thumbnail" href="/watch?v=main0001"></a></ytd-thumbnail>
+				<div class="ytp-fullscreen-grid">
+					<div class="ytp-fullscreen-grid-stills-container">
+						<a id="modern-endscreen-still" class="ytp-modern-videowall-still" href="/watch?v=end00001">
+							<div class="ytp-modern-videowall-still-image"></div>
+						</a>
+						<div id="nested-endscreen-still" class="ytp-modern-videowall-still">
+							<a href="/watch?v=end00003">
+								<yt-thumbnail-view-model id="endscreen-modern-thumb"></yt-thumbnail-view-model>
+							</a>
+						</div>
+					</div>
+				</div>
+				<div class="html5-endscreen">
+					<div class="ytp-endscreen-content">
+						<a id="classic-endscreen-still" class="ytp-videowall-still" href="/watch?v=end00002">
+							<div class="ytp-videowall-still-image"></div>
+						</a>
+					</div>
+				</div>
+			</div>
 			<ytd-rich-section-renderer id="playables-section">
 				<ytd-rich-shelf-renderer><h2 id="title">YouTube Playables</h2></ytd-rich-shelf-renderer>
 			</ytd-rich-section-renderer>
@@ -901,11 +949,11 @@ async function testYtFeedFilterAndHoverGuard() {
 		assert.strictEqual(doc.getElementById("lockup-streamed").style.display, "none", "Modern lockup streamed hidden");
 		assert.strictEqual(doc.getElementById("lockup-normal").style.display, "", "Normal lockup remains visible");
 
-		// Hover guard: must NOT attach inside #movie_player, MUST attach on normal thumbnails
+		// Hover guard: must NOT attach to non-endscreen thumbnails inside #movie_player, MUST attach on normal thumbnails
 		assert.strictEqual(
-			doc.querySelectorAll("#movie_player .shinku-hover-shield").length,
+			doc.querySelectorAll("#player-non-endscreen-thumb .shinku-hover-shield").length,
 			0,
-			"Hover shield must not attach inside #movie_player"
+			"Hover shield must not attach to non-endscreen thumbnails inside #movie_player"
 		);
 		const classicThumb = doc.getElementById("classic-thumb");
 		const classicShield = classicThumb.querySelector(".shinku-hover-shield");
@@ -938,6 +986,76 @@ async function testYtFeedFilterAndHoverGuard() {
 		doc.body.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true }));
 		assert.strictEqual(classicShield.style.display, "block", "Shield restored when pointer moves away");
 		assert.strictEqual(classicShield.style.pointerEvents, "auto", "Shield pointerEvents restored when pointer moves away");
+
+		// End-of-video recommendation tiles overlaid inside #movie_player MUST be shielded
+		const modernEndscreenStill = doc.getElementById("modern-endscreen-still");
+		const modernEndscreenShield = modernEndscreenStill.querySelector(".shinku-hover-shield");
+		assert.ok(modernEndscreenShield, "Hover shield attached to .ytp-modern-videowall-still");
+		assert.ok(modernEndscreenShield.closest("a[href]"), "Endscreen shield stays inside anchor link");
+		assert.strictEqual(modernEndscreenShield.style.zIndex, "100", "Endscreen shield sits above inner tile layers");
+
+		let modernEndscreenMouseovers = 0;
+		modernEndscreenStill.addEventListener("mouseover", () => {
+			modernEndscreenMouseovers++;
+		});
+		modernEndscreenShield.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true }));
+		assert.strictEqual(modernEndscreenMouseovers, 0, "mouseover blocked on modern endscreen still before delay");
+
+		modernEndscreenShield.dispatchEvent(
+			new dom.window.MouseEvent("mouseenter", { bubbles: false, clientX: 25, clientY: 35 })
+		);
+		await new Promise((r) => origSetTimeout(r, 80));
+		assert.strictEqual(modernEndscreenShield.style.display, "none", "Endscreen shield unlocks after hover delay");
+		assert.strictEqual(modernEndscreenMouseovers, 1, "Synthetic mouseover dispatched once to endscreen still");
+
+		doc.body.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true }));
+		assert.strictEqual(modernEndscreenShield.style.display, "block", "Endscreen shield restored when pointer moves away");
+		assert.strictEqual(modernEndscreenShield.style.pointerEvents, "auto", "Endscreen shield pointerEvents restored");
+
+		// Classic .ytp-videowall-still must also be shielded and block mouseover
+		const classicEndscreenStill = doc.getElementById("classic-endscreen-still");
+		const classicEndscreenShield = classicEndscreenStill.querySelector(".shinku-hover-shield");
+		assert.ok(classicEndscreenShield, "Hover shield attached to .ytp-videowall-still");
+		let classicEndscreenMouseovers = 0;
+		classicEndscreenStill.addEventListener("mouseover", () => {
+			classicEndscreenMouseovers++;
+		});
+		classicEndscreenShield.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true }));
+		assert.strictEqual(classicEndscreenMouseovers, 0, "mouseover blocked on classic videowall still");
+
+		// Nested endscreen container wraps yt-thumbnail-view-model without double-shielding
+		const nestedEndscreenStill = doc.getElementById("nested-endscreen-still");
+		assert.strictEqual(
+			nestedEndscreenStill.querySelectorAll(".shinku-hover-shield").length,
+			1,
+			"Nested endscreen still gets exactly 1 shield"
+		);
+		assert.ok(
+			doc.querySelector("#endscreen-modern-thumb .shinku-hover-shield"),
+			"Shield attaches to inner yt-thumbnail-view-model inside nested endscreen still"
+		);
+
+		// Lazy on-demand shielding blocks hover immediately before MutationObserver debounce fires
+		const stillsContainer = doc.querySelector(".ytp-fullscreen-grid-stills-container");
+		const lazyStill = doc.createElement("a");
+		lazyStill.id = "lazy-endscreen-still";
+		lazyStill.className = "ytp-modern-videowall-still";
+		lazyStill.setAttribute("href", "/watch?v=end00004");
+		const lazyImg = doc.createElement("div");
+		lazyImg.className = "ytp-modern-videowall-still-image";
+		lazyStill.appendChild(lazyImg);
+		stillsContainer.appendChild(lazyStill);
+
+		let lazyMouseovers = 0;
+		lazyStill.addEventListener("mouseover", () => {
+			lazyMouseovers++;
+		});
+		lazyImg.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true }));
+		assert.ok(
+			lazyStill.querySelector(".shinku-hover-shield"),
+			"Lazy endscreen still shielded synchronously on first hover event"
+		);
+		assert.strictEqual(lazyMouseovers, 0, "First mouseover blocked synchronously on newly injected endscreen still");
 
 		// Turning off hover-preview-guard removes all shields
 		settings["thumbnail-title-settings"]["hover-preview-guard"] = false;
@@ -1195,14 +1313,709 @@ async function testYtExtendedSettingsFeatures() {
 	}
 }
 
+async function testYtAuditBugFixes() {
+	const dom = new JSDOM(
+		`<!DOCTYPE html><html><body>
+			<ytd-watch-flexy id="watch-flexy">
+				<div id="full-bleed-container"></div>
+				<div id="player">
+					<div id="movie_player"><video class="html5-main-video"></video></div>
+				</div>
+			</ytd-watch-flexy>
+			<ytd-shelf-renderer id="mix-shelf">
+				<h2 id="title">Recommended</h2>
+				<ytd-video-renderer id="shelf-bad-video">
+					<span id="video-title">Blocked Keyword Video</span>
+				</ytd-video-renderer>
+				<ytd-video-renderer id="shelf-good-video">
+					<span id="video-title">Safe Video</span>
+				</ytd-video-renderer>
+			</ytd-shelf-renderer>
+			<ytd-thumbnail>
+				<img id="webp-thumb" src="https://i.ytimg.com/vi_webp/vid99999999/hq720.webp?sqp=123" />
+			</ytd-thumbnail>
+		</body></html>`,
+		{
+			url: "https://www.youtube.com/watch?v=audit12345",
+			runScripts: "outside-only",
+		}
+	);
+	try {
+		const win = dom.window;
+		const doc = win.document;
+		win.innerWidth = 1280;
+		win.innerHeight = 720;
+
+		const playerEl = doc.getElementById("player");
+		const fullBleedEl = doc.getElementById("full-bleed-container");
+		const watchFlexy = doc.getElementById("watch-flexy");
+
+		playerEl.getBoundingClientRect = () => ({
+			left: 24,
+			top: 56,
+			right: 874,
+			bottom: 536,
+			width: 850,
+			height: 480,
+		});
+		fullBleedEl.getBoundingClientRect = () => ({
+			left: 0,
+			top: 56,
+			right: 1280,
+			bottom: 656,
+			width: 1280,
+			height: 600,
+		});
+
+		runScriptInDom(dom, "yt-tools/yt_defaults.js");
+		const contentCode = fs.readFileSync(path.join(ROOT, "yt-tools/yt_content.js"), "utf8");
+		const windowProxy = new Proxy(win, {
+			get(target, prop) {
+				if (prop === "window" || prop === "globalThis" || prop === "self") return windowProxy;
+				if (prop === "addEventListener") {
+					return (type, fn, opts) => {
+						if (type !== "message") return target.addEventListener(type, fn, opts);
+						return target.addEventListener(
+							type,
+							(ev) =>
+								fn.call(
+									windowProxy,
+									new Proxy(ev, {
+										get(t, p) {
+											if (p === "source") return windowProxy;
+											const v = Reflect.get(t, p, t);
+											return typeof v === "function" ? v.bind(t) : v;
+										},
+									})
+								),
+							opts
+						);
+					};
+				}
+				const val = Reflect.get(target, prop, target);
+				return typeof val === "function" ? val.bind(target) : val;
+			},
+			set(target, prop, value) {
+				return Reflect.set(target, prop, value, target);
+			},
+		});
+		const ctx = vm.createContext({
+			window: windowProxy,
+			document: doc,
+			location: win.location,
+			Element: win.Element,
+			HTMLElement: win.HTMLElement,
+			Node: win.Node,
+			Event: win.Event,
+			MouseEvent: win.MouseEvent,
+			KeyboardEvent: win.KeyboardEvent,
+			WheelEvent: win.WheelEvent,
+			MutationObserver: win.MutationObserver,
+			URL: win.URL,
+			setTimeout: win.setTimeout,
+			clearTimeout: win.clearTimeout,
+			requestAnimationFrame: win.requestAnimationFrame || (() => 0),
+			cancelAnimationFrame: win.cancelAnimationFrame || (() => {}),
+			console,
+		});
+		vm.runInContext(contentCode, ctx, { filename: "yt-tools/yt_content.js" });
+
+		const settings = JSON.parse(JSON.stringify(win.SHINKU_YT_DEFAULTS));
+		settings["frame-removal-settings"]["blocked-keywords"] = "blocked keyword";
+		settings["distraction-settings"]["hide-ai-summaries"] = true;
+		settings["video-player-settings"]["cinema-mode"] = true;
+		settings["thumbnail-title-settings"]["still-frame-thumbnails"] = true;
+
+		win.dispatchEvent(
+			new win.MessageEvent("message", {
+				data: { type: "SHINKU__userSetting", data: settings },
+				source: win,
+				origin: win.location.origin,
+			})
+		);
+
+		// 1. Cinema mode uses high-z fixed backdrop with clip-path cutout and no player zIndex mutation
+		const backdrop = doc.getElementById("shinku-cinema-backdrop");
+		assert.ok(backdrop, "Cinema backdrop created");
+		assert.strictEqual(backdrop.style.zIndex, "2147483645");
+		assert.ok(
+			backdrop.style.clipPath.includes("24px 56px, 874px 56px, 874px 536px, 24px 536px"),
+			"Cinema backdrop cuts out normal player rect"
+		);
+		assert.strictEqual(playerEl.style.zIndex, "", "Does not mutate player container z-index");
+
+		// Toggling theater attribute moves #movie_player into #full-bleed-container and updates cutout
+		fullBleedEl.appendChild(doc.getElementById("movie_player"));
+		watchFlexy.setAttribute("theater", "");
+		await new Promise((r) => win.setTimeout(r, 20));
+		assert.ok(
+			backdrop.style.clipPath.includes("0px 56px, 1280px 56px, 1280px 656px, 0px 656px"),
+			"Cinema backdrop updates cutout for #full-bleed-container in theater mode"
+		);
+
+		// 2. hide-ai-summaries scopes Ask button selector
+		const distractionStyle = doc.getElementById("shinku-distraction-style");
+		assert.ok(distractionStyle, "Distraction style injected");
+		assert.ok(
+			distractionStyle.textContent.includes('ytd-watch-metadata button[aria-label*="Ask" i]') &&
+				distractionStyle.textContent.includes('#actions button[aria-label*="Ask" i]'),
+			"Ask button selector is scoped to watch metadata/action bar"
+		);
+		assert.ok(
+			!/,\s*button\[aria-label\*="Ask" i\]/.test(distractionStyle.textContent),
+			"No unscoped global Ask button selector"
+		);
+
+		// 3. still-frame-thumbnails handles /vi_webp/ and hq720
+		const webpThumb = doc.getElementById("webp-thumb");
+		assert.strictEqual(
+			webpThumb.getAttribute("src"),
+			"https://i.ytimg.com/vi/vid99999999/hq2.jpg",
+			"Rewrites /vi_webp/.../hq720.webp to hq2.jpg"
+		);
+
+		// 4. blocked-keywords hides matching video inside shelf without hiding the shelf container
+		assert.strictEqual(
+			doc.getElementById("shelf-bad-video").style.display,
+			"none",
+			"Matching video inside shelf is hidden"
+		);
+		assert.strictEqual(
+			doc.getElementById("shelf-good-video").style.display,
+			"",
+			"Non-matching video inside shelf remains visible"
+		);
+		assert.strictEqual(
+			doc.getElementById("mix-shelf").style.display,
+			"",
+			"Shelf container itself is not hidden by blocked-keywords"
+		);
+
+		// Disabling cinema-mode and still-frame-thumbnails restores DOM cleanly
+		settings["video-player-settings"]["cinema-mode"] = false;
+		settings["thumbnail-title-settings"]["still-frame-thumbnails"] = false;
+		win.dispatchEvent(
+			new win.MessageEvent("message", {
+				data: { type: "SHINKU__updateUserSetting", data: settings },
+				source: win,
+				origin: win.location.origin,
+			})
+		);
+		assert.strictEqual(doc.getElementById("shinku-cinema-backdrop"), null, "Cinema backdrop removed");
+		assert.strictEqual(
+			webpThumb.getAttribute("src"),
+			"https://i.ytimg.com/vi_webp/vid99999999/hq720.webp?sqp=123",
+			"Original webp thumbnail src restored"
+		);
+	} finally {
+		dom.window.close();
+	}
+}
+
+async function testYtIntegrationAndRegressionFixes() {
+	// 1. Progress bar / status badge zero childList churn, Shadow DOM hijackedSeek, shinkuWheelKey,
+	//    hover shield inside <a>, drag mousemove pass-through, recycled SPA cards, disable teardown
+	const dom = new JSDOM(
+		`<!DOCTYPE html><html><head></head><body>
+			<div id="movie_player">
+				<video class="html5-main-video"></video>
+				<div class="ytp-right-controls"></div>
+			</div>
+			<div id="mpv-shadow-host"></div>
+			<ytd-rich-item-renderer id="recycled-card">
+				<ytd-thumbnail id="recycled-thumb">
+					<a id="thumbnail" href="/watch?v=oldVid11111"></a>
+				</ytd-thumbnail>
+				<h3 id="video-title">OLD CLICKBAIT TITLE!!!</h3>
+			</ytd-rich-item-renderer>
+			<ytd-rich-item-renderer id="watched-streamed-card">
+				<div id="metadata-line">Streamed 2 days ago</div>
+				<div id="progress" style="width: 95%"></div>
+			</ytd-rich-item-renderer>
+			<tp-yt-paper-dialog id="hidden-idle-dialog" style="display: none;" aria-hidden="true">
+				<span>Continue watching?</span>
+				<button id="confirm-button">Yes</button>
+			</tp-yt-paper-dialog>
+		</body></html>`,
+		{ url: "https://www.youtube.com/watch?v=watch000001", runScripts: "outside-only" }
+	);
+
+	const timeouts = [];
+	const origSetTimeout = dom.window.setTimeout.bind(dom.window);
+	const origClearTimeout = dom.window.clearTimeout.bind(dom.window);
+	dom.window.setTimeout = (fn, ms, ...args) => {
+		const id = origSetTimeout(fn, ms, ...args);
+		timeouts.push(id);
+		return id;
+	};
+
+	const rafQueue = [];
+	dom.window.requestAnimationFrame = (cb) => {
+		rafQueue.push(cb);
+		return rafQueue.length;
+	};
+	dom.window.cancelAnimationFrame = () => {};
+
+	try {
+		const win = dom.window;
+		const doc = win.document;
+		const player = doc.getElementById("movie_player");
+		const video = doc.querySelector("video.html5-main-video");
+
+		let currentRate = 1;
+		let playVideoCount = 0;
+		let pauseVideoCount = 0;
+		const seekCalls = [];
+		const audioTrackCalls = [];
+		let resumeCount = 0;
+		let audioCtxState = "suspended";
+
+		player.getVideoData = () => ({ video_id: "watch000001" });
+		player.setPlaybackRate = (r) => { currentRate = r; };
+		player.playVideo = () => { playVideoCount++; };
+		player.pauseVideo = () => { pauseVideoCount++; };
+		player.seekTo = (t) => seekCalls.push(t);
+		player.getAvailableAudioTracks = () => [
+			{ id: "en-dub", name: "English (auto-dubbed)", isDefault: true },
+			{ id: "ja-orig", name: "Japanese (original)", isDefault: false },
+		];
+		player.setAudioTrack = (tr) => audioTrackCalls.push(tr);
+
+		Object.defineProperty(video, "readyState", { configurable: true, get: () => 2 });
+		Object.defineProperty(video, "duration", { configurable: true, get: () => 200 });
+		let curTime = 50;
+		Object.defineProperty(video, "currentTime", {
+			configurable: true,
+			get: () => curTime,
+			set: (v) => { curTime = v; },
+		});
+		let isPaused = true;
+		Object.defineProperty(video, "paused", { configurable: true, get: () => isPaused });
+
+		let hiddenDialogClicks = 0;
+		doc.getElementById("confirm-button").addEventListener("click", () => { hiddenDialogClicks++; });
+
+		class FakeAudioContext {
+			constructor() { this.state = audioCtxState; this.destination = {}; }
+			createMediaElementSource() { return { connect: () => {} }; }
+			createGain() { return { gain: { value: 1 }, connect: () => {} }; }
+			async resume() { resumeCount++; audioCtxState = "running"; this.state = "running"; }
+		}
+
+		const postedMessages = [];
+		const origPostMessage = win.postMessage.bind(win);
+		win.postMessage = (msg, origin) => {
+			postedMessages.push(msg);
+			return origPostMessage(msg, origin);
+		};
+
+		let assignedUrl = null;
+		const locationProxy = new Proxy({}, {
+			get(_t, prop) {
+				if (prop === "assign") return (u) => { assignedUrl = u; };
+				const v = Reflect.get(win.location, prop, win.location);
+				return typeof v === "function" ? v.bind(win.location) : v;
+			},
+		});
+
+		const windowProxy = new Proxy(win, {
+			get(target, prop) {
+				if (prop === "location") return locationProxy;
+				if (prop === "window" || prop === "globalThis" || prop === "self") return windowProxy;
+				if (prop === "AudioContext") return FakeAudioContext;
+				if (prop === "addEventListener") {
+					return (type, fn, opts) => {
+						if (type !== "message") return target.addEventListener(type, fn, opts);
+						return target.addEventListener(type, (ev) => {
+							const wrapped = new Proxy(ev, {
+								get(t, p) {
+									if (p === "source") return windowProxy;
+									const v = Reflect.get(t, p, t);
+									return typeof v === "function" ? v.bind(t) : v;
+								},
+							});
+							return fn.call(windowProxy, wrapped);
+						}, opts);
+					};
+				}
+				const val = Reflect.get(target, prop, target);
+				return typeof val === "function" ? val.bind(target) : val;
+			},
+			set(target, prop, value) {
+				return Reflect.set(target, prop, value, target);
+			},
+		});
+
+		runScriptInDom(dom, "yt-tools/yt_defaults.js");
+		const contentCode = fs.readFileSync(path.join(ROOT, "yt-tools/yt_content.js"), "utf8");
+		const ctx = vm.createContext({
+			window: windowProxy,
+			globalThis: windowProxy,
+			self: windowProxy,
+			document: doc,
+			URL: win.URL,
+			MutationObserver: win.MutationObserver,
+			MouseEvent: win.MouseEvent,
+			KeyboardEvent: win.KeyboardEvent,
+			WheelEvent: win.WheelEvent,
+			Event: win.Event,
+			setTimeout: win.setTimeout,
+			clearTimeout: win.clearTimeout,
+			setInterval: win.setInterval,
+			clearInterval: win.clearInterval,
+			requestAnimationFrame: win.requestAnimationFrame,
+			cancelAnimationFrame: win.cancelAnimationFrame,
+			AudioContext: FakeAudioContext,
+			console,
+		});
+		vm.runInContext(contentCode, ctx, { filename: "yt-tools/yt_content.js" });
+
+		// Simulate bridge ready & library
+		win.dispatchEvent(new win.MessageEvent("message", {
+			data: { type: "SHINKU__bridgeReady" },
+			source: win,
+			origin: win.location.origin,
+		}));
+		win.dispatchEvent(new win.MessageEvent("message", {
+			data: {
+				type: "SHINKU__Library",
+				data: {
+					watch000001: { id: "watch000001", videoId: "watch000001", currentTime: 30, updatedAt: 2000 },
+					nextVid0002: { id: "nextVid0002", videoId: "nextVid0002", currentTime: 10, updatedAt: 1000 },
+				},
+			},
+			source: win,
+			origin: win.location.origin,
+		}));
+
+		const settings = JSON.parse(JSON.stringify(win.SHINKU_YT_DEFAULTS));
+		settings["frame-removal-settings"]["streamed-removal"] = false;
+		settings["frame-removal-settings"]["watched-removal"] = true;
+		settings["video-player-settings"]["playback-speed"] = "2";
+		settings["video-player-settings"]["disable-auto-dubbing"] = true;
+		settings["video-player-settings"]["volume-boost-enable"] = true;
+		settings["video-player-settings"]["prevent-idle-pause"] = true;
+		settings["thumbnail-title-settings"]["clean-clickbait-titles"] = true;
+		settings["playlist-manager"]["auto-next"] = true;
+
+		win.dispatchEvent(new win.MessageEvent("message", {
+			data: { type: "SHINKU__userSetting", data: settings },
+			source: win,
+			origin: win.location.origin,
+		}));
+
+		// 1. Progress bar rAF should produce 0 childList mutations when timestamp unchanged
+		let childListMutations = 0;
+		const obs = new win.MutationObserver((recs) => {
+			for (const r of recs) {
+				if (r.type === "childList") childListMutations++;
+			}
+		});
+		obs.observe(doc.documentElement, { childList: true, subtree: true });
+		for (let i = 0; i < 5 && rafQueue.length > 0; i++) {
+			rafQueue.shift()();
+		}
+		await new Promise((r) => origSetTimeout(r, 15));
+		// First frame updates "00:00 / 00:00" -> "00:50 / 03:20", remaining 4 frames must emit 0 childList mutations
+		assert.ok(childListMutations <= 1, `Expected <=1 childList mutation across 5 frames, got ${childListMutations}`);
+		obs.disconnect();
+
+		// 2. Hover shield mounted inside <a> on classic thumbnail + local stacking + drag mousemove pass-through
+		const recycledThumb = doc.getElementById("recycled-thumb");
+		const shield = recycledThumb.querySelector(".shinku-hover-shield");
+		assert.ok(shield, "Hover shield attached");
+		assert.ok(shield.closest("a[href]"), "Hover shield sits inside <a> so native link context menus work");
+		assert.strictEqual(recycledThumb.style.isolation, "isolate", "Thumbnail creates isolated stacking context");
+		assert.strictEqual(shield.style.zIndex, "20", "Shield uses local zIndex instead of 2147483646");
+
+		let docMouseMoves = 0;
+		doc.addEventListener("mousemove", () => { docMouseMoves++; });
+		shield.dispatchEvent(new win.MouseEvent("mousemove", { bubbles: true, cancelable: true }));
+		assert.strictEqual(docMouseMoves, 1, "mousemove reaches document-level Draggable/Resizable over shield");
+
+		// 3. Shadow DOM hijackedSeek does not steal ArrowRight from focused Shadow DOM <select>
+		seekCalls.length = 0; // ignore initial applyFastResume seek to 30s
+		const shadowHost = doc.getElementById("mpv-shadow-host");
+		const shadow = shadowHost.attachShadow({ mode: "open" });
+		const shadowSelect = doc.createElement("select");
+		shadow.appendChild(shadowSelect);
+		shadowSelect.focus();
+		const arrowEv = new win.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true, composed: true });
+		shadowSelect.dispatchEvent(arrowEv);
+		assert.strictEqual(arrowEv.defaultPrevented, false, "hijackedSeek must not intercept Shadow DOM select");
+		assert.strictEqual(seekCalls.length, 0, "YouTube video must not seek when Shadow DOM select focused");
+
+		// 4. disable-auto-dubbing prefers 'original' track over isDefault dubbed track
+		assert.strictEqual(audioTrackCalls[0]?.id, "ja-orig", "Auto-dubbing switch prefers original track");
+
+		// 5. applyAutoPause does not burn flag when already paused
+		assert.strictEqual(pauseVideoCount, 0, "Auto-pause does not fire while video is already paused");
+		isPaused = false;
+		video.dispatchEvent(new win.Event("play"));
+		assert.strictEqual(pauseVideoCount, 1, "Auto-pause fires when playback actually starts");
+
+		// 6. prevent-idle-pause ignores hidden dialog
+		assert.strictEqual(hiddenDialogClicks, 0, "Hidden idle dialog must not be clicked");
+		assert.strictEqual(playVideoCount, 0, "Hidden idle dialog must not call playVideo");
+
+		// 7. classifyFeedItem lets watched-removal hide 95%-watched streamed item when streamed-removal is false
+		assert.strictEqual(
+			doc.getElementById("watched-streamed-card").style.display,
+			"none",
+			"watched-removal not shadowed when streamed-removal is disabled"
+		);
+
+		// 8. Recycled SPA card updates clean-clickbait-titles and thumbnail bookmark videoId
+		doc.querySelector("#recycled-card #video-title").textContent = "BRAND NEW RECYCLED TITLE!!!";
+		doc.querySelector("#recycled-thumb a").setAttribute("href", "/watch?v=newVid22222");
+		settings["thumbnail-title-settings"]["hover-preview-guard"] = true;
+		win.dispatchEvent(new win.MessageEvent("message", {
+			data: { type: "SHINKU__updateUserSetting", data: settings },
+			source: win,
+			origin: win.location.origin,
+		}));
+		assert.strictEqual(
+			doc.querySelector("#recycled-card #video-title").textContent,
+			"Brand New Recycled Title!",
+			"Recycled card updates clickbait title"
+		);
+		assert.strictEqual(
+			doc.querySelector("#recycled-thumb .shinku-thumb-bookmark-btn").dataset.shinkuVideoId,
+			"newVid22222",
+			"Recycled card updates thumbnail bookmark videoId"
+		);
+
+		// 9. auto-next waits for SHINKU__saveToLibraryAck when bridgeConnected is true
+		video.dispatchEvent(new win.Event("ended"));
+		assert.strictEqual(assignedUrl, null, "auto-next waits for saveToLibraryAck before navigating");
+		const endSaveMsg = postedMessages.filter((m) => m.type === "SHINKU__saveToLibrary").pop();
+		assert.ok(endSaveMsg?.data?.saveId, "auto-next attaches saveId for ack");
+		win.dispatchEvent(new win.MessageEvent("message", {
+			data: { type: "SHINKU__saveToLibraryAck", data: { saveId: endSaveMsg.data.saveId } },
+			source: win,
+			origin: win.location.origin,
+		}));
+		assert.strictEqual(
+			assignedUrl,
+			"https://www.youtube.com/watch?v=nextVid0002",
+			"auto-next navigates once saveToLibraryAck arrives"
+		);
+
+		// 10. volume-boost-enable resumes suspended AudioContext on play even after disable,
+		//     and SHINKU__toolsDisabled resets playbackRate to 1
+		assert.strictEqual(video.playbackRate, 2, "Playback speed set to 2x before disable");
+		settings["video-player-settings"]["volume-boost-enable"] = false;
+		win.dispatchEvent(new win.MessageEvent("message", {
+			data: { type: "SHINKU__updateUserSetting", data: settings },
+			source: win,
+			origin: win.location.origin,
+		}));
+		video.dispatchEvent(new win.Event("play"));
+		await new Promise((r) => origSetTimeout(r, 10));
+		assert.ok(resumeCount >= 1, "Suspended AudioContext resumed even after volume boost disabled");
+
+		const recycledTitleEl = doc.querySelector("#recycled-card #video-title");
+		recycledTitleEl.textContent = "Fresh Video After Recycle";
+
+		win.dispatchEvent(new win.MessageEvent("message", {
+			data: { type: "SHINKU__toolsDisabled" },
+			source: win,
+			origin: win.location.origin,
+		}));
+		assert.strictEqual(video.playbackRate, 1, "SHINKU__toolsDisabled resets video.playbackRate to 1");
+		assert.strictEqual(currentRate, 1, "SHINKU__toolsDisabled resets player playback rate to 1");
+		assert.strictEqual(
+			recycledTitleEl.textContent,
+			"Fresh Video After Recycle",
+			"Recycled title must not revert to stale original on disable"
+		);
+		assert.strictEqual(recycledTitleEl.hasAttribute("data-shinku-orig-title"), false);
+		assert.strictEqual(recycledTitleEl.hasAttribute("data-shinku-cleaned-title"), false);
+
+		const msgCountBeforeBridgeReady = postedMessages.length;
+		win.dispatchEvent(new win.MessageEvent("message", {
+			data: { type: "SHINKU__bridgeReady" },
+			source: win,
+			origin: win.location.origin,
+		}));
+		assert.ok(
+			postedMessages.slice(msgCountBeforeBridgeReady).some((m) => m.type === "SHINKU__requestSettings"),
+			"SHINKU__bridgeReady requests settings while disabled"
+		);
+		win.dispatchEvent(new win.MessageEvent("message", {
+			data: { type: "SHINKU__NEW_YOUTUBE_URL", videoId: "watch000001" },
+			source: win,
+			origin: win.location.origin,
+		}));
+		assert.strictEqual(video.playbackRate, 1, "SHINKU__bridgeReady must not re-enable disabled tools");
+	} finally {
+		for (const id of timeouts) origClearTimeout(id);
+		dom.window.close();
+	}
+
+	// 11. Security & serialization checks in yt_tools_service.js + popup_youtube.js
+	const mock = createChromeMock({
+		shinkuYtToolsEnabled: false,
+		shinkuLibrary: [
+			{ id: "done1", videoId: "done1", title: "Done Item", done: true, doneAt: 123, currentTime: 50, duration: 50 },
+		],
+	});
+	const origChrome = global.chrome;
+	const origFetch = global.fetch;
+	global.chrome = mock.chrome;
+	global.fetch = async () => ({
+		ok: true,
+		async json() { return { title: "Safe Title", author_name: "Author" }; },
+	});
+	try {
+		const svc = await import(pathToFileURL(path.join(ROOT, "background/yt_tools_service.js")).href);
+		assert.strictEqual(svc.extractYouTubeVideoId("https://notyoutube.com/watch?v=dQw4w9WgXcQ"), null);
+		assert.strictEqual(svc.extractYouTubeVideoId("https://youtube.com.evil.com/watch?v=dQw4w9WgXcQ"), null);
+		assert.strictEqual(svc.extractYouTubeVideoId("ftp://youtube.com/watch?v=dQw4w9WgXcQ"), null);
+		assert.strictEqual(svc.extractYouTubeVideoId("https://www.youtube.com/watch?v=__proto__"), null);
+		assert.strictEqual(svc.extractYouTubeVideoId("https://youtu.be/watch?v=dQw4w9WgXcQ"), "dQw4w9WgXcQ");
+
+		// Rapid ON -> OFF toggle serialization leaves 0 scripts registered
+		const pOn = svc.setYtToolsEnabled(true);
+		const pOff = svc.setYtToolsEnabled(false);
+		await Promise.all([pOn, pOff]);
+		assert.strictEqual(mock.localData.shinkuYtToolsEnabled, false);
+		assert.strictEqual(mock.registeredScripts.length, 0, "Serialized toggle leaves 0 scripts registered");
+
+		// Re-saving a Done item resets done: false and normalizes array shinkuLibrary cleanly
+		await svc.handleSaveYouTubeLinkToLibrary("https://www.youtube.com/watch?v=done1", null);
+		assert.strictEqual(Array.isArray(mock.localData.shinkuLibrary), false);
+		assert.strictEqual(mock.localData.shinkuLibrary.done1.done, false, "Re-save resets done flag");
+		assert.strictEqual(mock.localData.shinkuLibrary.done1.doneAt, null, "Re-save resets doneAt");
+
+		// Concurrent saves don't clobber each other
+		await Promise.all([
+			svc.handleSaveYouTubeLinkToLibrary("https://www.youtube.com/watch?v=concurA", null),
+			svc.handleSaveYouTubeLinkToLibrary("https://www.youtube.com/watch?v=concurB", null),
+		]);
+		assert.ok(mock.localData.shinkuLibrary.concurA && mock.localData.shinkuLibrary.concurB, "Concurrent saves preserved");
+	} finally {
+		global.chrome = origChrome;
+		global.fetch = origFetch;
+	}
+
+	// 12. popup_youtube.js dominance on non-YT tab, serialized saves/deletes, Infinity/blank library resilience
+	const popupDom = new JSDOM(
+		`<!DOCTYPE html><html><body>
+			<div id="popup-extension-tabs">
+				<button class="ext-tab-btn active" data-ext-tab="mpv"></button>
+				<button class="ext-tab-btn" data-ext-tab="yt"></button>
+			</div>
+			<div id="mini-controller-view"></div>
+			<div id="folder-management-view"></div>
+			<div id="youtube-tools-view" style="display:none">
+				<input type="checkbox" id="yt-tools-master-enable" />
+				<div id="yt-tools-disabled-notice" style="display:none"></div>
+				<div id="yt-tools-library-panel">
+					<div id="yt-library-list"></div>
+					<div id="yt-library-empty"></div>
+				</div>
+				<div id="yt-tools-settings-panel" style="display:none">
+					<div id="yt-frame-removal-settings"></div>
+					<div id="yt-playlist-manager-settings"></div>
+				</div>
+			</div>
+		</body></html>`,
+		{ url: "https://example.invalid/popup.html", runScripts: "outside-only" }
+	);
+	const origWin2 = global.window;
+	const origDoc2 = global.document;
+	const origChrome2 = global.chrome;
+	const origDefaults2 = global.SHINKU_YT_DEFAULTS;
+	const origQualities2 = global.SHINKU_YT_QUALITIES;
+	const origSchema2 = global.SHINKU_YT_UI_SCHEMA;
+
+	const popupMock = createChromeMock({
+		shinkuYtToolsEnabled: true,
+		popupActiveExtTab: "yt",
+		shinkuExtensionSettings: {
+			"playlist-manager": { "playlist-manager": true, "yt-dominant-on-youtube": true },
+			"frame-removal-settings": { "frame-removal": true, "shorts-removal": true, "live-removal": true },
+		},
+		shinkuLibrary: {
+			v1: { id: "v1", title: "Vid 1", currentTime: 10, duration: 100, updatedAt: 200 },
+			v2: { id: "v2", title: "Vid 2", currentTime: "Infinity", duration: "Infinity", updatedAt: 100 },
+			"": { title: "Blank Key" },
+			arrBad: ["corrupt"],
+		},
+	});
+	// Add artificial async storage delay to exercise races
+	const origSet = popupMock.chrome.storage.local.set;
+	popupMock.chrome.storage.local.set = async (obj) => {
+		await new Promise((r) => setTimeout(r, 15));
+		return origSet(obj);
+	};
+	popupMock.chrome.tabs.query = async () => [{ id: 1, url: "https://example.com/" }];
+
+	global.window = popupDom.window;
+	global.document = popupDom.window.document;
+	global.chrome = popupMock.chrome;
+	try {
+		runScriptInDom(popupDom, "yt-tools/yt_defaults.js");
+		global.SHINKU_YT_DEFAULTS = popupDom.window.SHINKU_YT_DEFAULTS;
+		global.SHINKU_YT_QUALITIES = popupDom.window.SHINKU_YT_QUALITIES;
+		global.SHINKU_YT_UI_SCHEMA = popupDom.window.SHINKU_YT_UI_SCHEMA;
+
+		const { createYouTubeToolsManager } = await import(
+			pathToFileURL(path.join(ROOT, "popup/popup_youtube.js")).href
+		);
+		const mgr = createYouTubeToolsManager({});
+		await mgr.initialize();
+
+		// Dominant mode on non-YouTube tab opens MPV instead of trapping on YT tab
+		assert.strictEqual(mgr.getActiveExtTab(), "mpv", "Dominant mode defaults to mpv on non-YouTube pages");
+		// Corrupted entries ("" key, array value) filtered out; Infinity rendered safely as 0:00
+		const cards = popupDom.window.document.querySelectorAll("#yt-library-list .yt-library-card");
+		assert.strictEqual(cards.length, 2, "Only valid object entries rendered");
+		assert.ok(
+			!popupDom.window.document.getElementById("yt-library-list").textContent.includes("Infinity"),
+			"Non-finite timestamp does not render Infinity:NaN:NaN"
+		);
+
+		// Concurrent library removes serialize properly without resurrecting v1
+		const removeBtns = popupDom.window.document.querySelectorAll(".yt-lib-remove-btn");
+		removeBtns[0].click();
+		removeBtns[1].click();
+		await new Promise((r) => setTimeout(r, 80));
+		assert.strictEqual(Object.keys(popupMock.localData.shinkuLibrary).includes("v1"), false, "v1 deleted");
+		assert.strictEqual(Object.keys(popupMock.localData.shinkuLibrary).includes("v2"), false, "v2 deleted");
+
+		// Rapid settings toggles serialize properly without dropping intermediate change
+		const cbShorts = popupDom.window.document.getElementById("yt-setting-shorts-removal");
+		const cbLive = popupDom.window.document.getElementById("yt-setting-live-removal");
+		cbShorts.checked = false;
+		cbShorts.dispatchEvent(new popupDom.window.Event("change"));
+		cbLive.checked = false;
+		cbLive.dispatchEvent(new popupDom.window.Event("change"));
+		await new Promise((r) => setTimeout(r, 80));
+		assert.strictEqual(popupMock.localData.shinkuExtensionSettings["frame-removal-settings"]["shorts-removal"], false);
+		assert.strictEqual(popupMock.localData.shinkuExtensionSettings["frame-removal-settings"]["live-removal"], false);
+	} finally {
+		global.window = origWin2;
+		global.document = origDoc2;
+		global.chrome = origChrome2;
+		global.SHINKU_YT_DEFAULTS = origDefaults2;
+		global.SHINKU_YT_QUALITIES = origQualities2;
+		global.SHINKU_YT_UI_SCHEMA = origSchema2;
+		popupDom.window.close();
+	}
+}
+
 async function main() {
 	await testYtDefaults();
 	await testYtBridge();
 	await testYtContentGuardsAndSchema();
 	await testYtFeedFilterAndHoverGuard();
 	await testYtExtendedSettingsFeatures();
+	await testYtAuditBugFixes();
 	await testYtToolsService();
 	await testPopupYoutube();
+	await testYtIntegrationAndRegressionFixes();
 	console.log("All YouTube Tools unit tests passed!");
 }
 

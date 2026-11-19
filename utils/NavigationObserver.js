@@ -38,7 +38,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			this.pollInterval = setInterval(() => {
 				if (this.isDestroyed) return;
-				this.debouncedNav();
+				this._checkUrl();
 				this.onValidate();
 			}, 1000);
 		}

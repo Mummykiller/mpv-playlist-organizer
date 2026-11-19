@@ -105,12 +105,6 @@ export const debouncedSyncToNativeHostFile = (
 	immediate = false,
 ) => {
 	if (immediate) {
-		if (folderId === null) {
-			pendingFullSync = false;
-			pendingSyncFolders.clear();
-		} else {
-			pendingSyncFolders.delete(folderId);
-		}
 		_syncToNativeHostFile(folderId).then(() => {
 			if (!pendingFullSync && pendingSyncFolders.size === 0 && typeof chrome !== "undefined" && chrome?.alarms?.clear) {
 				chrome.alarms.clear(SYNC_ALARM_NAME);
@@ -122,7 +116,7 @@ export const debouncedSyncToNativeHostFile = (
 		} else {
 			pendingSyncFolders.add(folderId);
 		}
-		persistPendingSyncState();
+		syncInitPromise.then(() => persistPendingSyncState());
 		chrome.alarms.create(SYNC_ALARM_NAME, { delayInMinutes: 1 });
 	}
 };

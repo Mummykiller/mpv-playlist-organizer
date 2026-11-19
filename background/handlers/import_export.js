@@ -5,6 +5,7 @@ import { nativeLink } from "../../utils/nativeLink.js";
 import { createHandler } from "../handler_factory.js";
 import { processPlaylist } from "../../utils/item_processor.js";
 import { UI_ONLY_KEYS } from "./ui_state.js";
+import { setYtToolsEnabled } from "../yt_tools_service.js";
 
 export const handleImportFromFile = createHandler(async ({ request, data }) => {
 	const filename = request.filename;
@@ -122,7 +123,7 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 
 async function _importSettingsLogic(importedData, localData) {
 	const importedSettings = importedData.settings;
-	const excludeKeys = ["lastUsedFolderId", "anilist_cache"];
+	const excludeKeys = ["lastUsedFolderId", "anilist_cache", "anilistCache"];
 
 	let restoredCount = 0;
 	for (const key in importedSettings) {
@@ -152,6 +153,50 @@ async function _importSettingsLogic(importedData, localData) {
 		} else {
 			localData.settings[key] = importedSettings[key];
 			restoredCount++;
+		}
+	}
+
+	// Restore YouTube Tools backup if included
+	const ytBackup = importedData.youtubeTools || importedData.youtube_tools;
+	if (ytBackup && typeof ytBackup === "object" && typeof chrome !== "undefined" && chrome?.storage?.local) {
+		try {
+			const existingYt = await chrome.storage.local.get(["shinkuExtensionSettings", "shinkuLibrary"]);
+			const toWrite = {};
+			if (ytBackup.settings && typeof ytBackup.settings === "object" && !Array.isArray(ytBackup.settings)) {
+				const prevSettings =
+					existingYt.shinkuExtensionSettings && typeof existingYt.shinkuExtensionSettings === "object"
+						? existingYt.shinkuExtensionSettings
+						: {};
+				const mergedSettings = { ...prevSettings };
+				for (const [cat, vals] of Object.entries(ytBackup.settings)) {
+					if (vals && typeof vals === "object" && !Array.isArray(vals)) {
+						mergedSettings[cat] = { ...(prevSettings[cat] || {}), ...vals };
+					}
+				}
+				toWrite.shinkuExtensionSettings = mergedSettings;
+			}
+			if (ytBackup.library && typeof ytBackup.library === "object" && !Array.isArray(ytBackup.library)) {
+				const prevLib =
+					existingYt.shinkuLibrary && typeof existingYt.shinkuLibrary === "object" && !Array.isArray(existingYt.shinkuLibrary)
+						? existingYt.shinkuLibrary
+						: {};
+				const mergedLib = { ...prevLib };
+				for (const [vid, entry] of Object.entries(ytBackup.library)) {
+					if (vid !== "__proto__" && vid !== "constructor" && vid !== "prototype" && entry && typeof entry === "object") {
+						mergedLib[vid] = entry;
+					}
+				}
+				toWrite.shinkuLibrary = mergedLib;
+			}
+			if (Object.keys(toWrite).length > 0) {
+				await chrome.storage.local.set(toWrite);
+				restoredCount++;
+			}
+			if (typeof ytBackup.enabled === "boolean") {
+				await setYtToolsEnabled(ytBackup.enabled);
+			}
+		} catch (ytErr) {
+			console.debug("[ImportExport] Failed to restore YouTube Tools data:", ytErr?.message || ytErr);
 		}
 	}
 
@@ -192,11 +237,30 @@ export const handleExportSettings = createHandler(async ({ data, request }) => {
 	// Keep domains in export so they aren't lost on restore
 	// delete filteredSettings.ui_preferences.domains; 
 
+	let youtubeTools = null;
+	if (typeof chrome !== "undefined" && chrome?.storage?.local?.get) {
+		try {
+			const ytStored = await chrome.storage.local.get([
+				"shinkuYtToolsEnabled",
+				"shinkuExtensionSettings",
+				"shinkuLibrary",
+			]);
+			youtubeTools = {
+				enabled: Boolean(ytStored.shinkuYtToolsEnabled),
+				settings: ytStored.shinkuExtensionSettings || {},
+				library: ytStored.shinkuLibrary || {},
+			};
+		} catch (ytErr) {
+			console.debug("[ImportExport] Failed to read YT Tools data for export:", ytErr?.message || ytErr);
+		}
+	}
+
 	const exportData = {
 		type: "mpv_playlist_organizer_settings",
 		version: chrome.runtime.getManifest().version,
 		timestamp: new Date().toISOString(),
 		settings: filteredSettings,
+		...(youtubeTools ? { youtubeTools } : {}),
 	};
 
 	return nativeLink.fileSystem.call("export_playlists", {

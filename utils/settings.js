@@ -1099,6 +1099,10 @@ export class OptionsManager {
 		settingsUi.startRecording(this, btn, input);
 	}
 
+	stopRecording() {
+		settingsUi.stopRecording(this);
+	}
+
 	async _resetAutomaticMpvFlags() {
 		return settingsLists.resetAutomaticMpvFlags(this);
 	}

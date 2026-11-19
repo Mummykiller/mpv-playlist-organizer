@@ -13,11 +13,15 @@
   const SETTINGS_KEY = "shinkuExtensionSettings";
   const LIBRARY_KEY = "shinkuLibrary";
   const TARGET_ORIGIN = window.location.origin;
+  const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
   let cachedSettings = null;
   let lastNavSignature = "";
   let initRetryTimer1 = null;
   let initRetryTimer2 = null;
+  let toolsEnabled = true;
+  let mainContentAlive = false;
+  let libraryWriteQueue = Promise.resolve();
 
   function clearInitRetries() {
     if (initRetryTimer1 !== null) {
@@ -67,9 +71,12 @@
           changed = true;
         }
       }
-      // Preserve any extra keys from savedCat
+      // Preserve any extra keys from savedCat (except migrated legacy Video-settings)
       if (savedCat) {
         for (const key of Object.keys(savedCat)) {
+          if (category === "video-player-settings" && key === "Video-settings") {
+            continue;
+          }
           if (!Object.prototype.hasOwnProperty.call(merged[category], key)) {
             merged[category][key] = savedCat[key];
           }
@@ -106,6 +113,9 @@
       if (url.pathname.startsWith("/live/")) {
         return url.pathname.split("/")[2] || null;
       }
+      if (url.pathname.startsWith("/embed/")) {
+        return url.pathname.split("/")[2] || null;
+      }
       return null;
     } catch (_err) {
       return null;
@@ -130,11 +140,22 @@
 
   let navIntervalId = null;
 
-  function teardownInvalidatedBridge() {
+  function startNavInterval() {
+    if (navIntervalId === null) {
+      navIntervalId = setInterval(checkAndNotifyNavigation, 500);
+    }
+  }
+
+  function stopNavInterval() {
     if (navIntervalId !== null) {
       clearInterval(navIntervalId);
       navIntervalId = null;
     }
+  }
+
+  function teardownInvalidatedBridge() {
+    clearInitRetries();
+    stopNavInterval();
     window.removeEventListener("message", onWindowMessage);
     window.removeEventListener("yt-navigate-finish", checkAndNotifyNavigation);
     window.removeEventListener("popstate", checkAndNotifyNavigation);
@@ -163,7 +184,16 @@
 
   async function initSettings() {
     try {
-      const result = await chrome.storage.local.get([SETTINGS_KEY]);
+      const result = await chrome.storage.local.get([SETTINGS_KEY, "shinkuYtToolsEnabled"]);
+      if (result.shinkuYtToolsEnabled === false) {
+        toolsEnabled = false;
+        clearInitRetries();
+        stopNavInterval();
+        postToMain("SHINKU__toolsDisabled", {});
+        return;
+      }
+      toolsEnabled = true;
+      startNavInterval();
       const { merged, changed } = mergeSettingsWithDefaults(result[SETTINGS_KEY]);
       cachedSettings = merged;
 
@@ -176,59 +206,89 @@
       postToMain("SHINKU__userSetting", merged);
       initRetryTimer1 = setTimeout(() => {
         initRetryTimer1 = null;
-        postToMain("SHINKU__userSetting", cachedSettings);
+        if (toolsEnabled) postToMain("SHINKU__userSetting", cachedSettings);
       }, 150);
       initRetryTimer2 = setTimeout(() => {
         initRetryTimer2 = null;
-        postToMain("SHINKU__userSetting", cachedSettings);
+        if (toolsEnabled) postToMain("SHINKU__userSetting", cachedSettings);
       }, 600);
     } catch (_err) {
       console.debug("[Shinku YT Bridge] initSettings skipped:", _err?.message || _err);
     }
   }
 
-  async function handleSaveToLibrary(payload) {
+  function normalizeLibraryObject(rawLibrary) {
+    const out = {};
+    if (Array.isArray(rawLibrary)) {
+      for (const item of rawLibrary) {
+        if (!item || typeof item !== "object") continue;
+        const vid = String(item.id || item.videoId || "");
+        if (!vid || FORBIDDEN_KEYS.has(vid)) continue;
+        out[vid] = { ...item, id: vid, videoId: vid };
+      }
+      return out;
+    }
+    if (rawLibrary && typeof rawLibrary === "object") {
+      for (const [k, item] of Object.entries(rawLibrary)) {
+        if (FORBIDDEN_KEYS.has(k) || !item || typeof item !== "object" || Array.isArray(item)) continue;
+        const vid = String(item.id || item.videoId || k);
+        if (!vid || FORBIDDEN_KEYS.has(vid)) continue;
+        out[k] = item;
+      }
+    }
+    return out;
+  }
+
+  function handleSaveToLibrary(payload) {
     if (!payload || typeof payload !== "object") {
-      return;
+      return Promise.resolve();
     }
     const videoId = payload.videoId;
-    if (!videoId || typeof videoId !== "string") {
-      return;
+    if (!videoId || typeof videoId !== "string" || FORBIDDEN_KEYS.has(videoId)) {
+      return Promise.resolve();
     }
 
-    try {
-      const result = await chrome.storage.local.get([LIBRARY_KEY]);
-      const library =
-        result[LIBRARY_KEY] && typeof result[LIBRARY_KEY] === "object"
-          ? { ...result[LIBRARY_KEY] }
-          : {};
+    const nextWrite = libraryWriteQueue.then(async () => {
+      try {
+        const result = await chrome.storage.local.get([LIBRARY_KEY]);
+        const library = normalizeLibraryObject(result[LIBRARY_KEY]);
 
-      if (payload.remove) {
-        delete library[videoId];
-      } else {
-        const entryData =
-          payload.entry && typeof payload.entry === "object" ? payload.entry : payload;
-        const existing =
-          library[videoId] && typeof library[videoId] === "object" ? library[videoId] : {};
-        library[videoId] = {
-          ...existing,
-          ...entryData,
-          videoId,
-          updatedAt: entryData.updatedAt || Date.now()
-        };
+        if (payload.remove) {
+          delete library[videoId];
+        } else {
+          const entryData =
+            payload.entry && typeof payload.entry === "object" ? payload.entry : payload;
+          const existing =
+            Object.prototype.hasOwnProperty.call(library, videoId) &&
+            library[videoId] &&
+            typeof library[videoId] === "object"
+              ? library[videoId]
+              : {};
+          library[videoId] = {
+            ...existing,
+            ...entryData,
+            id: videoId,
+            videoId,
+            updatedAt: entryData.updatedAt || Date.now()
+          };
+        }
+
+        await chrome.storage.local.set({ [LIBRARY_KEY]: library });
+        if (payload.saveId) {
+          postToMain("SHINKU__saveToLibraryAck", { saveId: payload.saveId, videoId });
+        }
+      } catch (_err) {
+        console.debug("[Shinku YT Bridge] handleSaveToLibrary failed:", _err?.message || _err);
       }
-
-      await chrome.storage.local.set({ [LIBRARY_KEY]: library });
-    } catch (_err) {
-      console.debug("[Shinku YT Bridge] handleSaveToLibrary failed:", _err?.message || _err);
-    }
+    });
+    libraryWriteQueue = nextWrite.catch(() => {});
+    return nextWrite;
   }
 
   async function handleRequestLibrary() {
     try {
       const result = await chrome.storage.local.get([LIBRARY_KEY]);
-      const library =
-        result[LIBRARY_KEY] && typeof result[LIBRARY_KEY] === "object" ? result[LIBRARY_KEY] : {};
+      const library = normalizeLibraryObject(result[LIBRARY_KEY]);
       postToMain("SHINKU__Library", library);
     } catch (_err) {
       console.debug("[Shinku YT Bridge] handleRequestLibrary failed:", _err?.message || _err);
@@ -250,12 +310,18 @@
       return;
     }
 
+    if (msg.type.startsWith("SHINKU__")) {
+      mainContentAlive = true;
+    }
+
     if (msg.type === "SHINKU__saveToLibrary") {
       handleSaveToLibrary(msg.data || msg);
     } else if (msg.type === "SHINKU__requestLibrary") {
       handleRequestLibrary();
     } else if (msg.type === "SHINKU__requestSettings") {
-      if (cachedSettings) {
+      if (!toolsEnabled) {
+        postToMain("SHINKU__toolsDisabled", {});
+      } else if (cachedSettings) {
         postToMain("SHINKU__userSetting", cachedSettings);
       } else {
         initSettings();
@@ -272,22 +338,25 @@
       }
       if (changes.shinkuYtToolsEnabled) {
         if (changes.shinkuYtToolsEnabled.newValue) {
+          toolsEnabled = true;
+          startNavInterval();
           postToMain("SHINKU__toolsEnabled", cachedSettings || getDefaults());
         } else {
+          toolsEnabled = false;
           clearInitRetries();
+          stopNavInterval();
           postToMain("SHINKU__toolsDisabled", {});
         }
       }
       if (changes[SETTINGS_KEY]) {
         const { merged } = mergeSettingsWithDefaults(changes[SETTINGS_KEY].newValue);
         cachedSettings = merged;
-        postToMain("SHINKU__updateUserSetting", merged);
+        if (toolsEnabled) {
+          postToMain("SHINKU__updateUserSetting", merged);
+        }
       }
       if (changes[LIBRARY_KEY]) {
-        const lib =
-          changes[LIBRARY_KEY].newValue && typeof changes[LIBRARY_KEY].newValue === "object"
-            ? changes[LIBRARY_KEY].newValue
-            : {};
+        const lib = normalizeLibraryObject(changes[LIBRARY_KEY].newValue);
         postToMain("SHINKU__updatingLibrary", lib);
       }
     });
@@ -301,9 +370,16 @@
       }
       const action = message.action || message.type;
       if (action === "shinku_yt_save_current_video") {
+        const currentVideoId = extractVideoId(window.location.href);
+        if (!toolsEnabled || !mainContentAlive || !currentVideoId) {
+          if (typeof sendResponse === "function") {
+            sendResponse({ success: false, saved: false });
+          }
+          return false;
+        }
         window.postMessage({ type: "SHINKU__saveCurrentVideo" }, TARGET_ORIGIN);
         if (typeof sendResponse === "function") {
-          sendResponse({ success: true });
+          sendResponse({ success: true, saved: true, videoId: currentVideoId });
         }
         return false;
       }
@@ -315,7 +391,7 @@
   lastNavSignature = getNavSignature();
   window.addEventListener("yt-navigate-finish", checkAndNotifyNavigation);
   window.addEventListener("popstate", checkAndNotifyNavigation);
-  navIntervalId = setInterval(checkAndNotifyNavigation, 500);
+  startNavInterval();
 
   // Initialize settings and announce bridge readiness for MAIN-world handshake
   postToMain("SHINKU__bridgeReady", {});

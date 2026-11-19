@@ -435,6 +435,14 @@ export function startRecording(ctx, btn, input) {
 		e.preventDefault();
 		e.stopPropagation();
 
+		if (e.key === "Escape") {
+			if (ctx.activeRecorder) {
+				ctx.activeRecorder.input.value = ctx.activeRecorder.originalValue;
+			}
+			stopRecording(ctx);
+			return;
+		}
+
 		const forbiddenKeys = [
 			"Control",
 			"Shift",
@@ -464,24 +472,21 @@ export function startRecording(ctx, btn, input) {
 	};
 
 	window.addEventListener("keydown", ctx.keyHandler, true);
-
-	ctx.escHandler = (e) => {
-		if (e.key === "Escape") {
-			input.value = ctx.activeRecorder.originalValue;
-			stopRecording(ctx);
-		}
-	};
-	window.addEventListener("keydown", ctx.escHandler);
 }
 
 export function stopRecording(ctx) {
 	if (ctx.activeRecorder) {
+		if (ctx.activeRecorder.input.value === "Press combination...") {
+			ctx.activeRecorder.input.value = ctx.activeRecorder.originalValue;
+		}
 		ctx.activeRecorder.btn.classList.remove("recording");
 		ctx.activeRecorder.btn.innerHTML =
 			'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>';
 		ctx.activeRecorder.input.classList.remove("recording-active");
 		ctx.activeRecorder = null;
 	}
-	if (ctx.keyHandler) window.removeEventListener("keydown", ctx.keyHandler, true);
-	if (ctx.escHandler) window.removeEventListener("keydown", ctx.escHandler);
+	if (ctx.keyHandler) {
+		window.removeEventListener("keydown", ctx.keyHandler, true);
+		ctx.keyHandler = null;
+	}
 }

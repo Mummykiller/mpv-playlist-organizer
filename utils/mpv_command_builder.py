@@ -304,7 +304,13 @@ class MpvCommandBuilder:
         if self.settings.get("yt_ignore_config", True) and "ignore-config" not in existing_raw:
             ytdl_opts_list.append("ignore-config=")
 
-        if "no-playlist" not in existing_raw and "noplaylist" not in existing_raw:
+        from . import url_analyzer
+        has_playlist_url = (
+            url_analyzer.is_youtube_playlist_url(self.url)
+            if isinstance(self.url, str)
+            else any(url_analyzer.is_youtube_playlist_url(u) for u in (self.url or []))
+        )
+        if not has_playlist_url and "no-playlist" not in existing_raw and "noplaylist" not in existing_raw:
             ytdl_opts_list.append("no-playlist=")
 
         if "js-runtimes" not in existing_raw:

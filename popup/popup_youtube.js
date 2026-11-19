@@ -29,8 +29,24 @@ const GROUP_FALLBACK_TITLES = {
 	"yt-playlist-manager-settings": "Watch Later / Library",
 };
 
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isYouTubeUrl(urlStr) {
+	if (!urlStr || typeof urlStr !== "string") return false;
+	try {
+		const parsed = new URL(urlStr);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+		const host = parsed.hostname.toLowerCase();
+		return host === "youtube.com" || host.endsWith(".youtube.com");
+	} catch {
+		return false;
+	}
+}
+
 function formatTime(seconds) {
-	const total = Math.max(0, Math.floor(Number(seconds) || 0));
+	const num = Number(seconds);
+	if (!Number.isFinite(num)) return "0:00";
+	const total = Math.max(0, Math.floor(num));
 	const h = Math.floor(total / 3600);
 	const m = Math.floor((total % 3600) / 60);
 	const s = total % 60;
@@ -52,12 +68,21 @@ function normalizeLibraryEntries(rawLibrary) {
 	if (!rawLibrary) return [];
 	if (Array.isArray(rawLibrary)) {
 		return rawLibrary
-			.filter((item) => item && typeof item === "object" && (item.id || item.videoId))
+			.filter((item) => {
+				if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+				const vid = String(item.id || item.videoId || "");
+				return Boolean(vid) && !FORBIDDEN_KEYS.has(vid);
+			})
 			.map((item) => ({ ...item, id: String(item.id || item.videoId) }));
 	}
 	if (typeof rawLibrary === "object") {
 		return Object.entries(rawLibrary)
-			.filter(([, item]) => item && typeof item === "object")
+			.filter(([key, item]) => {
+				if (FORBIDDEN_KEYS.has(key)) return false;
+				if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+				const vid = String(item.id || item.videoId || key);
+				return Boolean(vid) && !FORBIDDEN_KEYS.has(vid);
+			})
 			.map(([key, item]) => ({ ...item, id: String(item.id || item.videoId || key) }));
 	}
 	return [];
@@ -198,6 +223,11 @@ export function createYouTubeToolsManager(ctx = {}) {
 	let renderedControls = [];
 	let collapsedUpdaters = [];
 	let doneFolderExpanded = false;
+	let userSwitchedExtTab = false;
+	let pendingSettingWrites = 0;
+	const inFlightSettingsSigs = new Map();
+	let settingsWriteQueue = Promise.resolve();
+	let libraryWriteQueue = Promise.resolve();
 	const selectedDoneIds = new Set();
 
 	function getMergedSettings(stored) {
@@ -206,24 +236,26 @@ export function createYouTubeToolsManager(ctx = {}) {
 				? globalThis.SHINKU_YT_DEFAULTS
 				: {};
 		const merged = {};
-		const src = stored && typeof stored === "object" ? stored : {};
+		const src = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
 		for (const cat of new Set([...Object.keys(defaults), ...Object.keys(src)])) {
+			if (FORBIDDEN_KEYS.has(cat)) continue;
 			const defVal = defaults[cat];
-			const srcVal = src[cat];
+			const rawSrcVal = src[cat];
+			const srcVal = rawSrcVal && typeof rawSrcVal === "object" && !Array.isArray(rawSrcVal) ? rawSrcVal : null;
 			if (defVal && typeof defVal === "object" && !Array.isArray(defVal)) {
-				const catObj = { ...defVal, ...(srcVal && typeof srcVal === "object" ? srcVal : {}) };
+				const catObj = { ...defVal, ...(srcVal || {}) };
 				if (
 					cat === "video-player-settings" &&
 					Object.prototype.hasOwnProperty.call(catObj, "Video-settings")
 				) {
-					if (!Object.prototype.hasOwnProperty.call(srcVal || {}, "video-settings")) {
+					if (srcVal?.["video-settings"] === undefined) {
 						catObj["video-settings"] = catObj["Video-settings"];
 					}
 					delete catObj["Video-settings"];
 				}
 				merged[cat] = catObj;
 			} else {
-				merged[cat] = srcVal !== undefined ? srcVal : defVal;
+				merged[cat] = rawSrcVal !== undefined ? rawSrcVal : defVal;
 			}
 		}
 		return merged;
@@ -250,8 +282,16 @@ export function createYouTubeToolsManager(ctx = {}) {
 		}
 	}
 
-	function switchExtTab(tab, { persist = true } = {}) {
+	function resetPopupScrollTop() {
+		const scrollable = document.getElementById("scrollable-content");
+		if (scrollable) {
+			scrollable.scrollTop = 0;
+		}
+	}
+
+	function switchExtTab(tab, { persist = true, skipRestoreIfAlreadyMpv = false } = {}) {
 		if (tab !== "mpv" && tab !== "yt") return;
+		const prevTab = activeExtTab;
 		activeExtTab = tab;
 
 		if (persist && chrome?.storage?.local?.set) {
@@ -281,10 +321,11 @@ export function createYouTubeToolsManager(ctx = {}) {
 			if (ytToolsView) ytToolsView.style.display = "flex";
 		} else {
 			if (ytToolsView) ytToolsView.style.display = "none";
-			if (typeof onRestoreMpvView === "function") {
+			if (!(skipRestoreIfAlreadyMpv && prevTab === "mpv") && typeof onRestoreMpvView === "function") {
 				onRestoreMpvView();
 			}
 		}
+		resetPopupScrollTop();
 	}
 
 	function switchSubview(subview, { persist = true } = {}) {
@@ -305,38 +346,46 @@ export function createYouTubeToolsManager(ctx = {}) {
 
 		if (libraryPanel) libraryPanel.style.display = subview === "library" ? "block" : "none";
 		if (settingsPanel) settingsPanel.style.display = subview === "settings" ? "flex" : "none";
+		resetPopupScrollTop();
 	}
 
-	async function removeLibraryItems(videoIds, successMessage) {
+	function removeLibraryItems(videoIds, successMessage) {
 		const idSet = new Set(Array.from(videoIds, (id) => String(id)));
-		if (idSet.size === 0) return;
-		try {
-			const data = await chrome.storage.local.get(["shinkuLibrary"]);
-			const raw = data.shinkuLibrary;
-			let updated;
-			if (Array.isArray(raw)) {
-				updated = raw.filter((item) => !idSet.has(String(item?.id || item?.videoId)));
-			} else if (raw && typeof raw === "object") {
-				updated = { ...raw };
-				for (const id of idSet) {
-					delete updated[id];
-				}
-				for (const [k, v] of Object.entries(updated)) {
-					if (v && typeof v === "object" && idSet.has(String(v.id || v.videoId))) {
-						delete updated[k];
+		if (idSet.size === 0) return Promise.resolve();
+
+		const nextTask = libraryWriteQueue.then(async () => {
+			try {
+				const data = await chrome.storage.local.get(["shinkuLibrary"]);
+				const raw = data.shinkuLibrary;
+				let updated;
+				if (Array.isArray(raw)) {
+					updated = raw.filter((item) => !idSet.has(String(item?.id || item?.videoId)));
+				} else if (raw && typeof raw === "object") {
+					updated = { ...raw };
+					for (const id of idSet) {
+						if (!FORBIDDEN_KEYS.has(id)) {
+							delete updated[id];
+						}
 					}
+					for (const [k, v] of Object.entries(updated)) {
+						if (!FORBIDDEN_KEYS.has(k) && v && typeof v === "object" && idSet.has(String(v.id || v.videoId))) {
+							delete updated[k];
+						}
+					}
+				} else {
+					return;
 				}
-			} else {
-				return;
+				for (const id of idSet) {
+					selectedDoneIds.delete(id);
+				}
+				await chrome.storage.local.set({ shinkuLibrary: updated });
+				showStatus?.(successMessage || `Removed ${idSet.size} video${idSet.size === 1 ? "" : "s"} from YouTube Library.`);
+			} catch (err) {
+				showStatus?.(`Failed to remove video: ${err.message}`, true);
 			}
-			for (const id of idSet) {
-				selectedDoneIds.delete(id);
-			}
-			await chrome.storage.local.set({ shinkuLibrary: updated });
-			showStatus?.(successMessage || `Removed ${idSet.size} video${idSet.size === 1 ? "" : "s"} from YouTube Library.`);
-		} catch (err) {
-			showStatus?.(`Failed to remove video: ${err.message}`, true);
-		}
+		});
+		libraryWriteQueue = nextTask.catch(() => {});
+		return nextTask;
 	}
 
 	async function removeLibraryItem(videoId) {
@@ -344,7 +393,8 @@ export function createYouTubeToolsManager(ctx = {}) {
 	}
 
 	function openYouTubeVideo(videoId, currentTime) {
-		const t = Math.max(0, Math.floor(Number(currentTime) || 0));
+		const numTime = Number(currentTime);
+		const t = Number.isFinite(numTime) ? Math.max(0, Math.floor(numTime)) : 0;
 		const url = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&t=${t}s`;
 		if (chrome?.tabs?.create) {
 			chrome.tabs.create({ url });
@@ -549,7 +599,7 @@ export function createYouTubeToolsManager(ctx = {}) {
 
 		clearAllBtn.addEventListener("click", () => {
 			const toRemove = doneEntries.map((it) => it.id);
-			removeLibraryItems(toRemove, `Cleared all ${toRemove.length} videos from Done.`);
+			removeLibraryItems(toRemove, `Cleared all ${toRemove.length} video${toRemove.length === 1 ? "" : "s"} from Done.`);
 		});
 
 		actionsWrap.append(clearSelectedBtn, clearAllBtn);
@@ -612,7 +662,12 @@ export function createYouTubeToolsManager(ctx = {}) {
 		renderDoneFolder(doneEntries);
 	}
 
-	async function saveSetting(groupId, key, value) {
+	function saveSetting(groupId, key, value) {
+		const hadPrevious = groupId
+			? Object.prototype.hasOwnProperty.call(currentSettings[groupId] || {}, key)
+			: Object.prototype.hasOwnProperty.call(currentSettings, key);
+		const prevValue = groupId ? currentSettings[groupId]?.[key] : currentSettings[key];
+
 		if (groupId) {
 			const prevGroup =
 				currentSettings[groupId] && typeof currentSettings[groupId] === "object"
@@ -625,11 +680,47 @@ export function createYouTubeToolsManager(ctx = {}) {
 		} else {
 			currentSettings = { ...currentSettings, [key]: value };
 		}
-		try {
-			await chrome.storage.local.set({ shinkuExtensionSettings: currentSettings });
-		} catch (err) {
-			showStatus?.(`Failed to save YouTube setting: ${err.message}`, true);
-		}
+
+		const snapshotToWrite =
+			typeof structuredClone === "function"
+				? structuredClone(currentSettings)
+				: JSON.parse(JSON.stringify(currentSettings));
+		const sig = JSON.stringify(snapshotToWrite);
+		inFlightSettingsSigs.set(sig, (inFlightSettingsSigs.get(sig) || 0) + 1);
+
+		const performWrite = async () => {
+			try {
+				await chrome.storage.local.set({ shinkuExtensionSettings: snapshotToWrite });
+			} catch (err) {
+				if (groupId && currentSettings[groupId]?.[key] === value) {
+					const rolledGroup = { ...currentSettings[groupId] };
+					if (hadPrevious) rolledGroup[key] = prevValue;
+					else delete rolledGroup[key];
+					currentSettings = { ...currentSettings, [groupId]: rolledGroup };
+					syncSettingsUI();
+				} else if (!groupId && currentSettings[key] === value) {
+					const rolled = { ...currentSettings };
+					if (hadPrevious) rolled[key] = prevValue;
+					else delete rolled[key];
+					currentSettings = rolled;
+					syncSettingsUI();
+				}
+				showStatus?.(`Failed to save YouTube setting: ${err.message}`, true);
+			} finally {
+				pendingSettingWrites = Math.max(0, pendingSettingWrites - 1);
+				if (pendingSettingWrites === 0) {
+					inFlightSettingsSigs.clear();
+				}
+			}
+		};
+
+		const shouldRunImmediately = pendingSettingWrites === 0;
+		pendingSettingWrites++;
+		const nextWrite = shouldRunImmediately
+			? performWrite()
+			: settingsWriteQueue.then(performWrite);
+		settingsWriteQueue = nextWrite.catch(() => {});
+		return nextWrite;
 	}
 
 	function renderSettings() {
@@ -693,6 +784,7 @@ export function createYouTubeToolsManager(ctx = {}) {
 
 			const childrenContainer = document.createElement("div");
 			childrenContainer.className = "yt-settings-children";
+			const groupChildControls = [];
 
 			let isMinimized = masterKey ? !Boolean(getSettingValue(group.groupId, masterKey)) : false;
 
@@ -704,6 +796,9 @@ export function createYouTubeToolsManager(ctx = {}) {
 				childrenContainer.classList.toggle("collapsed", isMinimized);
 				chevron.textContent = isMinimized ? "▸" : "▾";
 				collapseBtn.setAttribute("aria-expanded", String(!isMinimized));
+				for (const childCtrl of groupChildControls) {
+					childCtrl.disabled = !isEnabled;
+				}
 			};
 
 			collapseBtn.addEventListener("click", () => {
@@ -851,6 +946,7 @@ export function createYouTubeToolsManager(ctx = {}) {
 				}
 
 				renderedControls.push({ groupId: group.groupId, key, type, controlEl });
+				groupChildControls.push(controlEl);
 				row.append(labelWrap, controlEl);
 				childrenContainer.appendChild(row);
 			}
@@ -883,7 +979,10 @@ export function createYouTubeToolsManager(ctx = {}) {
 
 	async function initialize() {
 		tabButtons.forEach((btn) => {
-			btn.addEventListener("click", () => switchExtTab(btn.dataset.extTab));
+			btn.addEventListener("click", () => {
+				userSwitchedExtTab = true;
+				switchExtTab(btn.dataset.extTab);
+			});
 		});
 
 		subviewButtons.forEach((btn) => {
@@ -900,9 +999,9 @@ export function createYouTubeToolsManager(ctx = {}) {
 						action: "set_yt_tools_enabled",
 						enabled,
 					});
-					if (response && response.success === false) {
+					if (!response || response.success === false) {
 						updateEnabledUI(prevEnabled);
-						showStatus?.(response.error || "Failed to toggle YouTube Tools.", true);
+						showStatus?.(response?.error || "Failed to toggle YouTube Tools.", true);
 					} else {
 						showStatus?.(enabled ? "YouTube Tools enabled." : "YouTube Tools disabled.");
 					}
@@ -922,6 +1021,13 @@ export function createYouTubeToolsManager(ctx = {}) {
 				renderLibrary(changes.shinkuLibrary.newValue);
 			}
 			if (changes.shinkuExtensionSettings) {
+				const incomingSig = JSON.stringify(changes.shinkuExtensionSettings.newValue);
+				const count = inFlightSettingsSigs.get(incomingSig) || 0;
+				if (pendingSettingWrites > 0 && count > 0) {
+					if (count === 1) inFlightSettingsSigs.delete(incomingSig);
+					else inFlightSettingsSigs.set(incomingSig, count - 1);
+					return;
+				}
 				currentSettings = getMergedSettings(changes.shinkuExtensionSettings.newValue);
 				syncSettingsUI();
 			}
@@ -942,27 +1048,32 @@ export function createYouTubeToolsManager(ctx = {}) {
 			if (stored.popupYtSubview === "library" || stored.popupYtSubview === "settings") {
 				switchSubview(stored.popupYtSubview, { persist: false });
 			}
-			if (stored.popupActiveExtTab === "yt" || stored.popupActiveExtTab === "mpv") {
-				switchExtTab(stored.popupActiveExtTab, { persist: false });
-			}
+
 			const isStandaloneMode = !document.getElementById("popup-extension-tabs");
-			if (
+			const isDominantActive =
 				!isStandaloneMode &&
-				stored.shinkuYtToolsEnabled &&
-				getSettingValue("playlist-manager", "yt-dominant-on-youtube") &&
-				chrome?.tabs?.query
-			) {
+				Boolean(stored.shinkuYtToolsEnabled) &&
+				Boolean(getSettingValue("playlist-manager", "playlist-manager")) &&
+				Boolean(getSettingValue("playlist-manager", "yt-dominant-on-youtube")) &&
+				Boolean(chrome?.tabs?.query);
+
+			if (isDominantActive) {
+				let targetTab = stored.popupActiveExtTab === "yt" ? "yt" : "mpv";
 				try {
 					const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
 					const activeUrl = tabs?.[0]?.url || "";
-					if (activeUrl) {
-						const parsed = new URL(activeUrl);
-						if (parsed.hostname.toLowerCase().includes("youtube.com")) {
-							switchExtTab("yt", { persist: false });
-						}
-					}
+					targetTab = isYouTubeUrl(activeUrl) ? "yt" : "mpv";
 				} catch (tabErr) {
 					console.debug("[YT Tools] Active tab dominant check skipped:", tabErr);
+				}
+				if (!userSwitchedExtTab) {
+					switchExtTab(targetTab, { persist: false, skipRestoreIfAlreadyMpv: true });
+				}
+			} else if (!userSwitchedExtTab) {
+				if (stored.popupActiveExtTab === "yt") {
+					switchExtTab("yt", { persist: false });
+				} else if (stored.popupActiveExtTab === "mpv") {
+					switchExtTab("mpv", { persist: false, skipRestoreIfAlreadyMpv: true });
 				}
 			}
 		} catch (err) {

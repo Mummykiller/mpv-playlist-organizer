@@ -335,8 +335,8 @@ class MpvSessionManager:
                 self.sync_lock, settings=settings, session=self
             )
             if start_item_enriched:
-                _url_items_list[playlist_start_index] = start_item_enriched[0]
-                logging.info(f"[PY][Session] Start item enriched: {start_item_enriched[0].get('title')}")
+                _url_items_list[playlist_start_index:playlist_start_index + 1] = start_item_enriched
+                logging.info(f"[PY][Session] Start item enriched ({len(start_item_enriched)} item(s)): {start_item_enriched[0].get('title')}")
 
         action_needed = None
         with self.sync_lock:

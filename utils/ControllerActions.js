@@ -442,11 +442,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				});
 			root.getElementById("btn-add")?.addEventListener("click", async () => {
 				const fid = getFolderId();
-				if (fid && c.state.state.detectedUrl) {
+				const targetUrl = c.view.getEffectiveAddUrl();
+				if (fid && targetUrl) {
 					const result = await this.sendCommandToBackground("add", fid, {
-						data: c.pageScraper.scrapePageDetails(
-							c.state.state.detectedUrl,
-						),
+						data: c.pageScraper.scrapePageDetails(targetUrl),
 					});
 					if (result?.success) {
 						c.timers.scheduleTimeout(() => this.refreshPlaylist(), 50);
@@ -473,11 +472,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				.getElementById("btn-compact-add")
 				?.addEventListener("click", async () => {
 					const fid = root.getElementById("compact-folder-select")?.value;
-					if (fid && c.state.state.detectedUrl) {
+					const targetUrl = c.view.getEffectiveAddUrl();
+					if (fid && targetUrl) {
 						const result = await this.sendCommandToBackground("add", fid, {
-							data: c.pageScraper.scrapePageDetails(
-								c.state.state.detectedUrl,
-							),
+							data: c.pageScraper.scrapePageDetails(targetUrl),
 						});
 						if (result?.success) {
 							c.timers.scheduleTimeout(() => this.refreshPlaylist(), 50);
@@ -562,13 +560,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					const isAlreadyInPlaylist = stub?.classList.contains("url-in-playlist");
 
 					if (isStreamPresent && !isAlreadyInPlaylist && e.button === 0) {
-						const hostname = window.location.hostname;
-						const isYouTube =
-							hostname.includes("youtube.com") &&
-							window.location.pathname.includes("/watch");
-						const urlToUse =
-							c.state.state.detectedUrl ||
-							(isYouTube ? window.location.href : null);
+						const urlToUse = c.view.getEffectiveAddUrl();
 
 						if (!urlToUse) {
 							c.setMinimizedState(false);

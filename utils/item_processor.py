@@ -130,11 +130,11 @@ class ItemProcessor:
         # String-based input (URL, Path, or raw M3U)
         from urllib.parse import urlparse
         from .m3u_parser import parse_m3u
-        from .url_analyzer import is_safe_url
+        from .url_analyzer import is_safe_url, is_youtube_playlist_url
         import os
 
         # 1. YouTube Playlist Check
-        if "youtube.com/playlist" in url_items_or_m3u or ("youtube.com/watch" in url_items_or_m3u and "list=" in url_items_or_m3u):
+        if is_youtube_playlist_url(url_items_or_m3u):
             logging.info(f"Expanding YouTube playlist: {url_items_or_m3u}")
             res = self.services.apply_bypass_script({'url': url_items_or_m3u}, self.send_message)
             entries = res[5] # entries index

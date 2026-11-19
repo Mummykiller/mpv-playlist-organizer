@@ -91,13 +91,20 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 	const isYouTubeUrl = MPV.isYouTubeUrl = function isYouTubeUrl(url) {
 		if (!url || typeof url !== "string") return false;
-		return url.includes("youtube.com/") || url.includes("youtu.be/");
+		try {
+			const parsed = new URL(url);
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+			const host = parsed.hostname.toLowerCase();
+			return host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be";
+		} catch (_err) {
+			return false;
+		}
 	}
 
 	const getYoutubeId = MPV.getYoutubeId = function getYoutubeId(url) {
-		if (!url) return null;
+		if (!url || typeof url !== "string" || !isYouTubeUrl(url)) return null;
 		const videoMatch = url.match(
-			/(?:v=|\/v\/|embed\/|youtu\.be\/|\/shorts\/)([a-zA-Z0-9_-]{11})/,
+			/(?:[?&]v=|\/v\/|\/embed\/|youtu\.be\/|\/shorts\/|\/live\/)([a-zA-Z0-9_-]{11})/,
 		);
 		if (videoMatch) return videoMatch[1];
 		const listMatch = url.match(/[?&]list=([a-zA-Z0-9_-]+)/);
@@ -112,17 +119,20 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		if (!ytUrl || typeof ytUrl !== "string") return ytUrl;
 		try {
 			const urlObj = new URL(ytUrl);
-			const host = urlObj.hostname;
+			if (urlObj.protocol !== "http:" && urlObj.protocol !== "https:") return ytUrl;
+			const host = urlObj.hostname.toLowerCase();
 			const path = urlObj.pathname;
 
-			const isStandard = host.includes("youtube.com") && path === "/watch";
-			const isShorts =
-				host.includes("youtube.com") && path.startsWith("/shorts/");
-			const isShortLink = host.includes("youtu.be");
+			const isYtDomain = host === "youtube.com" || host.endsWith(".youtube.com");
+			const isStandard = isYtDomain && path === "/watch";
+			const isShorts = isYtDomain && path.startsWith("/shorts/");
+			const isLive = isYtDomain && path.startsWith("/live/");
+			const isPlaylist = isYtDomain && path.replace(/\/+$/, "") === "/playlist";
+			const isShortLink = host === "youtu.be";
 
-			if (isStandard || isShortLink || isShorts) {
-				// Strip timestamps and index/shuffle parameters that break resume/deduplication logic
-				["t", "index", "start", "ab_channel", "attr_tag"].forEach((p) => {
+			if (isStandard || isShortLink || isShorts || isLive || isPlaylist) {
+				// Strip timestamps and tracking/index parameters that break resume/deduplication logic
+				["t", "index", "start", "ab_channel", "attr_tag", "si", "pp", "feature"].forEach((p) => {
 					urlObj.searchParams.delete(p);
 				});
 				return urlObj.toString();

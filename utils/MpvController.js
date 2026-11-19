@@ -484,6 +484,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// 3. Start Observation Modules
 			this.nav.init();
+			this._reportCurrentUrl();
 			this._startHeartbeat();
 
 			// 4. Initial Sync
@@ -533,7 +534,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		handleMessage(request, sender, sendResponse) {
-			if (this.isTearingDown) return;
+			if (this.isTearingDown || !request || typeof request !== "object") return;
 			const action =
 				request.action || (request.foldersChanged ? "foldersChanged" : null);
 			const handler = Object.hasOwn(this.actionMap, action) ? this.actionMap[action] : null;

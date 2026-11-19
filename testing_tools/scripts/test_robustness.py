@@ -680,5 +680,69 @@ class TestRobustness(BaseTestCase):
         self.assertEqual(exhausted_mgr.status, ConnectionStatus.DISCONNECTED)
         self.assertEqual(exhausted_mgr.attempts, 2)
 
+    def test_youtube_url_analyzer_and_responder_key_preservation(self):
+        """Verifies strict YOUTUBE_RE, rsplit('|', 1) pipe handling, playlist URL detection,
+        import_from_file key preservation, and .ruff_cache exclusion in create_release."""
+        import fnmatch
+        from utils import url_analyzer
+        from utils.native_link import responder, translator
+        from testing_tools import create_release
+
+        # 1. Strict YOUTUBE_RE and playlist URL check
+        self.assertIsNone(url_analyzer.YOUTUBE_RE.search("https://example.com/video.mp4?ref=youtube.com"))
+        self.assertIsNotNone(url_analyzer.YOUTUBE_RE.search("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+        self.assertTrue(url_analyzer.is_youtube_playlist_url("https://www.youtube.com/playlist?list=PL123"))
+        self.assertFalse(url_analyzer.is_youtube_playlist_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123"))
+
+        # 2. run_bypass_logic handles '|' inside titles via rsplit and ignores '&list=' on watch URLs
+        mock_proc = MagicMock()
+        mock_proc.stdout = "Epic Song | Official Video | Artist|https://www.youtube.com/watch?v=vid22222222\n"
+        with patch("utils.url_analyzer.subprocess.run", return_value=mock_proc), \
+             patch("utils.url_analyzer.get_cookies_file", return_value=None), \
+             patch("utils.url_analyzer.is_safe_url", return_value=True), \
+             patch("shutil.which", return_value="/usr/bin/yt-dlp"):
+            res_playlist = url_analyzer.run_bypass_logic(
+                "https://www.youtube.com/playlist?list=PL123",
+                "None",
+                True,
+                "TestUA",
+            )
+            self.assertTrue(res_playlist.get("is_playlist"))
+            self.assertEqual(res_playlist["entries"][0]["title"], "Epic Song | Official Video | Artist")
+            self.assertEqual(res_playlist["entries"][0]["url"], "https://www.youtube.com/watch?v=vid22222222")
+
+            res_single = url_analyzer.run_bypass_logic(
+                "https://www.youtube.com/watch?v=ep12&list=PL123&index=12",
+                "None",
+                True,
+                "TestUA",
+            )
+            self.assertFalse(res_single.get("is_playlist", False))
+            self.assertEqual(res_single["url"], "https://www.youtube.com/watch?v=ep12&list=PL123&index=12")
+
+        # 3. Responder preserves top-level folder names, domain keys, and youtubeTools keys on import_from_file
+        raw_import = {
+            "my_anime_list": {"playlist": [{"id": "1", "url": "https://example.com/1"}]},
+            "settings": {
+                "anilist_cache": {"foo": 1},
+                "ui_preferences": {"domains": {"my_custom_site.local": {"minimized": True}}},
+            },
+            "youtubeTools": {
+                "enabled": True,
+                "settings": {"frame-removal-settings": {"blocked-keywords": "foo_bar"}},
+                "library": {"vid_abc_123": {"id": "vid_abc_123"}},
+            },
+        }
+        reply = responder.success(data=raw_import, preserve_data_keys=True)
+        self.assertIn("my_anime_list", reply["data"])
+        self.assertIn("my_custom_site.local", reply["data"]["settings"]["ui_preferences"]["domains"])
+        self.assertIn("vid_abc_123", reply["data"]["youtubeTools"]["library"])
+
+        norm = translator._normalize_message({"youtubeTools": raw_import["youtubeTools"]})
+        self.assertIn("vid_abc_123", norm["youtube_tools"]["library"])
+
+        # 4. create_release excludes .ruff_cache
+        self.assertTrue(any(fnmatch.fnmatch(".ruff_cache", p) for p in create_release.IGNORE_PATTERNS))
+
 if __name__ == '__main__':
     unittest.main()

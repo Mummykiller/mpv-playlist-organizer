@@ -6,8 +6,12 @@
 (function () {
   "use strict";
 
-  if (window.__shinkuYtContentLoaded) {
-    return;
+  if (typeof window.__shinkuYtContentTeardown === "function") {
+    try {
+      window.__shinkuYtContentTeardown();
+    } catch (_err) {
+      console.debug("[Shinku YT] Previous instance teardown skipped:", _err?.message || _err);
+    }
   }
   window.__shinkuYtContentLoaded = true;
 
@@ -19,9 +23,12 @@
   const TRACKER_INTERVAL_MS = 15000;
 
   let toolsEnabled = true;
+  let bridgeConnected = false;
   let userSetting = null;
+  let userSettingSig = "";
   let shinkuLibrary = {};
   let pageID = extractVideoId(window.location.href);
+  let lastBlockedKeywordsSig = null;
 
   // Managed loop / timer handles
   let rafId = null;
@@ -30,12 +37,21 @@
   let feedScanTimer = null;
   let initWatchRetryTimer = null;
   let plusButtonRetryTimer = null;
+  let autoNextSafetyTimer = null;
+  let pendingAutoNextSaveId = null;
+  let pendingAutoNextUrl = null;
+  let saveAckCounter = 0;
 
   // Listener & per-video state
   let seekListenerAttached = false;
   let wheelListenerAttached = false;
   let scrollListenerAttached = false;
   let copyListenerAttached = false;
+  let cinemaListenersAttached = false;
+  let cinemaWatchObserver = null;
+  let cinemaResizeObserver = null;
+  let cinemaObservedPlayer = null;
+  let cinemaObservedFlexy = null;
   let boundVideoEl = null;
   let endedHandledForId = null;
   let fastResumeAppliedForId = null;
@@ -64,6 +80,9 @@
         return url.pathname.split("/")[2] || null;
       }
       if (url.pathname.startsWith("/live/")) {
+        return url.pathname.split("/")[2] || null;
+      }
+      if (url.pathname.startsWith("/embed/")) {
         return url.pathname.split("/")[2] || null;
       }
       return null;
@@ -163,6 +182,14 @@
   // Seek & Scroll Overrides
   // ---------------------------------------------------------------------------
 
+  function getDeepActiveElement() {
+    let active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    return active;
+  }
+
   function isEditableTarget(el) {
     if (!el) return false;
     const tag = el.tagName;
@@ -179,7 +206,8 @@
     if (e.ctrlKey || e.metaKey || e.altKey) {
       return;
     }
-    if (isEditableTarget(document.activeElement)) {
+    const composedTarget = typeof e.composedPath === "function" ? e.composedPath()[0] : null;
+    if (isEditableTarget(composedTarget) || isEditableTarget(getDeepActiveElement())) {
       return;
     }
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") {
@@ -281,7 +309,17 @@
       bubbles: true,
       cancelable: true
     });
-    const handledByPlayer = !player.dispatchEvent(keyEvent);
+    let handledByPlayer = false;
+    if (player.dataset) {
+      player.dataset.shinkuWheelKey = "1";
+    }
+    try {
+      handledByPlayer = !player.dispatchEvent(keyEvent);
+    } finally {
+      if (player.dataset) {
+        delete player.dataset.shinkuWheelKey;
+      }
+    }
     if (handledByPlayer) {
       return;
     }
@@ -315,7 +353,11 @@
     }
     try {
       const url = new URL(text.trim());
-      if (!url.hostname.includes("youtube.com") && url.hostname !== "youtu.be") {
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        return text;
+      }
+      const host = url.hostname.toLowerCase();
+      if (host !== "youtube.com" && !host.endsWith(".youtube.com") && host !== "youtu.be") {
         return text;
       }
       url.searchParams.delete("si");
@@ -493,10 +535,20 @@
     if (video && Number.isFinite(video.duration) && video.duration > 0) {
       const pct = Math.max(0, Math.min(100, (video.currentTime / video.duration) * 100));
       if (fill && ps["progress-bar"]) {
-        fill.style.width = `${pct.toFixed(2)}%`;
+        const nextWidth = `${pct.toFixed(2)}%`;
+        if (fill.style.width !== nextWidth) {
+          fill.style.width = nextWidth;
+        }
       }
       if (statusBadge && ps["on-player-status"]) {
-        statusBadge.textContent = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
+        const nextText = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
+        if (statusBadge.textContent !== nextText) {
+          if (statusBadge.firstChild && statusBadge.firstChild.nodeType === 3 && statusBadge.childNodes.length === 1) {
+            statusBadge.firstChild.nodeValue = nextText;
+          } else {
+            statusBadge.textContent = nextText;
+          }
+        }
       }
     }
 
@@ -534,6 +586,16 @@
     btn.style.color = saved ? "#3ea6ff" : "#ffffff";
   }
 
+  function scheduleRightControlsRetry(attempt) {
+    if (attempt >= 10 || plusButtonRetryTimer !== null) return;
+    plusButtonRetryTimer = setTimeout(() => {
+      plusButtonRetryTimer = null;
+      ensurePlusButton(attempt + 1);
+      ensureScreenshotButton(attempt + 1);
+      ensureLoopButton(attempt + 1);
+    }, 300);
+  }
+
   function ensurePlusButton(attempt = 0) {
     if (plusButtonRetryTimer !== null) {
       clearTimeout(plusButtonRetryTimer);
@@ -557,9 +619,7 @@
 
     const rightControls = document.querySelector("#movie_player .ytp-right-controls");
     if (!rightControls) {
-      if (attempt < 10) {
-        plusButtonRetryTimer = setTimeout(() => ensurePlusButton(attempt + 1), 300);
-      }
+      scheduleRightControlsRetry(attempt);
       return;
     }
 
@@ -799,7 +859,7 @@
     }
     if (ds["hide-ai-summaries"]) {
       rules.push(
-        'ytd-expandable-metadata-renderer[has-magic-wand], #expandable-metadata ytd-structuring-summary-renderer, button[aria-label*="Ask" i], ytd-video-description-transcript-section-renderer[is-ai-summary] { display: none !important; }'
+        'ytd-expandable-metadata-renderer[has-magic-wand], #expandable-metadata ytd-structuring-summary-renderer, ytd-watch-metadata button[aria-label*="Ask" i], #actions button[aria-label*="Ask" i], #flexible-item-buttons button[aria-label*="Ask" i], ytd-video-description-transcript-section-renderer[is-ai-summary] { display: none !important; }'
       );
     }
     if (ds["hide-info-cards-watermarks"]) {
@@ -889,9 +949,9 @@
       (typeof player.getAvailableAudioTracks === "function" && player.getAvailableAudioTracks()) ||
       null;
     if (Array.isArray(tracks) && tracks.length > 1 && typeof player.setAudioTrack === "function") {
-      const original = tracks.find(
-        (t) => t && (t.isDefault || /original/i.test(String(t.name || t.id || "")))
-      );
+      const original =
+        tracks.find((t) => t && /original/i.test(String(t.name || t.id || ""))) ||
+        tracks.find((t) => t && t.isDefault);
       if (original) {
         player.setAudioTrack(original);
         audioTrackAppliedForId = pageID;
@@ -929,30 +989,87 @@
     };
   }
 
+  function getCinemaPlayerContainer() {
+    const watchFlexy = document.querySelector("ytd-watch-flexy");
+    const isTheater = Boolean(watchFlexy?.hasAttribute("theater"));
+    const fullBleedEl = document.querySelector("#full-bleed-container");
+    const theaterEl = document.querySelector("#player-theater-container");
+    const hasMoviePlayer = (el) => Boolean(el && el.querySelector("#movie_player"));
+
+    if (isTheater || hasMoviePlayer(fullBleedEl) || hasMoviePlayer(theaterEl)) {
+      const theaterContainer =
+        (hasMoviePlayer(fullBleedEl) ? fullBleedEl : null) ||
+        (hasMoviePlayer(theaterEl) ? theaterEl : null) ||
+        (isTheater ? fullBleedEl || theaterEl : null);
+      if (theaterContainer) return theaterContainer;
+    }
+    return document.querySelector("#player") || getPlayer();
+  }
+
+  function updateCinemaBackdropClip(backdrop, playerContainer) {
+    if (!backdrop) return;
+    if (!playerContainer || typeof playerContainer.getBoundingClientRect !== "function") {
+      backdrop.style.clipPath = "";
+      return;
+    }
+    const rect = playerContainer.getBoundingClientRect();
+    const vw = window.innerWidth || document.documentElement?.clientWidth || 0;
+    const vh = window.innerHeight || document.documentElement?.clientHeight || 0;
+    if (!rect || rect.width <= 0 || rect.height <= 0 || vw <= 0 || vh <= 0) {
+      backdrop.style.clipPath = "";
+      return;
+    }
+    const left = Math.max(0, Math.round(rect.left));
+    const top = Math.max(0, Math.round(rect.top));
+    const right = Math.min(vw, Math.round(rect.right));
+    const bottom = Math.min(vh, Math.round(rect.bottom));
+    if (right <= left || bottom <= top) {
+      backdrop.style.clipPath = "";
+      return;
+    }
+    backdrop.style.clipPath = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${left}px ${top}px, ${right}px ${top}px, ${right}px ${bottom}px, ${left}px ${bottom}px, ${left}px ${top}px)`;
+  }
+
+  function cleanupCinemaMode() {
+    const backdrop = document.getElementById(CINEMA_BACKDROP_ID);
+    if (backdrop) backdrop.remove();
+    if (cinemaListenersAttached) {
+      window.removeEventListener("scroll", handleCinemaViewportChange);
+      window.removeEventListener("resize", handleCinemaViewportChange);
+      cinemaListenersAttached = false;
+    }
+    if (cinemaWatchObserver) {
+      cinemaWatchObserver.disconnect();
+      cinemaWatchObserver = null;
+      cinemaObservedFlexy = null;
+    }
+    if (cinemaResizeObserver) {
+      cinemaResizeObserver.disconnect();
+      cinemaResizeObserver = null;
+      cinemaObservedPlayer = null;
+    }
+  }
+
+  function handleCinemaViewportChange() {
+    const active = isPlayerMasterOn() && Boolean(getPlayerSettings()["cinema-mode"]) && isWatchPage();
+    if (!active) {
+      cleanupCinemaMode();
+      return;
+    }
+    const backdrop = document.getElementById(CINEMA_BACKDROP_ID);
+    if (backdrop) {
+      updateCinemaBackdropClip(backdrop, getCinemaPlayerContainer());
+    }
+  }
+
   function syncCinemaMode() {
     const active = isPlayerMasterOn() && Boolean(getPlayerSettings()["cinema-mode"]) && isWatchPage();
-    let backdrop = document.getElementById(CINEMA_BACKDROP_ID);
-    const watchFlexy = document.querySelector("ytd-watch-flexy");
-    const theaterEl = document.querySelector("#player-theater-container");
-    const useTheater = Boolean(
-      theaterEl && (watchFlexy?.hasAttribute("theater") || theaterEl.querySelector("#movie_player"))
-    );
-    const playerContainer =
-      (useTheater ? theaterEl : null) || document.querySelector("#player") || getPlayer();
-
     if (!active) {
-      if (backdrop) backdrop.remove();
-      const elevated = document.querySelectorAll("[data-shinku-cinema-z]");
-      for (const el of elevated) {
-        el.style.position = el.getAttribute("data-shinku-orig-pos") || "";
-        el.style.zIndex = el.getAttribute("data-shinku-orig-z") || "";
-        el.removeAttribute("data-shinku-orig-pos");
-        el.removeAttribute("data-shinku-orig-z");
-        el.removeAttribute("data-shinku-cinema-z");
-      }
+      cleanupCinemaMode();
       return;
     }
 
+    let backdrop = document.getElementById(CINEMA_BACKDROP_ID);
     if (!backdrop && document.body) {
       backdrop = document.createElement("div");
       backdrop.id = CINEMA_BACKDROP_ID;
@@ -961,20 +1078,40 @@
         inset: "0",
         background: "rgba(0, 0, 0, 0.78)",
         pointerEvents: "none",
-        zIndex: "1"
+        zIndex: "2147483645"
       });
       document.body.appendChild(backdrop);
     }
-    if (playerContainer) {
-      if (!playerContainer.hasAttribute("data-shinku-cinema-z")) {
-        playerContainer.setAttribute("data-shinku-orig-pos", playerContainer.style.position || "");
-        playerContainer.setAttribute("data-shinku-orig-z", playerContainer.style.zIndex || "");
-        playerContainer.setAttribute("data-shinku-cinema-z", "1");
-      }
-      if (!playerContainer.style.position) {
-        playerContainer.style.position = "relative";
-      }
-      playerContainer.style.zIndex = "2";
+
+    const watchFlexy = document.querySelector("ytd-watch-flexy");
+    const playerContainer = getCinemaPlayerContainer();
+    updateCinemaBackdropClip(backdrop, playerContainer);
+
+    if (!cinemaListenersAttached) {
+      window.addEventListener("scroll", handleCinemaViewportChange, { passive: true });
+      window.addEventListener("resize", handleCinemaViewportChange, { passive: true });
+      cinemaListenersAttached = true;
+    }
+
+    if (watchFlexy && watchFlexy !== cinemaObservedFlexy && typeof MutationObserver === "function") {
+      if (cinemaWatchObserver) cinemaWatchObserver.disconnect();
+      cinemaWatchObserver = new MutationObserver(() => {
+        syncCinemaMode();
+      });
+      cinemaWatchObserver.observe(watchFlexy, {
+        attributes: true,
+        attributeFilter: ["theater", "fullscreen"]
+      });
+      cinemaObservedFlexy = watchFlexy;
+    }
+
+    if (playerContainer && playerContainer !== cinemaObservedPlayer && typeof ResizeObserver === "function") {
+      if (cinemaResizeObserver) cinemaResizeObserver.disconnect();
+      cinemaResizeObserver = new ResizeObserver(() => {
+        handleCinemaViewportChange();
+      });
+      cinemaResizeObserver.observe(playerContainer);
+      cinemaObservedPlayer = playerContainer;
     }
   }
 
@@ -1012,7 +1149,7 @@
     }
   }
 
-  function ensureScreenshotButton() {
+  function ensureScreenshotButton(attempt = 0) {
     const shouldShow =
       isPlayerMasterOn() && Boolean(getPlayerSettings()["screenshot-btn"]) && isWatchPage();
     const existing = document.getElementById(SCREENSHOT_BUTTON_ID);
@@ -1022,7 +1159,10 @@
     }
     if (existing) return;
     const rightControls = document.querySelector("#movie_player .ytp-right-controls");
-    if (!rightControls) return;
+    if (!rightControls) {
+      scheduleRightControlsRetry(attempt);
+      return;
+    }
 
     const btn = document.createElement("button");
     btn.id = SCREENSHOT_BUTTON_ID;
@@ -1056,7 +1196,7 @@
     btn.title = isLoop ? "Loop Enabled (Click to Disable)" : "Loop Video";
   }
 
-  function ensureLoopButton() {
+  function ensureLoopButton(attempt = 0) {
     const shouldShow =
       isPlayerMasterOn() && Boolean(getPlayerSettings()["loop-btn"]) && isWatchPage();
     const existing = document.getElementById(LOOP_BUTTON_ID);
@@ -1074,7 +1214,10 @@
       return;
     }
     const rightControls = document.querySelector("#movie_player .ytp-right-controls");
-    if (!rightControls) return;
+    if (!rightControls) {
+      scheduleRightControlsRetry(attempt);
+      return;
+    }
 
     const btn = document.createElement("button");
     btn.id = LOOP_BUTTON_ID;
@@ -1133,7 +1276,9 @@
       }
     }
     entry.gainNode.gain.value = targetGain;
-    if (enabled && audioCtx && audioCtx.state === "suspended" && typeof audioCtx.resume === "function") {
+    // Once a <video> is routed through MediaElementAudioSourceNode, its audio stays
+    // wired to audioCtx.destination even after boost is turned off—resume if suspended.
+    if (audioCtx && audioCtx.state === "suspended" && typeof audioCtx.resume === "function") {
       audioCtx.resume().catch((err) => console.debug("[Shinku YT] AudioContext resume skipped:", err));
     }
   }
@@ -1186,10 +1331,26 @@
     }
   }
 
+  function isDialogVisible(dialog) {
+    if (!dialog || dialog.hidden || dialog.getAttribute("aria-hidden") === "true") {
+      return false;
+    }
+    if (typeof window.getComputedStyle === "function") {
+      const cs = window.getComputedStyle(dialog);
+      if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") {
+        return false;
+      }
+    } else if (dialog.style?.display === "none") {
+      return false;
+    }
+    return true;
+  }
+
   function checkIdleContinueDialog() {
     if (!isPlayerMasterOn() || !getPlayerSettings()["prevent-idle-pause"]) return;
     const dialogs = document.querySelectorAll("yt-confirm-dialog-renderer, tp-yt-paper-dialog");
     for (const dialog of dialogs) {
+      if (!isDialogVisible(dialog)) continue;
       const text = (dialog.textContent || "").toLowerCase();
       if (text.includes("continue watching") || text.includes("still watching")) {
         const confirmBtn = dialog.querySelector("#confirm-button button, #confirm-button");
@@ -1223,19 +1384,19 @@
 
   function applyAutoPause() {
     if (!isPlayerMasterOn() || !getPlayerSettings()["pause"] || !isWatchPage()) {
-      return;
+      return false;
     }
     if (autoPausedForId === pageID) {
-      return;
+      return false;
     }
     const video = getVideo();
     if (!video) {
-      return;
+      return false;
     }
-    // Only mark as auto-paused once the video is actually playing or has metadata ready;
-    // otherwise YouTube's autoplay can start playback right after and override an early pause.
-    if (video.paused && video.readyState < 1) {
-      return;
+    // Only pause once playback has actually started (not paused); otherwise we'd
+    // burn autoPausedForId before YouTube's autoplay starts playing the video.
+    if (video.paused) {
+      return false;
     }
     autoPausedForId = pageID;
     const player = getPlayer();
@@ -1244,6 +1405,7 @@
     } else if (!video.paused) {
       video.pause();
     }
+    return true;
   }
 
   function applyFastResume() {
@@ -1254,7 +1416,10 @@
       return;
     }
     const saved = shinkuLibrary?.[pageID];
-    const savedTime = saved && Number(saved.currentTime);
+    if (!saved || saved.done) {
+      return;
+    }
+    const savedTime = Number(saved.currentTime);
     if (!Number.isFinite(savedTime) || savedTime <= 1) {
       return;
     }
@@ -1303,7 +1468,26 @@
     return entries.map(([id]) => id);
   }
 
+  function cancelPendingAutoNext() {
+    if (autoNextSafetyTimer !== null) {
+      clearTimeout(autoNextSafetyTimer);
+      autoNextSafetyTimer = null;
+    }
+    pendingAutoNextSaveId = null;
+    pendingAutoNextUrl = null;
+  }
+
   function handleVideoEnded() {
+    if (toolsEnabled && isWatchPage() && isHoverGuardOn()) {
+      syncHoverPreviewGuards();
+      clearEndscreenGuardTimer();
+      endscreenGuardTimer = setTimeout(() => {
+        endscreenGuardTimer = null;
+        if (toolsEnabled && isHoverGuardOn()) {
+          syncHoverPreviewGuards();
+        }
+      }, 250);
+    }
     if (!isPlaylistMasterOn() || !isWatchPage()) {
       return;
     }
@@ -1316,6 +1500,7 @@
     }
     endedHandledForId = pageID;
 
+    let saveId = null;
     if (isVideoSaved(pageID)) {
       const video = getVideo();
       const duration = video && Number.isFinite(video.duration) ? Math.floor(video.duration) : 0;
@@ -1329,7 +1514,8 @@
         updatedAt: Date.now()
       };
       shinkuLibrary[pageID] = entry;
-      postToBridge("SHINKU__saveToLibrary", { videoId: pageID, entry });
+      saveId = pls["auto-next"] && bridgeConnected ? `end_${++saveAckCounter}` : null;
+      postToBridge("SHINKU__saveToLibrary", { videoId: pageID, entry, ...(saveId ? { saveId } : {}) });
     }
 
     if (!pls["auto-next"]) {
@@ -1342,7 +1528,19 @@
     }
 
     const nextId = keys[0];
-    window.location.assign(`https://www.youtube.com/watch?v=${encodeURIComponent(nextId)}`);
+    const nextUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(nextId)}`;
+    if (saveId) {
+      cancelPendingAutoNext();
+      pendingAutoNextSaveId = saveId;
+      pendingAutoNextUrl = nextUrl;
+      autoNextSafetyTimer = setTimeout(() => {
+        const target = pendingAutoNextUrl;
+        cancelPendingAutoNext();
+        if (target) window.location.assign(target);
+      }, 400);
+      return;
+    }
+    window.location.assign(nextUrl);
   }
 
   function handleVideoMetadata() {
@@ -1354,9 +1552,40 @@
   }
 
   function handleVideoPlay() {
-    applyAutoPause();
+    const didAutoPause = applyAutoPause();
     syncVolumeBoost();
-    broadcastTabPlay();
+    if (!didAutoPause) {
+      broadcastTabPlay();
+    }
+  }
+
+  function flushVideoProgress() {
+    if (!toolsEnabled || !isPlaylistMasterOn() || !isWatchPage()) return;
+    const pls = getPlaylistSettings();
+    if (!pls["auto-update-library"]) return;
+    const video = getVideo();
+    if (!video || !pageID || !isVideoSaved(pageID) || !Number.isFinite(video.currentTime)) {
+      return;
+    }
+    const existing = shinkuLibrary[pageID];
+    const savedTime = Number(existing.currentTime) || 0;
+    const current = Math.floor(video.currentTime);
+    const duration = Number.isFinite(video.duration) ? Math.floor(video.duration) : 0;
+
+    if (Math.abs(current - savedTime) > 1) {
+      const effectiveDuration = duration || existing.duration || 0;
+      const rewoundFromDone = Boolean(existing.done) && current > 3 && (effectiveDuration <= 0 || current < effectiveDuration - 10);
+      const entry = {
+        ...existing,
+        videoId: pageID,
+        currentTime: current,
+        duration: effectiveDuration,
+        ...(rewoundFromDone ? { done: false, doneAt: null } : {}),
+        updatedAt: Date.now()
+      };
+      shinkuLibrary[pageID] = entry;
+      postToBridge("SHINKU__saveToLibrary", { videoId: pageID, entry });
+    }
   }
 
   function bindVideoElement() {
@@ -1369,6 +1598,7 @@
     boundVideoEl.addEventListener("ended", handleVideoEnded);
     boundVideoEl.addEventListener("loadedmetadata", handleVideoMetadata);
     boundVideoEl.addEventListener("play", handleVideoPlay);
+    boundVideoEl.addEventListener("pause", flushVideoProgress);
   }
 
   function unbindVideoElement() {
@@ -1376,6 +1606,7 @@
       boundVideoEl.removeEventListener("ended", handleVideoEnded);
       boundVideoEl.removeEventListener("loadedmetadata", handleVideoMetadata);
       boundVideoEl.removeEventListener("play", handleVideoPlay);
+      boundVideoEl.removeEventListener("pause", flushVideoProgress);
       boundVideoEl = null;
     }
   }
@@ -1407,26 +1638,10 @@
       return;
     }
 
-    const video = getVideo();
-    if (pls["auto-update-library"] && video && pageID && isVideoSaved(pageID) && Number.isFinite(video.currentTime)) {
-      const savedTime = Number(shinkuLibrary[pageID].currentTime) || 0;
-      const current = Math.floor(video.currentTime);
-      const duration = Number.isFinite(video.duration) ? Math.floor(video.duration) : 0;
-
-      if (Math.abs(current - savedTime) > 1) {
-        const entry = {
-          ...shinkuLibrary[pageID],
-          videoId: pageID,
-          currentTime: current,
-          duration: duration || shinkuLibrary[pageID].duration || 0,
-          updatedAt: Date.now()
-        };
-        shinkuLibrary[pageID] = entry;
-        postToBridge("SHINKU__saveToLibrary", { videoId: pageID, entry });
-      }
-    }
+    flushVideoProgress();
 
     // Fallback check for video end in case player state ended without DOM event
+    const video = getVideo();
     const player = getPlayer();
     if (
       (pls["auto-next"] || pls["auto-update-library"]) &&
@@ -1524,12 +1739,13 @@
     return keywords.some((kw) => combined.includes(kw));
   }
 
-  function classifyFeedItem(el, blockedKeywords = []) {
+  function classifyFeedItem(el, blockedKeywords = [], enabledCategories = null) {
+    const isCatEnabled = (cat) => !enabledCategories || Boolean(enabledCategories[cat]);
     const tag = el.tagName;
     const isShelfContainer = SHELF_CONTAINER_TAGS.has(tag);
 
     if (tag === "YTD-BACKSTAGE-POST-THREAD-RENDERER" || tag === "YTD-POST-RENDERER") {
-      return "posts";
+      return isCatEnabled("posts") ? "posts" : null;
     }
 
     if (
@@ -1539,7 +1755,7 @@
       Boolean(el.querySelector('ytd-mini-game-card-view-model, a[href*="/playables"]')) ||
       (isShelfContainer && getShelfTitleText(el).includes("playables"))
     ) {
-      return "playables";
+      if (isCatEnabled("playables")) return "playables";
     }
 
     if (
@@ -1555,29 +1771,31 @@
       ) ||
       (isShelfContainer && getShelfTitleText(el) === "shorts")
     ) {
-      return "shorts";
+      if (isCatEnabled("shorts")) return "shorts";
     }
 
     if (tag === "YTD-STATEMENT-BANNER-RENDERER") {
-      return "news-movies";
+      return isCatEnabled("news-movies") ? "news-movies" : null;
     }
 
     if (isShelfContainer) {
       const shelfTitle = getShelfTitleText(el);
       if (
-        shelfTitle.includes("people also watched") ||
-        shelfTitle.includes("for you") ||
-        shelfTitle.includes("previously watched") ||
-        shelfTitle.includes("related to your search") ||
-        shelfTitle.includes("others searched for")
+        isCatEnabled("search-filler") &&
+        (shelfTitle.includes("people also watched") ||
+          shelfTitle.includes("for you") ||
+          shelfTitle.includes("previously watched") ||
+          shelfTitle.includes("related to your search") ||
+          shelfTitle.includes("others searched for"))
       ) {
         return "search-filler";
       }
       if (
-        shelfTitle.includes("breaking news") ||
-        shelfTitle.includes("top news") ||
-        shelfTitle.includes("movies & tv") ||
-        shelfTitle.includes("primetime movies")
+        isCatEnabled("news-movies") &&
+        (shelfTitle.includes("breaking news") ||
+          shelfTitle.includes("top news") ||
+          shelfTitle.includes("movies & tv") ||
+          shelfTitle.includes("primetime movies"))
       ) {
         return "news-movies";
       }
@@ -1585,63 +1803,67 @@
     }
 
     if (
-      tag === "YTD-RADIO-RENDERER" ||
-      Boolean(
-        el.querySelector(
-          'ytd-radio-renderer, a[href*="start_radio=1"], a[href*="list=RD"], ytd-thumbnail-overlay-bottom-panel-renderer'
-        )
-      ) ||
-      hasThumbnailBadgeText(el, "MIX")
+      isCatEnabled("mixes") &&
+      (tag === "YTD-RADIO-RENDERER" ||
+        Boolean(
+          el.querySelector(
+            'ytd-radio-renderer, a[href*="start_radio=1"], a[href*="list=RD"], ytd-thumbnail-overlay-bottom-panel-renderer'
+          )
+        ) ||
+        hasThumbnailBadgeText(el, "MIX"))
     ) {
       return "mixes";
     }
 
     if (
-      Boolean(
+      isCatEnabled("members") &&
+      (Boolean(
         el.querySelector(
           '.badge-style-type-members-only, ytd-badge-supported-renderer[aria-label*="Members only" i]'
         )
       ) ||
-      hasThumbnailBadgeText(el, "MEMBERS ONLY")
+        hasThumbnailBadgeText(el, "MEMBERS ONLY"))
     ) {
       return "members";
     }
 
     if (
-      Boolean(
+      isCatEnabled("live") &&
+      (Boolean(
         el.querySelector(
           '[overlay-style="LIVE"], .badge-style-type-live-now-alternate, ytd-badge-supported-renderer[aria-label*="LIVE" i], .yt-badge-shape--thumbnail-live, .badge-shape-wiz--thumbnail-live'
         )
       ) ||
-      hasThumbnailBadgeText(el, "LIVE")
+        hasThumbnailBadgeText(el, "LIVE"))
     ) {
       return "live";
     }
 
     if (
-      Boolean(el.querySelector('[overlay-style="UPCOMING"], button[aria-label*="Notify me" i]')) ||
-      hasThumbnailBadgeText(el, "UPCOMING")
+      isCatEnabled("upcoming") &&
+      (Boolean(el.querySelector('[overlay-style="UPCOMING"], button[aria-label*="Notify me" i]')) ||
+        hasThumbnailBadgeText(el, "UPCOMING"))
     ) {
       return "upcoming";
     }
 
     const metaEl = el.querySelector("#metadata-line, yt-content-metadata-view-model");
     const metaText = (metaEl?.textContent || "").toLowerCase();
-    if (metaText.includes("streamed ")) {
+    if (isCatEnabled("streamed") && metaText.includes("streamed ")) {
       return "streamed";
     }
-    if (metaText.includes("premieres") || metaText.includes("upcoming")) {
+    if (isCatEnabled("upcoming") && (metaText.includes("premieres") || metaText.includes("upcoming"))) {
       return "upcoming";
     }
-    if (metaText.includes("members only")) {
+    if (isCatEnabled("members") && metaText.includes("members only")) {
       return "members";
     }
 
-    if (isWatchedProgressHigh(el)) {
+    if (isCatEnabled("watched") && isWatchedProgressHigh(el)) {
       return "watched";
     }
 
-    if (matchesBlockedKeyword(el, blockedKeywords)) {
+    if (isCatEnabled("keyword") && matchesBlockedKeyword(el, blockedKeywords)) {
       return "keyword";
     }
 
@@ -1664,11 +1886,13 @@
     const fs = getFrameSettings();
 
     if (!isFrameMasterOn()) {
+      lastBlockedKeywordsSig = null;
       restoreHiddenItems(null);
       return;
     }
 
     const blockedKeywords = getBlockedKeywordsList(fs);
+    const blockedKeywordsSig = blockedKeywords.join("|");
     const enabledCategories = {
       shorts: Boolean(fs["shorts-removal"]),
       live: Boolean(fs["live-removal"]),
@@ -1684,8 +1908,11 @@
       keyword: blockedKeywords.length > 0
     };
 
-    // Always re-evaluate keyword-hidden items in case blocked-keywords changed
-    restoreHiddenItems("keyword");
+    // Re-evaluate keyword-hidden items only when blocked-keywords actually changed
+    if (lastBlockedKeywordsSig !== null && lastBlockedKeywordsSig !== blockedKeywordsSig) {
+      restoreHiddenItems("keyword");
+    }
+    lastBlockedKeywordsSig = blockedKeywordsSig;
 
     // Restore any categories that were turned off
     for (const [cat, enabled] of Object.entries(enabledCategories)) {
@@ -1702,11 +1929,15 @@
       if (el.parentElement && el.parentElement.closest("[data-shinku-hidden]")) {
         continue;
       }
-      const category = classifyFeedItem(el, blockedKeywords);
+      const category = classifyFeedItem(el, blockedKeywords, enabledCategories);
       if (category && enabledCategories[category]) {
         el.setAttribute("data-shinku-hidden", category);
         el.style.display = "none";
-      } else if (enabledCategories.keyword && matchesBlockedKeyword(el, blockedKeywords)) {
+      } else if (
+        enabledCategories.keyword &&
+        !SHELF_CONTAINER_TAGS.has(el.tagName) &&
+        matchesBlockedKeyword(el, blockedKeywords)
+      ) {
         el.setAttribute("data-shinku-hidden", "keyword");
         el.style.display = "none";
       }
@@ -1719,8 +1950,13 @@
 
   const HOVER_SHIELD_CLASS = "shinku-hover-shield";
   const THUMBNAIL_SELECTOR = "ytd-thumbnail, yt-thumbnail-view-model, ytd-playlist-thumbnail";
+  const PLAYER_ENDSCREEN_OVERLAY_SELECTOR =
+    ".html5-endscreen, .ytp-endscreen-content, .ytp-fullscreen-grid, .ytp-fullscreen-grid-stills-container";
+  const PLAYER_ENDSCREEN_STILL_SELECTOR =
+    ".ytp-modern-videowall-still, .ytp-videowall-still, a.ytp-suggestion-link";
+  const HOVER_GUARD_SELECTOR = `${THUMBNAIL_SELECTOR}, ${PLAYER_ENDSCREEN_STILL_SELECTOR}`;
   const CARD_SELECTOR =
-    "ytd-rich-item-renderer, ytd-rich-grid-media, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, yt-lockup-view-model";
+    "ytd-rich-item-renderer, ytd-rich-grid-media, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, yt-lockup-view-model, .ytp-modern-videowall-still, .ytp-videowall-still";
   const HOVER_CAPTURE_EVENTS = [
     "pointerover",
     "pointerenter",
@@ -1731,11 +1967,19 @@
   ];
   let activeHoverShield = null;
   let activeHoverTimer = null;
+  let endscreenGuardTimer = null;
   let activeHoverX = 0;
   let activeHoverY = 0;
   let unlockedShieldEntry = null; // { shield, container, card }
   let hoverCaptureAttached = false;
   let isDispatchingSyntheticHover = false;
+
+  function clearEndscreenGuardTimer() {
+    if (endscreenGuardTimer !== null) {
+      clearTimeout(endscreenGuardTimer);
+      endscreenGuardTimer = null;
+    }
+  }
 
   function showShieldHoverState(shield, delayMs) {
     if (!shield) return;
@@ -1806,7 +2050,9 @@
     const overCard = Boolean(card && card.contains(activeTarget));
     const overPortal =
       typeof activeTarget.closest === "function" &&
-      Boolean(activeTarget.closest("ytd-video-preview"));
+      Boolean(
+        activeTarget.closest("ytd-video-preview, .ytp-inline-preview-ui, .ytp-modern-videowall-still-preview")
+      );
     return Boolean(overContainer || overCard || overPortal);
   }
 
@@ -1823,8 +2069,25 @@
       ? target
       : target.closest(`.${HOVER_SHIELD_CLASS}`);
     let container = directShield
-      ? directShield.parentElement
+      ? directShield.closest("[data-shinku-hover-guarded]") ||
+        directShield.closest(HOVER_GUARD_SELECTOR) ||
+        directShield.parentElement
       : target.closest("[data-shinku-hover-guarded]");
+
+    if (!container) {
+      const candidate = target.closest(HOVER_GUARD_SELECTOR);
+      if (candidate) {
+        attachHoverGuard(candidate);
+        if (candidate.hasAttribute("data-shinku-hover-guarded")) {
+          container = candidate;
+        } else {
+          const guardedInner = candidate.querySelector("[data-shinku-hover-guarded]");
+          if (guardedInner && (guardedInner === target || guardedInner.contains(target))) {
+            container = guardedInner;
+          }
+        }
+      }
+    }
 
     if (!container && (e.type === "mouseenter" || e.type === "pointerenter")) {
       const card =
@@ -1840,8 +2103,7 @@
     }
 
     if (!container) return null;
-    const shield =
-      directShield || container.querySelector(`:scope > .${HOVER_SHIELD_CLASS}`);
+    const shield = directShield || container.querySelector(`.${HOVER_SHIELD_CLASS}`);
     if (!shield || shield.dataset.shinkuUnlocked === "1") {
       return null;
     }
@@ -1853,6 +2115,23 @@
       return;
     }
     const target = e.target;
+    if (
+      target &&
+      typeof target.closest === "function" &&
+      target.closest("#m3u8-controller-host, #m3u8-minimized-host, #anilist-panel-host, #mpv-page-level-modal-host")
+    ) {
+      return;
+    }
+    const bodyCls = document.body?.classList;
+    if (
+      (typeof e.buttons === "number" && e.buttons !== 0) ||
+      bodyCls?.contains("mpv-controller-dragging") ||
+      bodyCls?.contains("mpv-anilist-dragging") ||
+      bodyCls?.contains("mpv-anilist-resizing")
+    ) {
+      clearActiveHoverTimer();
+      return;
+    }
 
     if (unlockedShieldEntry && !isPointerStillOverUnlocked(target)) {
       restoreUnlockedShield();
@@ -1903,14 +2182,17 @@
           container.querySelector("a#thumbnail, #mouseover-overlay, img") ||
           container;
         const hoverTarget = container.contains(under) ? under : container;
-        if (parentCard) {
+        if (parentCard && parentCard !== hoverTarget) {
           dispatchSyntheticHover(parentCard, activeHoverX, activeHoverY);
         }
         dispatchSyntheticHover(hoverTarget, activeHoverX, activeHoverY);
       }, delayMs);
     }
 
-    e.stopImmediatePropagation();
+    // Do not swallow mousemove/pointermove so document-level drag/resize handlers keep receiving events.
+    if (e.type !== "mousemove" && e.type !== "pointermove") {
+      e.stopImmediatePropagation();
+    }
   }
 
   function handlePageMouseLeave() {
@@ -1939,6 +2221,7 @@
   function removeAllHoverGuards() {
     removeHoverCaptureListeners();
     clearActiveHoverTimer();
+    clearEndscreenGuardTimer();
     restoreUnlockedShield();
     const leftovers = document.querySelectorAll(`.${HOVER_SHIELD_CLASS}`);
     for (const el of leftovers) {
@@ -1985,21 +2268,40 @@
   }
 
   function attachHoverGuard(container) {
-    if (!container || container.hasAttribute("data-shinku-hover-guarded")) {
+    if (
+      !container ||
+      container.hasAttribute("data-shinku-hover-guarded") ||
+      container.querySelector(`.${HOVER_SHIELD_CLASS}`)
+    ) {
       return;
     }
+    const isInMoviePlayer = Boolean(container.closest("#movie_player"));
+    const isPlayerEndscreenTile =
+      Boolean(container.matches?.(PLAYER_ENDSCREEN_STILL_SELECTOR)) ||
+      Boolean(container.closest(PLAYER_ENDSCREEN_OVERLAY_SELECTOR));
     if (
-      container.closest("#movie_player") ||
+      (isInMoviePlayer && !isPlayerEndscreenTile) ||
       container.closest("ytd-reel-video-renderer") ||
       container.closest("[data-shinku-hidden]")
     ) {
       return;
     }
-    if (container.parentElement && container.parentElement.closest(THUMBNAIL_SELECTOR)) {
+    if (
+      container.matches?.(PLAYER_ENDSCREEN_STILL_SELECTOR) &&
+      container.querySelector(THUMBNAIL_SELECTOR)
+    ) {
+      return;
+    }
+    if (
+      container.parentElement &&
+      (container.parentElement.closest(THUMBNAIL_SELECTOR) ||
+        container.parentElement.closest("[data-shinku-hover-guarded]"))
+    ) {
       return;
     }
 
     container.setAttribute("data-shinku-hover-guarded", "1");
+    container.style.isolation = "isolate";
     if (typeof window.getComputedStyle === "function") {
       const cs = window.getComputedStyle(container);
       if (cs.position === "static") {
@@ -2012,6 +2314,41 @@
       container.style.position = "relative";
     }
 
+    // Mount inside the thumbnail's own <a href> when not already wrapped by an <a>,
+    // preserving native link context menus (linkUrl), middle-click, and Ctrl+click.
+    let innerAnchor = null;
+    if (!container.closest("a[href]")) {
+      if (container.matches?.(PLAYER_ENDSCREEN_STILL_SELECTOR)) {
+        const candidateAnchor = container.querySelector(
+          "a.ytp-modern-videowall-still[href], a.ytp-videowall-still[href], a.ytp-suggestion-link[href], a[href]"
+        );
+        if (
+          candidateAnchor &&
+          candidateAnchor.querySelector(
+            "img, .ytp-modern-videowall-still-image, .ytp-videowall-still-image"
+          )
+        ) {
+          innerAnchor = candidateAnchor;
+        }
+      } else {
+        innerAnchor = container.querySelector("a#thumbnail[href], a[href]");
+      }
+    }
+    const shieldHost = innerAnchor || container;
+    if (shieldHost !== container) {
+      if (typeof window.getComputedStyle === "function") {
+        const hostCs = window.getComputedStyle(shieldHost);
+        if (hostCs.position === "static") {
+          shieldHost.style.position = "relative";
+        }
+        if (hostCs.display === "inline") {
+          shieldHost.style.display = "block";
+        }
+      } else if (!shieldHost.style.position) {
+        shieldHost.style.position = "relative";
+      }
+    }
+
     const shield = document.createElement("div");
     shield.className = HOVER_SHIELD_CLASS;
     shield.setAttribute("aria-hidden", "true");
@@ -2022,9 +2359,10 @@
       width: "100%",
       height: "100%",
       display: "block",
-      zIndex: "2147483646",
+      zIndex: isPlayerEndscreenTile ? "100" : "20",
       background: "transparent",
       boxShadow: "none",
+      borderRadius: "inherit",
       pointerEvents: "auto",
       cursor: "pointer"
     });
@@ -2080,8 +2418,8 @@
     shield.addEventListener("mouseleave", cancelHoverTimer);
 
     const forwardClickIfNeeded = (e) => {
-      // If container is already wrapped by an <a>, let the click bubble naturally.
-      if (container.closest("a[href]")) {
+      // If shield is already inside an <a>, let clicks/middle-clicks/context menus work natively.
+      if (shield.closest("a[href]")) {
         return;
       }
       const link = container.querySelector("a[href]");
@@ -2123,7 +2461,7 @@
     shield.addEventListener("click", forwardClickIfNeeded);
     shield.addEventListener("auxclick", forwardClickIfNeeded);
 
-    container.appendChild(shield);
+    shieldHost.appendChild(shield);
   }
 
   const THUMB_BOOKMARK_BTN_CLASS = "shinku-thumb-bookmark-btn";
@@ -2142,7 +2480,14 @@
   function extractCardMetadata(container) {
     const link = container.closest("a[href]") || container.querySelector("a[href]");
     const href = link?.getAttribute("href") || "";
-    const absUrl = href ? new URL(href, window.location.origin).href : "";
+    let absUrl = "";
+    if (href) {
+      try {
+        absUrl = new URL(href, window.location.origin).href;
+      } catch (_err) {
+        return null;
+      }
+    }
     const videoId = absUrl ? extractVideoId(absUrl) : null;
     if (!videoId) return null;
 
@@ -2192,7 +2537,6 @@
   function attachThumbnailBookmarkButton(container) {
     if (
       !container ||
-      container.querySelector(`:scope > .${THUMB_BOOKMARK_BTN_CLASS}`) ||
       container.closest("#movie_player") ||
       container.closest("ytd-reel-video-renderer") ||
       container.closest("[data-shinku-hidden]")
@@ -2202,9 +2546,19 @@
     if (container.parentElement && container.parentElement.closest(THUMBNAIL_SELECTOR)) {
       return;
     }
+    const existingBtn = container.querySelector(`:scope > .${THUMB_BOOKMARK_BTN_CLASS}`);
     const meta = extractCardMetadata(container);
     if (!meta) return;
 
+    if (existingBtn) {
+      if (existingBtn.dataset.shinkuVideoId !== meta.videoId) {
+        existingBtn.dataset.shinkuVideoId = meta.videoId;
+      }
+      updateThumbBookmarkButtonVisual(existingBtn, meta.videoId);
+      return;
+    }
+
+    container.style.isolation = "isolate";
     if (typeof window.getComputedStyle === "function") {
       if (window.getComputedStyle(container).position === "static") {
         container.style.position = "relative";
@@ -2221,7 +2575,7 @@
       position: "absolute",
       top: "6px",
       right: "6px",
-      zIndex: "2147483647",
+      zIndex: "21",
       width: "24px",
       height: "24px",
       padding: "0",
@@ -2280,7 +2634,7 @@
       return;
     }
     ensureHoverCaptureListeners();
-    const thumbnails = document.querySelectorAll(THUMBNAIL_SELECTOR);
+    const thumbnails = document.querySelectorAll(HOVER_GUARD_SELECTOR);
     for (const thumb of thumbnails) {
       attachHoverGuard(thumb);
     }
@@ -2333,17 +2687,24 @@
     );
     for (const el of titleEls) {
       if (doCleanTitles) {
-        if (!el.hasAttribute("data-shinku-orig-title")) {
-          el.setAttribute("data-shinku-orig-title", el.textContent || "");
+        const currentText = el.textContent || "";
+        const lastCleaned = el.getAttribute("data-shinku-cleaned-title");
+        if (!el.hasAttribute("data-shinku-orig-title") || (lastCleaned !== null && currentText !== lastCleaned)) {
+          el.setAttribute("data-shinku-orig-title", currentText);
         }
         const orig = el.getAttribute("data-shinku-orig-title") || "";
         const next = cleanClickbaitText(orig);
+        el.setAttribute("data-shinku-cleaned-title", next);
         if (el.textContent !== next) {
           el.textContent = next;
         }
       } else if (el.hasAttribute("data-shinku-orig-title")) {
-        el.textContent = el.getAttribute("data-shinku-orig-title");
+        const lastCleaned = el.getAttribute("data-shinku-cleaned-title");
+        if (lastCleaned === null || el.textContent === lastCleaned) {
+          el.textContent = el.getAttribute("data-shinku-orig-title");
+        }
         el.removeAttribute("data-shinku-orig-title");
+        el.removeAttribute("data-shinku-cleaned-title");
       }
     }
 
@@ -2354,19 +2715,25 @@
     for (const img of thumbImgs) {
       if (doStillThumbs) {
         const currentSrc = img.getAttribute("src") || "";
-        const match = currentSrc.match(/\/vi\/([^/]+)\/(maxresdefault|hqdefault|mqdefault|sddefault)\.(jpg|webp)/i);
+        const match = currentSrc.match(/\/(?:vi|vi_webp)\/([^/]+)\/(maxresdefault|hq720|hqdefault|mqdefault|sddefault)\.(jpg|webp)/i);
         if (match) {
-          if (!img.hasAttribute("data-shinku-orig-src")) {
+          const lastStill = img.getAttribute("data-shinku-still-src");
+          if (!img.hasAttribute("data-shinku-orig-src") || (lastStill !== null && currentSrc !== lastStill)) {
             img.setAttribute("data-shinku-orig-src", currentSrc);
           }
           const nextSrc = `https://i.ytimg.com/vi/${encodeURIComponent(match[1])}/hq2.jpg`;
+          img.setAttribute("data-shinku-still-src", nextSrc);
           if (currentSrc !== nextSrc) {
             img.setAttribute("src", nextSrc);
           }
         }
       } else if (img.hasAttribute("data-shinku-orig-src")) {
-        img.setAttribute("src", img.getAttribute("data-shinku-orig-src"));
+        const lastStill = img.getAttribute("data-shinku-still-src");
+        if (lastStill === null || img.getAttribute("src") === lastStill) {
+          img.setAttribute("src", img.getAttribute("data-shinku-orig-src"));
+        }
         img.removeAttribute("data-shinku-orig-src");
+        img.removeAttribute("data-shinku-still-src");
       }
     }
 
@@ -2375,28 +2742,41 @@
       'a[href*="si="], a[href*="pp="], a[data-shinku-orig-href]'
     );
     for (const link of trackedLinks) {
+      if (link.id === "logo") continue;
       if (doStripTracking) {
         const href = link.getAttribute("href") || "";
-        if (!href || (!href.includes("si=") && !href.includes("pp="))) continue;
+        if (!href || (!href.includes("si=") && !href.includes("pp="))) {
+          if (link.hasAttribute("data-shinku-orig-href") && link.hasAttribute("data-shinku-stripped-href")) {
+            const lastStripped = link.getAttribute("data-shinku-stripped-href");
+            if (href !== lastStripped) {
+              link.removeAttribute("data-shinku-orig-href");
+              link.removeAttribute("data-shinku-stripped-href");
+            }
+          }
+          continue;
+        }
         try {
           const parsed = new URL(href, window.location.origin);
           if (parsed.searchParams.has("si") || parsed.searchParams.has("pp")) {
-            if (!link.hasAttribute("data-shinku-orig-href")) {
-              link.setAttribute("data-shinku-orig-href", href);
-            }
+            link.setAttribute("data-shinku-orig-href", href);
             parsed.searchParams.delete("si");
             parsed.searchParams.delete("pp");
             const nextHref = href.startsWith("/")
               ? `${parsed.pathname}${parsed.search}${parsed.hash}`
               : parsed.toString();
+            link.setAttribute("data-shinku-stripped-href", nextHref);
             link.setAttribute("href", nextHref);
           }
         } catch (_err) {
           console.debug("[Shinku YT] Link strip skipped:", _err?.message || _err);
         }
-      } else if (link.hasAttribute("data-shinku-orig-href") && link.id !== "logo") {
-        link.setAttribute("href", link.getAttribute("data-shinku-orig-href"));
+      } else if (link.hasAttribute("data-shinku-orig-href")) {
+        const lastStripped = link.getAttribute("data-shinku-stripped-href");
+        if (lastStripped === null || link.getAttribute("href") === lastStripped) {
+          link.setAttribute("href", link.getAttribute("data-shinku-orig-href"));
+        }
         link.removeAttribute("data-shinku-orig-href");
+        link.removeAttribute("data-shinku-stripped-href");
       }
     }
   }
@@ -2415,19 +2795,26 @@
     }, 150);
   }
 
+  function disconnectFeedObserver() {
+    if (feedObserver) {
+      feedObserver.disconnect();
+      feedObserver = null;
+    }
+  }
+
   function initContentFilter() {
+    applyConvertShortsToWatch();
+    syncCodecPreference();
     if (!document.body) {
       document.addEventListener("DOMContentLoaded", initContentFilter, { once: true });
       return;
     }
-    applyConvertShortsToWatch();
     syncDistractionStyle();
     applyHomeToSubsRedirect();
     applyContentFilter();
     applyTitleAndThumbnailTransforms();
     syncHoverPreviewGuards();
     syncThumbnailBookmarkButtons();
-    syncCodecPreference();
     syncTabPlaybackChannel();
     syncIdleCheckTimer();
     if (feedObserver) {
@@ -2435,11 +2822,12 @@
     }
     feedObserver = new MutationObserver(() => {
       if (
-        isFrameMasterOn() ||
-        isHoverGuardOn() ||
-        isThumbnailBookmarkOn() ||
-        isThumbnailMasterOn() ||
-        isDistractionMasterOn()
+        toolsEnabled &&
+        (isFrameMasterOn() ||
+          isHoverGuardOn() ||
+          isThumbnailBookmarkOn() ||
+          isThumbnailMasterOn() ||
+          isDistractionMasterOn())
       ) {
         scheduleContentFilter();
       }
@@ -2454,7 +2842,12 @@
   function sessionCleanup() {
     stopProgressBarLoop();
     stopVideoTimeTracker();
+    cancelPendingAutoNext();
+    clearEndscreenGuardTimer();
+    clearActiveHoverTimer();
+    restoreUnlockedShield();
     unbindVideoElement();
+    cleanupCinemaMode();
 
     const loopVideos = document.querySelectorAll("video[data-shinku-loop-managed]");
     for (const v of loopVideos) {
@@ -2491,7 +2884,7 @@
       clearTimeout(initWatchRetryTimer);
       initWatchRetryTimer = null;
     }
-    if (!userSetting || !isWatchPage()) {
+    if (!toolsEnabled || !userSetting || !isWatchPage()) {
       return;
     }
 
@@ -2576,10 +2969,33 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Bridge Message Handling
+  // Bridge Message Handling & Teardown
   // ---------------------------------------------------------------------------
 
-  window.addEventListener("message", (event) => {
+  function disableToolsState() {
+    toolsEnabled = false;
+    // Reset playback rate before sessionCleanup() clears speedAppliedForId
+    applyPlaybackSpeed(true);
+    sessionCleanup();
+    disconnectFeedObserver();
+    updateGlobalListeners();
+    restoreHiddenItems(null);
+    lastBlockedKeywordsSig = null;
+    removeAllHoverGuards();
+    removeAllThumbnailBookmarkButtons();
+    syncEndscreenStyle();
+    syncDistractionStyle();
+    syncPlayerComfortStyle();
+    syncCinemaMode();
+    syncStickyMiniPlayer();
+    syncCodecPreference();
+    syncVolumeBoost();
+    syncTabPlaybackChannel();
+    syncIdleCheckTimer();
+    applySettingsHotReload();
+  }
+
+  function onWindowMessage(event) {
     if (event.source !== window || event.origin !== TARGET_ORIGIN) {
       return;
     }
@@ -2590,37 +3006,24 @@
 
     switch (msg.type) {
       case "SHINKU__bridgeReady": {
-        toolsEnabled = true;
-        if (!userSetting) {
+        bridgeConnected = true;
+        if (!userSetting || !toolsEnabled) {
           postToBridge("SHINKU__requestSettings");
         }
         postToBridge("SHINKU__requestLibrary");
         break;
       }
       case "SHINKU__toolsDisabled": {
-        toolsEnabled = false;
-        sessionCleanup();
-        updateGlobalListeners();
-        restoreHiddenItems(null);
-        removeAllHoverGuards();
-        removeAllThumbnailBookmarkButtons();
-        syncEndscreenStyle();
-        syncDistractionStyle();
-        syncPlayerComfortStyle();
-        syncCinemaMode();
-        syncStickyMiniPlayer();
-        syncCodecPreference();
-        syncVolumeBoost();
-        syncTabPlaybackChannel();
-        syncIdleCheckTimer();
-        applySettingsHotReload();
+        disableToolsState();
         break;
       }
       case "SHINKU__toolsEnabled": {
         toolsEnabled = true;
         if (msg.data && typeof msg.data === "object") {
           userSetting = msg.data;
+          userSettingSig = JSON.stringify(userSetting);
         }
+        updateGlobalListeners();
         initContentFilter();
         applySettingsHotReload();
         if (isWatchPage()) {
@@ -2630,8 +3033,14 @@
       }
       case "SHINKU__userSetting": {
         const isFirstInit = userSetting === null;
+        const nextData = msg.data || {};
+        const nextSig = JSON.stringify(nextData);
+        if (!isFirstInit && toolsEnabled && nextSig === userSettingSig) {
+          break;
+        }
         toolsEnabled = true;
-        userSetting = msg.data || {};
+        userSetting = nextData;
+        userSettingSig = nextSig;
         if (isFirstInit) {
           postToBridge("SHINKU__requestLibrary");
           updateGlobalListeners();
@@ -2640,6 +3049,7 @@
             initWatchPage(0);
           }
         } else {
+          updateGlobalListeners();
           initContentFilter();
           applySettingsHotReload();
           if (isWatchPage()) {
@@ -2650,6 +3060,7 @@
       }
       case "SHINKU__updateUserSetting": {
         userSetting = msg.data || {};
+        userSettingSig = JSON.stringify(userSetting);
         applySettingsHotReload();
         break;
       }
@@ -2658,16 +3069,29 @@
         shinkuLibrary = msg.data && typeof msg.data === "object" ? msg.data : {};
         updatePlusButtonState();
         updateAllThumbnailBookmarkButtons();
-        if (isWatchPage()) {
+        if (toolsEnabled && isWatchPage()) {
           applyFastResume();
         }
         break;
       }
+      case "SHINKU__saveToLibraryAck": {
+        const ackId = msg.data?.saveId;
+        if (ackId && ackId === pendingAutoNextSaveId) {
+          const target = pendingAutoNextUrl;
+          cancelPendingAutoNext();
+          if (target) {
+            window.location.assign(target);
+          }
+        }
+        break;
+      }
       case "SHINKU__NEW_YOUTUBE_URL": {
+        flushVideoProgress();
         const nextId = msg.videoId || msg.data?.videoId || extractVideoId(window.location.href);
         sessionCleanup();
         pageID = nextId;
-        if (userSetting) {
+        if (toolsEnabled && userSetting) {
+          updateGlobalListeners();
           initContentFilter();
           if (isWatchPage()) {
             initWatchPage(0);
@@ -2684,7 +3108,28 @@
       default:
         break;
     }
-  });
+  }
+
+  function onPageHide() {
+    flushVideoProgress();
+  }
+
+  function teardownAll() {
+    disableToolsState();
+    window.removeEventListener("message", onWindowMessage);
+    window.removeEventListener("pagehide", onPageHide);
+    try {
+      delete window.__shinkuYtContentLoaded;
+      delete window.__shinkuYtContentTeardown;
+    } catch (_err) {
+      window.__shinkuYtContentLoaded = false;
+      window.__shinkuYtContentTeardown = null;
+    }
+  }
+
+  window.__shinkuYtContentTeardown = teardownAll;
+  window.addEventListener("message", onWindowMessage);
+  window.addEventListener("pagehide", onPageHide);
 
   // Request settings & library in case bridge posted before MAIN script attached
   postToBridge("SHINKU__requestSettings");

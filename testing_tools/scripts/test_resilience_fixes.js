@@ -280,12 +280,98 @@ async function testPlaybackCanonicalFolderAndEarlyClearCasing() {
 	);
 }
 
+async function testCrossSideMpvYouTubeRegressionFixes() {
+	// 1. commUtils strict YouTube URL checks + /live/ + &si=/&pp= normalization
+	const comm = await import(pathToFileURL(path.join(ROOT, "utils/commUtils.module.js")).href);
+	assert.strictEqual(comm.isYouTubeUrl("https://notyoutube.com/watch?v=dQw4w9WgXcQ"), false);
+	assert.strictEqual(comm.isYouTubeUrl("https://youtube.com.evil.com/watch?v=dQw4w9WgXcQ"), false);
+	assert.strictEqual(comm.isYouTubeUrl("https://www.youtube.com/live/dQw4w9WgXcQ"), true);
+	assert.strictEqual(comm.getYoutubeId("https://www.youtube.com/live/dQw4w9WgXcQ"), "dQw4w9WgXcQ");
+	assert.strictEqual(comm.getYoutubeId("https://www.youtube.com/watch?prev=badbad12345&v=dQw4w9WgXcQ"), "dQw4w9WgXcQ");
+	assert.strictEqual(
+		comm.normalizeYouTubeUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ&si=track1&pp=abc&feature=share"),
+		"https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+	);
+	assert.strictEqual(
+		comm.normalizeYouTubeUrl("https://www.youtube.com/live/dQw4w9WgXcQ?t=60&si=track9"),
+		"https://www.youtube.com/live/dQw4w9WgXcQ"
+	);
+
+	// 2. ControllerView Shadow DOM editable guard & shinkuWheelKey guard
+	const dom = new JSDOM('<!DOCTYPE html><html><body><div id="movie_player"></div><div id="host"></div></body></html>', {
+		url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+	});
+	global.window = dom.window;
+	global.document = dom.window.document;
+	window.MPV_INTERNAL = window.MPV_INTERNAL || {};
+	require(path.join(ROOT, "utils/commUtils.js"));
+	require(path.join(ROOT, "utils/ControllerView.js"));
+
+	const sentCommands = [];
+	const view = new window.MPV_INTERNAL.ControllerView({
+		state: {
+			state: {
+				detectedUrl: null,
+				kbAddPlaylist: "Shift+A",
+				kbSwitchPlaylist: "Shift+Tab",
+				kbToggleController: "ArrowUp",
+			},
+		},
+		ui: { shadowRoot: null },
+		pageScraper: { scrapePageDetails: (u) => ({ url: u, title: "Scraped" }) },
+		sendCommandToBackground: (action, fid, payload) => sentCommands.push({ action, fid, payload }),
+		bridge: { send: (action) => sentCommands.push({ action }) },
+	});
+
+	const shadow = document.getElementById("host").attachShadow({ mode: "open" });
+	const select = document.createElement("select");
+	shadow.appendChild(select);
+	select.focus();
+	view.handleGlobalKeydown(new dom.window.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true, composed: true }));
+	assert.strictEqual(sentCommands.length, 0, "handleGlobalKeydown must not fire inside Shadow DOM select");
+
+	const player = document.getElementById("movie_player");
+	player.dataset.shinkuWheelKey = "1";
+	view.handleGlobalKeydown(new dom.window.KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }));
+	delete player.dataset.shinkuWheelKey;
+	assert.strictEqual(sentCommands.length, 0, "handleGlobalKeydown must ignore shinkuWheelKey synthetic events");
+	assert.strictEqual(view.getEffectiveAddUrl(), "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+
+	// 3. core_services cold-start pendingFullSync preservation
+	let resolveGet;
+	const sessionState = {
+		mpv_pending_sync_state: { pendingFullSync: true, pendingSyncFolders: ["OldFolder"] },
+	};
+	global.chrome = {
+		runtime: { id: "test-ext-id", sendMessage: async () => ({}), onMessage: { addListener: () => {} } },
+		tabs: { query: async () => [] },
+		storage: {
+			local: { get: async () => ({}), set: async () => {}, remove: async () => {} },
+			session: {
+				get: () => new Promise((r) => { resolveGet = () => r({ ...sessionState }); }),
+				set: async (obj) => { Object.assign(sessionState, obj); },
+				remove: async (k) => { delete sessionState[k]; },
+			},
+			onChanged: { addListener: () => {} },
+		},
+		alarms: { create: () => {}, clear: () => {} },
+	};
+	const coreServices = await import(`${pathToFileURL(path.join(ROOT, "background/core_services.js")).href}?coldstart=${Date.now()}`);
+	coreServices.debouncedSyncToNativeHostFile("NewFolder", false);
+	resolveGet();
+	await new Promise((r) => setTimeout(r, 30));
+	assert.strictEqual(sessionState.mpv_pending_sync_state.pendingFullSync, true, "Cold-start pendingFullSync preserved");
+	assert.ok(sessionState.mpv_pending_sync_state.pendingSyncFolders.includes("OldFolder"));
+	assert.ok(sessionState.mpv_pending_sync_state.pendingSyncFolders.includes("NewFolder"));
+}
+
 async function main() {
 	await testSystemLoggerPersistRejectionSafety();
 	await testPlaylistRendererClipboardFailureSafety();
 	await testAniListUIFetchReleasesGenerationGuard();
 	await testCoreServicesRetryAlarmOnImmediateSyncFailure();
 	await testPlaybackCanonicalFolderAndEarlyClearCasing();
+	await testCrossSideMpvYouTubeRegressionFixes();
 	console.log("All resilience fix tests passed!");
 }
 

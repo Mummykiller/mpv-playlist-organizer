@@ -7,7 +7,7 @@ import { findM3u8InUrl } from "../background/handlers/m3u8_scanner.js";
 import { createHandler } from "../background/handler_factory.js";
 import { broadcastPlaylistState, broadcastItemUpdate, isFolderActive } from "../background/ui_broadcaster.js";
 import { broadcastLog } from "../background/messaging.js";
-import { normalizeYouTubeUrl, promptUserConfirmation } from "./commUtils.module.js";
+import { isYouTubeUrl, normalizeYouTubeUrl, promptUserConfirmation } from "./commUtils.module.js";
 import { nativeLink } from "./nativeLink.js";
 import { storage } from "../background/storage_instance.js";
 import { playbackManager } from "../background/playback_manager.js";
@@ -127,6 +127,41 @@ async function addUrlToFolder(
 	}
 }
 
+function buildYouTubeOEmbedUrl(rawUrl) {
+	const parsed = new URL(rawUrl);
+	const host = parsed.hostname.toLowerCase();
+	const path = parsed.pathname.replace(/\/+$/, "");
+	const listId = parsed.searchParams.get("list");
+
+	if ((host === "youtube.com" || host.endsWith(".youtube.com")) && path === "/playlist" && listId) {
+		const target = `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`;
+		return {
+			isPlaylist: true,
+			oEmbedUrl: `https://www.youtube.com/oembed?url=${encodeURIComponent(target)}&format=json`,
+		};
+	}
+
+	let videoId = parsed.searchParams.get("v");
+	if (!videoId && host === "youtu.be") {
+		const parts = parsed.pathname.slice(1).split("/").filter(Boolean);
+		videoId = parts[0] === "watch" ? parsed.searchParams.get("v") : parts[0];
+	} else if (!videoId) {
+		const parts = parsed.pathname.split("/").filter(Boolean);
+		if (parts.length >= 2 && ["shorts", "live", "embed", "v"].includes(parts[0])) {
+			videoId = parts[1];
+		}
+	}
+
+	if (!videoId || !/^[a-zA-Z0-9_-]{1,64}$/.test(videoId)) {
+		throw new Error("Could not extract YouTube video ID");
+	}
+	const target = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+	return {
+		isPlaylist: false,
+		oEmbedUrl: `https://www.youtube.com/oembed?url=${encodeURIComponent(target)}&format=json`,
+	};
+}
+
 /**
  * Handles complex URL addition including YouTube scraping and M3U8 scanning.
  */
@@ -138,21 +173,31 @@ async function _scrapeAndAddUrl(
 	skipYouTubeCheck = false,
 	isAutoAdd = false,
 ) {
-	const isYouTubeUrl = urlToAdd.includes("youtube.com/") || urlToAdd.includes("youtu.be/");
+	const isYt = isYouTubeUrl(urlToAdd);
 
-	if (isYouTubeUrl && !skipYouTubeCheck) {
+	if (isYt && !skipYouTubeCheck) {
 		broadcastLog({
 			text: `[Background]: YouTube URL detected. Scraping title...`,
 			type: "info",
 		});
 
+		const isPlaylistHint = (() => {
+			try {
+				const u = new URL(urlToAdd);
+				return u.pathname.replace(/\/+$/, "") === "/playlist" && u.searchParams.has("list");
+			} catch {
+				return false;
+			}
+		})();
+
 		try {
-			const videoId = urlToAdd.split("v=")[1]?.split("&")[0] || urlToAdd.split("/").pop();
-			const oEmbedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+			const { isPlaylist, oEmbedUrl } = buildYouTubeOEmbedUrl(urlToAdd);
 			const response = await fetch(oEmbedUrl);
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}`);
+			}
 			const videoDetails = await response.json();
 
-			const isPlaylist = urlToAdd.includes("/playlist?list=");
 			const itemTitle =
 				videoDetails.title ||
 				(isPlaylist ? "YouTube Playlist" : "YouTube Video");
@@ -166,8 +211,7 @@ async function _scrapeAndAddUrl(
 				text: `[Background]: YouTube oEmbed scrape failed: ${e.message}. Adding URL directly without scanner.`,
 				type: "warning",
 			});
-			const isPlaylist = urlToAdd.includes("/playlist?list=");
-			const fallbackTitle = isPlaylist ? "YouTube Playlist" : "YouTube Video";
+			const fallbackTitle = isPlaylistHint ? "YouTube Playlist" : "YouTube Video";
 			return await addUrlToFolder(folderId, urlToAdd, fallbackTitle, tab, sender, isAutoAdd);
 		}
 	} else {

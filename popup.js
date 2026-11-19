@@ -701,6 +701,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 		window.addEventListener("keydown", handleGlobalKeydown, true);
 
 		// --- Main Initialization ---
+		let ytInitPromise = Promise.resolve();
 		async function initializePopup() {
 			try {
 				// 1. INSTANT RENDER: Direct storage access (No Background Script required)
@@ -734,6 +735,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 					initialPlaylistData[`mpv_folder_data_${lastUsedFolderId}`]
 						?.lastPlayedId;
 
+				await ytInitPromise;
 				// Set initial mode optimistically based on prefs
 				const showMiniView = prefs?.mode === "minimized";
 				uiManager.setMode(showMiniView ? "mini" : "full");
@@ -946,8 +948,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 		// Add a listener for log messages from the background script.
 		// This will only receive messages while the popup is open.
 		chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-			// Handle log messages for the status bar
-			if (request.log) {
+			// Handle log messages for the status bar (only when MPV tab is visible)
+			if (request.log && youTubeToolsManager?.getActiveExtTab?.() !== "yt") {
 				showStatus(request.log.text, request.log.type === "error");
 			}
 
@@ -1155,22 +1157,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 		});
 		aniListManager.bindAniListListeners();
 
-		// Start the initialization process
-		optionsManager.initializeEventListeners();
-		initializePopup();
-
 		const youTubeToolsManager = createYouTubeToolsManager({
 			showStatus,
 			onHideMpvView: () => {
+				optionsManager.stopRecording();
+				cancelReorderMode();
 				uiManager.views.mini.style.display = "none";
 				uiManager.views.full.style.display = "none";
 			},
 			onRestoreMpvView: () => {
-				uiManager.setMode(uiManager.activeMode || "full");
+				if (uiManager.activeMode) {
+					uiManager.setMode(uiManager.activeMode);
+				}
 			},
 		});
 		uiManager.isMpvViewHidden = () => youTubeToolsManager.getActiveExtTab() === "yt";
-		youTubeToolsManager.initialize();
+		optionsManager.initializeEventListeners();
+		ytInitPromise = youTubeToolsManager.initialize().catch(() => {});
+		initializePopup();
 
 		// Periodic Sync: Now replaced by reactive storage listener for better performance.
 		chrome.storage.onChanged.addListener((changes, areaName) => {

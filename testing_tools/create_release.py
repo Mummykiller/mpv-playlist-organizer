@@ -12,6 +12,7 @@ IGNORE_PATTERNS = (
     "__pycache__",
     "*.pyc",
     ".pytest_cache",
+    ".ruff_cache",
     "mpv-playlist-organizer-release",
     "mpv-playlist-organizer-release.zip",
     "yt-tools-legacy",

@@ -20,7 +20,26 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
 
 # Regular Expressions for URL detection
-YOUTUBE_RE = re.compile(r"(youtube\.com|youtu\.be)")
+YOUTUBE_RE = re.compile(
+    r"^https?://(?:[a-z0-9-]+\.)*(?:youtube\.com|youtu\.be)(?::\d+)?(?:/|\?|$)",
+    re.IGNORECASE,
+)
+
+
+def is_youtube_playlist_url(url):
+    """Returns True only for dedicated YouTube playlist URLs (/playlist?list=...),
+    never single watch URLs that happen to carry &list=."""
+    if not url or not isinstance(url, str) or not YOUTUBE_RE.search(url):
+        return False
+    try:
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(url)
+        path = parsed.path.rstrip("/").lower()
+        qs = parse_qs(parsed.query)
+        return path == "/playlist" and bool(qs.get("list") and qs["list"][0])
+    except Exception as e:
+        logging.debug(f"Failed to parse YouTube playlist URL {url}: {e}")
+        return False
 # Flexible regex for Animepahe/owocdn vault links (allows query params)
 VAULT_RE = re.compile(r"(vault-\d+|na-\d+|cdn-\d+)\.(owocdn|uwucdn)\.top/stream/.*uwu\.m3u8")
 # Common direct stream extensions
@@ -452,7 +471,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
 
     if is_yt:
         # 2a. Handle Playlist Expansion (REQUIRES COOKIES FILE for Python to read)
-        if "list=" in url:
+        if is_youtube_playlist_url(url):
             if check_cancelled and check_cancelled():
                 raise RuntimeError("Launch cancelled by user.")
             try:
@@ -490,8 +509,11 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 entries = []
                 for line in lines:
                     if '|' in line:
-                        title, webpage_url = line.split('|', 1)
-                        title = file_io.sanitize_string(title)
+                        title, webpage_url = line.rsplit('|', 1)
+                        title = file_io.sanitize_string(title.strip())
+                        webpage_url = webpage_url.strip()
+                        if not webpage_url.startswith(("http://", "https://")):
+                            continue
 
                         ytdl_opts = []
                         # NOTE: We do NOT append "cookies=" here.
