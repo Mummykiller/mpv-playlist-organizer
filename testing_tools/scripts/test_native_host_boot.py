@@ -1,16 +1,22 @@
 import os
 import sys
 import unittest
-import subprocess
 import json
 import struct
 import time
 import logging
 from typing import Any, Dict
 
-# Ensure base_test can be imported
+# Ensure base_test and shared native host harness can be imported
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_test import BaseTestCase
+from native_host_harness import (
+    read_native_message,
+    read_native_response,
+    send_native_message,
+    spawn_native_host,
+    terminate_native_host,
+)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils import security
@@ -28,72 +34,35 @@ class TestNativeHostBoot(BaseTestCase):
 
     def tearDown(self):
         for proc in self.procs:
-            try:
-                if proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=1.0)
-                    except (subprocess.TimeoutExpired, OSError) as wait_err:
-                        logging.debug(f"[TEST] Terminate wait timed out: {wait_err}")
-                        proc.kill()
-                        proc.wait(timeout=1.0)
-            except (subprocess.SubprocessError, OSError) as proc_err:
-                logging.debug(f"[TEST] Error terminating proc: {proc_err}")
-            for stream in (proc.stdin, proc.stdout, proc.stderr):
-                if stream and not stream.closed:
-                    try:
-                        stream.close()
-                    except OSError as stream_err:
-                        logging.debug(f"[TEST] Error closing stream: {stream_err}")
+            terminate_native_host(proc, wait_timeout=1.0)
         super().tearDown()
 
     def spawn_host(self, working_dir: str):
         """Spawns the native host process and tracks it for clean shutdown."""
-        env = os.environ.copy()
-        env["XDG_DATA_HOME"] = working_dir
-        env["HOME"] = working_dir
-        script_path = os.path.join(PROJECT_ROOT, "native_host.py")
-
-        proc = subprocess.Popen(
-            [sys.executable, script_path],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            cwd=PROJECT_ROOT
-        )
+        proc = spawn_native_host(working_dir, project_root=PROJECT_ROOT)
         self.procs.append(proc)
         return proc
 
     def send_msg(self, proc, msg: Dict[str, Any]):
         """Sends a Native Messaging formatted message (4-byte length prefix + UTF-8 JSON)."""
-        encoded = json.dumps(msg).encode('utf-8')
-        proc.stdin.write(struct.pack('@I', len(encoded)))
-        proc.stdin.write(encoded)
-        proc.stdin.flush()
+        send_native_message(proc, msg)
 
     def read_msg(self, proc, timeout=5.0) -> Dict[str, Any]:
-        """Reads a single Native Messaging framed message with explicit length prefix checking."""
-        raw_length = proc.stdout.read(4)
-        if not raw_length or len(raw_length) < 4:
-            return None
-        length = struct.unpack('@I', raw_length)[0]
-        data = proc.stdout.read(length).decode('utf-8')
-        return json.loads(data)
+        """Reads a single Native Messaging framed message with explicit timeout and length prefix checking."""
+        return read_native_message(proc, timeout=timeout)
 
     def read_response(self, proc, request_id: str, timeout=5.0) -> Dict[str, Any]:
         """Reads messages from the process until the one with request_id is found."""
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            msg = self.read_msg(proc, timeout=timeout)
-            if msg is None:
-                return None
+        return read_native_response(proc, request_id=request_id, timeout=timeout)
 
-            if msg.get('request_id') == request_id:
-                return msg
-            else:
-                logging.info(f"Skipping unsolicited message: {msg.get('action')}")
-        return None
+    def test_read_msg_respects_timeout(self):
+        """Verifies read_msg enforces its timeout instead of blocking indefinitely on idle stdout."""
+        proc = self.spawn_host(self.test_dir)
+        t0 = time.monotonic()
+        msg = self.read_msg(proc, timeout=0.2)
+        elapsed = time.monotonic() - t0
+        self.assertIsNone(msg, "Idle host without requests must return None on timeout")
+        self.assertLess(elapsed, 1.0, f"read_msg blocked too long ({elapsed:.2f}s)")
 
     # =========================================================================
     # Stdio Framing & Header Packing/Unpacking Tests

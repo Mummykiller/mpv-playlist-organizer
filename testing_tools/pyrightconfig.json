@@ -9,7 +9,9 @@
     "../yt-tools-legacy",
     "../mpv-playlist-organizer-release",
     "../.git",
-    "../__pycache__"
+    "../__pycache__",
+    "../mcp_server",
+    "../mcp_server/.venv"
   ],
   "extraPaths": [
     "..",

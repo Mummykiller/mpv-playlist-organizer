@@ -23,6 +23,7 @@ IGNORE_PATTERNS = (
     ".gitignore",
     ".gemini*",
     "testing_tools",
+    "mcp_server",
     "biome.json",
     "pyproject.toml",
     "verify_changes.py",

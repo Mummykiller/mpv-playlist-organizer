@@ -27,3 +27,6 @@ mpv-playlist-organizer-release.zip
 yt-tools-legacy/
 yt-tools-standalone/
 yt-tools-standalone.zip
+mcp_server/.venv/
+.gemini/settings.json
+.gemini/proposals/

@@ -5,6 +5,7 @@ extend-exclude = [
     "yt-tools-standalone",
     "yt-tools-legacy",
     "mpv-playlist-organizer-release",
+    "mcp_server/.venv",
 ]
 
 [tool.ruff.lint]

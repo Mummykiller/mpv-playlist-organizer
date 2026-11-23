@@ -1,0 +1,8 @@
+[project]
+name = "mpv-playlist-organizer-mcp"
+version = "0.1.0"
+description = "Token-efficient local stdio MCP server for mpv-playlist-organizer"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.0.0",
+]
