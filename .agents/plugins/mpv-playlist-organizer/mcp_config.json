@@ -1,13 +1,13 @@
 {
   "mcpServers": {
     "mpv-playlist-organizer": {
-      "command": "/home/shinku/.local/bin/uv",
+      "command": "uv",
       "args": [
         "run",
         "--frozen",
         "--quiet",
         "--directory",
-        "/home/shinku/Documents/mpv-playlist-organizer/mcp_server",
+        "mcp_server",
         "python",
         "server.py"
       ],

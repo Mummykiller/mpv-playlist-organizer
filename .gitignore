@@ -30,3 +30,4 @@ yt-tools-standalone.zip
 mcp_server/.venv/
 .gemini/settings.json
 .gemini/proposals/
+.ruff_cache/

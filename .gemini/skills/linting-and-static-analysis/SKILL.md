@@ -25,7 +25,7 @@ All linters run automatically inside `testing_tools/run_suite.py` (invoked by `p
 
 ## Standalone Commands
 
-Run from the repository root (`/home/shinku/Documents/mpv-playlist-organizer`):
+Run from the repository root:
 
 ```bash
 # Python lint (E, F, W, B bugbear)
