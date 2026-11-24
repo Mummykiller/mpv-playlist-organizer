@@ -140,8 +140,10 @@ export async function handlePlaybackHealthChanged(data) {
 
 	// Update the global playback state bucket
 	const { active_playback_state: pbState } = await chrome.storage.local.get("active_playback_state");
+	let clearedStale = false;
 	if (health === "dead") {
-		await playbackManager.clearStalePlaybackState(actualFolderId);
+		const res = await playbackManager.clearStalePlaybackState(actualFolderId);
+		clearedStale = Boolean(res?.cleared);
 	}
 	if (pbState && pbState.folderId?.toLowerCase() === actualFolderId.toLowerCase()) {
 		pbState.folderId = actualFolderId;
@@ -162,6 +164,20 @@ export async function handlePlaybackHealthChanged(data) {
 		broadcastPlaybackState(actualFolderId, {
 			health,
 			...(health === "dead" ? { isRunning: false, isLaunching: false, isPaused: false, isIdle: false } : {}),
+		});
+	} else if (health === "dead" && clearedStale) {
+		await broadcastPlaybackState(actualFolderId, {
+			health,
+			isRunning: false,
+			isLaunching: false,
+			isPaused: false,
+			isIdle: false,
+		});
+		broadcastToTabs({
+			action: "render_playlist",
+			folderId: actualFolderId,
+			isFolderActive: false,
+			isClosing: false,
 		});
 	}
 }

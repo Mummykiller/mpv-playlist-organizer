@@ -111,6 +111,18 @@ def verify_mpv_process(pid, ipc_path=None):
     # 2. Check process command line / name on Linux via /proc
     system = platform.system()
     if system == "Linux":
+        proc_status = f"/proc/{pid}/status"
+        try:
+            if os.path.exists(proc_status):
+                with open(proc_status, "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if line.startswith("State:"):
+                            if "Z" in line.split(":", 1)[1]:
+                                return False
+                            break
+        except Exception as e:
+            logging.debug(f"Failed to inspect /proc/{pid}/status: {e}")
+
         proc_cmdline = f"/proc/{pid}/cmdline"
         try:
             if os.path.exists(proc_cmdline):
@@ -136,6 +148,8 @@ def verify_mpv_process(pid, ipc_path=None):
     try:
         import psutil
         p = psutil.Process(pid)
+        if p.status() == psutil.STATUS_ZOMBIE:
+            return False
         name = p.name().lower()
         cmdline_list = []
         try:

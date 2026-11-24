@@ -540,5 +540,43 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
         self.assertEqual(res.get("isRunning"), False)
         ctx.mpv.clear.assert_called_once()
 
+    def test_get_playback_status_clears_zombie_or_reused_pid_when_ipc_fails(self):
+        """Regression: handle_get_playback_status clears session if IPC ping fails and PID is no longer verified as MPV."""
+        from utils.handlers.playback_handler import PlaybackHandler
+
+        ctx = MagicMock()
+        ctx.mpv.sync_lock = threading.RLock()
+        ctx.mpv.is_alive = True
+        ctx.mpv.pid = 99998
+        ctx.mpv.ipc_path = "/tmp/stale.sock"
+        ctx.mpv.owner_folder_id = "Anime"
+        ctx.mpv.playlist = []
+        ctx.mpv.playlist_tracker = None
+        ctx.mpv.ipc_manager.is_connected.return_value = True
+        ctx.mpv.ipc_manager.get_property.return_value = None
+        ctx.ipc.is_pid_running.return_value = True
+        ctx.ipc.verify_mpv_process.return_value = False
+
+        handler = PlaybackHandler(ctx)
+        res = handler.handle_get_playback_status(MagicMock())
+
+        self.assertEqual(res.get("isRunning"), False)
+        ctx.mpv.clear.assert_called_once()
+
+    def test_verify_mpv_process_rejects_zombie_process(self):
+        """Regression: verify_mpv_process returns False for a zombie mpv process via psutil."""
+        fake_psutil = MagicMock()
+        fake_psutil.STATUS_ZOMBIE = "zombie"
+        fake_proc = MagicMock()
+        fake_proc.status.return_value = "zombie"
+        fake_proc.name.return_value = "mpv"
+        fake_proc.cmdline.return_value = []
+        fake_psutil.Process.return_value = fake_proc
+
+        with patch.object(ipc_utils, "is_pid_running", return_value=True), \
+             patch.object(ipc_utils.platform, "system", return_value="Darwin"), \
+             patch.dict(sys.modules, {"psutil": fake_psutil}):
+            self.assertFalse(ipc_utils.verify_mpv_process(42424, ipc_path=None))
+
 if __name__ == '__main__':
     unittest.main()
