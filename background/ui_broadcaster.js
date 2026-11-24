@@ -31,9 +31,16 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 	try {
 		// 1. Try to get real-time status with a tight timeout
 		const statusResponse = await nativeLink.getPlaybackStatus().catch(() => null);
+		const hasAuthoritativeStatus = Boolean(statusResponse && statusResponse.success !== false);
+
+		// Authoritative "not running" from native host clears any stale local session/cache
+		if (hasAuthoritativeStatus && !statusResponse.isRunning) {
+			await playbackManager.clearStalePlaybackState(null, { preserveRecentLaunch: true });
+			return { ...IDLE_VISUAL_STATE, folderId };
+		}
 
 		// 2. If native host is not available/timed out, fallback to local cache
-		let finalStatus = statusResponse;
+		let finalStatus = hasAuthoritativeStatus ? statusResponse : null;
 		if (!finalStatus) {
 			const { mpv_playback_cache } = await chrome.storage.local.get(
 				"mpv_playback_cache",
@@ -54,9 +61,9 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
 
 		// Rely on automated normalization
 		const isProcessRunning = !!finalStatus.isRunning;
-		const isManagerActive = isFolderActive(folderId);
-		
-		let isActive = (isProcessRunning || isManagerActive) && (finalStatus.folderId?.toLowerCase() === folderId?.toLowerCase() || !finalStatus.folderId);
+		const isManagerActive = !hasAuthoritativeStatus && isFolderActive(folderId);
+		const folderMatches = finalStatus.folderId?.toLowerCase() === folderId?.toLowerCase();
+		const isActive = (isProcessRunning || isManagerActive) && folderMatches;
 		
 		const isPaused = (finalStatus.isPaused || finalStatus.isIdle) ?? false;
 		let needsAppend = false;

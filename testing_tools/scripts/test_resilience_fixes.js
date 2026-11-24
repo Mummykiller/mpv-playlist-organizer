@@ -365,6 +365,145 @@ async function testCrossSideMpvYouTubeRegressionFixes() {
 	assert.ok(sessionState.mpv_pending_sync_state.pendingSyncFolders.includes("NewFolder"));
 }
 
+async function testSleepWakeStalePlaybackReconciliation() {
+	const localStore = {
+		mpv_playback_cache: {
+			folderId: "Anime",
+			isRunning: true,
+			isLaunching: false,
+			timestamp: Date.now() - 60000,
+		},
+		active_playback_state: {
+			folderId: "Anime",
+			isRunning: true,
+			isLaunching: false,
+			sessionIds: ["item1"],
+		},
+	};
+	const sessionStore = {};
+	const storageData = {
+		folders: {
+			Anime: {
+				name: "Anime",
+				playlist: [{ id: "item1", url: "https://example.com/1", title: "Ep 1" }],
+			},
+		},
+		settings: { uiPreferences: { global: {} } },
+	};
+
+	global.chrome = {
+		...global.chrome,
+		runtime: {
+			id: "test-ext-id",
+			sendMessage: async () => ({}),
+			onMessage: { addListener: () => {} },
+		},
+		tabs: {
+			query: async () => [],
+		},
+		storage: {
+			local: {
+				get: async (keys) => {
+					if (typeof keys === "string") return { [keys]: localStore[keys] };
+					if (Array.isArray(keys)) {
+						const out = {};
+						for (const k of keys) out[k] = localStore[k];
+						return out;
+					}
+					return { ...localStore };
+				},
+				set: async (obj) => {
+					Object.assign(localStore, obj);
+				},
+				remove: async (key) => {
+					delete localStore[key];
+				},
+			},
+			session: {
+				get: async () => ({ ...sessionStore }),
+				set: async (obj) => {
+					Object.assign(sessionStore, obj);
+				},
+				remove: async (key) => {
+					delete sessionStore[key];
+				},
+			},
+			onChanged: { addListener: () => {} },
+		},
+	};
+
+	const { storage } = await import(pathToFileURL(path.join(ROOT, "background/storage_instance.js")).href);
+	storage.get = async () => storageData;
+	storage.set = async () => {};
+
+	const { playbackManager } = await import(pathToFileURL(path.join(ROOT, "background/playback_manager.js")).href);
+	const { nativeLink } = await import(pathToFileURL(path.join(ROOT, "utils/nativeLink.js")).href);
+	const { getVisualPlaybackState } = await import(pathToFileURL(path.join(ROOT, "background/ui_broadcaster.js")).href);
+	const playbackHandlers = await import(pathToFileURL(path.join(ROOT, "background/handlers/playback.js")).href);
+
+	const origIsMpvRunning = nativeLink.isMpvRunning;
+	const origGetPlaybackStatus = nativeLink.getPlaybackStatus;
+
+	const seedStaleState = () => {
+		localStore.mpv_playback_cache = {
+			folderId: "Anime",
+			isRunning: true,
+			isLaunching: false,
+			timestamp: Date.now() - 60000,
+		};
+		localStore.active_playback_state = {
+			folderId: "Anime",
+			isRunning: true,
+			isLaunching: false,
+			sessionIds: ["item1"],
+		};
+		playbackManager.syncCache = localStore.mpv_playback_cache;
+		const session = playbackManager.getSession("Anime");
+		session.isPlaying = true;
+		return session;
+	};
+
+	try {
+		// 1. handleSessionRestored with no active session must clear stale sleep/wake state
+		const s1 = seedStaleState();
+		await playbackHandlers.handleSessionRestored({ action: "session_restored", result: null });
+		assert.strictEqual(s1.isPlaying, false, "handleSessionRestored(null) must clear session.isPlaying");
+		assert.strictEqual(localStore.mpv_playback_cache, undefined, "handleSessionRestored(null) must remove stale mpv_playback_cache");
+		assert.strictEqual(localStore.active_playback_state.isRunning, false, "handleSessionRestored(null) must clear active_playback_state.isRunning");
+
+		// 2. getVisualPlaybackState must honor authoritative native isRunning:false over stale session.isPlaying
+		const s2 = seedStaleState();
+		nativeLink.getPlaybackStatus = async () => ({ success: true, isRunning: false, isPaused: false });
+		const visual = await getVisualPlaybackState("Anime", storageData.folders.Anime.playlist);
+		assert.strictEqual(visual.isActive, false, "getVisualPlaybackState must not override native isRunning:false with stale session");
+		assert.strictEqual(s2.isPlaying, false, "getVisualPlaybackState must clear stale session.isPlaying");
+		assert.strictEqual(localStore.mpv_playback_cache, undefined, "getVisualPlaybackState must clear stale mpv_playback_cache");
+
+		// 3. handleIsMpvRunning must query native host instead of blindly returning stale cache
+		const s3 = seedStaleState();
+		let nativeQueried = false;
+		nativeLink.isMpvRunning = async () => {
+			nativeQueried = true;
+			return { success: true, isRunning: false, folderId: null };
+		};
+		const runningRes = await playbackHandlers.handleIsMpvRunning({}, {});
+		assert.strictEqual(nativeQueried, true, "handleIsMpvRunning must query nativeLink.isMpvRunning");
+		assert.strictEqual(runningRes.isRunning, false, "handleIsMpvRunning must return false when native host says not running");
+		assert.strictEqual(s3.isPlaying, false, "handleIsMpvRunning must clear stale session.isPlaying");
+		assert.strictEqual(localStore.mpv_playback_cache, undefined, "handleIsMpvRunning must remove stale mpv_playback_cache");
+
+		// 4. handlePlaybackHealthChanged("dead") must clear mpv_playback_cache and session.isPlaying
+		const s4 = seedStaleState();
+		await playbackHandlers.handlePlaybackHealthChanged({ folderId: "Anime", health: "dead" });
+		assert.strictEqual(s4.isPlaying, false, "health=dead must clear session.isPlaying");
+		assert.strictEqual(localStore.mpv_playback_cache, undefined, "health=dead must remove mpv_playback_cache");
+		assert.strictEqual(localStore.active_playback_state.isRunning, false, "health=dead must set active_playback_state.isRunning=false");
+	} finally {
+		nativeLink.isMpvRunning = origIsMpvRunning;
+		nativeLink.getPlaybackStatus = origGetPlaybackStatus;
+	}
+}
+
 async function main() {
 	await testSystemLoggerPersistRejectionSafety();
 	await testPlaylistRendererClipboardFailureSafety();
@@ -372,6 +511,7 @@ async function main() {
 	await testCoreServicesRetryAlarmOnImmediateSyncFailure();
 	await testPlaybackCanonicalFolderAndEarlyClearCasing();
 	await testCrossSideMpvYouTubeRegressionFixes();
+	await testSleepWakeStalePlaybackReconciliation();
 	console.log("All resilience fix tests passed!");
 }
 

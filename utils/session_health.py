@@ -21,6 +21,7 @@ def start_health_watcher(session):
                 is_alive = session.is_alive
                 ipc = session.ipc_manager
                 pid = session.pid
+                ipc_path = session.ipc_path
                 folder_id = session.owner_folder_id
                 current_gen = getattr(session, "session_generation", 0)
 
@@ -52,11 +53,13 @@ def start_health_watcher(session):
                     "health": current_health
                 })
 
-                if current_health == "dead":
-                    if not ipc_utils.is_pid_running(pid):
-                        logging.warning("[PY][Health] PID is gone. Clearing session state.")
-                        session.clear(session_generation=gen)
+            if current_health == "dead":
+                if not ipc_utils.is_pid_running(pid) or not ipc_utils.verify_mpv_process(pid, ipc_path=ipc_path):
+                    logging.warning("[PY][Health] PID is gone or no longer MPV. Clearing session state.")
+                    session.clear(session_generation=gen)
                     break
+                time.sleep(1.0)
+                continue
 
             time.sleep(0.5)
         logging.info("[PY][Health] Watcher stopped.")

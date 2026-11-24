@@ -3,6 +3,7 @@ import sys
 import unittest
 import json
 import socket
+import threading
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -483,6 +484,61 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
         )
         self.assertEqual(rc, -1)
         self.assertTrue(any("timed out" in (m.get("log", {}).get("text", "").lower()) for m in msgs))
+
+    def test_health_watcher_keeps_watching_after_dead_until_pid_gone(self):
+        """Regression: start_health_watcher stays alive across transient wake stalls and clears once MPV PID is gone."""
+        from utils import session_health
+
+        clear_called = threading.Event()
+        session = MagicMock()
+        session.sync_lock = threading.RLock()
+        session.is_alive = True
+        session.pid = 54321
+        session.ipc_path = "/tmp/fake.sock"
+        session.owner_folder_id = "Anime"
+        session.session_generation = 1
+        session.health_watcher_thread = None
+        session.ipc_manager = MagicMock()
+        session.ipc_manager.get_property.return_value = None
+
+        def on_clear(**_kwargs):
+            session.is_alive = False
+            clear_called.set()
+
+        session.clear.side_effect = on_clear
+
+        # First "dead" tick: PID still verified alive (transient sleep/wake stall); second tick: PID gone
+        verify_results = iter([True, False])
+
+        with patch.object(session_health.ipc_utils, "is_pid_running", return_value=True), \
+             patch.object(session_health.ipc_utils, "verify_mpv_process", side_effect=lambda *_a, **_kw: next(verify_results, False)), \
+             patch.object(session_health.time, "sleep", return_value=None):
+            session_health.start_health_watcher(session)
+            self.assertTrue(clear_called.wait(timeout=2.0), "Watcher must stay alive after first dead tick and clear once verify_mpv_process is False")
+            session.health_watcher_thread.join(timeout=2.0)
+
+        session.clear.assert_called_once_with(session_generation=1)
+
+    def test_is_mpv_running_clears_zombie_or_reused_pid_when_ipc_fails(self):
+        """Regression: handle_is_mpv_running clears session if IPC ping fails and PID is no longer verified as MPV."""
+        from utils.handlers.playback_handler import PlaybackHandler
+
+        ctx = MagicMock()
+        ctx.mpv.sync_lock = threading.RLock()
+        ctx.mpv.is_alive = True
+        ctx.mpv.pid = 99999
+        ctx.mpv.ipc_path = "/tmp/stale.sock"
+        ctx.mpv.owner_folder_id = "Anime"
+        ctx.mpv.ipc_manager.is_connected.return_value = True
+        ctx.mpv.ipc_manager.get_property.return_value = None
+        ctx.ipc.is_pid_running.return_value = True
+        ctx.ipc.verify_mpv_process.return_value = False
+
+        handler = PlaybackHandler(ctx)
+        res = handler.handle_is_mpv_running(MagicMock())
+
+        self.assertEqual(res.get("isRunning"), False)
+        ctx.mpv.clear.assert_called_once()
 
 if __name__ == '__main__':
     unittest.main()

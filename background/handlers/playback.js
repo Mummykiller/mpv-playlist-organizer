@@ -140,6 +140,9 @@ export async function handlePlaybackHealthChanged(data) {
 
 	// Update the global playback state bucket
 	const { active_playback_state: pbState } = await chrome.storage.local.get("active_playback_state");
+	if (health === "dead") {
+		await playbackManager.clearStalePlaybackState(actualFolderId);
+	}
 	if (pbState && pbState.folderId?.toLowerCase() === actualFolderId.toLowerCase()) {
 		pbState.folderId = actualFolderId;
 		pbState.health = health;
@@ -147,12 +150,19 @@ export async function handlePlaybackHealthChanged(data) {
 		// If health is dead, we should also mark it as not running to trigger UI reset
 		if (health === "dead") {
 			pbState.isRunning = false;
+			pbState.isLaunching = false;
+			pbState.isPaused = false;
+			pbState.isIdle = false;
+			pbState.sessionIds = [];
 		}
 		
 		await chrome.storage.local.set({ active_playback_state: pbState });
 		
 		// Broadcast the new state to all tabs
-		broadcastPlaybackState(actualFolderId, { health });
+		broadcastPlaybackState(actualFolderId, {
+			health,
+			...(health === "dead" ? { isRunning: false, isLaunching: false, isPaused: false, isIdle: false } : {}),
+		});
 	}
 }
 
@@ -1139,17 +1149,31 @@ export const handleAppend = createHandler(async ({ request, folderId }) => {
 });
 
 export const handleIsMpvRunning = createHandler(async () => {
+	const response = await nativeLink.isMpvRunning().catch(() => null);
+	if (response && response.success !== false) {
+		if (!response.isRunning) {
+			await playbackManager.clearStalePlaybackState(null, { preserveRecentLaunch: true });
+		}
+		return response;
+	}
+
+	// Only fall back to local cache when the native host is unreachable and a launch is actively in flight
 	const { mpv_playback_cache } = await chrome.storage.local.get("mpv_playback_cache");
-	if (mpv_playback_cache && mpv_playback_cache.folderId && !mpv_playback_cache.isIdle) {
-		return { 
-			success: true, 
-			isRunning: true, 
+	if (
+		mpv_playback_cache?.folderId &&
+		mpv_playback_cache.isLaunching &&
+		typeof mpv_playback_cache.timestamp === "number" &&
+		Date.now() - mpv_playback_cache.timestamp < 30000
+	) {
+		return {
+			success: true,
+			isRunning: true,
 			folderId: mpv_playback_cache.folderId,
 			isPaused: mpv_playback_cache.isPaused,
-			lastPlayedId: mpv_playback_cache.lastPlayedId
+			lastPlayedId: mpv_playback_cache.lastPlayedId,
 		};
 	}
-	return nativeLink.isMpvRunning();
+	return response || { success: false, isRunning: false };
 }, {
 	manualPersistence: true,
 });
@@ -1171,6 +1195,25 @@ export async function handleSessionRestored(request) {
 
 	if (!result || (result.wasStale === undefined && result.folderId === undefined)) {
 		broadcastLog({ text: `[Background]: No active session found to restore.`, type: "info" });
+		const { cleared, folderIds } = await playbackManager.clearStalePlaybackState(null, {
+			preserveRecentLaunch: true,
+		});
+		if (cleared) {
+			for (const fid of folderIds) {
+				await broadcastPlaybackState(fid, {
+					isRunning: false,
+					isClosing: false,
+					isIdle: false,
+					isLaunching: false,
+				});
+				broadcastToTabs({
+					action: "render_playlist",
+					folderId: fid,
+					isFolderActive: false,
+					isClosing: false,
+				});
+			}
+		}
 		return;
 	}
 

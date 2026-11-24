@@ -393,11 +393,15 @@ class PlaybackHandler(BaseHandler):
         if is_running and not self.ipc_utils.is_pid_running(pid):
             is_running = False
 
-        # 2. Socket check if PID seems alive (a slow IPC reply must not tear down a live session)
+        # 2. Socket check if PID seems alive (a slow IPC reply must not tear down a live session,
+        #    but a dead/reused/zombie PID must be cleared)
         if is_running:
             if ipc_manager and ipc_manager.is_connected():
                 if ipc_manager.get_property("pid", timeout=0.3) is None:
-                    logging.debug("[PY][Handler] IPC ping timed out but PID is alive; keeping session.")
+                    if not self.ipc_utils.verify_mpv_process(pid, ipc_path=None):
+                        is_running = False
+                    else:
+                        logging.debug("[PY][Handler] IPC ping timed out but MPV PID is verified alive; keeping session.")
             else:
                 is_running = self.ipc_utils.is_process_alive(pid, ipc_path)
 

@@ -299,6 +299,89 @@ export class PlaybackManager {
 		}
 		return null;
 	}
+
+	/**
+	 * Reconciles and clears stale local playback state when the native host reports
+	 * no live MPV session (e.g., after PC sleep/wake or missed mpv_exited events).
+	 */
+	async clearStalePlaybackState(targetFolderId = null, { preserveRecentLaunch = false } = {}) {
+		await this.initPromise;
+		const stored = chrome.storage?.local?.get
+			? await chrome.storage.local
+					.get(["mpv_playback_cache", "active_playback_state"])
+					.catch(() => ({}))
+			: {};
+		const cache = stored?.mpv_playback_cache || this.syncCache;
+		const pbState = stored?.active_playback_state || null;
+
+		if (
+			preserveRecentLaunch &&
+			cache?.isLaunching &&
+			typeof cache.timestamp === "number" &&
+			Date.now() - cache.timestamp < 30000
+		) {
+			return { cleared: false, folderIds: [] };
+		}
+
+		const targetLower = targetFolderId ? targetFolderId.toLowerCase() : null;
+		const affected = new Set();
+		let didChange = false;
+
+		for (const [key, session] of this.sessions.entries()) {
+			if (targetLower && key.toLowerCase() !== targetLower) continue;
+			if (session.isPlaying || session.currentPlayingItem) {
+				session.isPlaying = false;
+				session.currentPlayingItem = null;
+				affected.add(key);
+				didChange = true;
+			}
+		}
+		if (didChange) {
+			this.persistSessions();
+		}
+
+		if (cache && (!targetLower || cache.folderId?.toLowerCase() === targetLower)) {
+			if (cache.folderId) affected.add(cache.folderId);
+			this.syncCache = null;
+			if (chrome.storage?.local?.remove) {
+				await chrome.storage.local.remove("mpv_playback_cache").catch(() => {});
+			}
+			didChange = true;
+		} else if (!targetLower && this.syncCache) {
+			if (this.syncCache.folderId) affected.add(this.syncCache.folderId);
+			this.syncCache = null;
+			didChange = true;
+		}
+
+		if (
+			pbState &&
+			(pbState.isRunning || pbState.isLaunching) &&
+			(!targetLower || pbState.folderId?.toLowerCase() === targetLower)
+		) {
+			if (pbState.folderId) affected.add(pbState.folderId);
+			if (chrome.storage?.local?.set) {
+				await chrome.storage.local
+					.set({
+						active_playback_state: {
+							...pbState,
+							isRunning: false,
+							isLaunching: false,
+							isPaused: false,
+							isIdle: false,
+							sessionIds: [],
+						},
+					})
+					.catch(() => {});
+			}
+			didChange = true;
+		}
+
+		if (targetFolderId && didChange) {
+			affected.add(targetFolderId);
+		}
+
+		return { cleared: didChange, folderIds: Array.from(affected) };
+	}
 }
 
 export const playbackManager = new PlaybackManager();
