@@ -91,3 +91,4 @@ This skill defines the high-level security invariants, validation entry points, 
 8. **Never leak raw paths or tokens** into UI-bound error responses or logs; use `mask_path` and redact `token=` query parameters.
 9. **Cap untrusted text** forwarded to logs (`log_event` / `log_browser_error` `message` and `stack` ≤ 4,096 chars).
 10. **Validate batch fields and pass `--` before URLs.** URL validation must cover `url`, `urlItem`, `urlItems`, `urls`, `playlist`, and `m3uData`. All CLI builders (`mpv`, `yt-dlp`) must insert `'--'` before positional URLs.
+11. **Installer & wrapper safety (`installer_src/installer_logic.py`, `installer_cli.py`):** Validate extension IDs via `validate_extension_id` (`^[a-p]{32}$`) before writing manifests, quote all paths in generated wrappers (`shlex.quote` on Unix; double-quoted paths in `WindowsLogic`), and keep installer modules import-safe with read-only `DATA_DIR` fallback.
