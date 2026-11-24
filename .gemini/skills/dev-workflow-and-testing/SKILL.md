@@ -10,7 +10,7 @@ description: >-
 # Dev Workflow, Linting & Testing Architecture
 
 > [!IMPORTANT]
-> - For the `utils/*.module.js` transpilation table, hand-written vs. generated file inventory, `pycache_watchdog.py` CLI, and component reload matrix, see [references/BUILD_AND_RELOAD_MATRIX.md](references/BUILD_AND_RELOAD_MATRIX.md).
+> - For the `utils/*.module.js` transpilation table, hand-written vs. generated file inventory, and component reload matrix, see [references/BUILD_AND_RELOAD_MATRIX.md](references/BUILD_AND_RELOAD_MATRIX.md).
 > - For `BaseTestCase` fixture boilerplate, JSDOM setup, valid/invalid `try/except` examples, and the risk-area regression matrix, see [references/TEST_PATTERNS_AND_FIXTURES.md](references/TEST_PATTERNS_AND_FIXTURES.md).
 
 ---
@@ -24,10 +24,9 @@ description: >-
 
 ## 2. Unified Verification Pipeline (`verify_changes.py` & `testing_tools/run_suite.py`)
 Run via `verify_repo(mode="full"|"fix"|"lint"|"targeted")` or `PYTHONDONTWRITEBYTECODE=1 python3 -B verify_changes.py` (skip for docs-only, `.gitignore`, or read-only tasks):
-1. **Pycache Watchdog (`testing_tools/pycache_watchdog.py`):** Ensures background bytecode cleanup is active.
-2. **JS Transpilation (`testing_tools/generate_js.py`):** Rebuilds all transpiled `utils/*.js` targets.
-3. **Concurrent Suite (`testing_tools/run_suite.py`):**
-   - **Parallel Python Pool (`PYTHON_TEST_FILES`):** Runs all registered Python test modules (including `test_mcp_server.py`) concurrently via `ThreadPoolExecutor`.
+1. **JS Transpilation (`testing_tools/generate_js.py`):** Rebuilds all transpiled `utils/*.js` targets.
+2. **Concurrent Suite (`testing_tools/run_suite.py`):**
+   - **Parallel Python Pool (`discover_python_test_files`):** Auto-discovers and runs all `testing_tools/scripts/test_*.py` modules (including `test_mcp_server.py`) concurrently via `ThreadPoolExecutor`.
    - **Concurrent `run_js_batch()`:**
      - Syncs `testing_tools/scripts/bridge_contract.js` via `testing_tools/generate_bridge_contract.py`.
      - Auto-discovers and runs `testing_tools/scripts/test_*.js` in Node.

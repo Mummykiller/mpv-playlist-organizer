@@ -1,6 +1,6 @@
-# JS Transpilation Matrix, Watchdog & Reload Reference
+# JS Transpilation Matrix & Reload Reference
 
-This reference details the module transpilation table (`testing_tools/generate_js.py:CONFIG`), hand-written vs. generated file classification, `pycache_watchdog.py` commands, and the component reloading matrix.
+This reference details the module transpilation table (`testing_tools/generate_js.py:CONFIG`), hand-written vs. generated file classification, and the component reloading matrix.
 
 ---
 
@@ -28,23 +28,7 @@ Only the target files listed in `testing_tools/generate_js.py:CONFIG` are auto-g
 
 ---
 
-## 2. Pycache Watchdog Daemon (`testing_tools/pycache_watchdog.py`)
-
-Monitors the workspace to purge `__pycache__` directories and `*.pyc` artifacts:
-
-```bash
-python3 testing_tools/pycache_watchdog.py        # Starts daemon if not running, or reports active PID
-python3 testing_tools/pycache_watchdog.py status # Check running status
-python3 testing_tools/pycache_watchdog.py clean  # One-shot immediate sweep
-python3 testing_tools/pycache_watchdog.py kill   # Terminate daemon
-```
-
-- Uses `inotify` via `watchdog.observers.Observer` when installed, falling back to non-blocking polling.
-- Both `verify_changes.py` and `testing_tools/run_suite.py` set `sys.dont_write_bytecode = True` and `PYTHONDONTWRITEBYTECODE=1`.
-
----
-
-## 3. Component Reloading & Troubleshooting Matrix
+## 2. Component Reloading & Troubleshooting Matrix
 
 | Component | How to Reload | Notes |
 | :--- | :--- | :--- |

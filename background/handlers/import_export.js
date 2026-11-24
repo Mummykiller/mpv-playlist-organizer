@@ -16,7 +16,7 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 
 	if (!filename) return { success: false, error: "No filename provided." };
 
-	const response = await nativeLink.fileSystem.call("import_from_file", {
+	const response = await nativeLink.call("import_from_file", {
 		filename,
 	});
 	
@@ -263,7 +263,7 @@ export const handleExportSettings = createHandler(async ({ data, request }) => {
 		...(youtubeTools ? { youtubeTools } : {}),
 	};
 
-	return nativeLink.fileSystem.call("export_playlists", {
+	return nativeLink.call("export_playlists", {
 		data: exportData,
 		filename,
 		subfolder: "settings",
@@ -285,7 +285,7 @@ export const handleExportAllPlaylistsSeparately = createHandler(async ({ data, r
 		if (!options.preserveLastPlayed) delete folder.lastPlayedId;
 	}
 
-	return nativeLink.fileSystem.call("export_all_playlists_separately", {
+	return nativeLink.call("export_all_playlists_separately", {
 		data: filteredFolders,
 		customNames: options.customNames || {},
 	});
@@ -310,7 +310,7 @@ export const handleExportFolderPlaylist = createHandler(async ({ data, request }
 	};
 	if (!options.preserveLastPlayed) delete folderToExport.lastPlayedId;
 
-	return nativeLink.fileSystem.call("export_playlists", {
+	return nativeLink.call("export_playlists", {
 		data: folderToExport,
 		filename: filename,
 	});
@@ -319,9 +319,9 @@ export const handleExportFolderPlaylist = createHandler(async ({ data, request }
 });
 
 export async function handleListImportFiles() {
-	return nativeLink.fileSystem.listFiles();
+	return nativeLink.call("list_import_files");
 }
 
 export async function handleOpenExportFolder() {
-	return nativeLink.fileSystem.openExportFolder();
+	return nativeLink.call("open_export_folder");
 }

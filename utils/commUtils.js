@@ -236,61 +236,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	}
 
 	/**
-	 * Dispatches a status banner update to the open popup or the active tab.
-	 * @param {string} message - Message text.
-	 * @param {boolean|Object} [options] - Boolean isError or options object { isError, isSuccess, tabId }.
-	 * @returns {Promise<boolean>} Whether at least one receiver acknowledged the notification.
-	 */
-	const notifyStatusBanner = MPV.notifyStatusBanner = async function notifyStatusBanner(message, options = {}) {
-		const isError = typeof options === "boolean" ? options : !!options.isError;
-		const isSuccess = typeof options === "object" ? !!options.isSuccess : !isError;
-		const targetTabId = typeof options === "object" ? options.tabId : null;
-		const payload = { action: "show_status_banner", message, isError, isSuccess };
-
-		let delivered = false;
-
-		// 1. Try sending to open popup
-		if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-			try {
-				const res = await new Promise((resolve) => {
-					chrome.runtime.sendMessage(payload, (resp) => {
-						if (chrome.runtime.lastError) resolve(null);
-						else resolve(resp);
-					});
-				});
-				if (res?.success) delivered = true;
-			} catch (e) {
-				const logger = (typeof window !== "undefined" && window.MPV_INTERNAL?.logger) || (typeof globalThis !== "undefined" && globalThis.MPV_INTERNAL?.logger);
-				logger?.debug?.("[commUtils] notifyStatusBanner runtime send failed:", { data: e });
-			}
-		}
-
-		// 2. Try sending to tab
-		let tabId = targetTabId;
-		if (!tabId) {
-			const activeTab = await getActiveTab();
-			tabId = activeTab?.id || null;
-		}
-
-		if (tabId && typeof chrome !== "undefined" && chrome.tabs?.sendMessage) {
-			try {
-				const res = await new Promise((resolve) => {
-					chrome.tabs.sendMessage(tabId, payload, (resp) => {
-						if (chrome.runtime.lastError) resolve(null);
-						else resolve(resp);
-					});
-				});
-				if (res?.success) delivered = true;
-			} catch (e) {
-				const logger = (typeof window !== "undefined" && window.MPV_INTERNAL?.logger) || (typeof globalThis !== "undefined" && globalThis.MPV_INTERNAL?.logger);
-				logger?.debug?.("[commUtils] notifyStatusBanner tab send failed:", { data: e });
-			}
-		}
-
-		return delivered;
-	}
-
-	/**
 	 * Reports a browser error to the background script and SystemLogger.
 	 * @param {string} context - Source context (e.g., 'Popup', 'ContentScript', 'MpvController').
 	 * @param {Error|string} errorOrMessage - Error object or error message string.

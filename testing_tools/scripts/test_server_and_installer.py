@@ -260,6 +260,44 @@ class TestServerAndInstaller(BaseTestCase):
             nh_src = f.read()
         self.assertIn("MAX_OUTBOUND_MESSAGE_SIZE = 900 * 1024", nh_src)
 
+    def test_get_message_returns_none_on_mid_frame_eof(self):
+        """Regression: native_host.get_message returns None cleanly when stdin hits EOF mid-frame."""
+        script = (
+            "import io, struct, sys, native_host; "
+            "header = struct.pack('@I', 100); "
+            "sys.stdin = io.TextIOWrapper(io.BytesIO(header + b'{\"partial\": 1')); "
+            "res = native_host.get_message(); "
+            "assert res is None, f'Expected None, got {res!r}'"
+        )
+        env = os.environ.copy()
+        env["XDG_DATA_HOME"] = self.test_dir
+        env["HOME"] = self.test_dir
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        res = subprocess.run(
+            [sys.executable, "-B", "-c", script],
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            env=env,
+            capture_output=True,
+            timeout=15,
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr.decode("utf-8", errors="replace"))
+
+    def test_trim_oversized_reply_unified_snake_and_camel_case(self):
+        """Regression: session_health.trim_oversized_reply trims both snake_case and camelCase preview fields."""
+        from utils import session_health
+
+        snake_payload = {"success": True, "enriched_m3u_content": "X" * 5000, "keep": "ok"}
+        session_health.trim_oversized_reply(snake_payload, max_bytes=1024, camel_case=False)
+        self.assertNotIn("enriched_m3u_content", snake_payload)
+        self.assertTrue(snake_payload.get("payload_truncated"))
+        self.assertEqual(snake_payload.get("keep"), "ok")
+
+        camel_payload = {"success": True, "enrichedM3uContent": "Y" * 5000, "keep": "ok"}
+        session_health.trim_oversized_reply(camel_payload, max_bytes=1024, camel_case=True)
+        self.assertNotIn("enrichedM3uContent", camel_payload)
+        self.assertTrue(camel_payload.get("payloadTruncated"))
+        self.assertEqual(camel_payload.get("keep"), "ok")
+
 
 if __name__ == "__main__":
     unittest.main()

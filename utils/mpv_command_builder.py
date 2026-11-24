@@ -34,7 +34,7 @@ def _smart_quote(s):
     return shlex.quote(s)
 
 class MpvCommandBuilder:
-    def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False, is_youtube=False, settings=None, cookies_browser=None, force_bypass=False, cookies_file=None, handshake_path=None):
+    def __init__(self, mpv_exe, use_ytdl_mpv=False, is_youtube_override=False, is_youtube=False, settings=None, cookies_browser=None, cookies_file=None, handshake_path=None):
         self.mpv_exe = mpv_exe
         self.settings = settings or {}
         self.cookies_browser = cookies_browser
@@ -42,7 +42,6 @@ class MpvCommandBuilder:
         self.use_ytdl_mpv = use_ytdl_mpv
         self.is_youtube_override = is_youtube_override
         self.is_youtube = is_youtube
-        self.force_bypass_hint = force_bypass
 
         self.url = None
         self.ipc_path = None
@@ -121,11 +120,7 @@ class MpvCommandBuilder:
                 if flag_dir:
                     safe_flag_dir = file_io.validate_safe_path(flag_dir)
                     if safe_flag_dir:
-                         self.script_opts.append(f'on_completion-flag_dir={safe_flag_dir}')
-
-                # Pass clear_on_item_finish preference
-                clear_item = self.settings.get('clear_on_item_finish', False)
-                self.script_opts.append(f"on_completion-clear_on_item_finish={'yes' if clear_item else 'no'}")
+                        self.script_opts.append(f'on_completion-flag_dir={safe_flag_dir}')
         return self
 
     def with_adaptive_headers_script(self, script_dir):
@@ -140,6 +135,8 @@ class MpvCommandBuilder:
             p = os.path.join(script_dir, "mpv_scripts", "python_loader.lua")
             if os.path.exists(p):
                 self.scripts.append(p)
+                if sys.executable and "," not in sys.executable:
+                    self.script_opts.append(f"python_loader-python_executable={sys.executable}")
         return self
 
     def with_title(self, title):
@@ -468,8 +465,8 @@ class MpvCommandBuilder:
             logging.debug(f"[MPV_CMD] Could not save last MPV command to file: {e}")
         return full_command, self.has_terminal_flag
 
-def construct_mpv_command(mpv_exe, ipc_path=None, url=None, is_youtube=False, ytdl_raw_options=None, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, headers=None, disable_http_persistent=False, start_paused=False, script_dir=None, load_on_completion_script=False, title=None, use_ytdl_mpv=False, is_youtube_override=False, idle=False, force_terminal=False, input_terminal=None, settings=None, flag_dir=None, playlist_start_index=None, cookies_browser=None, force_bypass=False, cookies_file=None, start_time=None, handshake_path=None):
-    b = MpvCommandBuilder(mpv_exe, use_ytdl_mpv, is_youtube_override, is_youtube, settings, cookies_browser, force_bypass=force_bypass, cookies_file=cookies_file, handshake_path=handshake_path)
+def construct_mpv_command(mpv_exe, ipc_path=None, url=None, is_youtube=False, ytdl_raw_options=None, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, headers=None, disable_http_persistent=False, start_paused=False, script_dir=None, load_on_completion_script=False, title=None, use_ytdl_mpv=False, is_youtube_override=False, idle=False, force_terminal=False, input_terminal=None, settings=None, flag_dir=None, playlist_start_index=None, cookies_browser=None, cookies_file=None, start_time=None, handshake_path=None):
+    b = MpvCommandBuilder(mpv_exe, use_ytdl_mpv, is_youtube_override, is_youtube, settings, cookies_browser, cookies_file=cookies_file, handshake_path=handshake_path)
     b.with_ipc_path(ipc_path).with_url(url).with_title(title).with_headers(headers)
     b.with_geometry(geometry, custom_width, custom_height).with_playlist_start(playlist_start_index)
     b.with_start_time(start_time)

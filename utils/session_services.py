@@ -334,14 +334,6 @@ class LauncherService:
         if url_item.get('id'):
             launch_url += ("#" if "#" not in launch_url else "&") + f"mpv_organizer_id={url_item['id']}"
 
-        # 2. Force Bypass Hint
-        force_bypass = False
-        targeted = settings.get('targeted_defaults', 'none')
-        if targeted == 'animepahe' and any(x in launch_url for x in ["kwik.cx", "owocdn.top", "uwucdn.top"]):
-            force_bypass = True
-        elif targeted == 'all-none-yt' and not is_youtube:
-            force_bypass = True
-
         if getattr(self.session, 'launch_cancelled', False):
             logging.info("[PY][Session] Launch cancelled flag detected.")
             return {"success": False, "error": "Launch cancelled by user."}
@@ -349,7 +341,7 @@ class LauncherService:
         process = None
         handshake_path = None
         try:
-            # 2.5 Generate Metadata Handshake File
+            # 2. Generate Metadata Handshake File
             logging.info("[PY][Session] Generating handshake file...")
             handshake_path, _ = services.create_handshake_file(
                 flag_dir=self.session.FLAG_DIR,
@@ -382,7 +374,6 @@ class LauncherService:
                 force_terminal=kwargs.get('force_terminal', False), settings=settings,
                 flag_dir=self.session.FLAG_DIR, playlist_start_index=0,
                 cookies_browser=kwargs.get('cookies_browser') or url_item.get('cookies_browser'),
-                force_bypass=force_bypass,
                 handshake_path=handshake_path
             )
 
@@ -575,7 +566,10 @@ class LauncherService:
                 except subprocess.TimeoutExpired:
                     logging.warning(f"MPV process {pid} did not terminate. Killing.")
                     proc.kill()
-                    proc.wait()
+                    try:
+                        proc.wait(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        logging.warning(f"MPV process {pid} did not exit within 2s after kill.")
                     was_killed = True
         elif pid:
             # Reconnected session (no proc object)
@@ -587,8 +581,13 @@ class LauncherService:
                 logging.info(f"Reconnected session: Attempting to close verified MPV PID {pid}")
                 try:
                     if platform.system() == "Windows":
-                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                                     capture_output=True, check=False)
+                        try:
+                            subprocess.run(
+                                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                                capture_output=True, check=False, timeout=5
+                            )
+                        except subprocess.TimeoutExpired:
+                            logging.warning(f"taskkill timed out for PID {pid}")
                     else:
                         os.kill(pid, signal.SIGTERM)
                         for _ in range(10):

@@ -8,15 +8,6 @@ import { callNativeHost } from "./nativeConnection.module.js";
 import { storage } from "../background/storage_instance.js";
 
 class NativeLink {
-	constructor() {
-		// Generic filesystem namespace
-		this.fileSystem = {
-			listFiles: () => this.call("list_import_files"),
-			openExportFolder: () => this.call("open_export_folder"),
-			call: (action, data = {}) => this.call(action, data),
-		};
-	}
-
 	/**
 	 * Generic passthrough for any action not explicitly defined.
 	 * @param {string} action The snake_case action name.

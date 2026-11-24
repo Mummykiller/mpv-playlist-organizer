@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import platform
+import threading
 import time
 import logging
 import file_io
@@ -85,8 +86,8 @@ def _get_linux_sudo_command_prefix(ytdlp_path, send_message_func):
         send_message_func({"log": {"text": "[yt-dlp]: No graphical sudo tool found. Please run `sudo yt-dlp -U` in a terminal.", "type": "error"}})
     return []
 
-def _run_update_command(command, send_message_func):
-    """Runs the yt-dlp update command and streams output to the sender."""
+def _run_update_command(command, send_message_func, timeout=300):
+    """Runs the yt-dlp update command and streams output to the sender with a bounded timeout."""
     system = platform.system()
     popen_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.STDOUT, 'universal_newlines': True, 'encoding': 'utf-8', 'errors': 'ignore', 'env': security.get_scrubbed_env()}
     if system == "Windows":
@@ -95,11 +96,43 @@ def _run_update_command(command, send_message_func):
     send_message_func({"log": {"text": f"[yt-dlp]: Executing: {' '.join(command)}", "type": "info"}})
     process = subprocess.Popen(command, **popen_kwargs)
 
-    for line in iter(process.stdout.readline, ''):
-        send_message_func({"log": {"text": f"[yt-dlp]: {line.strip()}", "type": "info"}})
+    timed_out = False
 
-    process.stdout.close()
-    return process.wait()
+    def _kill_on_timeout():
+        nonlocal timed_out
+        if process.poll() is None:
+            timed_out = True
+            logging.error(f"[yt-dlp] Update command timed out after {timeout}s. Killing process.")
+            try:
+                process.kill()
+            except OSError as e:
+                logging.debug(f"[yt-dlp] Failed to kill timed-out update process: {e}")
+
+    timer = threading.Timer(timeout, _kill_on_timeout)
+    timer.daemon = True
+    timer.start()
+    try:
+        for line in iter(process.stdout.readline, ''):
+            send_message_func({"log": {"text": f"[yt-dlp]: {line.strip()}", "type": "info"}})
+    finally:
+        timer.cancel()
+        process.stdout.close()
+
+    try:
+        rc = process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        logging.error("[yt-dlp] Update process did not exit after stdout closed. Killing process.")
+        process.kill()
+        try:
+            rc = process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            rc = -1
+
+    if timed_out:
+        send_message_func({"log": {"text": f"[yt-dlp]: Update timed out after {timeout}s.", "type": "error"}})
+        return -1
+    return rc
 
 def update_ytdlp(send_message_func):
     """Downloads the latest yt-dlp binary and replaces the existing one."""

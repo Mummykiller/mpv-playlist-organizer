@@ -78,38 +78,32 @@ def start_health_watcher(session):
         new_thread.start()
 
 
+SAFE_OUTBOUND_PAYLOAD_SIZE = 800 * 1024
+
+_TRIM_CANDIDATE_FIELDS = (
+    "enrichedM3uContent", "enriched_m3u_content",
+    "playlist",
+    "enrichedUrlItems", "enriched_url_items",
+)
+
+
 def persist_session_atomic(session):
     """Saves current session metadata to disk atomically with 0o600 permissions."""
-    tmp_file = f"{session.session_file}.{os.getpid()}.{threading.get_ident()}.tmp"
-    try:
-        session_data = {
-            "pid": session.pid,
-            "ipc_path": session.ipc_path,
-            "owner_folder_id": session.owner_folder_id,
-            "token": getattr(session, 'current_token', None),
-            "create_time": getattr(session, 'create_time', None),
-            "session_generation": getattr(session, 'session_generation', 0)
-        }
-        session_dir = os.path.dirname(session.session_file)
-        if session_dir:
-            os.makedirs(session_dir, exist_ok=True)
-        fd = os.open(tmp_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(session_data, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_file, session.session_file)
+    session_data = {
+        "pid": session.pid,
+        "ipc_path": session.ipc_path,
+        "owner_folder_id": session.owner_folder_id,
+        "token": getattr(session, 'current_token', None),
+        "create_time": getattr(session, 'create_time', None),
+        "session_generation": getattr(session, 'session_generation', 0)
+    }
+    if file_io._atomic_json_dump(session_data, session.session_file, create_backup=False, indent=None, mode=0o600):
         logging.info(f"[PY][Session] Saved session data to {session.session_file}")
-    except Exception as e:
-        logging.warning(f"[PY][Session] Failed to write session file: {e}")
-        if os.path.exists(tmp_file):
-            try:
-                os.remove(tmp_file)
-            except OSError as rm_err:
-                logging.debug(f"[PY][Session] Could not remove temp session file {tmp_file}: {rm_err}")
+    else:
+        logging.warning(f"[PY][Session] Failed to write session file: {session.session_file}")
 
 
-def trim_oversized_reply(payload, max_bytes=800 * 1024):
+def trim_oversized_reply(payload, max_bytes=SAFE_OUTBOUND_PAYLOAD_SIZE, camel_case=False):
     """Omits optional large preview fields if serialized payload exceeds max_bytes."""
     if not isinstance(payload, dict):
         return payload
@@ -121,7 +115,7 @@ def trim_oversized_reply(payload, max_bytes=800 * 1024):
         return payload
 
     trimmed_fields = []
-    for field in ("enriched_m3u_content", "playlist", "enriched_url_items"):
+    for field in _TRIM_CANDIDATE_FIELDS:
         if field in payload:
             payload.pop(field, None)
             trimmed_fields.append(field)
@@ -132,10 +126,12 @@ def trim_oversized_reply(payload, max_bytes=800 * 1024):
                 break
 
     if trimmed_fields:
-        payload["payload_truncated"] = True
+        flag_key = "payloadTruncated" if camel_case else "payload_truncated"
+        payload[flag_key] = True
+        new_size = len(json.dumps(payload, default=str).encode('utf-8'))
         logging.warning(
-            f"[PY][Session] Outbound reply exceeded {max_bytes} bytes; "
-            f"omitted {trimmed_fields} to stay under Chrome's 1 MiB limit."
+            f"[PY] Outbound reply exceeded {max_bytes} bytes; "
+            f"omitted {trimmed_fields} to stay under Chrome's 1 MiB limit (new size: {new_size} bytes)."
         )
     return payload
 
@@ -240,8 +236,9 @@ def restore_session(session):
                 )
 
                 if last_played_id:
-                    session.playlist_tracker.current_id = last_played_id
-                    session.playlist_tracker.last_played_id = last_played_id
+                    with session.playlist_tracker.lock:
+                        session.playlist_tracker.current_id = last_played_id
+                        session.playlist_tracker.last_played_id = last_played_id
 
                 session.session_generation += 1
                 session.manual_quit = False

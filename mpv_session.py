@@ -383,12 +383,11 @@ class MpvSessionManager:
                     else:
                         action_needed = "clear"
 
-        if action_needed == "close":
-            self.close()
-        elif action_needed == "clear":
-            self.clear(mpv_return_code=0)
+            if action_needed == "close":
+                self.close()
+            elif action_needed == "clear":
+                self.clear(mpv_return_code=0)
 
-        with self.sync_lock:
             if getattr(self, 'launch_cancelled', False):
                 logging.info(f"[PY][Session] Launch for folder '{folder_id}' aborted due to cancellation.")
                 return {"success": False, "error": "Launch cancelled."}

@@ -1458,7 +1458,7 @@ def _run_mpv_headless(options: dict[str, Any]) -> dict[str, Any]:
             "--no-terminal",
             "--msg-level=all=warn,cplayer=status,script=info",
             f"--input-ipc-server={sock_path}",
-            f"--script-opts=on_completion-flag_dir={flag_dir},on_completion-clear_on_item_finish=no",
+            f"--script-opts=on_completion-flag_dir={flag_dir}",
             *[f"--script={p}" for p in lua_files],
         ]
 

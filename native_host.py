@@ -132,7 +132,7 @@ try:
     from mpv_session import MpvSessionManager
     import cli
     import services
-    from utils import ipc_utils, security
+    from utils import ipc_utils, security, session_health
     from utils.native_host_handlers import HandlerManager
     from utils.handlers.registry import HandlerRegistry
     from utils.janitor import Janitor
@@ -180,12 +180,22 @@ try:
              logging.error(f"[PY][MAIN] Incoming message too large: {message_length} bytes.")
              sys.exit(1)
 
-        message = sys.stdin.buffer.read(message_length).decode('utf-8')
+        chunks = bytearray()
+        while len(chunks) < message_length:
+            chunk = sys.stdin.buffer.read(message_length - len(chunks))
+            if not chunk:
+                logging.info(
+                    f"[PY][MAIN] Stdin closed mid-frame (expected {message_length} bytes, got {len(chunks)} bytes)."
+                )
+                return None
+            chunks.extend(chunk)
+
+        message = chunks.decode('utf-8')
         return json.loads(message)
 
     print_lock = threading.Lock()
     MAX_OUTBOUND_MESSAGE_SIZE = 900 * 1024  # 900 KB guard against Chrome 1 MiB limit
-    SAFE_OUTBOUND_PAYLOAD_SIZE = 800 * 1024  # 800 KB threshold to trim optional preview fields
+    SAFE_OUTBOUND_PAYLOAD_SIZE = session_health.SAFE_OUTBOUND_PAYLOAD_SIZE
 
     def send_message_binary(message_content):
         """Encodes and sends a length-prefixed JSON message to stdout for browser native messaging."""
@@ -215,25 +225,12 @@ try:
 
                 # PY-H2: Trim optional large preview fields before hitting Chrome's 1 MiB limit
                 if len(encoded_content) > SAFE_OUTBOUND_PAYLOAD_SIZE and isinstance(translated_content, dict):
-                    trimmed_fields = []
-                    for field in (
-                        "enrichedM3uContent", "enriched_m3u_content",
-                        "playlist",
-                        "enrichedUrlItems", "enriched_url_items",
-                    ):
-                        if field in translated_content:
-                            translated_content.pop(field, None)
-                            trimmed_fields.append(field)
-                            encoded_content = json.dumps(translated_content).encode('utf-8')
-                            if len(encoded_content) <= SAFE_OUTBOUND_PAYLOAD_SIZE:
-                                break
-                    if trimmed_fields:
-                        translated_content["payloadTruncated"] = True
-                        encoded_content = json.dumps(translated_content).encode('utf-8')
-                        logging.warning(
-                            f"[PY] Trimmed oversized outbound fields {trimmed_fields} to keep reply under 900 KB "
-                            f"(new size: {len(encoded_content)} bytes)."
-                        )
+                    session_health.trim_oversized_reply(
+                        translated_content,
+                        max_bytes=SAFE_OUTBOUND_PAYLOAD_SIZE,
+                        camel_case=True,
+                    )
+                    encoded_content = json.dumps(translated_content).encode('utf-8')
 
                 # PY-H2: Guard against oversized outbound messages exceeding Chrome limit
                 if len(encoded_content) > MAX_OUTBOUND_MESSAGE_SIZE:
@@ -551,6 +548,9 @@ try:
             while True:
                 try:
                     message = get_message()
+                    if message is None:
+                        logging.info("[PY][MAIN] Native messaging stdin closed mid-frame (EOF), exiting.")
+                        break
                     action = message.get('action') if isinstance(message, dict) else None
                     logging.info(f"[PY][RECV] (ID: {message.get('request_id')}): {action}")
                     target_executor = select_executor(action, control_executor, worker_executor)

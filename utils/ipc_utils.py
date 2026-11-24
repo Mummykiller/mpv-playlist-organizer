@@ -79,8 +79,8 @@ def _pipe_has_data_windows(handle_or_file):
             return bytes_avail.value > 0
         return False
     except Exception as e:
-        logging.debug(f"PeekNamedPipe check note: {e}")
-        return True
+        logging.debug(f"PeekNamedPipe check failed: {e}")
+        return False
 
 def verify_mpv_process(pid, ipc_path=None):
     """

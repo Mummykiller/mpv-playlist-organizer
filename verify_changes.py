@@ -1,7 +1,6 @@
 import subprocess
 import sys
 import os
-import logging
 
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
@@ -29,14 +28,6 @@ def main():
     verbose = "--verbose" in extra_args or "-v" in extra_args
     if verbose:
         print("🔍 Verifying build & test suite...")
-
-    # 0. Ensure Pycache Watchdog is active in background
-    try:
-        sys.path.insert(0, os.path.join(project_root, "testing_tools"))
-        import pycache_watchdog
-        pycache_watchdog.ensure_running(silent=not verbose)
-    except (ImportError, OSError) as e:
-        logging.debug(f"[VERIFY] Pycache watchdog ensure_running: {e}")
 
     # 1. Generate JS (Transpile ES modules to legacy globals)
     if not run_step(os.path.join("testing_tools", "generate_js.py"), "JS Build", extra_args):

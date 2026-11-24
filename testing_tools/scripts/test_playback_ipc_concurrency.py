@@ -412,5 +412,77 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
         self.assertEqual(len(captured["full_playlist"]), 3)
         self.assertEqual([i["title"] for i in captured["full_playlist"]], ["Episode 1", "Episode 2", "Episode 3"])
 
+    def test_pipe_has_data_windows_returns_false_on_exception(self):
+        """Regression: _pipe_has_data_windows must return False on unexpected exceptions to avoid blocking readline."""
+        bad_handle = MagicMock()
+        bad_handle.fileno.side_effect = RuntimeError("broken pipe handle")
+        with patch("platform.system", return_value="Windows"):
+            self.assertFalse(ipc_utils._pipe_has_data_windows(bad_handle))
+
+    def test_persist_session_atomic_uses_atomic_json_dump_0600_no_bak(self):
+        """Regression: persist_session_atomic writes 0o600 session.json via file_io._atomic_json_dump without .bak."""
+        from utils import session_health
+
+        session_file = os.path.join(self.test_dir, "session.json")
+        fake_session = MagicMock()
+        fake_session.session_file = session_file
+        fake_session.pid = 12345
+        fake_session.ipc_path = "/tmp/fake.sock"
+        fake_session.owner_folder_id = "Anime"
+        fake_session.current_token = "tok"
+        fake_session.create_time = 1000.0
+        fake_session.session_generation = 2
+
+        session_health.persist_session_atomic(fake_session)
+        self.assertTrue(os.path.exists(session_file))
+        self.assertFalse(os.path.exists(f"{session_file}.bak"))
+        if os.name != "nt":
+            self.assertEqual(os.stat(session_file).st_mode & 0o777, 0o600)
+        with open(session_file, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved["pid"], 12345)
+        self.assertEqual(saved["session_generation"], 2)
+
+    def test_unified_diagnostics_does_not_restart_logger(self):
+        """Regression: handle_get_unified_diagnostics flushes handlers without calling logger.shutdown/initialize."""
+        from utils.handlers.data_handler import DataHandler
+        from utils import logger as logger_module
+
+        ctx = MagicMock()
+        ctx.data_dir = self.test_dir
+        ctx.script_dir = self.test_dir
+        ctx.diagnostic_collector = None
+        handler = DataHandler(ctx)
+
+        req = MagicMock()
+        req.data = {}
+        fake_handler = MagicMock()
+        fake_listener = MagicMock()
+        fake_listener.handlers = [fake_handler]
+
+        with patch.object(logger_module, "shutdown") as mock_shutdown, \
+             patch.object(logger_module, "initialize") as mock_init, \
+             patch.object(logger_module, "_listener", fake_listener), \
+             patch.object(logger_module, "_active_data_dir", self.test_dir):
+            res = handler.handle_get_unified_diagnostics(req)
+
+        self.assertTrue(res.get("success"))
+        mock_shutdown.assert_not_called()
+        mock_init.assert_not_called()
+        fake_handler.flush.assert_called_once()
+
+    def test_run_update_command_kills_on_timeout(self):
+        """Regression: _run_update_command terminates hung subprocesses when timeout expires."""
+        from utils import dependency_manager
+
+        msgs = []
+        rc = dependency_manager._run_update_command(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            msgs.append,
+            timeout=0.2,
+        )
+        self.assertEqual(rc, -1)
+        self.assertTrue(any("timed out" in (m.get("log", {}).get("text", "").lower()) for m in msgs))
+
 if __name__ == '__main__':
     unittest.main()

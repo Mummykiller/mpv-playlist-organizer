@@ -23,12 +23,9 @@ export function createHandler(logic, options = {}) {
 		broadcastPlaylist = false,
 		broadcastPreferences = false,
 		updateMenus = false,
-		successMessage = null,
 		manualPersistence = false,
-		onBefore = null,
 		onSuccess = null,
-		onError = null,
-		onFinally = null
+		onError = null
 	} = options;
 
 	return async (rawRequest = {}, sender = {}) => {
@@ -43,9 +40,6 @@ export function createHandler(logic, options = {}) {
 			if (requireFolder && !context.folderId) {
 				return { success: false, error: "Missing folderId." };
 			}
-
-			// Hook: Before Logic (e.g., for optimistic UI updates)
-			if (onBefore) await onBefore(context);
 
 			// Context Setup: Fetch storage
 			const data = await storage.get();
@@ -93,9 +87,9 @@ export function createHandler(logic, options = {}) {
 				broadcastToTabs({ action: "preferences_changed" });
 			}
 
-			if (successMessage || result.message) {
+			if (result.message) {
 				broadcastLog({ 
-					text: `[Background]: ${result.message || successMessage}`, 
+					text: `[Background]: ${result.message}`, 
 					type: "info" 
 				});
 			}
@@ -114,8 +108,6 @@ export function createHandler(logic, options = {}) {
 			if (onError) await onError(errorResult, context);
 			
 			return errorResult;
-		} finally {
-			if (onFinally) await onFinally(context);
 		}
 	};
 }

@@ -50,10 +50,17 @@ class DataHandler(BaseHandler):
 
     @command('get_unified_diagnostics')
     def handle_get_unified_diagnostics(self, request: native_link.DataSyncRequest):
-        # Flush logs to disk by restarting the listener
+        # Safely flush active log handlers without tearing down QueueListener/root.handlers
         from utils import logger as logger_module
-        logger_module.shutdown()
-        resolved_dir = logger_module.initialize(self.ctx.data_dir, self.ctx.script_dir) or self.ctx.data_dir
+        with logger_module._init_lock:
+            resolved_dir = logger_module._active_data_dir or self.ctx.data_dir
+            listener = logger_module._listener
+            handlers = list(listener.handlers) if listener else []
+        for handler in handlers:
+            try:
+                handler.flush()
+            except Exception as e:
+                logging.debug(f"[PY][Diag] Could not flush log handler {handler}: {e}")
 
         js_diagnostics = request.data or {}
 

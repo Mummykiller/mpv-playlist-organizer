@@ -5,7 +5,7 @@ import unittest
 import json
 import time
 import logging
-import uuid
+import stat
 import re
 from unittest.mock import MagicMock, patch
 
@@ -24,49 +24,163 @@ class TestRobustness(BaseTestCase):
     """Verifies system-level robustness (Heartbeat, Normalization, Handshakes, Parameter Validation, Unmanaged Launch)."""
 
     def test_handshake_generation(self):
-        """Verify that the handshake file is created with correct JSON structure."""
+        """Verify services.create_handshake_file creates a 0o600 JSON handshake with expected metadata."""
         flag_dir = os.path.join(self.test_dir, "flags_test")
-        os.makedirs(flag_dir, exist_ok=True)
-
-        handshake_data = {
-            "folder_id": "test_folder",
-            "project_root": self.test_dir,
-            "id": str(uuid.uuid4())
+        item = {
+            "id": "ep-42",
+            "title": "Episode 42",
+            "url": "https://example.com/ep42.mp4",
+            "resume_time": 95,
+            "headers": {"Referer": "https://example.com/"},
         }
+        settings = {"enable_precise_resume": True, "yt_mark_watched": True}
 
-        handshake_path = os.path.join(flag_dir, f"handshake_test_{uuid.uuid4().hex}.json")
+        managed_path = None
+        unmanaged_path = None
+        try:
+            managed_path, managed_flag = services.create_handshake_file(
+                flag_dir=flag_dir,
+                folder_id="test_folder",
+                script_dir=self.test_dir,
+                item=item,
+                settings=settings,
+                playlist_start_index=3,
+                is_unmanaged=False,
+                is_youtube=True,
+                use_ytdl_mpv=True,
+                cookies_browser="chrome",
+            )
+            self.assertTrue(os.path.exists(managed_path))
+            self.assertTrue(os.path.basename(managed_path).startswith("handshake_"))
+            self.assertFalse(os.path.basename(managed_path).startswith("handshake_unmanaged_"))
+            self.assertEqual(managed_flag, f"--script-opts=mpv_organizer-handshake={managed_path}")
 
-        with open(handshake_path, 'w', encoding='utf-8') as f:
-            json.dump(handshake_data, f)
+            if platform.system() != "Windows":
+                self.assertEqual(stat.S_IMODE(os.stat(managed_path).st_mode), 0o600)
 
-        self.assertTrue(os.path.exists(handshake_path))
-        with open(handshake_path, 'r') as f:
-            loaded = json.load(f)
+            with open(managed_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+
             self.assertEqual(loaded["folder_id"], "test_folder")
+            self.assertEqual(loaded["project_root"], self.test_dir)
+            self.assertEqual(loaded["flag_dir"], flag_dir)
+            self.assertEqual(loaded["playlist_start_index"], 3)
+            self.assertTrue(loaded["is_youtube"])
+            self.assertTrue(loaded["use_ytdl_mpv"])
+            self.assertFalse(loaded["is_unmanaged"])
+            self.assertEqual(loaded["id"], "ep-42")
+            self.assertEqual(loaded["title"], "Episode 42")
+            self.assertEqual(loaded["original_url"], "https://example.com/ep42.mp4")
+            self.assertEqual(loaded["headers"], {"Referer": "https://example.com/"})
+            self.assertEqual(loaded["cookies_browser"], "chrome")
+            self.assertIsInstance(loaded["lua_options"], dict)
+            self.assertEqual(loaded["lua_options"]["resume_time"], 95)
+
+            unmanaged_path, _ = services.create_handshake_file(
+                flag_dir=flag_dir,
+                folder_id="test_folder",
+                script_dir=self.test_dir,
+                item=item,
+                settings=settings,
+                is_unmanaged=True,
+            )
+            self.assertTrue(os.path.exists(unmanaged_path))
+            self.assertTrue(os.path.basename(unmanaged_path).startswith("handshake_unmanaged_"))
+            with open(unmanaged_path, "r", encoding="utf-8") as f:
+                self.assertTrue(json.load(f)["is_unmanaged"])
+        finally:
+            for path in (managed_path, unmanaged_path):
+                if path and os.path.exists(path):
+                    os.remove(path)
+            if managed_path:
+                self.assertFalse(os.path.exists(managed_path))
 
     def test_normalization_simulation(self):
-        """Simulate the casing translation layer (Snake -> Camel)."""
-        python_data = {
-            "is_running": True,
-            "folder_id": "my_folder",
-            "last_played_id": "123",
-            "playlist_items": [{"item_id": "abc", "resume_time": 10}]
+        """Verify real native_link translator & responder key translation, map-key preservation, and round-tripping."""
+        from utils.native_link import responder, translator
+
+        incoming_js_payload = {
+            "action": "play_batch",
+            "request_id": "req-99",
+            "folderId": "my_Anime_Folder",
+            "playNewInstance": True,
+            "playlist": [
+                {
+                    "itemId": "abc",
+                    "resumeTime": 120,
+                    "markedAsWatched": False,
+                    "headers": {"X-Custom-Header": "KeepMe", "Referer": "https://example.com/"},
+                }
+            ],
+            "__proto__": {"polluted": True},
         }
 
-        def js_normalize(data):
-            if isinstance(data, list): return [js_normalize(x) for x in data]
-            if not isinstance(data, dict): return data
+        # 1. translate() normalizes camelCase -> snake_case into typed PlaybackRequest and preserves request_id
+        req = translator.translate(incoming_js_payload)
+        self.assertIsInstance(req, native_link.PlaybackRequest)
+        self.assertEqual(req.action, "play_batch")
+        self.assertEqual(req.request_id, "req-99")
+        self.assertEqual(req.folder_id, "my_Anime_Folder")
+        self.assertTrue(req.play_new_instance)
+        self.assertEqual(req.playlist[0]["item_id"], "abc")
+        self.assertEqual(req.playlist[0]["resume_time"], 120)
+        self.assertFalse(req.playlist[0]["marked_as_watched"])
+        # Header names under "headers" must be preserved verbatim
+        self.assertEqual(req.playlist[0]["headers"]["X-Custom-Header"], "KeepMe")
 
-            def snake_to_camel(s):
-                parts = s.split('_')
-                return parts[0] + ''.join(x.title() for x in parts[1:])
+        # 2. _normalize_message strips forbidden __proto__ and preserves folder/domain map keys
+        norm = translator._normalize_message({
+            "__proto__": {"evil": 1},
+            "folders": {
+                "My_Custom_Folder": {"lastPlayedId": "ep1", "playlistItems": [{"resumeTime": 10}]}
+            },
+            "domains": {"sub_domain.example.com": {"autoAdd": True}},
+        })
+        self.assertNotIn("__proto__", norm)
+        self.assertIn("My_Custom_Folder", norm["folders"])
+        self.assertEqual(norm["folders"]["My_Custom_Folder"]["last_played_id"], "ep1")
+        self.assertEqual(norm["folders"]["My_Custom_Folder"]["playlist_items"][0]["resume_time"], 10)
+        self.assertIn("sub_domain.example.com", norm["domains"])
+        self.assertTrue(norm["domains"]["sub_domain.example.com"]["auto_add"])
 
-            return {snake_to_camel(k): js_normalize(v) for k, v in data.items()}
+        # 3. responder._translate_keys / success() converts snake_case -> camelCase while preserving
+        #    request_id, folder IDs, URL cache keys, headers, and youtube_tools subtree
+        py_reply = {
+            "request_id": "req-99",
+            "is_running": True,
+            "folder_id": "my_Anime_Folder",
+            "last_played_id": "123",
+            "playlist_items": [{"item_id": "abc", "resume_time": 10}],
+            "folders": {"My_Custom_Folder": {"last_played_id": "ep1"}},
+            "metadata_cache": {"https://example.com/v_1.mp4": {"last_watched": 42}},
+            "headers": {"X-Custom-Header": "KeepMe"},
+            "__proto__": {"evil": 1},
+        }
+        translated = responder.success(py_reply)
+        self.assertTrue(translated["success"])
+        self.assertEqual(translated["request_id"], "req-99")
+        self.assertTrue(translated["isRunning"])
+        self.assertEqual(translated["folderId"], "my_Anime_Folder")
+        self.assertEqual(translated["lastPlayedId"], "123")
+        self.assertEqual(translated["playlistItems"][0]["resumeTime"], 10)
+        self.assertIn("My_Custom_Folder", translated["folders"])
+        self.assertEqual(translated["folders"]["My_Custom_Folder"]["lastPlayedId"], "ep1")
+        self.assertIn("https://example.com/v_1.mp4", translated["metadataCache"])
+        self.assertEqual(translated["metadataCache"]["https://example.com/v_1.mp4"]["lastWatched"], 42)
+        self.assertEqual(translated["headers"]["X-Custom-Header"], "KeepMe")
+        self.assertNotIn("__proto__", translated)
 
-        normalized = js_normalize(python_data)
-        self.assertIn("isRunning", normalized)
-        self.assertIn("folderId", normalized)
-        self.assertIn("resumeTime", normalized["playlistItems"][0])
+        # 4. Round-trip: JS camelCase -> Python snake_case -> JS camelCase
+        round_tripped = responder._translate_keys(translator._normalize_message({
+            "request_id": "rt-1",
+            "folderId": "f1",
+            "playlistItems": [{"itemId": "x1", "resumeTime": 55}],
+        }))
+        self.assertEqual(round_tripped, {
+            "request_id": "rt-1",
+            "folderId": "f1",
+            "playlistItems": [{"itemId": "x1", "resumeTime": 55}],
+        })
 
     def test_heartbeat_persistence(self):
         """Verify that the heartbeat forces a disk commit after the interval."""
@@ -613,72 +727,6 @@ class TestRobustness(BaseTestCase):
             self.assertFalse(os.path.exists(lock_file))
         else:
             self.assertTrue(os.path.exists(lock_file))
-
-    def test_native_connection_backoff_and_reconnect(self):
-        """Verifies reconnection logic, exponential backoff progression, and status transitions."""
-        class ConnectionStatus:
-            DISCONNECTED = "DISCONNECTED"
-            CONNECTING = "CONNECTING"
-            CONNECTED = "CONNECTED"
-
-        class NativeConnectionManager:
-            def __init__(self, max_retries=3, base_backoff=0.01, backoff_factor=2.0):
-                self.status = ConnectionStatus.DISCONNECTED
-                self.status_history = [ConnectionStatus.DISCONNECTED]
-                self.max_retries = max_retries
-                self.base_backoff = base_backoff
-                self.backoff_factor = backoff_factor
-                self.attempts = 0
-                self.recorded_delays = []
-
-            def _set_status(self, new_status):
-                self.status = new_status
-                self.status_history.append(new_status)
-
-            def connect(self, fail_count=0):
-                """Attempts connection with exponential backoff on transient disconnection."""
-                backoff = self.base_backoff
-                while self.attempts < self.max_retries:
-                    self.attempts += 1
-                    self._set_status(ConnectionStatus.CONNECTING)
-
-                    if self.attempts <= fail_count:
-                        # Simulated connection drop
-                        self._set_status(ConnectionStatus.DISCONNECTED)
-                        self.recorded_delays.append(backoff)
-                        time.sleep(backoff)
-                        backoff *= self.backoff_factor
-                    else:
-                        self._set_status(ConnectionStatus.CONNECTED)
-                        return True
-
-                return False
-
-        # Case 1: Reconnection succeeds after 2 drops
-        mgr = NativeConnectionManager(max_retries=4, base_backoff=0.01, backoff_factor=2.0)
-        result = mgr.connect(fail_count=2)
-        self.assertTrue(result)
-        self.assertEqual(mgr.status, ConnectionStatus.CONNECTED)
-        self.assertEqual(mgr.attempts, 3)
-        self.assertEqual(len(mgr.recorded_delays), 2)
-        self.assertAlmostEqual(mgr.recorded_delays[0], 0.01, places=3)
-        self.assertAlmostEqual(mgr.recorded_delays[1], 0.02, places=3)
-        self.assertEqual(mgr.status_history, [
-            ConnectionStatus.DISCONNECTED,
-            ConnectionStatus.CONNECTING,
-            ConnectionStatus.DISCONNECTED,
-            ConnectionStatus.CONNECTING,
-            ConnectionStatus.DISCONNECTED,
-            ConnectionStatus.CONNECTING,
-            ConnectionStatus.CONNECTED
-        ])
-
-        # Case 2: Max retries exceeded -> remains disconnected
-        exhausted_mgr = NativeConnectionManager(max_retries=2, base_backoff=0.01)
-        res_exhausted = exhausted_mgr.connect(fail_count=5)
-        self.assertFalse(res_exhausted)
-        self.assertEqual(exhausted_mgr.status, ConnectionStatus.DISCONNECTED)
-        self.assertEqual(exhausted_mgr.attempts, 2)
 
     def test_youtube_url_analyzer_and_responder_key_preservation(self):
         """Verifies strict YOUTUBE_RE, rsplit('|', 1) pipe handling, playlist URL detection,

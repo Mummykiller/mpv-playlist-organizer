@@ -91,16 +91,6 @@ local function get_flag_dir()
     return nil
 end
 
--- Read clear_on_item_finish preference
-local function get_clear_on_item_finish()
-    local script_name = mp.get_script_name()
-    local opt = mp.get_opt("clear_on_item_finish") or mp.get_opt(script_name .. "-clear_on_item_finish")
-    return opt == "yes"
-end
-
-local clear_on_item_finish = get_clear_on_item_finish()
-log("Option clear_on_item_finish: " .. (clear_on_item_finish and "yes" or "no"))
-
 -- Ensure the directory exists before writing
 local function ensure_dir(path)
     if not path or path == "" then return end

@@ -456,7 +456,7 @@ def save_library_batch(folders_to_save, is_incremental=False):
 
 # --- Atomic Write & Safe Load Helpers ---
 
-def _atomic_json_dump(data, filepath):
+def _atomic_json_dump(data, filepath, create_backup=True, indent=4, mode=0o600):
     """Writes JSON data to a file atomically using a .tmp file and os.replace."""
     tmp_file = f"{filepath}.{os.getpid()}.{threading.get_ident()}.tmp"
     bak_file = f"{filepath}.bak"
@@ -467,14 +467,14 @@ def _atomic_json_dump(data, filepath):
             os.makedirs(dirname, exist_ok=True)
 
         # 1. Write to temporary file
-        tmp_fd = os.open(tmp_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        tmp_fd = os.open(tmp_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, mode)
         with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4)
+            json.dump(data, f, indent=indent)
             f.flush()
             os.fsync(f.fileno()) # Force write to disk
 
         # 2. Create backup of existing file only if it exists and is valid JSON
-        if os.path.exists(filepath):
+        if create_backup and os.path.exists(filepath):
             is_valid_existing = False
             try:
                 with open(filepath, 'r', encoding='utf-8') as existing_f:

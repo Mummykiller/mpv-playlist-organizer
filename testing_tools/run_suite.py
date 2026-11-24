@@ -144,46 +144,49 @@ def run_js_batch(verbose=False):
         print(f"  {RED}{BOLD}❌ Contract Sync FAILED:{RESET}\n{RED}{e.stderr or e.stdout}{RESET}")
         return False, 0, 1, 0, 0, 0, 0
 
-    # Check if node is installed
+    # Check if node is installed (required for JS unit tests & syntax checks)
+    node_available = True
     try:
         subprocess.run(["node", "--version"], capture_output=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print(f"  {YELLOW}⚠️  Skipping JS tests: Node.js is not installed.{RESET}")
-        return True, 0, 0, 0, 0, 0, 0
+        print(f"  {RED}{BOLD}❌ Required tool 'node' is not installed; cannot run JS tests or syntax checks.{RESET}")
+        all_success = False
+        node_available = False
 
     # 1. JS Unit Tests (parallel)
     scripts_dir = os.path.join(TESTING_TOOLS_DIR, 'scripts')
     js_tests = sorted(f for f in os.listdir(scripts_dir) if f.startswith("test_") and f.endswith(".js"))
     js_passed = 0
 
-    def _run_one_js_test(test_file):
-        js_test_path = os.path.join(scripts_dir, test_file)
-        return test_file, subprocess.run(["node", js_test_path], capture_output=True, text=True)
+    if node_available:
+        def _run_one_js_test(test_file):
+            js_test_path = os.path.join(scripts_dir, test_file)
+            return test_file, subprocess.run(["node", js_test_path], capture_output=True, text=True)
 
-    max_js_workers = min(len(js_tests), os.cpu_count() or 4) if js_tests else 1
-    with ThreadPoolExecutor(max_workers=max_js_workers) as pool:
-        js_results = list(pool.map(_run_one_js_test, js_tests))
+        max_js_workers = min(len(js_tests), os.cpu_count() or 4) if js_tests else 1
+        with ThreadPoolExecutor(max_workers=max_js_workers) as pool:
+            js_results = list(pool.map(_run_one_js_test, js_tests))
 
-    for test_file, result in js_results:
-        if result.returncode == 0:
-            js_passed += 1
-            if verbose:
-                print(f"    {GREEN}✅ {test_file}{RESET}")
-                if result.stdout.strip():
-                    for line in result.stdout.strip().splitlines():
-                        if line.strip():
-                            print(f"       {CYAN}•{RESET} {line.strip()}")
-        else:
-            print(f"\n  {RED}{BOLD}❌ JS Test FAILED: {test_file}{RESET}")
-            if result.stdout:
-                print(f"{RED}{result.stdout.strip()}{RESET}")
-            if result.stderr:
-                print(f"{RED}{result.stderr.strip()}{RESET}")
-            all_success = False
+        for test_file, result in js_results:
+            if result.returncode == 0:
+                js_passed += 1
+                if verbose:
+                    print(f"    {GREEN}✅ {test_file}{RESET}")
+                    if result.stdout.strip():
+                        for line in result.stdout.strip().splitlines():
+                            if line.strip():
+                                print(f"       {CYAN}•{RESET} {line.strip()}")
+            else:
+                print(f"\n  {RED}{BOLD}❌ JS Test FAILED: {test_file}{RESET}")
+                if result.stdout:
+                    print(f"{RED}{result.stdout.strip()}{RESET}")
+                if result.stderr:
+                    print(f"{RED}{result.stderr.strip()}{RESET}")
+                all_success = False
 
-    if js_passed != len(js_tests) or verbose:
-        status_icon = f"{GREEN}✅" if js_passed == len(js_tests) else f"{RED}{BOLD}❌"
-        print(f"  {status_icon} JS Unit Tests: {js_passed}/{len(js_tests)} passed{RESET}")
+        if js_passed != len(js_tests) or verbose:
+            status_icon = f"{GREEN}✅" if js_passed == len(js_tests) else f"{RED}{BOLD}❌"
+            print(f"  {status_icon} JS Unit Tests: {js_passed}/{len(js_tests)} passed{RESET}")
     total_passed += js_passed
     total_checks += len(js_tests)
 
@@ -196,48 +199,49 @@ def run_js_batch(verbose=False):
                 js_files.append(os.path.join(root_dir, f))
 
     syntax_ok = 0
-    js_empty_catch_regex = re.compile(
-        r'catch\s*(?:\([^)]*\))?\s*\{(?:\s|//[^\n]*|/\*[\s\S]*?\*/)*\}'
-    )
+    if node_available:
+        js_empty_catch_regex = re.compile(
+            r'catch\s*(?:\([^)]*\))?\s*\{(?:\s|//[^\n]*|/\*[\s\S]*?\*/)*\}'
+        )
 
-    def _check_one_js_file(js_file):
-        rel_name = os.path.relpath(js_file, PROJECT_ROOT)
-        check = subprocess.run(["node", "--check", js_file], capture_output=True, text=True)
-        empty_catches = []
-        read_err = None
-        try:
-            with open(js_file, "r", encoding="utf-8") as fh:
-                js_content = fh.read()
-            empty_catches = [
-                js_content.count('\n', 0, m.start()) + 1
-                for m in js_empty_catch_regex.finditer(js_content)
-            ]
-        except Exception as e:
-            read_err = str(e)
-        return rel_name, check, empty_catches, read_err
+        def _check_one_js_file(js_file):
+            rel_name = os.path.relpath(js_file, PROJECT_ROOT)
+            check = subprocess.run(["node", "--check", js_file], capture_output=True, text=True)
+            empty_catches = []
+            read_err = None
+            try:
+                with open(js_file, "r", encoding="utf-8") as fh:
+                    js_content = fh.read()
+                empty_catches = [
+                    js_content.count('\n', 0, m.start()) + 1
+                    for m in js_empty_catch_regex.finditer(js_content)
+                ]
+            except Exception as e:
+                read_err = str(e)
+            return rel_name, check, empty_catches, read_err
 
-    max_syntax_workers = min(len(js_files), max(4, os.cpu_count() or 4)) if js_files else 1
-    with ThreadPoolExecutor(max_workers=max_syntax_workers) as pool:
-        syntax_results = list(pool.map(_check_one_js_file, js_files))
+        max_syntax_workers = min(len(js_files), max(4, os.cpu_count() or 4)) if js_files else 1
+        with ThreadPoolExecutor(max_workers=max_syntax_workers) as pool:
+            syntax_results = list(pool.map(_check_one_js_file, js_files))
 
-    for rel_name, check, empty_catches, read_err in syntax_results:
-        if check.returncode == 0:
-            syntax_ok += 1
-        else:
-            print(f"\n  {RED}{BOLD}❌ JS SYNTAX ERROR in {rel_name}:{RESET}")
-            print(f"{RED}{check.stderr.strip()}{RESET}")
-            all_success = False
+        for rel_name, check, empty_catches, read_err in syntax_results:
+            if check.returncode == 0:
+                syntax_ok += 1
+            else:
+                print(f"\n  {RED}{BOLD}❌ JS SYNTAX ERROR in {rel_name}:{RESET}")
+                print(f"{RED}{check.stderr.strip()}{RESET}")
+                all_success = False
 
-        if read_err is not None:
-            print(f"\n  {RED}{BOLD}❌ Could not read {rel_name}: {read_err}{RESET}")
-            all_success = False
-        elif empty_catches:
-            print(f"\n  {RED}{BOLD}❌ JS AST Gate: Silent empty/comment-only catch block found in {rel_name} at line(s) {empty_catches}{RESET}")
-            all_success = False
+            if read_err is not None:
+                print(f"\n  {RED}{BOLD}❌ Could not read {rel_name}: {read_err}{RESET}")
+                all_success = False
+            elif empty_catches:
+                print(f"\n  {RED}{BOLD}❌ JS AST Gate: Silent empty/comment-only catch block found in {rel_name} at line(s) {empty_catches}{RESET}")
+                all_success = False
 
-    if syntax_ok != len(js_files) or verbose:
-        status_icon = f"{GREEN}✅" if syntax_ok == len(js_files) else f"{RED}{BOLD}❌"
-        print(f"  {status_icon} JS Syntax & AST Gate: {syntax_ok}/{len(js_files)} files OK{RESET}")
+        if syntax_ok != len(js_files) or verbose:
+            status_icon = f"{GREEN}✅" if syntax_ok == len(js_files) else f"{RED}{BOLD}❌"
+            print(f"  {status_icon} JS Syntax & AST Gate: {syntax_ok}/{len(js_files)} files OK{RESET}")
 
     # 3. Python Static Analysis (Hardened AST Syntax + Bare Except + Silent Pass Check)
     py_files = []
@@ -290,7 +294,7 @@ def run_js_batch(verbose=False):
         status_icon = f"{GREEN}✅" if py_ok == len(py_files) else f"{RED}{BOLD}❌"
         print(f"  {status_icon} Python AST Gate: {py_ok}/{len(py_files)} files OK{RESET}")
 
-    # 4. Non-Interactive Static Linters (Executed without prompting when available)
+    # 4. Non-Interactive Static Linters (Required core linters fail if missing)
     ruff_bin = shutil.which("ruff")
     if ruff_bin:
         ruff_cmd = [ruff_bin, "check", "--no-fix"]
@@ -314,8 +318,9 @@ def run_js_batch(verbose=False):
             if ruff_res.stderr:
                 print(f"{RED}{ruff_res.stderr.strip()}{RESET}")
             all_success = False
-    elif verbose:
-        print(f"  {CYAN}ℹ️  Ruff linter not installed (skipping).{RESET}")
+    else:
+        print(f"  {RED}{BOLD}❌ Required linter 'ruff' is not installed.{RESET}")
+        all_success = False
 
     biome_bin = shutil.which("biome")
     if not biome_bin:
@@ -349,8 +354,9 @@ def run_js_batch(verbose=False):
             if biome_res.stderr:
                 print(f"{RED}{biome_res.stderr.strip()}{RESET}")
             all_success = False
-    elif verbose:
-        print(f"  {CYAN}ℹ️  Biome linter not installed (skipping).{RESET}")
+    else:
+        print(f"  {RED}{BOLD}❌ Required linter 'biome' is not installed.{RESET}")
+        all_success = False
 
     # 5. Lua Syntax Check (mpv_scripts/*.lua via luac -p when available)
     luac_bin = shutil.which("luac")
@@ -382,8 +388,8 @@ def run_js_batch(verbose=False):
         if lua_ok != len(lua_files) or verbose:
             status_icon = f"{GREEN}✅" if lua_ok == len(lua_files) else f"{RED}{BOLD}❌"
             print(f"  {status_icon} Lua Syntax Check (luac -p): {lua_ok}/{len(lua_files)} files OK{RESET}")
-    elif verbose and not luac_bin:
-        print(f"  {CYAN}ℹ️  luac not installed (skipping Lua syntax check).{RESET}")
+    elif lua_files and not luac_bin:
+        print(f"  {YELLOW}{BOLD}⚠️  WARNING: luac not found (skipped Lua syntax check).{RESET}")
 
     # 6. Luacheck (mpv_scripts/*.lua via testing_tools/.luacheckrc when available)
     luacheck_bin = shutil.which("luacheck")
@@ -409,8 +415,8 @@ def run_js_batch(verbose=False):
             if lc_res.stderr:
                 print(f"{RED}{lc_res.stderr.strip()}{RESET}")
             all_success = False
-    elif verbose and not luacheck_bin:
-        print(f"  {CYAN}ℹ️  Luacheck not installed (skipping).{RESET}")
+    elif lua_files and not luacheck_bin:
+        print(f"  {YELLOW}{BOLD}⚠️  WARNING: luacheck not found (skipped).{RESET}")
 
     # 7. ShellCheck (*.sh scripts when available)
     shellcheck_bin = shutil.which("shellcheck")
@@ -437,10 +443,10 @@ def run_js_batch(verbose=False):
             if sc_res.stderr:
                 print(f"{RED}{sc_res.stderr.strip()}{RESET}")
             all_success = False
-    elif verbose and not shellcheck_bin:
-        print(f"  {CYAN}ℹ️  ShellCheck not installed (skipping).{RESET}")
+    elif sh_files and not shellcheck_bin:
+        print(f"  {YELLOW}{BOLD}⚠️  WARNING: shellcheck not found (skipped).{RESET}")
 
-    # 8. Pyright (Python type checker via testing_tools/pyrightconfig.json when available)
+    # 8. Pyright (Python type checker via testing_tools/pyrightconfig.json; required)
     pyright_bin = shutil.which("pyright")
     if pyright_bin:
         pyright_cmd = [pyright_bin]
@@ -465,24 +471,25 @@ def run_js_batch(verbose=False):
             if pr_res.stderr:
                 print(f"{RED}{pr_res.stderr.strip()}{RESET}")
             all_success = False
-    elif verbose:
-        print(f"  {CYAN}ℹ️  Pyright not installed (skipping).{RESET}")
+    else:
+        print(f"  {RED}{BOLD}❌ Required linter 'pyright' is not installed.{RESET}")
+        all_success = False
 
     return all_success, total_passed, total_checks, syntax_ok, len(js_files), py_ok, len(py_files)
 
 
-PYTHON_TEST_FILES = [
-    "test_logging_system.py",
-    "test_robustness.py",
-    "test_repro_crash.py",
-    "test_native_host_boot.py",
-    "test_security_claims.py",
-    "test_storage_locking.py",
-    "test_playback_ipc_concurrency.py",
-    "test_server_and_installer.py",
-    "test_logging_pipeline.py",
-    "test_mcp_server.py",
-]
+def discover_python_test_files():
+    """Auto-discovers test_*.py modules in testing_tools/scripts/ in deterministic sorted order."""
+    scripts_dir = os.path.join(TESTING_TOOLS_DIR, "scripts")
+    if not os.path.isdir(scripts_dir):
+        return []
+    return sorted(
+        f for f in os.listdir(scripts_dir)
+        if f.startswith("test_") and f.endswith(".py")
+    )
+
+
+PYTHON_TEST_FILES = discover_python_test_files()
 
 _WORKER_RESULT_PREFIX = "__WORKER_RESULT__:"
 
@@ -519,9 +526,10 @@ def run_all_tests(verbose=False):
     """Main entry point running all test batches concurrently."""
     t_start = time.time()
 
-    max_py_workers = min(len(PYTHON_TEST_FILES), os.cpu_count() or 4)
+    python_test_files = discover_python_test_files()
+    max_py_workers = max(1, min(len(python_test_files), os.cpu_count() or 4))
     with ThreadPoolExecutor(max_workers=max_py_workers) as pool:
-        py_futures = [pool.submit(_run_python_worker, tf, verbose) for tf in PYTHON_TEST_FILES]
+        py_futures = [pool.submit(_run_python_worker, tf, verbose) for tf in python_test_files]
 
         # Run JS tests, syntax checks, AST gates, and linters concurrently with Python workers
         b2_ok, b2_pass, b2_total, syntax_ok, js_total_files, py_ok, py_total_files = run_js_batch(verbose=verbose)
