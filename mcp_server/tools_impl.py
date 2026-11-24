@@ -1,6 +1,4 @@
-import ast
 import contextlib
-import dataclasses
 import importlib.util
 import io
 import json
@@ -15,7 +13,6 @@ import sys
 import tempfile
 import threading
 import time
-import typing
 from typing import Any
 
 sys.dont_write_bytecode = True
@@ -41,7 +38,6 @@ GENERATED_READONLY_FILES = GENERATED_JS_FILES + (BRIDGE_CONTRACT_REL,)
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+\.(py|js)$")
 SAFE_PROP_RE = re.compile(r"^[a-zA-Z0-9_./-]{1,64}$")
-SNAKE_CASE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 EXT_ORIGIN_RE = re.compile(r"^chrome-extension://[a-p]{32}/$")
 
 LOG_FILES = {
@@ -416,13 +412,76 @@ def _parse_suite_summary(output: str) -> dict[str, Any]:
     return {}
 
 
+def _run_fix() -> dict[str, Any]:
+    stages: list[dict[str, Any]] = []
+
+    rc_js, out_js, err_js = _run_cmd([_python_bin(), os.path.join(TESTING_TOOLS_DIR, "generate_js.py")])
+    stages.append(
+        {
+            "name": "generate_js",
+            "ok": rc_js == 0,
+            **({} if rc_js == 0 else {"error": _trim_lines(err_js or out_js, 20)[0]}),
+        }
+    )
+    if rc_js != 0:
+        return {"ok": False, "mode": "fix", "stages": stages}
+
+    rc_bc, out_bc, err_bc = _run_cmd([_python_bin(), os.path.join(TESTING_TOOLS_DIR, "generate_bridge_contract.py")])
+    stages.append(
+        {
+            "name": "generate_bridge_contract",
+            "ok": rc_bc == 0,
+            **({} if rc_bc == 0 else {"error": _trim_lines(err_bc or out_bc, 20)[0]}),
+        }
+    )
+    if rc_bc != 0:
+        return {"ok": False, "mode": "fix", "stages": stages}
+
+    ruff_bin = shutil.which("ruff")
+    if ruff_bin:
+        cfg = os.path.join(TESTING_TOOLS_DIR, "pyproject.toml")
+        cmd = [ruff_bin, "check", "--fix"]
+        if os.path.isfile(cfg):
+            cmd.extend(["--config", cfg])
+        cmd.append(".")
+        rc_rf, out_rf, err_rf = _run_cmd(cmd)
+        stages.append(
+            {
+                "name": "ruff_fix",
+                "ok": rc_rf == 0,
+                **({} if rc_rf == 0 else {"error": _trim_lines(err_rf or out_rf, 20)[0]}),
+            }
+        )
+    else:
+        stages.append({"name": "ruff_fix", "ok": True, "skipped": True, "reason": "not_installed"})
+
+    rc_v, out_v, err_v = _run_cmd([_python_bin(), os.path.join(REPO_ROOT, "verify_changes.py")], timeout=180)
+    combined = (out_v + "\n" + err_v).strip()
+    verify_stage: dict[str, Any] = {
+        "name": "verify_full",
+        "ok": rc_v == 0,
+        "summary": _parse_suite_summary(combined),
+    }
+    if rc_v != 0:
+        fail_lines, trunc, _ = _trim_lines(combined, 40)
+        verify_stage["failure_lines"] = fail_lines
+        verify_stage["truncated"] = trunc
+    stages.append(verify_stage)
+
+    all_ok = all(s.get("ok", False) for s in stages)
+    return {"ok": all_ok, "mode": "fix", "stages": stages}
+
+
 def verify_repo(mode: str = "full", target: str | None = None, sync_contract: bool = False) -> dict[str, Any]:
-    allowed = {"build", "lint", "test", "targeted", "full"}
+    allowed = {"build", "lint", "test", "targeted", "fix", "full"}
     if mode not in allowed:
         return {"ok": False, "error": f"Invalid mode '{mode}'. Allowed: {sorted(allowed)}"}
 
     if mode == "build":
         return _run_build(sync_contract=sync_contract)
+
+    if mode == "fix":
+        return _run_fix()
 
     if mode == "lint":
         linters: dict[str, Any] = {
@@ -500,111 +559,6 @@ def verify_repo(mode: str = "full", target: str | None = None, sync_contract: bo
 # ---------------------------------------------------------------------------
 # 2. check_repo_drift
 # ---------------------------------------------------------------------------
-
-
-def _render_module_js(cfg: dict[str, Any]) -> str:
-    source_path = os.path.join(REPO_ROOT, cfg["source"])
-    namespace = cfg["namespace"]
-    dependencies = cfg["dependencies"]
-    with open(source_path, "r", encoding="utf-8") as fh:
-        content = fh.read()
-
-    def handle_import(match: re.Match[str]) -> str:
-        imports_str = match.group(1).replace("\n", " ").strip()
-        imports = [i.strip() for i in imports_str.split(",") if i.strip()]
-        path = match.group(2)
-        if path in dependencies:
-            dep_ns = dependencies[path]
-            return "\n".join(f"const {i} = {dep_ns}.{i};" for i in imports)
-        return f'// import {{ {", ".join(imports)} }} from "{path}"; // UNMAPPED'
-
-    content = re.sub(r'import\s+\{\s*([\s\S]*?)\s*\}\s+from\s+"(.*?)";', handle_import, content)
-
-    def handle_star_import(match: re.Match[str]) -> str:
-        alias = match.group(1)
-        path = match.group(2)
-        if path in dependencies:
-            return f"const {alias} = {dependencies[path]};"
-        return f'// import * as {alias} from "{path}"; // UNMAPPED'
-
-    content = re.sub(r'import\s+\*\s+as\s+(\w+)\s+from\s+"(.*?)";', handle_star_import, content)
-    content = re.sub(r"^export\s+class\s+(\w+)(.*)", r"const \1 = MPV.\1 = class \1\2", content, flags=re.MULTILINE)
-    content = re.sub(
-        r"^export\s+(async\s+)?function\s+(\w+)(.*)",
-        r"const \2 = MPV.\2 = \1function \2\3",
-        content,
-        flags=re.MULTILINE,
-    )
-    content = re.sub(r"^export\s+const\s+(\w+)\s*=(.*)", r"const \1 = MPV.\1 =\2", content, flags=re.MULTILINE)
-    content = re.sub(r"^export\s+\{[\s\S]*?\};", "", content, flags=re.MULTILINE)
-
-    output = [
-        f"// AUTO-GENERATED from {os.path.basename(cfg['source'])}. DO NOT EDIT MANUALLY.",
-        f"window.{namespace} = window.{namespace} || {{}};",
-        "(() => {",
-        f"\tconst MPV = window.{namespace};",
-    ]
-    for line in content.split("\n"):
-        output.append("\t" + line if line.strip() else "")
-    output.append("})();")
-    return "\n".join(output)
-
-
-def _render_bridge_contract() -> str:
-    _ensure_repo_on_path()
-    with contextlib.redirect_stdout(io.StringIO()):
-        from utils.native_link import models
-        from utils.native_link.translator import ACTION_MAP
-
-    settings_fields = [f.name for f in dataclasses.fields(models.SettingsOverrides)]
-    action_schemas: dict[str, list[str]] = {}
-    for action, req_class in ACTION_MAP.items():
-        if dataclasses.is_dataclass(req_class):
-            allowed = [f.name for f in dataclasses.fields(req_class)]
-            action_schemas[action] = [f for f in allowed if f not in ("action", "request_id", "settings")]
-
-    return f"""/**
- * AUTO-GENERATED from Python Models (models.py). DO NOT EDIT MANUALLY.
- * Generated by: testing_tools/generate_bridge_contract.py
- */
-
-const SETTINGS_FIELDS = new Set({json.dumps(settings_fields, indent=4)});
-
-const ACTION_SCHEMAS = {json.dumps(action_schemas, indent=4)};
-
-/**
- * Validates a snaked-case payload against the Python contract.
- * @param {{object}} snakedPayload - The object AFTER normalization.
- */
-function validateContract(snakedPayload) {{
-\tconst {{ action, request_id }} = snakedPayload;
-\tif (!action) return {{ valid: false, error: "Missing 'action' key." }};
-
-\tconst allowedKeys = ACTION_SCHEMAS[action];
-\tif (!allowedKeys) {{
-\t\t// BaseRequest fallback
-\t\tconst baseKeys = ["action", "request_id"];
-\t\tconst extra = Object.keys(snakedPayload).filter(k => !baseKeys.includes(k));
-\t\tif (extra.length > 0) return {{ valid: false, error: `Unknown action '${{action}}' or unexpected keys: ${{extra.join(", ")}}` }};
-\t\treturn {{ valid: true }};
-\t}}
-
-\tconst validKeys = new Set([...allowedKeys, "action", "request_id", ...SETTINGS_FIELDS]);
-\tconst payloadKeys = Object.keys(snakedPayload);
-
-\tfor (const key of payloadKeys) {{
-\t\tif (!validKeys.has(key)) {{
-\t\t\treturn {{ valid: false, error: `Key '${{key}}' is not defined in Python model for action '${{action}}'.` }};
-\t\t}}
-\t}}
-
-\treturn {{ valid: true }};
-}}
-
-if (typeof module !== "undefined") {{
-\tmodule.exports = {{ validateContract, ACTION_SCHEMAS }};
-}}
-"""
 
 
 def _check_yt_tools_standalone_drift() -> dict[str, Any]:
@@ -689,7 +643,7 @@ def _check_yt_tools_standalone_drift() -> dict[str, Any]:
 def check_repo_drift() -> dict[str, Any]:
     _ensure_repo_on_path()
     with contextlib.redirect_stdout(io.StringIO()):
-        from testing_tools import generate_js
+        from testing_tools import generate_bridge_contract, generate_js
 
     js_drift: list[dict[str, Any]] = []
     for cfg in generate_js.CONFIG:
@@ -702,7 +656,7 @@ def check_repo_drift() -> dict[str, Any]:
             source_newer = os.path.getmtime(src_abs) > os.path.getmtime(tgt_abs)
             with open(tgt_abs, "r", encoding="utf-8") as fh:
                 actual = fh.read()
-            expected = _render_module_js(cfg)
+            expected = generate_js.render_module_js(cfg, project_root=REPO_ROOT)
             content_diff = actual != expected
         if target_missing or content_diff or source_newer:
             js_drift.append(
@@ -726,7 +680,7 @@ def check_repo_drift() -> dict[str, Any]:
         contract_source_newer = max(os.path.getmtime(models_abs), os.path.getmtime(trans_abs)) > contract_mtime
         with open(contract_abs, "r", encoding="utf-8") as fh:
             actual_contract = fh.read()
-        contract_content_diff = actual_contract != _render_bridge_contract()
+        contract_content_diff = actual_contract != generate_bridge_contract.render_bridge_contract()
     contract_drift = {
         "drifted": contract_missing or contract_content_diff,
         "target": BRIDGE_CONTRACT_REL,
@@ -1244,294 +1198,40 @@ def probe_mpv_ipc(
 
 
 # ---------------------------------------------------------------------------
-# 7. validate_bridge_payload
+# 3 (Unified). inspect_runtime
 # ---------------------------------------------------------------------------
 
 
-def _format_type(tp: Any) -> str:
-    origin = typing.get_origin(tp)
-    if origin is typing.Union:
-        args = [a for a in typing.get_args(tp) if a is not type(None)]
-        inner = " | ".join(_format_type(a) for a in args)
-        return f"Optional[{inner}]"
-    if origin is not None:
-        args = ", ".join(_format_type(a) for a in typing.get_args(tp))
-        name = getattr(origin, "__name__", str(origin))
-        return f"{name}[{args}]" if args else name
-    return getattr(tp, "__name__", str(tp))
-
-
-def _schema_info(action_schema: str) -> dict[str, Any]:
-    _ensure_repo_on_path()
-    with contextlib.redirect_stdout(io.StringIO()):
-        from utils.native_link import models
-        from utils.native_link.translator import ACTION_MAP
-
-    if action_schema in ("*", "list"):
-        grouped: dict[str, list[str]] = {}
-        for act, cls in sorted(ACTION_MAP.items()):
-            grouped.setdefault(cls.__name__, []).append(act)
-        return {"ok": True, "actions_by_model": grouped, "total_actions": len(ACTION_MAP)}
-
-    if action_schema not in ACTION_MAP:
+def inspect_runtime(
+    target: str = "state",
+    log: str = "native_host",
+    lines: int = 50,
+    grep: str | None = None,
+    level: str | None = None,
+    sections: list[str] | None = None,
+    include_urls_for_folder: str | None = None,
+    ipc_action: str = "list",
+    socket_path: str | None = None,
+    property_name: str | None = None,
+) -> dict[str, Any]:
+    if target == "logs":
+        res = tail_logs(log=log, lines=lines, grep=grep, level=level)
+    elif target == "state":
+        res = inspect_runtime_state(sections=sections, include_urls_for_folder=include_urls_for_folder)
+    elif target == "registration":
+        res = check_native_host_registration()
+    elif target == "ipc":
+        res = probe_mpv_ipc(action=ipc_action, socket_path=socket_path, property_name=property_name)
+    else:
         return {
             "ok": False,
-            "error": f"Unknown action '{action_schema}'",
-            "known_actions": sorted(ACTION_MAP.keys()),
+            "error": f"Invalid target '{target}'. Allowed: ['ipc', 'logs', 'registration', 'state']",
         }
-
-    cls = ACTION_MAP[action_schema]
-    fields_map = {f.name: _format_type(f.type) for f in dataclasses.fields(cls) if f.name != "settings"}
-    out: dict[str, Any] = {
-        "ok": True,
-        "action": action_schema,
-        "model": cls.__name__,
-        "fields": fields_map,
-    }
-    if cls is models.PlaybackRequest:
-        out["settings_fields"] = {f.name: _format_type(f.type) for f in dataclasses.fields(models.SettingsOverrides)}
-    return out
-
-
-def validate_bridge_payload(
-    payload: dict[str, Any] | str | None = None,
-    direction: str = "js_to_py",
-    action_schema: str | None = None,
-) -> dict[str, Any]:
-    if action_schema:
-        return _schema_info(action_schema)
-
-    if payload is None:
-        return {"ok": False, "error": "Provide either payload or action_schema"}
-
-    if isinstance(payload, str):
-        try:
-            payload_dict = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            return {"ok": False, "error": f"Invalid JSON payload: {exc}"}
-    else:
-        payload_dict = payload
-
-    if not isinstance(payload_dict, dict):
-        return {"ok": False, "error": "payload must be a JSON object"}
-
-    _ensure_repo_on_path()
-    with contextlib.redirect_stdout(io.StringIO()):
-        from utils.native_link import models, responder, translator
-
-    if direction == "py_to_js":
-        translated = responder._translate_keys(payload_dict)
-        errors: list[str] = []
-        action_val = payload_dict.get("action")
-        if action_val is not None and (not isinstance(action_val, str) or not SNAKE_CASE_RE.match(action_val)):
-            errors.append("action must be snake_case")
-        req_id_in = payload_dict.get("request_id")
-        req_id_preserved = (
-            ("request_id" not in payload_dict)
-            or (isinstance(translated, dict) and translated.get("request_id") == req_id_in)
-        )
-        if not req_id_preserved:
-            errors.append("request_id was not preserved")
-        return {
-            "ok": len(errors) == 0,
-            "direction": direction,
-            "request_id_preserved": req_id_preserved,
-            "errors": errors,
-            "translated": translated,
-        }
-
-    if direction != "js_to_py":
-        return {"ok": False, "error": f"Invalid direction '{direction}'. Allowed: ['js_to_py', 'py_to_js']"}
-
-    errors = []
-    warnings: list[str] = []
-
-    if "__proto__" in payload_dict:
-        errors.append("Forbidden key '__proto__' present")
-
-    norm = translator._normalize_message(payload_dict)
-    action_val = norm.get("action")
-    if not action_val or not isinstance(action_val, str):
-        errors.append("Missing required 'action' field")
-    elif not SNAKE_CASE_RE.match(action_val):
-        errors.append(f"action '{action_val}' must be snake_case")
-    elif action_val not in translator.ACTION_MAP:
-        warnings.append(f"action '{action_val}' is not in ACTION_MAP (falls back to BaseRequest)")
-
-    req_cls = translator.ACTION_MAP.get(action_val, models.BaseRequest) if isinstance(action_val, str) else models.BaseRequest
-    allowed_keys = {f.name for f in dataclasses.fields(req_cls)} - {"settings"}
-    if req_cls is models.PlaybackRequest:
-        allowed_keys |= {f.name for f in dataclasses.fields(models.SettingsOverrides)}
-    elif req_cls is models.LogBrowserErrorRequest:
-        allowed_keys.add("error")
-
-    unknown = sorted(k for k in norm if k not in allowed_keys)
-    if unknown:
-        errors.append(f"Unknown keys for {req_cls.__name__}: {unknown}")
-
-    req_obj = translator.translate(payload_dict)
-    req_dict = dataclasses.asdict(req_obj)
-    if isinstance(req_dict.get("settings"), dict):
-        req_dict["settings"] = {k: v for k, v in req_dict["settings"].items() if v is not None}
-
-    in_req_id = payload_dict.get("request_id") if "request_id" in payload_dict else payload_dict.get("requestId")
-    req_id_preserved = (
-        (in_req_id is None and "request_id" not in payload_dict and "requestId" not in payload_dict)
-        or (req_dict.get("request_id") == in_req_id)
-    )
-    if not req_id_preserved:
-        errors.append("request_id was not preserved")
-
-    return {
-        "ok": len(errors) == 0,
-        "direction": direction,
-        "action": action_val,
-        "model": req_cls.__name__,
-        "request_id_preserved": req_id_preserved,
-        "errors": errors,
-        "warnings": warnings,
-        "translated": req_dict,
-    }
+    return {"target": target, **res}
 
 
 # ---------------------------------------------------------------------------
-# 8. trace_action
-# ---------------------------------------------------------------------------
-
-SAFE_ACTION_RE = re.compile(r"^[a-zA-Z0-9_.-]{1,80}$")
-
-
-def _extract_control_actions_static() -> set[str]:
-    nh_path = os.path.join(REPO_ROOT, "native_host.py")
-    if not os.path.isfile(nh_path):
-        return set()
-    try:
-        with open(nh_path, "r", encoding="utf-8") as fh:
-            tree = ast.parse(fh.read(), filename="native_host.py")
-        for node in tree.body:
-            if isinstance(node, ast.Assign):
-                for tgt in node.targets:
-                    if isinstance(tgt, ast.Name) and tgt.id == "CONTROL_ACTIONS":
-                        call = node.value
-                        if isinstance(call, ast.Call) and call.args:
-                            val = ast.literal_eval(call.args[0])
-                            if isinstance(val, (set, frozenset, list, tuple)):
-                                return {str(x) for x in val}
-    except (OSError, SyntaxError, ValueError) as exc:
-        logger.debug("Failed to parse CONTROL_ACTIONS from native_host.py: %s", exc)
-    return set()
-
-
-def _collect_layer_files(entries: list[str], ext: str) -> list[str]:
-    found: list[str] = []
-    for rel in entries:
-        abs_path = os.path.join(REPO_ROOT, rel)
-        if os.path.isfile(abs_path):
-            found.append(abs_path)
-        elif os.path.isdir(abs_path):
-            for root_dir, _dirs, files in os.walk(abs_path):
-                for fname in sorted(files):
-                    if fname.endswith(ext):
-                        found.append(os.path.join(root_dir, fname))
-    return sorted(set(found))
-
-
-def _scan_files_for_pattern(
-    files: list[str],
-    pattern: re.Pattern[str],
-    cap: int = 20,
-    match_type: str | None = None,
-) -> tuple[list[dict[str, Any]], bool]:
-    matches: list[dict[str, Any]] = []
-    truncated = False
-    for fpath in files:
-        rel_path = os.path.relpath(fpath, REPO_ROOT)
-        try:
-            with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
-                for line_no, raw_line in enumerate(fh, start=1):
-                    if pattern.search(raw_line):
-                        if len(matches) >= cap:
-                            truncated = True
-                            return matches, truncated
-                        entry: dict[str, Any] = {
-                            "file": rel_path,
-                            "line": line_no,
-                            "snippet": raw_line.strip()[:120],
-                        }
-                        if match_type:
-                            entry["type"] = match_type
-                        matches.append(entry)
-        except OSError as exc:
-            logger.debug("trace_action read error %s: %s", rel_path, exc)
-    return matches, truncated
-
-
-def trace_action(action_name: str) -> dict[str, Any]:
-    if not isinstance(action_name, str) or not SAFE_ACTION_RE.match(action_name):
-        return {"ok": False, "error": "action_name must match ^[a-zA-Z0-9_.-]{1,80}$"}
-
-    _ensure_repo_on_path()
-    with contextlib.redirect_stdout(io.StringIO()):
-        from utils.native_link.translator import ACTION_MAP
-
-    model_cls = ACTION_MAP.get(action_name)
-    model_name = model_cls.__name__ if model_cls is not None else None
-    control_actions = _extract_control_actions_static()
-
-    escaped = re.escape(action_name)
-    action_pat = re.compile(rf"""(?:["'`]{escaped}["'`]|^\s*{escaped}\s*:)""")
-
-    popup_files = _collect_layer_files(["popup.js", "popup"], ".js")
-    bg_files = _collect_layer_files(["background.js", "background"], ".js")
-    handler_files = _collect_layer_files(["utils/handlers", "native_host.py"], ".py")
-    mpv_files = _collect_layer_files(["mpv_scripts"], ".lua")
-
-    popup_hits, popup_trunc = _scan_files_for_pattern(popup_files, action_pat, cap=20)
-    bg_hits, bg_trunc = _scan_files_for_pattern(bg_files, action_pat, cap=20)
-    handler_hits, handler_trunc = _scan_files_for_pattern(handler_files, action_pat, cap=20)
-    mpv_hits, mpv_trunc = _scan_files_for_pattern(mpv_files, action_pat, cap=20)
-
-    translator_path = os.path.join(REPO_ROOT, "utils", "native_link", "translator.py")
-    models_path = os.path.join(REPO_ROOT, "utils", "native_link", "models.py")
-    model_hits, m_trunc1 = _scan_files_for_pattern([translator_path, models_path], action_pat, cap=20)
-    if model_name and len(model_hits) < 20:
-        cls_pat = re.compile(rf"^\s*class\s+{re.escape(model_name)}\b")
-        cls_hits, m_trunc2 = _scan_files_for_pattern(
-            [models_path], cls_pat, cap=20 - len(model_hits), match_type="model_definition"
-        )
-        seen_pairs = {(h["file"], h["line"]) for h in model_hits}
-        for ch in cls_hits:
-            if (ch["file"], ch["line"]) not in seen_pairs:
-                model_hits.append(ch)
-        m_trunc = m_trunc1 or m_trunc2
-    else:
-        m_trunc = m_trunc1
-
-    layers = {
-        "popup": popup_hits,
-        "background": bg_hits,
-        "models": model_hits,
-        "handlers": handler_hits,
-        "mpv_scripts": mpv_hits,
-    }
-    total_matches = sum(len(v) for v in layers.values())
-    any_truncated = popup_trunc or bg_trunc or m_trunc or handler_trunc or mpv_trunc
-
-    return {
-        "ok": True,
-        "action": action_name,
-        "is_snake_case": bool(SNAKE_CASE_RE.match(action_name)),
-        "in_action_map": action_name in ACTION_MAP,
-        "model": model_name,
-        "is_control_action": action_name in control_actions,
-        "layers": layers,
-        "total_matches": total_matches,
-        "truncated": any_truncated,
-    }
-
-
-# ---------------------------------------------------------------------------
-# 9. simulate_native_message
+# 4. simulate_native_message
 # ---------------------------------------------------------------------------
 
 

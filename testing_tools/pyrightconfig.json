@@ -10,11 +10,11 @@
     "../mpv-playlist-organizer-release",
     "../.git",
     "../__pycache__",
-    "../mcp_server",
     "../mcp_server/.venv"
   ],
   "extraPaths": [
     "..",
+    "../mcp_server",
     "../testing_tools",
     "../testing_tools/scripts"
   ],

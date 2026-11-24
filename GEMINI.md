@@ -27,11 +27,9 @@ Before undertaking work in specific architectural domains, read the correspondin
 - **Skill & Tool Evolution**: [.gemini/skills/skill-and-tool-evolution/SKILL.md](.gemini/skills/skill-and-tool-evolution/SKILL.md) — Audits/evolves skills & `mcp_server/`; during any task, silently stage non-trivial friction proposals to `.gemini/proposals/` and append only a 1-line note.
 
 ## Local MCP Tools (`mpv-playlist-organizer`)
-Prefer these MCP tools over raw shell commands, multi-file greps, or reading full log/`models.py` files directly:
+Prefer these MCP tools over raw shell commands or reading full log files directly:
 - Use `check_repo_drift` before edits/commits to detect `utils/*.module.js`, `bridge_contract.js`, or `yt-tools-standalone/` drift and stray `__pycache__`.
-- Use `verify_repo(mode="build"|"lint"|"targeted"|"test"|"full")` for structured build, linter, and test diagnostics.
-- Use `tail_logs`, `inspect_runtime_state`, `check_native_host_registration`, and `probe_mpv_ipc` for read-only runtime, socket, and manifest inspection.
-- Use `validate_bridge_payload` to verify `snake_case` actions, `request_id` preservation, and `models.py` schemas without reading full files.
-- Use `trace_action(action_name)` to locate an action across `popup/`, `background/`, `utils/native_link/`, `utils/handlers/`, and `mpv_scripts/` in one call.
+- Use `verify_repo(mode="build"|"lint"|"targeted"|"test"|"fix"|"full")` for structured build, linter, auto-fix (`build` + `bridge_contract` + `ruff --fix` + verify), and test diagnostics.
+- Use `inspect_runtime(target="logs"|"state"|"registration"|"ipc", ...)` for read-only log tailing, `DATA_DIR` snapshots, native-host manifest checks, and MPV Unix IPC inspection.
 - Use `simulate_native_message` and `test_mpv_pipeline(mode="dry_run"|"headless")` for isolated native-host framing tests, mpv argv/M3U dry-runs, and headless Lua/IPC checks without touching real `DATA_DIR`.
 - Never run `python3` directly without `PYTHONDONTWRITEBYTECODE=1` (or `python3 -B`), and use MCP tools directly instead of importing `mcp_server/tools_impl.py`.

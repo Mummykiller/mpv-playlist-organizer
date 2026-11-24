@@ -481,6 +481,7 @@ PYTHON_TEST_FILES = [
     "test_playback_ipc_concurrency.py",
     "test_server_and_installer.py",
     "test_logging_pipeline.py",
+    "test_mcp_server.py",
 ]
 
 _WORKER_RESULT_PREFIX = "__WORKER_RESULT__:"

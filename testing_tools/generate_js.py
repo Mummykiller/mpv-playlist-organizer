@@ -55,20 +55,15 @@ CONFIG = [
     }
 ]
 
-def process_file(config, verbose=False):
+def render_module_js(config, project_root=None):
+    base_dir = project_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     source_path = config["source"]
-    target_path = config["target"]
+    if not os.path.isabs(source_path):
+        source_path = os.path.join(base_dir, source_path)
     namespace = config["namespace"]
     dependencies = config["dependencies"]
 
-    if verbose:
-        print(f"Processing {source_path} -> {target_path} ({namespace})")
-
-    if not os.path.exists(source_path):
-        print(f"❌ ERROR: Source file {source_path} not found.")
-        return False
-
-    with open(source_path, "r") as f:
+    with open(source_path, "r", encoding="utf-8") as f:
         content = f.read()
 
     # Handle Imports
@@ -116,9 +111,24 @@ def process_file(config, verbose=False):
             output.append("")
 
     output.append("})();")
+    return "\n".join(output)
 
-    with open(target_path, "w") as f:
-        f.write("\n".join(output))
+
+def process_file(config, verbose=False):
+    source_path = config["source"]
+    target_path = config["target"]
+    namespace = config["namespace"]
+
+    if verbose:
+        print(f"Processing {source_path} -> {target_path} ({namespace})")
+
+    if not os.path.exists(source_path):
+        print(f"❌ ERROR: Source file {source_path} not found.")
+        return False
+
+    rendered = render_module_js(config, project_root=os.getcwd())
+    with open(target_path, "w", encoding="utf-8") as f:
+        f.write(rendered)
     return True
 
 if __name__ == "__main__":

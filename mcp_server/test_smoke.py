@@ -13,12 +13,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 EXPECTED_TOOLS = {
     "verify_repo",
     "check_repo_drift",
-    "tail_logs",
-    "inspect_runtime_state",
-    "check_native_host_registration",
-    "probe_mpv_ipc",
-    "validate_bridge_payload",
-    "trace_action",
+    "inspect_runtime",
     "simulate_native_message",
     "test_mpv_pipeline",
 }
@@ -105,12 +100,12 @@ def main() -> None:
 
         _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
 
-        # 2. tools/list
+        # 2. tools/list — enforce 5-tool schema budget
         _send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         list_resp = _recv_id(proc, 2)
         tools = list_resp["result"]["tools"]
         names = {t["name"] for t in tools}
-        assert len(tools) <= 10, f"Tool budget exceeded: {len(tools)} > 10"
+        assert len(tools) == 5, f"Tool budget mismatch: {len(tools)} != 5 ({names})"
         assert names == EXPECTED_TOOLS, f"Tool set mismatch: {names} vs {EXPECTED_TOOLS}"
         schema_bytes = len(json.dumps(tools, separators=(",", ":")))
 
@@ -119,47 +114,26 @@ def main() -> None:
         assert "ok" in drift and "js_drift" in drift, drift
         assert "yt_tools_standalone_drift" in drift and "present" in drift["yt_tools_standalone_drift"], drift
 
-        logs = _call_tool(proc, 4, "tail_logs", {"log": "native_host", "lines": 10})
-        assert logs["ok"] is True and logs["log"] == "native_host", logs
+        logs = _call_tool(proc, 4, "inspect_runtime", {"target": "logs", "log": "native_host", "lines": 10})
+        assert logs["ok"] is True and logs["target"] == "logs" and logs["log"] == "native_host", logs
 
-        state = _call_tool(proc, 5, "inspect_runtime_state", {})
-        assert state["ok"] is True and "counts" in state, state
+        state = _call_tool(proc, 5, "inspect_runtime", {"target": "state"})
+        assert state["ok"] is True and state["target"] == "state" and "counts" in state, state
 
-        reg = _call_tool(proc, 6, "check_native_host_registration", {})
-        assert "ok" in reg and "browsers" in reg, reg
+        reg = _call_tool(proc, 6, "inspect_runtime", {"target": "registration"})
+        assert "ok" in reg and reg["target"] == "registration" and "browsers" in reg, reg
 
-        ipc = _call_tool(proc, 7, "probe_mpv_ipc", {"action": "list"})
-        assert ipc["ok"] is True and ipc["action"] == "list", ipc
+        ipc = _call_tool(proc, 7, "inspect_runtime", {"target": "ipc", "ipc_action": "list"})
+        assert ipc["ok"] is True and ipc["target"] == "ipc" and ipc["action"] == "list", ipc
 
-        val_payload = _call_tool(
-            proc,
-            8,
-            "validate_bridge_payload",
-            {"payload": {"action": "play", "request_id": "req-1", "folderId": "Anime"}},
-        )
-        assert val_payload["ok"] is True and val_payload["request_id_preserved"] is True, val_payload
-
-        val_schema = _call_tool(proc, 9, "validate_bridge_payload", {"action_schema": "play"})
-        assert val_schema["ok"] is True and val_schema["model"] == "PlaybackRequest", val_schema
-
-        trace_diag = _call_tool(proc, 10, "trace_action", {"action_name": "get_unified_diagnostics"})
-        assert trace_diag["ok"] is True and trace_diag["model"] == "DataSyncRequest", trace_diag
-        for layer_name in ("popup", "background", "models", "handlers"):
-            assert trace_diag["layers"][layer_name], f"Expected trace matches in {layer_name}: {trace_diag}"
-
-        trace_play = _call_tool(proc, 100, "trace_action", {"action_name": "play"})
-        assert trace_play["ok"] is True and trace_play["model"] == "PlaybackRequest", trace_play
-        for layer_name in ("background", "models", "handlers"):
-            assert trace_play["layers"][layer_name], f"Expected trace matches in {layer_name}: {trace_play}"
-
-        trace_lua = _call_tool(proc, 11, "trace_action", {"action_name": "set_url_options"})
-        assert trace_lua["ok"] is True and trace_lua["layers"]["mpv_scripts"], trace_lua
+        bad_target = _call_tool(proc, 8, "inspect_runtime", {"target": "invalid"})
+        assert bad_target["ok"] is False and "Invalid target" in bad_target["error"], bad_target
 
         tmp_root = tempfile.gettempdir()
         sim_before = set(glob.glob(os.path.join(tmp_root, "mpv_nh_sim_*")))
         sim = _call_tool(
             proc,
-            12,
+            9,
             "simulate_native_message",
             {
                 "payload": {"action": "ping", "request_id": "smoke-ping-1"},
@@ -185,7 +159,7 @@ def main() -> None:
 
         dry = _call_tool(
             proc,
-            13,
+            10,
             "test_mpv_pipeline",
             {
                 "mode": "dry_run",
@@ -207,7 +181,7 @@ def main() -> None:
             assert not os.path.exists(real_last_cmd), "Real last_mpv_command.txt was created by dry_run!"
 
         hl_before = set(glob.glob(os.path.join(tmp_root, "mpv_headless_*")))
-        headless = _call_tool(proc, 14, "test_mpv_pipeline", {"mode": "headless"})
+        headless = _call_tool(proc, 11, "test_mpv_pipeline", {"mode": "headless"})
         hl_after = set(glob.glob(os.path.join(tmp_root, "mpv_headless_*")))
         assert headless["ok"] is True and headless["ipc_connected"] is True, headless
         assert headless["pid_verified"] is True and headless["lua_errors"] == [], headless
@@ -222,7 +196,7 @@ def main() -> None:
         assert hl_dead, f"Headless mpv PID {hl_pid} still alive!"
         assert hl_after <= hl_before, f"Leaked headless temp dirs: {hl_after - hl_before}"
 
-        lint = _call_tool(proc, 15, "verify_repo", {"mode": "lint"})
+        lint = _call_tool(proc, 12, "verify_repo", {"mode": "lint"})
         assert lint["ok"] is True, lint
 
         if proc.stdin:
