@@ -1,6 +1,10 @@
 import logging
+import re
 import uuid
 from .context import BackendContext
+from .. import security
+
+_STREAM_BUFFER_SIZE_RE = re.compile(r'^[0-9]+[KMGkmg]?$')
 
 class BaseHandler:
     def __init__(self, ctx: BackendContext):
@@ -35,6 +39,26 @@ class BaseHandler:
             # Handle both dict and object with __dict__
             attrs = request_settings.__dict__ if hasattr(request_settings, '__dict__') else request_settings
             for key, value in attrs.items():
-                if value is not None:
-                    settings[key] = value
+                if value is None:
+                    continue
+                if key in ('ffmpeg_path', 'ytdlp_path'):
+                    if not isinstance(value, str) or not security.is_safe_executable_path(value, setting_key=key):
+                        logging.warning(f"[PY][SEC] Dropped invalid settings override for {key}.")
+                        continue
+                elif key == 'stream_buffer_size':
+                    buf_str = str(value).strip()
+                    if not _STREAM_BUFFER_SIZE_RE.match(buf_str):
+                        logging.warning(f"[PY][SEC] Dropped invalid settings override for stream_buffer_size: '{value}'.")
+                        continue
+                    value = buf_str
+                elif key == 'ytdlp_concurrent_fragments':
+                    if isinstance(value, bool):
+                        logging.warning(f"[PY][SEC] Dropped boolean override for ytdlp_concurrent_fragments: '{value}'.")
+                        continue
+                    try:
+                        value = int(value)
+                    except (ValueError, TypeError):
+                        logging.warning(f"[PY][SEC] Dropped invalid override for ytdlp_concurrent_fragments: '{value}'.")
+                        continue
+                settings[key] = value
         return settings

@@ -100,12 +100,14 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
     def test_volatile_cookie_manager_per_process_isolation(self):
         """Fix PY-M2: VolatileCookieManager uses mkdtemp and cleans only its own directory."""
         v_dir = url_analyzer.VolatileCookieManager.get_volatile_dir()
-        self.assertTrue(os.path.isdir(v_dir))
-        self.assertIn(str(os.getpid()), v_dir)
-        if os.name != 'nt':
-            st = os.stat(v_dir)
-            self.assertEqual(st.st_mode & 0o777, 0o700)
-        url_analyzer.VolatileCookieManager.cleanup_volatile_dir()
+        try:
+            self.assertTrue(os.path.isdir(v_dir))
+            self.assertIn(str(os.getpid()), v_dir)
+            if os.name != 'nt':
+                st = os.stat(v_dir)
+                self.assertEqual(st.st_mode & 0o777, 0o700)
+        finally:
+            url_analyzer.VolatileCookieManager.cleanup_volatile_dir()
         self.assertFalse(os.path.exists(v_dir))
 
     def test_flag_file_safe_reading(self):
@@ -478,7 +480,7 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
 
         msgs = []
         rc = dependency_manager._run_update_command(
-            [sys.executable, "-c", "import time; time.sleep(10)"],
+            [sys.executable, "-B", "-c", "import time; time.sleep(10)"],
             msgs.append,
             timeout=0.2,
         )
@@ -577,6 +579,142 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
              patch.object(ipc_utils.platform, "system", return_value="Darwin"), \
              patch.dict(sys.modules, {"psutil": fake_psutil}):
             self.assertFalse(ipc_utils.verify_mpv_process(42424, ipc_path=None))
+
+    def test_check_session_liveness_does_not_clear_newer_generation_or_none_pid(self):
+        """Regression: _check_session_liveness guards clear() by snap_gen and non-None pid."""
+        from utils.handlers.playback_handler import PlaybackHandler
+
+        ctx = MagicMock()
+        ctx.mpv.sync_lock = threading.RLock()
+        ctx.mpv.is_alive = True
+        ctx.mpv.pid = 77777
+        ctx.mpv.session_generation = 2
+        ctx.mpv.ipc_path = "/tmp/stale.sock"
+        ctx.mpv.ipc_manager.is_connected.return_value = True
+
+        # Simulate a newer session (gen 3) starting while IPC ping is in flight
+        def advance_gen(*_args, **_kwargs):
+            ctx.mpv.session_generation = 3
+            return None
+
+        ctx.mpv.ipc_manager.get_property.side_effect = advance_gen
+        ctx.ipc.is_pid_running.return_value = True
+        ctx.ipc.verify_mpv_process.return_value = False
+
+        handler = PlaybackHandler(ctx)
+        res = handler.handle_is_mpv_running(MagicMock())
+        self.assertEqual(res.get("isRunning"), False)
+        ctx.mpv.clear.assert_not_called()
+
+        # When pid is None (idle), _check_session_liveness must not call clear()
+        ctx.mpv.pid = None
+        ctx.mpv.is_alive = False
+        ctx.mpv.session_generation = 3
+        handler.handle_is_mpv_running(MagicMock())
+        ctx.mpv.clear.assert_not_called()
+
+    def test_launcher_close_passes_captured_generation_to_clear(self):
+        """Regression: LauncherService.close passes the generation captured under sync_lock to clear()."""
+        session_mock = MagicMock()
+        session_mock.is_alive = True
+        session_mock.pid = 88888
+        session_mock.session_generation = 7
+        session_mock.ipc_path = "/tmp/fake.sock"
+        session_mock.ipc_manager = None
+        session_mock.process = None
+        session_mock.manual_quit = False
+        session_mock.is_closing = False
+        session_mock.sync_lock = threading.RLock()
+
+        def bump_gen(*_args, **_kwargs):
+            session_mock.session_generation = 8
+            return False
+
+        launcher = session_services.LauncherService(session_mock)
+        with patch.object(ipc_utils, "verify_mpv_process", side_effect=bump_gen):
+            res = launcher.close()
+
+        self.assertTrue(res.get("success"))
+        session_mock.clear.assert_called_once_with(mpv_return_code=0, session_generation=7)
+
+    def test_anilist_cache_concurrent_offsets_preserved(self):
+        """Regression: get_anilist_releases_with_cache merges offsets atomically under one FileLock."""
+        from utils import anilist_service
+
+        cache_file = os.path.join(self.test_dir, "anilist_cache.json")
+
+        def fake_fetch(_self, is_ping, days=0):
+            return {"success": True, "output": json.dumps({"day": days, "raw_schedules_for_cache": []})}
+
+        with patch.object(anilist_service.AniListCache, "_fetch_from_anilist_script", fake_fetch):
+            t1 = threading.Thread(
+                target=anilist_service.get_anilist_releases_with_cache,
+                args=(False, False, False, 0, cache_file, self.test_dir, MagicMock()),
+            )
+            t2 = threading.Thread(
+                target=anilist_service.get_anilist_releases_with_cache,
+                args=(False, False, False, 1, cache_file, self.test_dir, MagicMock()),
+            )
+            t1.start()
+            t2.start()
+            t1.join(timeout=5.0)
+            t2.join(timeout=5.0)
+
+        with open(cache_file, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertIn("0", saved.get("offsets", {}))
+        self.assertIn("1", saved.get("offsets", {}))
+
+    def test_open_export_folder_non_blocking_popen_and_gpu_vendor_timeout(self):
+        """Regression: handle_open_export_folder uses detached Popen and get_gpu_vendor uses timeout=5."""
+        import subprocess
+        import services
+        from utils.handlers.data_handler import DataHandler
+
+        ctx = MagicMock()
+        ctx.io = file_io
+        ctx.mpv.current_token = "tok"
+        handler = DataHandler(ctx)
+
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("subprocess.run") as mock_run, \
+             patch.object(file_io, "get_settings", return_value={"os_platform": "Linux"}):
+            res = handler.handle_open_export_folder(MagicMock())
+
+        self.assertTrue(res.get("success"))
+        mock_run.assert_not_called()
+        mock_popen.assert_called_once()
+        _, kwargs = mock_popen.call_args
+        self.assertEqual(kwargs.get("stdin"), subprocess.DEVNULL)
+        self.assertEqual(kwargs.get("stdout"), subprocess.DEVNULL)
+        self.assertEqual(kwargs.get("stderr"), subprocess.DEVNULL)
+        self.assertTrue(kwargs.get("start_new_session"))
+
+        with patch("platform.system", return_value="Linux"), \
+             patch("shutil.which", return_value="/usr/bin/lspci"), \
+             patch("subprocess.check_output", return_value="VGA: NVIDIA GeForce") as mock_check:
+            vendor = services.get_gpu_vendor()
+
+        self.assertEqual(vendor, "nvidia")
+        self.assertEqual(mock_check.call_args[1].get("timeout"), 5)
+
+    def test_ipc_socket_manager_close_from_reader_thread_no_self_join(self):
+        """Regression: IPCSocketManager.close() guards against joining the current thread."""
+        mgr = ipc_utils.IPCSocketManager()
+        errors = []
+
+        def run_on_reader():
+            try:
+                mgr._event_reader_thread = threading.current_thread()
+                mgr._event_reader_running = True
+                mgr.close()
+            except Exception as exc:
+                errors.append(exc)
+
+        t = threading.Thread(target=run_on_reader)
+        t.start()
+        t.join(timeout=2.0)
+        self.assertEqual(errors, [])
 
 if __name__ == '__main__':
     unittest.main()

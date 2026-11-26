@@ -334,7 +334,7 @@ export async function handleSaveYouTubeLinkToLibrary(targetUrl, tab) {
 	let uploader = "YouTube";
 	try {
 		const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`)}&format=json`;
-		const resp = await fetch(oembedUrl);
+		const resp = await fetch(oembedUrl, { signal: AbortSignal.timeout(5000) });
 		if (resp.ok) {
 			const meta = await resp.json();
 			if (meta?.title) title = meta.title;

@@ -36,36 +36,56 @@ export async function addRestrictedDomain(ctx) {
 		return;
 	}
 
-	const response = await ctx.sendMessageAsync({
-		action: "get_ui_preferences",
-	});
-	const currentDomains = response?.preferences?.restrictedDomains || [];
-
-	if (!currentDomains.includes(newDomain)) {
-		const newDomains = [...currentDomains, newDomain];
-		renderRestrictedDomainsList(newDomains);
-		await ctx.sendMessageAsync({
-			action: "set_ui_preferences",
-			preferences: { restrictedDomains: newDomains },
+	try {
+		const response = await ctx.sendMessageAsync({
+			action: "get_ui_preferences",
 		});
-		ctx.showStatus(`Domain "${newDomain}" restricted.`);
-	} else {
-		ctx.showStatus("Domain already in list.", true);
+		const currentDomains = response?.preferences?.restrictedDomains || [];
+
+		if (!currentDomains.includes(newDomain)) {
+			const newDomains = [...currentDomains, newDomain];
+			const saveRes = await ctx.sendMessageAsync({
+				action: "set_ui_preferences",
+				preferences: { restrictedDomains: newDomains },
+			});
+			if (saveRes && saveRes.success === false) {
+				throw new Error(saveRes.error || "Failed to save restricted domain.");
+			}
+			renderRestrictedDomainsList(newDomains);
+			ctx.showStatus(`Domain "${newDomain}" restricted.`);
+		} else {
+			ctx.showStatus("Domain already in list.", true);
+		}
+		input.value = "";
+	} catch (err) {
+		ctx.showStatus(
+			`Failed to add restricted domain: ${err?.message || err}`,
+			true,
+		);
 	}
-	input.value = "";
 }
 
 export async function removeRestrictedDomain(ctx, domainToRemove) {
-	const response = await ctx.sendMessageAsync({
-		action: "get_ui_preferences",
-	});
-	const currentDomains = response?.preferences?.restrictedDomains || [];
-	const newDomains = currentDomains.filter((d) => d !== domainToRemove);
-	await ctx.sendMessageAsync({
-		action: "set_ui_preferences",
-		preferences: { restrictedDomains: newDomains },
-	});
-	renderRestrictedDomainsList(newDomains);
+	try {
+		const response = await ctx.sendMessageAsync({
+			action: "get_ui_preferences",
+		});
+		const currentDomains = response?.preferences?.restrictedDomains || [];
+		const newDomains = currentDomains.filter((d) => d !== domainToRemove);
+		const saveRes = await ctx.sendMessageAsync({
+			action: "set_ui_preferences",
+			preferences: { restrictedDomains: newDomains },
+		});
+		if (saveRes && saveRes.success === false) {
+			throw new Error(saveRes.error || "Failed to remove restricted domain.");
+		}
+		renderRestrictedDomainsList(newDomains);
+	} catch (err) {
+		ctx.showStatus(
+			`Failed to remove restricted domain: ${err?.message || err}`,
+			true,
+		);
+	}
 }
 
 export function renderMpvFlagsList(flags = []) {
@@ -149,12 +169,23 @@ export function toggleAutomaticMpvFlag(ctx, element) {
 }
 
 export async function resetAutomaticMpvFlags(ctx) {
-	const response = await ctx.sendMessageAsync({
-		action: "get_default_automatic_flags",
-	});
-	if (response && response.flags) {
-		renderAutomaticMpvFlagsList(response.flags);
-		ctx.debouncedSaveAllPreferences();
+	try {
+		const response = await ctx.sendMessageAsync({
+			action: "get_default_automatic_flags",
+		});
+		if (response && response.flags) {
+			renderAutomaticMpvFlagsList(response.flags);
+			ctx.debouncedSaveAllPreferences();
+		} else if (response && response.success === false) {
+			throw new Error(
+				response.error || "Failed to load default automatic flags.",
+			);
+		}
+	} catch (err) {
+		ctx.showStatus(
+			`Failed to reset automatic MPV flags: ${err?.message || err}`,
+			true,
+		);
 	}
 }
 
@@ -206,33 +237,53 @@ export async function addScraperFilterWord(ctx) {
 	const newWord = input.value.trim().toLowerCase();
 	if (!newWord) return;
 
-	const response = await ctx.sendMessageAsync({
-		action: "get_ui_preferences",
-	});
-	const currentWords = response?.preferences?.scraperFilterWords || [];
-
-	if (!currentWords.includes(newWord)) {
-		const newWords = [...currentWords, newWord];
-		await ctx.sendMessageAsync({
-			action: "set_ui_preferences",
-			preferences: { scraperFilterWords: newWords },
+	try {
+		const response = await ctx.sendMessageAsync({
+			action: "get_ui_preferences",
 		});
-		renderScraperFilterList(newWords);
+		const currentWords = response?.preferences?.scraperFilterWords || [];
+
+		if (!currentWords.includes(newWord)) {
+			const newWords = [...currentWords, newWord];
+			const saveRes = await ctx.sendMessageAsync({
+				action: "set_ui_preferences",
+				preferences: { scraperFilterWords: newWords },
+			});
+			if (saveRes && saveRes.success === false) {
+				throw new Error(saveRes.error || "Failed to save scraper filter word.");
+			}
+			renderScraperFilterList(newWords);
+		}
+		input.value = "";
+	} catch (err) {
+		ctx.showStatus(
+			`Failed to add scraper filter word: ${err?.message || err}`,
+			true,
+		);
 	}
-	input.value = "";
 }
 
 export async function removeScraperFilterWord(ctx, wordToRemove) {
-	const response = await ctx.sendMessageAsync({
-		action: "get_ui_preferences",
-	});
-	const currentWords = response?.preferences?.scraperFilterWords || [];
-	const newWords = currentWords.filter((word) => word !== wordToRemove);
-	await ctx.sendMessageAsync({
-		action: "set_ui_preferences",
-		preferences: { scraperFilterWords: newWords },
-	});
-	renderScraperFilterList(newWords);
+	try {
+		const response = await ctx.sendMessageAsync({
+			action: "get_ui_preferences",
+		});
+		const currentWords = response?.preferences?.scraperFilterWords || [];
+		const newWords = currentWords.filter((word) => word !== wordToRemove);
+		const saveRes = await ctx.sendMessageAsync({
+			action: "set_ui_preferences",
+			preferences: { scraperFilterWords: newWords },
+		});
+		if (saveRes && saveRes.success === false) {
+			throw new Error(saveRes.error || "Failed to remove scraper filter word.");
+		}
+		renderScraperFilterList(newWords);
+	} catch (err) {
+		ctx.showStatus(
+			`Failed to remove scraper filter word: ${err?.message || err}`,
+			true,
+		);
+	}
 }
 
 export function getBufferingPresets() {

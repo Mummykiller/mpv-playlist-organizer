@@ -23,7 +23,7 @@ description: >-
 ---
 
 ## 2. Unified Verification Pipeline (`verify_changes.py` & `testing_tools/run_suite.py`)
-Run via `verify_repo(mode="full"|"fix"|"lint"|"targeted")` or `PYTHONDONTWRITEBYTECODE=1 python3 -B verify_changes.py` (skip for docs-only, `.gitignore`, or read-only tasks):
+Run via `verify_repo(mode="build"|"lint"|"test"|"targeted"|"fix"|"full")` or `PYTHONDONTWRITEBYTECODE=1 python3 -B verify_changes.py` (skip for docs-only, `.gitignore`, or read-only tasks):
 1. **JS Transpilation (`testing_tools/generate_js.py`):** Rebuilds all transpiled `utils/*.js` targets.
 2. **Concurrent Suite (`testing_tools/run_suite.py`):**
    - **Parallel Python Pool (`discover_python_test_files`):** Auto-discovers and runs all `testing_tools/scripts/test_*.py` modules (including `test_mcp_server.py`) concurrently via `ThreadPoolExecutor`.
@@ -48,7 +48,7 @@ Run via `verify_repo(mode="full"|"fix"|"lint"|"targeted")` or `PYTHONDONTWRITEBY
 ---
 
 ## 4. Testing, Comments & Release Guardrails
-1. **Regression tests required:** Every bugfix and security change ships with a test in `testing_tools/scripts/`. Update `testing_tools/scripts/test_security_claims.py` whenever a security allowlist or limit changes.
+1. **Regression tests required:** Every bugfix and security change ships with a test in `testing_tools/scripts/`. Update `testing_tools/scripts/test_security_claims.py` whenever a security allowlist or limit changes. For repeatable bug classes, log them via MCP (`log_bug_pattern`) and graduate them (`graduate_bug_pattern` with `test_ref`) once covered by tests or static checks.
 2. **Isolate test state:** Inherit from `testing_tools/base_test.py:BaseTestCase` (`self.test_dir`) so tests never touch live `DATA_DIR` or leak log handlers, subprocesses, sockets, or temp dirs.
 3. **No skipped/ignored linter errors:** Any error from an installed linter is a hard failure.
 4. **Release hygiene (`testing_tools/create_release.py`):** Excludes `*.log`, `*.tmp`, `*.bak`, `data`, `flags`, `.gemini*`, `mcp_server`, `testing_tools`, `yt-tools-legacy`, and `yt-tools-standalone*`.

@@ -478,29 +478,36 @@ export async function handleGetPlaylist(request) {
 	}
 
 	// Deep Check: Only query native host if cache is missing or says it's running (to get latest readahead/sessionIds)
+	let hasAuthoritativeStatus = false;
 	if (!finalStatus || finalStatus.isRunning) {
 		const statusResponse = await nativeLink.getPlaybackStatus().catch(() => null);
 		
 		if (statusResponse?.success) {
-			finalStatus = statusResponse;
-			if (finalStatus.isRunning && finalStatus.folderId) {
-				const freshCache = {
-					folderId: finalStatus.folderId,
-					isRunning: true,
-					isPaused: finalStatus.isPaused || false,
-					isIdle: finalStatus.isIdle || false,
-					sessionIds: finalStatus.sessionIds || [],
-					lastPlayedId: finalStatus.lastPlayedId,
-					timestamp: Date.now()
-				};
-				chrome.storage.local.set({ mpv_playback_cache: freshCache });
+			hasAuthoritativeStatus = true;
+			if (!statusResponse.isRunning) {
+				await playbackManager.clearStalePlaybackState(null, { preserveRecentLaunch: true });
+				finalStatus = { isRunning: false, isPaused: false, isIdle: false, sessionIds: [] };
+			} else {
+				finalStatus = statusResponse;
+				if (finalStatus.folderId) {
+					const freshCache = {
+						folderId: finalStatus.folderId,
+						isRunning: true,
+						isPaused: finalStatus.isPaused || false,
+						isIdle: finalStatus.isIdle || false,
+						sessionIds: finalStatus.sessionIds || [],
+						lastPlayedId: finalStatus.lastPlayedId,
+						timestamp: Date.now()
+					};
+					chrome.storage.local.set({ mpv_playback_cache: freshCache });
+				}
 			}
 		}
 	}
 
 	const isProcessRunning = !!finalStatus?.isRunning;
 	await playbackManager.initPromise;
-	const isManagerActive = isFolderActive(request.folderId);
+	const isManagerActive = !hasAuthoritativeStatus && isFolderActive(request.folderId);
 	let isActive = (isProcessRunning || isManagerActive) && (finalStatus?.folderId?.toLowerCase() === request.folderId?.toLowerCase() || !finalStatus?.folderId);
 	let needsAppend = false;
 	const lastPlayedId = finalStatus?.lastPlayedId || folder.lastPlayedId;
@@ -518,7 +525,7 @@ export async function handleGetPlaylist(request) {
 		isRunning: isActive,
 		needsAppend: needsAppend,
 		sessionIds: isActive ? finalStatus?.sessionIds || [] : [],
-		isPaused: (finalStatus?.isPaused || finalStatus?.isIdle) ?? false,
-		isIdle: finalStatus?.isIdle ?? false
+		isPaused: isActive ? ((finalStatus?.isPaused || finalStatus?.isIdle) ?? false) : false,
+		isIdle: isActive ? (finalStatus?.isIdle ?? false) : false
 	};
 }

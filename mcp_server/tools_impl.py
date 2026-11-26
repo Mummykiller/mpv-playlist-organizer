@@ -23,17 +23,7 @@ logger = logging.getLogger("mpv_mcp")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTING_TOOLS_DIR = os.path.join(REPO_ROOT, "testing_tools")
 
-GENERATED_JS_FILES = (
-    "utils/SystemLogger.js",
-    "utils/anilist_renderer.js",
-    "utils/commUtils.js",
-    "utils/security.js",
-    "utils/nativeConnection.js",
-    "utils/MpvInterface.js",
-    "utils/domUtils.js",
-)
 BRIDGE_CONTRACT_REL = "testing_tools/scripts/bridge_contract.js"
-GENERATED_READONLY_FILES = GENERATED_JS_FILES + (BRIDGE_CONTRACT_REL,)
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+\.(py|js)$")
@@ -142,15 +132,22 @@ def _redact_obj(obj: Any, data_dir: str | None = None) -> Any:
 
 
 def _run_cmd(cmd: list[str], timeout: int = 120) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        cmd,
-        cwd=REPO_ROOT,
-        env=_repo_env(),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    return proc.returncode, strip_ansi(proc.stdout), strip_ansi(proc.stderr)
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            env=_repo_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return proc.returncode, strip_ansi(proc.stdout), strip_ansi(proc.stderr)
+    except subprocess.TimeoutExpired as exc:
+        out_raw = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        err_raw = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        timeout_msg = f"Command timed out after {timeout}s"
+        combined_err = f"{err_raw}\n{timeout_msg}".strip() if err_raw else timeout_msg
+        return -1, strip_ansi(out_raw), strip_ansi(combined_err)
 
 
 def _trim_lines(text: str, limit: int = 40) -> tuple[list[str], bool, int]:
@@ -235,6 +232,12 @@ def _lint_ruff() -> dict[str, Any]:
 
 def _lint_biome() -> dict[str, Any]:
     bin_path = shutil.which("biome")
+    if not bin_path:
+        for candidate_root in (REPO_ROOT, TESTING_TOOLS_DIR):
+            candidate = os.path.join(candidate_root, "node_modules", ".bin", "biome")
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                bin_path = candidate
+                break
     if not bin_path:
         return {"ok": True, "skipped": True, "reason": "not_installed"}
     cfg = os.path.join(TESTING_TOOLS_DIR, "biome.json")
@@ -413,28 +416,9 @@ def _parse_suite_summary(output: str) -> dict[str, Any]:
 
 
 def _run_fix() -> dict[str, Any]:
-    stages: list[dict[str, Any]] = []
-
-    rc_js, out_js, err_js = _run_cmd([_python_bin(), os.path.join(TESTING_TOOLS_DIR, "generate_js.py")])
-    stages.append(
-        {
-            "name": "generate_js",
-            "ok": rc_js == 0,
-            **({} if rc_js == 0 else {"error": _trim_lines(err_js or out_js, 20)[0]}),
-        }
-    )
-    if rc_js != 0:
-        return {"ok": False, "mode": "fix", "stages": stages}
-
-    rc_bc, out_bc, err_bc = _run_cmd([_python_bin(), os.path.join(TESTING_TOOLS_DIR, "generate_bridge_contract.py")])
-    stages.append(
-        {
-            "name": "generate_bridge_contract",
-            "ok": rc_bc == 0,
-            **({} if rc_bc == 0 else {"error": _trim_lines(err_bc or out_bc, 20)[0]}),
-        }
-    )
-    if rc_bc != 0:
+    build_res = _run_build(sync_contract=True)
+    stages: list[dict[str, Any]] = list(build_res["stages"])
+    if not build_res["ok"]:
         return {"ok": False, "mode": "fix", "stages": stages}
 
     ruff_bin = shutil.which("ruff")
@@ -689,7 +673,8 @@ def check_repo_drift() -> dict[str, Any]:
         "source_newer": contract_source_newer,
     }
 
-    rc, git_out, _git_err = _run_cmd(["git", "status", "--porcelain", "--", *GENERATED_READONLY_FILES])
+    generated_readonly_files = tuple(cfg["target"] for cfg in generate_js.CONFIG) + (BRIDGE_CONTRACT_REL,)
+    rc, git_out, _git_err = _run_cmd(["git", "status", "--porcelain", "--", *generated_readonly_files])
     generated_edits: list[str] = []
     if rc == 0:
         for ln in git_out.splitlines():
@@ -1112,28 +1097,39 @@ def _validate_ipc_socket_path(socket_path: str | None) -> tuple[str | None, str 
 def _query_mpv_properties(sock_path: str, props: list[str], timeout: float = 1.5) -> dict[str, Any]:
     values: dict[str, Any] = {}
     errors: dict[str, str] = {}
+    deadline = time.monotonic() + max(0.1, float(timeout))
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.settimeout(timeout)
+        sock.settimeout(max(0.1, deadline - time.monotonic()))
         sock.connect(sock_path)
-        reader = sock.makefile("r", encoding="utf-8", errors="replace")
-        for idx, prop in enumerate(props, start=1):
-            req = json.dumps({"command": ["get_property", prop], "request_id": idx}) + "\n"
-            sock.sendall(req.encode("utf-8"))
-            while True:
-                line = reader.readline()
-                if not line:
-                    errors[prop] = "eof"
+        with sock.makefile("r", encoding="utf-8", errors="replace") as reader:
+            for idx, prop in enumerate(props, start=1):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    errors[prop] = "timeout"
                     break
-                try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if msg.get("request_id") == idx:
-                    if msg.get("error") == "success":
-                        values[prop] = msg.get("data")
-                    else:
-                        errors[prop] = str(msg.get("error", "unknown_error"))
-                    break
+                sock.settimeout(remaining)
+                req = json.dumps({"command": ["get_property", prop], "request_id": idx}) + "\n"
+                sock.sendall(req.encode("utf-8"))
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        errors[prop] = "timeout"
+                        break
+                    sock.settimeout(remaining)
+                    line = reader.readline()
+                    if not line:
+                        errors[prop] = "eof"
+                        break
+                    try:
+                        msg = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if msg.get("request_id") == idx:
+                        if msg.get("error") == "success":
+                            values[prop] = msg.get("data")
+                        else:
+                            errors[prop] = str(msg.get("error", "unknown_error"))
+                        break
     return {"values": values, "errors": errors}
 
 
@@ -1242,14 +1238,20 @@ def _mask_sim_text(text: str, sim_data_dir: str, sim_tmp_dir: str) -> str:
     return strip_ansi(masked)
 
 
+def _replace_str_in_obj(obj: Any, old: str, new: str) -> Any:
+    if isinstance(obj, str):
+        return obj.replace(old, new)
+    if isinstance(obj, dict):
+        return {k: _replace_str_in_obj(v, old, new) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_replace_str_in_obj(item, old, new) for item in obj]
+    return obj
+
+
 def _redact_sim_obj(obj: Any, sim_data_dir: str, sim_tmp_dir: str) -> Any:
     redacted = _redact_obj(obj, data_dir=sim_data_dir)
-    if isinstance(redacted, str) and sim_tmp_dir:
-        return redacted.replace(sim_tmp_dir, "<SIM_TMP_DIR>")
-    if isinstance(redacted, dict):
-        return {k: _redact_sim_obj(v, sim_data_dir, sim_tmp_dir) for k, v in redacted.items()}
-    if isinstance(redacted, list):
-        return [_redact_sim_obj(item, sim_data_dir, sim_tmp_dir) for item in redacted]
+    if sim_tmp_dir:
+        return _replace_str_in_obj(redacted, sim_tmp_dir, "<SIM_TMP_DIR>")
     return redacted
 
 
@@ -1360,10 +1362,10 @@ def _run_mpv_dry_run(urls: list[Any] | None, options: dict[str, Any]) -> dict[st
         orig_data_dir = file_io.DATA_DIR
         orig_temp_dir = file_io.TEMP_DIR
         try:
-            # Isolate file_io.DATA_DIR and file_io.TEMP_DIR so MpvCommandBuilder.build()
-            # writes last_mpv_command.txt into tmp_dir and never touches real DATA_DIR.
-            file_io.initialize_paths(tmp_data_dir)
+            # Isolate file_io.TEMP_DIR and file_io.DATA_DIR (TEMP_DIR before initialize_paths
+            # so file_io.paths.temp_dir also points to tmp_dir) and never touch real DATA_DIR.
             file_io.TEMP_DIR = tmp_dir
+            file_io.initialize_paths(tmp_data_dir)
 
             m3u_content = session_ipc_ops.generate_m3u_content(items)
             first = items[0]

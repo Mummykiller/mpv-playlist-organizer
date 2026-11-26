@@ -9,7 +9,7 @@ This reference details the `OptionsManager` (`utils/settings.js` and `popup/sett
 In-page UI hosts (`#m3u8-controller-host`, `#m3u8-minimized-host`, `#anilist-panel-host`) attach an open Shadow Root (`host.attachShadow({ mode: "open" })`).
 
 ### Mandatory Style Injection Sequence (`UIManager._injectStyles`)
-1. Fetch `shared.css` and `content.css` text via `fetch(chrome.runtime.getURL(...))` and cache the combined promise (`MPV._cachedStylesPromise`).
+1. Request `shared.css` and `content.css` text from `background.js:get_extension_styles` (which fetches via `chrome.runtime.getURL(...)`) and cache the combined promise (`MPV._cachedStylesPromise`).
 2. Create or reuse `<style class="mpv-injected-styles">` inside the Shadow Root and assign the CSS string to `styleEl.textContent`.
 3. Append UI containers as child elements (`shadowRoot.appendChild(uiWrapper)`)—**never** assign `shadowRoot.innerHTML = ...` after `_injectStyles()`, which would destroy the `<style>` element.
 

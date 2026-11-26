@@ -75,7 +75,7 @@ To prevent the Native Host and extension from being used as an internal network 
   - **Windows (`WindowsLogic.install`):** Quotes executable paths in `run_native_host.bat` and `mpv-cli.bat` and registers the manifest under `HKEY_CURRENT_USER\SOFTWARE\<Browser>\NativeMessagingHosts\com.mpv_playlist_organizer.handler` (user-scoped registry, requiring no administrator elevation).
 
 ### 3.3 Shadow DOM Encapsulation & XSS Prevention
-- **Shadow DOM Style Injection (`utils/UIManager.js`):** The on-page controller renders inside an isolated Shadow DOM container (`#mpv-organizer-root`). Stylesheets (`shared.css`, `content.css`) are fetched via `chrome.runtime.getURL` and injected into `<style>.textContent`—never via `<link rel="stylesheet">` (blocked by strict site CSPs) and never by overwriting `shadowRoot.innerHTML` after style injection.
+- **Shadow DOM Style Injection (`utils/UIManager.js`):** The on-page controller renders inside isolated Shadow DOM containers (`#m3u8-controller-host`, `#m3u8-minimized-host`, `#anilist-panel-host`). Stylesheets (`shared.css`, `content.css`) are fetched via `chrome.runtime.getURL` (through `background.js:get_extension_styles`) and injected into `<style>.textContent`—never via `<link rel="stylesheet">` (blocked by strict site CSPs) and never by overwriting `shadowRoot.innerHTML` after style injection.
 - **XSS-Safe DOM Construction (`utils/domUtils.module.js`, `utils/anilist_renderer.module.js`, `popup/popup_youtube.js`):** Untrusted video titles, URLs, folder names, AniList release metadata, and YouTube library items are rendered exclusively via `document.createElement` and `textContent` (never raw `innerHTML`).
 
 ### 3.4 Shinku's YouTube Tools Sub-Extension Security (`background/yt_tools_service.js`, `yt-tools/`)

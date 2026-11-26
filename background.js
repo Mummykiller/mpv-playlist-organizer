@@ -823,6 +823,8 @@ function isScriptableUrl(urlStr) {
 	}
 }
 
+const injectingTabs = new Set();
+
 async function injectIntoTab(tabOrId, attempt = 1) {
 	const tabId = typeof tabOrId === "object" ? tabOrId.id : tabOrId;
 	if (!tabId) {
@@ -830,159 +832,169 @@ async function injectIntoTab(tabOrId, attempt = 1) {
 		return;
 	}
 
-	logger.debug(`[Background] injectIntoTab ENTRY: Tab ${tabId} (Attempt ${attempt})`, { persist: false });
-
-	// 1. Fetch fresh tab data
-	const tab = await chrome.tabs.get(tabId).catch((err) => {
-		logger.debug(`[Background] Failed to get tab ${tabId}: ${err?.message}`);
-		return null;
-	});
-	if (!tab) {
-		logger.debug(`[Background] injectIntoTab: Tab ${tabId} no longer exists. Skipping.`, { persist: false });
+	if (injectingTabs.has(tabId)) {
+		logger.debug(`[Background] injectIntoTab: Tab ${tabId} injection already in progress. Skipping overlapping call.`, { persist: false });
 		return;
 	}
-
-	if (tab.status !== "complete") {
-		logger.debug(`[Background] injectIntoTab: Tab ${tabId} status is '${tab.status}' (not complete). Skipping.`, { persist: false });
-		return;
-	}
-
-	if (!tab.url) {
-		logger.debug(`[Background] injectIntoTab: Tab ${tabId} has no URL. (Attempt ${attempt}). Skipping.`, { persist: false });
-		return;
-	}
-
-	if (!isScriptableUrl(tab.url)) {
-		logger.debug(`[Background] injectIntoTab: Tab ${tabId} (${tab.url}) is a restricted or non-scriptable page. Skipping.`);
-		return;
-	}
-
-	const MAX_ATTEMPTS = 3;
-	const RETRY_DELAY = 2000;
-
-	const manifest = chrome.runtime.getManifest();
-	const jsFiles = manifest.content_scripts[0].js;
+	injectingTabs.add(tabId);
 
 	try {
-		const data = await storage.get();
-		const restrictedDomains =
-			data.settings.uiPreferences.global.restrictedDomains || [];
-		
-		const url = new URL(tab.url);
-		if (
-			restrictedDomains.some(
-				(domain) =>
-					url.hostname === domain || url.hostname.endsWith("." + domain),
-			)
-		) {
-			logger.debug(`[Background] Skipping injection for restricted domain: ${url.hostname}`, { persist: false });
+		logger.debug(`[Background] injectIntoTab ENTRY: Tab ${tabId} (Attempt ${attempt})`, { persist: false });
+
+		// 1. Fetch fresh tab data
+		const tab = await chrome.tabs.get(tabId).catch((err) => {
+			logger.debug(`[Background] Failed to get tab ${tabId}: ${err?.message}`);
+			return null;
+		});
+		if (!tab) {
+			logger.debug(`[Background] injectIntoTab: Tab ${tabId} no longer exists. Skipping.`, { persist: false });
 			return;
 		}
 
-		// 2. Early Exit Check - ONLY on the first attempt.
-		if (attempt === 1) {
-			const isAlive = await chrome.tabs
+		if (tab.status !== "complete") {
+			logger.debug(`[Background] injectIntoTab: Tab ${tabId} status is '${tab.status}' (not complete). Skipping.`, { persist: false });
+			return;
+		}
+
+		if (!tab.url) {
+			logger.debug(`[Background] injectIntoTab: Tab ${tabId} has no URL. (Attempt ${attempt}). Skipping.`, { persist: false });
+			return;
+		}
+
+		if (!isScriptableUrl(tab.url)) {
+			logger.debug(`[Background] injectIntoTab: Tab ${tabId} (${tab.url}) is a restricted or non-scriptable page. Skipping.`);
+			return;
+		}
+
+		const MAX_ATTEMPTS = 3;
+		const RETRY_DELAY = 2000;
+
+		const manifest = chrome.runtime.getManifest();
+		const jsFiles = manifest.content_scripts[0].js;
+
+		try {
+			const data = await storage.get();
+			const restrictedDomains =
+				data.settings.uiPreferences.global.restrictedDomains || [];
+			
+			const url = new URL(tab.url);
+			if (
+				restrictedDomains.some(
+					(domain) =>
+						url.hostname === domain || url.hostname.endsWith("." + domain),
+				)
+			) {
+				logger.debug(`[Background] Skipping injection for restricted domain: ${url.hostname}`, { persist: false });
+				return;
+			}
+
+			// 2. Early Exit Check - ONLY on the first attempt.
+			if (attempt === 1) {
+				const isAlive = await chrome.tabs
+					.sendMessage(tab.id, { action: "ping" })
+					.then((res) => res?.success)
+					.catch((err) => {
+						logger.debug(`[Background] Early exit ping failed: ${err?.message}`);
+						return false;
+					});
+
+				if (isAlive) {
+					logger.debug(`[Background] Tab ${tab.id} already has a responsive script. Syncing...`, { persist: false });
+					let origin = null;
+					try {
+						origin = new URL(tab.url).origin;
+					} catch (e) {
+						logger.debug(`[Background] URL origin parse failed: ${e.message}`);
+					}
+					await ui_state_handlers.handleContentScriptInit(
+						{},
+						{ tab: tab, origin: origin },
+					);
+					return;
+				}
+			}
+
+			logger.debug(`[Background] Injecting content script into tab ${tab.id} (Attempt ${attempt}/${MAX_ATTEMPTS})...`, { persist: false });
+
+			// 3. Cleanup & Inject
+			await chrome.scripting
+				.executeScript({
+					target: { tabId: tab.id },
+					func: () => {
+						if (
+							window.mpvControllerInstance &&
+							typeof window.mpvControllerInstance.teardown === "function"
+						) {
+							window.mpvControllerInstance.teardown();
+						}
+						[
+							"m3u8-controller-host",
+							"m3u8-minimized-host",
+							"anilist-panel-host",
+							"mpv-organizer-host-styles",
+						].forEach((id) => {
+							const el = document.getElementById(id);
+							if (el) el.remove();
+						});
+						window.mpvControllerInitialized = false;
+					},
+				})
+				.catch((err) => {
+					logger.debug(`[Background] Script pre-cleanup error: ${err?.message}`);
+				});
+
+			await chrome.scripting.executeScript({
+				target: { tabId: tab.id },
+				files: jsFiles,
+			});
+
+			// 4. Verification Ping (with a small delay to allow scripts to boot)
+			await new Promise(r => setTimeout(r, 200));
+			const confirmedAlive = await chrome.tabs
 				.sendMessage(tab.id, { action: "ping" })
 				.then((res) => res?.success)
 				.catch((err) => {
-					logger.debug(`[Background] Early exit ping failed: ${err?.message}`);
+					logger.debug(`[Background] Verification ping failed: ${err?.message}`);
 					return false;
 				});
 
-			if (isAlive) {
-				logger.debug(`[Background] Tab ${tab.id} already has a responsive script. Syncing...`, { persist: false });
-				let origin = null;
-				try {
-					origin = new URL(tab.url).origin;
-				} catch (e) {
-					logger.debug(`[Background] URL origin parse failed: ${e.message}`);
-				}
-				await ui_state_handlers.handleContentScriptInit(
-					{},
-					{ tab: tab, origin: origin },
-				);
+			if (!confirmedAlive && attempt < MAX_ATTEMPTS) {
+				logger.warn(`[Background] Injection Verification FAILED for tab ${tab.id}. Retrying in ${RETRY_DELAY/1000}s...`, { persist: true });
+				setTimeout(() => injectIntoTab(tabId, attempt + 1), RETRY_DELAY);
+			} else if (!confirmedAlive && attempt === MAX_ATTEMPTS) {
+				logger.error(`[Background] ALL injection attempts failed for tab ${tab.id}. Content script could not be verified.`, { persist: true });
+				broadcastLog({
+					text: `[System]: Failed to connect to page controller on tab ${tab.id} after ${MAX_ATTEMPTS} attempts. Please refresh the tab.`,
+					type: "error",
+				});
+			} else if (confirmedAlive) {
+				logger.debug(`[Background] Content script successfully injected and verified for tab ${tab.id} (Attempt ${attempt}).`, { persist: false });
+			}
+		} catch (err) {
+			const errorMsg = err.message || "Unknown error";
+			const isPermissionError =
+				errorMsg.includes("Cannot access contents of the page") ||
+				errorMsg.includes("Extension manifest must request permission") ||
+				errorMsg.includes("The extensions gallery cannot be scripted");
+
+			if (isPermissionError) {
+				logger.debug(`[Background] Skipping injection for tab ${tabId} (${errorMsg}).`, { persist: false });
 				return;
 			}
+
+			if (attempt < MAX_ATTEMPTS) {
+				logger.warn(`[Background] Error in injection attempt ${attempt} for tab ${tabId}: ${errorMsg}. Retrying...`, { persist: true });
+				setTimeout(() => injectIntoTab(tabId, attempt + 1), RETRY_DELAY);
+			} else {
+				logger.error(`[Background] Fatal injection error after ${MAX_ATTEMPTS} attempts for tab ${tabId}: ${errorMsg}`, { persist: true });
+				broadcastLog({
+					text: `[System]: Content script injection failed for tab ${tabId}: ${errorMsg}`,
+					type: "error",
+				});
+			}
 		}
-
-		logger.debug(`[Background] Injecting content script into tab ${tab.id} (Attempt ${attempt}/${MAX_ATTEMPTS})...`, { persist: false });
-
-		// 3. Cleanup & Inject
-		await chrome.scripting
-			.executeScript({
-				target: { tabId: tab.id },
-				func: () => {
-					if (
-						window.mpvControllerInstance &&
-						typeof window.mpvControllerInstance.teardown === "function"
-					) {
-						window.mpvControllerInstance.teardown();
-					}
-					[
-						"m3u8-controller-host",
-						"m3u8-minimized-host",
-						"anilist-panel-host",
-						"mpv-organizer-host-styles",
-					].forEach((id) => {
-						const el = document.getElementById(id);
-						if (el) el.remove();
-					});
-					window.mpvControllerInitialized = false;
-				},
-			})
-			.catch((err) => {
-				logger.debug(`[Background] Script pre-cleanup error: ${err?.message}`);
-			});
-
-		await chrome.scripting.executeScript({
-			target: { tabId: tab.id },
-			files: jsFiles,
-		});
-
-		// 4. Verification Ping (with a small delay to allow scripts to boot)
-		await new Promise(r => setTimeout(r, 200));
-		const confirmedAlive = await chrome.tabs
-			.sendMessage(tab.id, { action: "ping" })
-			.then((res) => res?.success)
-			.catch((err) => {
-				logger.debug(`[Background] Verification ping failed: ${err?.message}`);
-				return false;
-			});
-
-		if (!confirmedAlive && attempt < MAX_ATTEMPTS) {
-			logger.warn(`[Background] Injection Verification FAILED for tab ${tab.id}. Retrying in ${RETRY_DELAY/1000}s...`, { persist: true });
-			setTimeout(() => injectIntoTab(tabId, attempt + 1), RETRY_DELAY);
-		} else if (!confirmedAlive && attempt === MAX_ATTEMPTS) {
-			logger.error(`[Background] ALL injection attempts failed for tab ${tab.id}. Content script could not be verified.`, { persist: true });
-			broadcastLog({
-				text: `[System]: Failed to connect to page controller on tab ${tab.id} after ${MAX_ATTEMPTS} attempts. Please refresh the tab.`,
-				type: "error",
-			});
-		} else if (confirmedAlive) {
-			logger.debug(`[Background] Content script successfully injected and verified for tab ${tab.id} (Attempt ${attempt}).`, { persist: false });
-		}
-	} catch (err) {
-		const errorMsg = err.message || "Unknown error";
-		const isPermissionError =
-			errorMsg.includes("Cannot access contents of the page") ||
-			errorMsg.includes("Extension manifest must request permission") ||
-			errorMsg.includes("The extensions gallery cannot be scripted");
-
-		if (isPermissionError) {
-			logger.debug(`[Background] Skipping injection for tab ${tabId} (${errorMsg}).`, { persist: false });
-			return;
-		}
-
-		if (attempt < MAX_ATTEMPTS) {
-			logger.warn(`[Background] Error in injection attempt ${attempt} for tab ${tabId}: ${errorMsg}. Retrying...`, { persist: true });
-			setTimeout(() => injectIntoTab(tabId, attempt + 1), RETRY_DELAY);
-		} else {
-			logger.error(`[Background] Fatal injection error after ${MAX_ATTEMPTS} attempts for tab ${tabId}: ${errorMsg}`, { persist: true });
-			broadcastLog({
-				text: `[System]: Content script injection failed for tab ${tabId}: ${errorMsg}`,
-				type: "error",
-			});
-		}
+	} finally {
+		injectingTabs.delete(tabId);
 	}
 }
 

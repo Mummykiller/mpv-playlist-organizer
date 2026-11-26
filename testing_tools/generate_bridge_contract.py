@@ -3,6 +3,9 @@ import sys
 import json
 from dataclasses import fields, is_dataclass
 
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 # Add the project root to path so we can import our models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

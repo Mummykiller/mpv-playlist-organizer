@@ -4,13 +4,13 @@ import unittest
 import json
 import struct
 import time
-import logging
 from typing import Any, Dict
 
 # Ensure base_test and shared native host harness can be imported
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_test import BaseTestCase
 from native_host_harness import (
+    pack_native_message,
     read_native_message,
     read_native_response,
     send_native_message,
@@ -78,23 +78,19 @@ class TestNativeHostBoot(BaseTestCase):
         ]
 
         for payload in test_payloads:
-            # Test with raw unicode (ensure_ascii=False) to verify byte length vs character length
-            json_str = json.dumps(payload, ensure_ascii=False)
-            encoded_bytes = json_str.encode('utf-8')
-            byte_length = len(encoded_bytes)
-            char_length = len(json_str)
-
-            # Pack with native 32-bit unsigned integer (@I)
-            header = struct.pack('@I', byte_length)
+            frame = pack_native_message(payload)
+            header = frame[:4]
+            body = frame[4:]
             self.assertEqual(len(header), 4, "Framing header must be exactly 4 bytes")
 
-            # Unpack header
             unpacked_len = struct.unpack('@I', header)[0]
-            self.assertEqual(unpacked_len, byte_length, "Unpacked length must match byte length")
+            self.assertEqual(unpacked_len, len(body), "Unpacked length must match UTF-8 byte length")
+            decoded = json.loads(body.decode('utf-8'))
+            self.assertEqual(decoded, payload)
 
-            # Verify byte_length > char_length for multibyte text
-            if "Emojis" in json_str:
-                self.assertGreater(byte_length, char_length, "UTF-8 byte length exceeds char count for multibyte text")
+            # Verify UTF-8 byte length > char count for multibyte text
+            if "Emojis" in payload.get("title", ""):
+                self.assertGreater(len(body), len(body.decode('utf-8')))
 
     def test_host_clean_exit_on_stdin_eof(self):
         """Verifies host process detects stdin EOF cleanly and exits with code 0."""
@@ -134,26 +130,19 @@ class TestNativeHostBoot(BaseTestCase):
         self.assertNotIn("Traceback", stderr, f"Unexpected Python traceback on truncated header: {stderr}")
 
     def test_host_handles_invalid_json(self):
-        """Verifies that malformed JSON doesn't necessarily crash the host."""
+        """Verifies that malformed JSON is caught by the host loop and subsequent valid requests still succeed."""
         proc = self.spawn_host(self.test_dir)
 
-        # Send malformed length/data
+        # Send malformed JSON frame followed immediately by a valid ping
         proc.stdin.write(struct.pack('@I', 10))
         proc.stdin.write(b"not-json!!")
         proc.stdin.flush()
 
-        time.sleep(0.5)
-        if proc.poll() is not None:
-            stderr = proc.stderr.read().decode('utf-8', errors='replace')
-            logging.info(f"Host exited on malformed JSON. Stderr: {stderr}")
-            self.assertGreaterEqual(proc.returncode, 0, f"Host crashed with signal {-proc.returncode}: {stderr}")
-            self.assertNotIn("Traceback", stderr, f"Unexpected Python traceback on malformed JSON: {stderr}")
-        else:
-            # Still running? Send a valid ping to verify host recovered
-            req_id = "recovery-ping"
-            self.send_msg(proc, {"action": "ping", "request_id": req_id})
-            resp = self.read_response(proc, req_id)
-            self.assertIsNotNone(resp, "Host should have stayed alive or reported error")
+        req_id = "recovery-ping"
+        self.send_msg(proc, {"action": "ping", "request_id": req_id})
+        resp = self.read_response(proc, req_id, timeout=5.0)
+        self.assertIsNotNone(resp, "Host should recover from malformed JSON and answer subsequent ping")
+        self.assertTrue(resp.get("success"))
 
     # =========================================================================
     # Handshake Verification Tests

@@ -18,6 +18,15 @@ class TestSecurityClaims(BaseTestCase):
     Verifies security claims using safe, isolated environment checks.
     """
 
+    def setUp(self):
+        super().setUp()
+        self.orig_data_dir = file_io.DATA_DIR
+        file_io.initialize_paths(self.test_dir)
+
+    def tearDown(self):
+        file_io.initialize_paths(self.orig_data_dir)
+        super().tearDown()
+
     def test_ssrf_protection(self):
         """Claim 2.2: Blocks private, loopback, link-local, and IPv6 SSRF targets."""
         # IPv4 Loopback
@@ -574,6 +583,149 @@ class TestSecurityClaims(BaseTestCase):
         # Preserved data keys survive a second translation pass
         res = responder.success(data={"my_anime_list": 1}, preserve_data_keys=True)
         self.assertIn("my_anime_list", responder._translate_keys(res)["data"])
+
+    def test_mpv_command_builder_strips_settings_only_ytdl_flags_and_sanitizes_ua(self):
+        """Regression: MpvCommandBuilder.build strips settings-only ytdl_raw_options and sanitizes UA."""
+        import services
+        cmd, _ = services.construct_mpv_command(
+            mpv_exe="mpv",
+            url="https://example.com/video.mp4",
+            ytdl_raw_options="format=best,proxy=http://evil.invalid:8080,ffmpeg-location=/bin/sh,js-runtimes=node:/bin/sh",
+            headers={"User-Agent": 'Mozilla/5.0, $(whoami) `id` "bad"\nInjected'},
+        )
+        raw_arg = next((a for a in cmd if a.startswith("--ytdl-raw-options=")), "")
+        self.assertIn("format=best", raw_arg)
+        self.assertNotIn("proxy=", raw_arg)
+        self.assertNotIn("ffmpeg-location=", raw_arg)
+        self.assertNotIn("/bin/sh", raw_arg)
+        self.assertIn("js-runtimes=node", raw_arg)
+        self.assertIn("user-agent=Mozilla/5.0", raw_arg)
+        self.assertNotIn("$", raw_arg)
+        self.assertNotIn("`", raw_arg)
+        self.assertNotIn('"', raw_arg)
+        self.assertNotIn("\n", raw_arg)
+
+    def test_settings_overrides_validation_and_essential_ytdlp_flags(self):
+        """Regression: _get_merged_settings & get_essential_ytdlp_flags validate paths, buffer size, and fragment count."""
+        from unittest.mock import MagicMock
+        import services
+        from utils.handlers.base_handler import BaseHandler
+        from utils.native_link.models import SettingsOverrides
+
+        ctx = MagicMock()
+        ctx.io = file_io
+        ctx.mpv.current_token = "tok"
+        handler = BaseHandler(ctx)
+
+        overrides = SettingsOverrides(
+            ffmpeg_path="/bin/sh",
+            ytdlp_path="/usr/bin/curl",
+            stream_buffer_size="10M,exec=rm -rf /",
+            ytdlp_concurrent_fragments="not-an-int",
+        )
+        merged = handler._get_merged_settings(overrides)
+        self.assertNotEqual(merged.get("ffmpeg_path"), "/bin/sh")
+        self.assertNotEqual(merged.get("ytdlp_path"), "/usr/bin/curl")
+        self.assertEqual(merged.get("stream_buffer_size"), "10M")
+        self.assertEqual(merged.get("ytdlp_concurrent_fragments"), 4)
+
+        valid_overrides = SettingsOverrides(
+            stream_buffer_size="32M",
+            ytdlp_concurrent_fragments="6",
+        )
+        merged_valid = handler._get_merged_settings(valid_overrides)
+        self.assertEqual(merged_valid.get("stream_buffer_size"), "32M")
+        self.assertEqual(merged_valid.get("ytdlp_concurrent_fragments"), 6)
+
+        flags = services.get_essential_ytdlp_flags(settings={
+            "stream_buffer_size": "10M,proxy=http://evil",
+            "ytdlp_concurrent_fragments": "invalid",
+        })
+        self.assertNotIn("buffer-size=", flags)
+        self.assertIn("concurrent-fragments=4", flags)
+
+    def test_cookie_browser_traversal_rejected_and_get_cookies_file_sanitizes_filename(self):
+        """Regression: is_safe_cookie_browser rejects '..' and get_cookies_file sanitizes temp filename."""
+        from unittest.mock import patch
+
+        self.assertFalse(security.is_safe_cookie_browser("chrome:../../etc/passwd"))
+        self.assertFalse(security.is_safe_cookie_browser("firefox:Profile..1"))
+        self.assertTrue(security.is_safe_cookie_browser("chrome:Profile 1"))
+
+        captured_cmd = {}
+
+        def fake_run(cmd, **_kwargs):
+            captured_cmd["cmd"] = cmd
+            out_idx = cmd.index("--cookies") + 1
+            with open(cmd[out_idx], "w", encoding="utf-8") as f:
+                f.write("# Netscape HTTP Cookie File\n")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            path = url_analyzer.get_cookies_file("chrome:Profile 1", "https://example.com/v", force_refresh=True)
+            try:
+                self.assertIsNotNone(path)
+                v_dir = os.path.realpath(url_analyzer.VolatileCookieManager.get_volatile_dir())
+                self.assertEqual(os.path.dirname(os.path.realpath(path)), v_dir)
+                base = os.path.basename(path)
+                self.assertNotIn(":", base)
+                self.assertNotIn(" ", base)
+                self.assertTrue(base.startswith("mpv_cookies_chrome_Profile_1_"))
+            finally:
+                url_analyzer.VolatileCookieManager.cleanup_volatile_dir()
+
+    def test_fetch_remote_m3u_size_cap_and_binary_content_type(self):
+        """Regression: _fetch_remote_m3u aborts on binary Content-Type and payloads exceeding 2 MiB."""
+        from unittest.mock import MagicMock, patch
+        from utils.item_processor import ItemProcessor
+
+        proc = ItemProcessor(MagicMock(), MagicMock(), file_io)
+
+        class FakeResp:
+            def __init__(self, body, content_type):
+                self._body = body
+                self.headers = {"Content-Type": content_type}
+
+            def read(self, n=-1):
+                return self._body if n < 0 else self._body[:n]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        # 1. Binary Content-Type bails early
+        opener_bin = MagicMock()
+        opener_bin.open.return_value = FakeResp(b"binary-video-data", "video/mp4")
+        with patch("urllib.request.build_opener", return_value=opener_bin):
+            self.assertIsNone(proc._fetch_remote_m3u("https://example.com/video.mp4", None))
+
+        # 2. Oversized M3U (> 2 MiB) aborted
+        oversized = b"#EXTM3U\n" + (b"A" * (proc.MAX_M3U_BYTES + 100))
+        opener_big = MagicMock()
+        opener_big.open.return_value = FakeResp(oversized, "application/vnd.apple.mpegurl")
+        with patch("urllib.request.build_opener", return_value=opener_big):
+            self.assertIsNone(proc._fetch_remote_m3u("https://example.com/big.m3u8", None))
+
+        # 3. Normal small M3U succeeds
+        small = b"#EXTM3U\nhttps://example.com/stream.m3u8\n"
+        opener_ok = MagicMock()
+        opener_ok.open.return_value = FakeResp(small, "application/vnd.apple.mpegurl; charset=utf-8")
+        with patch("urllib.request.build_opener", return_value=opener_ok):
+            self.assertEqual(proc._fetch_remote_m3u("https://example.com/list.m3u8", None), small.decode("utf-8"))
+
+    def test_emergency_log_path_honors_xdg_without_import_makedirs(self):
+        """Regression: _get_emergency_log_path honors XDG_DATA_HOME on Unix and does not call os.makedirs."""
+        from unittest.mock import patch
+        import native_host
+
+        custom_xdg = os.path.join(self.test_dir, "xdg_never_created")
+        with patch.object(sys, "platform", "linux"), \
+             patch.dict(os.environ, {"XDG_DATA_HOME": custom_xdg}, clear=False):
+            p = native_host._get_emergency_log_path()
+
+        self.assertEqual(p, os.path.join(custom_xdg, "MPVPlaylistOrganizer", "native_host_crash.log"))
+        self.assertFalse(os.path.exists(custom_xdg))
 
 if __name__ == '__main__':
     unittest.main()

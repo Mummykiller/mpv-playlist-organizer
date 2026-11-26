@@ -51,11 +51,19 @@ async function testPlaylistRendererClipboardFailureSafety() {
 	global.document = dom.window.document;
 	global.Node = dom.window.Node;
 	global.Element = dom.window.Element;
-	global.navigator = {
-		clipboard: {
-			writeText: () => Promise.reject(new Error("Clipboard permission denied")),
+	let writeTextCalled = false;
+	const mockClipboard = {
+		writeText: () => {
+			writeTextCalled = true;
+			return Promise.reject(new Error("Clipboard permission denied"));
 		},
 	};
+	Object.defineProperty(global, "navigator", {
+		configurable: true,
+		writable: true,
+		value: { clipboard: mockClipboard },
+	});
+	dom.window.navigator.clipboard = mockClipboard;
 
 	window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	window.MPV_INTERNAL.logger = { debug: () => {} };
@@ -63,11 +71,10 @@ async function testPlaylistRendererClipboardFailureSafety() {
 	const { PlaylistRenderer } = await import(pathToFileURL(path.join(ROOT, "utils/PlaylistRenderer.js")).href);
 
 	const container = document.getElementById("list");
-	const renderer = new PlaylistRenderer(
-		container,
-		{ enableDblclickCopy: true },
-		{}
-	);
+	const renderer = new PlaylistRenderer(container, {
+		prefs: { enableDblclickCopy: true },
+		callbacks: {},
+	});
 
 	let unhandled = false;
 	const onUnhandled = () => { unhandled = true; };
@@ -85,6 +92,7 @@ async function testPlaylistRendererClipboardFailureSafety() {
 	await new Promise((r) => setTimeout(r, 30));
 	process.off("unhandledRejection", onUnhandled);
 
+	assert.strictEqual(writeTextCalled, true, "navigator.clipboard.writeText must be called on dblclick");
 	assert.strictEqual(unhandled, false, "Clipboard rejection in PlaylistRenderer must be caught");
 }
 

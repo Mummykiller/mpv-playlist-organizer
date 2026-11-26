@@ -120,8 +120,9 @@ class TestServerAndInstaller(BaseTestCase):
         env = os.environ.copy()
         env["XDG_DATA_HOME"] = self.test_dir
         env["HOME"] = self.test_dir
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         res = subprocess.run(
-            [sys.executable, "-c", script],
+            [sys.executable, "-B", "-c", script],
             cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             env=env,
             capture_output=True,

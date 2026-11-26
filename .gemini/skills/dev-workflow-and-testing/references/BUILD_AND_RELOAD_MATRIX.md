@@ -21,7 +21,7 @@ Only the target files listed in `testing_tools/generate_js.py:CONFIG` are auto-g
 - **Classic content-script / UI helpers (`window.MPV_INTERNAL`):** `AniListUI.js`, `ContentState.js`, `ControllerActions.js`, `ControllerTimers.js`, `ControllerView.js`, `Draggable.js`, `MessageBridge.js`, `MpvController.js`, `NavigationObserver.js`, `PageScraper.js`, `PlaybackStateManager.js`, `PlaylistRenderer.js`, `PlaylistUI.js`, `Resizable.js`, `UIManager.js`, `janitor.js`.
 - **ES modules (background / popup):** `contextMenu.js`, `item_processor.js`, `nativeLink.js`, `playlistManager.js`, `settings.js`, `storageManager.js`.
 
-### Transpilation Mechanism (`testing_tools/generate_js.py:transpile_file`)
+### Transpilation Mechanism (`testing_tools/generate_js.py:render_module_js`)
 1. Strips ES module `import { ... } from "..."` statements and maps imported symbols to their global namespace aliases (`const normalizeKeys = window.MPV_INTERNAL.normalizeKeys;`).
 2. Converts `export class`, `export function`, and `export const` declarations into namespace assignments (`const Foo = MPV.Foo = class Foo ...`).
 3. Wraps the output in an IIFE initializing `window.<NAMESPACE> = window.<NAMESPACE> || {};`.
@@ -39,5 +39,5 @@ Only the target files listed in `testing_tools/generate_js.py:CONFIG` are auto-g
 | **MPV Scripts (`mpv_scripts/*.lua`)** | Restart MPV or re-trigger playback | Active MPV instances hold loaded Lua scripts in memory. |
 
 ### Common Build & Registration Pitfalls
-- **Service worker registration failed (Status code: 15):** Top-level JS syntax error or unresolved import in `background.js` or `background/handlers/*.js`. Run `node --check <file>` or `python3 testing_tools/run_suite.py`.
-- **Missing Global Symbol at Runtime:** Confirm the module is registered in `testing_tools/generate_js.py:CONFIG`, run `python3 testing_tools/generate_js.py`, and verify the consumer reads from the matching namespace (`window.MPV_INTERNAL` vs. `window.MPV_SECURITY`).
+- **Service worker registration failed (Status code: 15):** Top-level JS syntax error or unresolved import in `background.js` or `background/handlers/*.js`. Run `node --check <file>` or `python3 -B testing_tools/run_suite.py`.
+- **Missing Global Symbol at Runtime:** Confirm the module is registered in `testing_tools/generate_js.py:CONFIG`, run `python3 -B testing_tools/generate_js.py`, and verify the consumer reads from the matching namespace (`window.MPV_INTERNAL` vs. `window.MPV_SECURITY`).

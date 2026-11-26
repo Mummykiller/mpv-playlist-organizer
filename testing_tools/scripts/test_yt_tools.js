@@ -221,7 +221,16 @@ async function testYtBridge() {
 			new dom.window.MessageEvent("message", {
 				data: {
 					type: "SHINKU__saveToLibrary",
-					data: { videoId: "xyz98765432", entry: { title: "New Vid", currentTime: 5 } },
+					data: {
+						videoId: "xyz98765432",
+						entry: {
+							title: "New Vid",
+							currentTime: 5,
+							url: "https://www.youtube.com/watch?v=xyz98765432",
+							thumbnail: "https://i.ytimg.com/vi/xyz98765432/mqdefault.jpg",
+							evilInjected: "drop-me",
+						},
+					},
 				},
 				source: dom.window,
 				origin: dom.window.location.origin,
@@ -229,6 +238,82 @@ async function testYtBridge() {
 		);
 		await new Promise((r) => origSetTimeout(r, 20));
 		assert.strictEqual(mock.localData.shinkuLibrary.xyz98765432.title, "New Vid");
+		assert.strictEqual(
+			mock.localData.shinkuLibrary.xyz98765432.evilInjected,
+			undefined,
+			"handleSaveToLibrary must strip non-allowlisted fields"
+		);
+
+		// Reject invalid videoId and unsafe javascript: URLs
+		dom.window.dispatchEvent(
+			new dom.window.MessageEvent("message", {
+				data: {
+					type: "SHINKU__saveToLibrary",
+					data: { videoId: "../bad id!", entry: { title: "Bad" } },
+				},
+				source: dom.window,
+				origin: dom.window.location.origin,
+			})
+		);
+		dom.window.dispatchEvent(
+			new dom.window.MessageEvent("message", {
+				data: {
+					type: "SHINKU__saveToLibrary",
+					data: {
+						videoId: "safeVid1234",
+						entry: {
+							title: "Unsafe URL Test",
+							url: "javascript:alert(1)",
+							thumbnail: "data:text/html,<script>alert(1)</script>",
+						},
+					},
+				},
+				source: dom.window,
+				origin: dom.window.location.origin,
+			})
+		);
+		await new Promise((r) => origSetTimeout(r, 20));
+		assert.strictEqual(
+			mock.localData.shinkuLibrary["../bad id!"],
+			undefined,
+			"handleSaveToLibrary must reject invalid videoId"
+		);
+		assert.strictEqual(mock.localData.shinkuLibrary.safeVid1234.title, "Unsafe URL Test");
+		assert.strictEqual(
+			mock.localData.shinkuLibrary.safeVid1234.url,
+			undefined,
+			"handleSaveToLibrary must reject javascript: url"
+		);
+		assert.strictEqual(
+			mock.localData.shinkuLibrary.safeVid1234.thumbnail,
+			undefined,
+			"handleSaveToLibrary must reject non-http(s) thumbnail"
+		);
+
+		// mergeSettingsWithDefaults must filter FORBIDDEN_KEYS at category and inner key levels
+		const poisoned = JSON.parse(
+			'{"__proto__":{"polluted":true},"constructor":{"bad":1},"video-player-settings":{"pause":true,"constructor":"evil","prototype":"evil"},"custom-cat":{"__proto__":{"x":1},"ok":1}}'
+		);
+		await mock.chrome.storage.local.set({ shinkuExtensionSettings: poisoned });
+		await new Promise((r) => origSetTimeout(r, 20));
+		const updateMsg = [...postedMessages].reverse().find((m) => m.type === "SHINKU__updateUserSetting");
+		assert.ok(updateMsg, "Storage change forwards sanitized settings");
+		assert.strictEqual(Object.prototype.hasOwnProperty.call(updateMsg.data, "__proto__"), false);
+		assert.strictEqual(Object.prototype.hasOwnProperty.call(updateMsg.data, "constructor"), false);
+		assert.strictEqual(
+			Object.prototype.hasOwnProperty.call(updateMsg.data["video-player-settings"], "constructor"),
+			false
+		);
+		assert.strictEqual(
+			Object.prototype.hasOwnProperty.call(updateMsg.data["video-player-settings"], "prototype"),
+			false
+		);
+		assert.strictEqual(
+			Object.prototype.hasOwnProperty.call(updateMsg.data["custom-cat"], "__proto__"),
+			false
+		);
+		assert.strictEqual(updateMsg.data["custom-cat"].ok, 1);
+		assert.strictEqual(({}).polluted, undefined, "Object.prototype must not be polluted");
 
 		// Runtime message shinku_yt_save_current_video
 		let sentResp = null;

@@ -934,16 +934,24 @@ export class OptionsManager {
 		const mpvFlagsList = document.getElementById("mpv-flags-list-container");
 		if (mpvFlagsList) {
 			let clickTimer = null;
+			let lastClickedPill = null;
 
 			mpvFlagsList.addEventListener("click", (e) => {
 				if (e.target.classList.contains("filter-pill")) {
-					if (clickTimer) {
+					if (clickTimer && lastClickedPill === e.target) {
 						clearTimeout(clickTimer);
 						clickTimer = null;
+						lastClickedPill = null;
 						this._removeMpvFlag(e.target);
 					} else {
+						if (clickTimer && lastClickedPill) {
+							clearTimeout(clickTimer);
+							this._toggleMpvFlag(lastClickedPill);
+						}
+						lastClickedPill = e.target;
 						clickTimer = setTimeout(() => {
 							clickTimer = null;
+							lastClickedPill = null;
 							this._toggleMpvFlag(e.target);
 						}, 250);
 					}

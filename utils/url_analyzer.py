@@ -315,8 +315,14 @@ def get_cookies_file(browser, url, ignore_config=True, force_refresh=False):
         cookies_dir = VolatileCookieManager.get_volatile_dir()
 
         # Use UUID to prevent collisions and ensure privacy per-session if needed
-        temp_filename = f"{COOKIE_PREFIX}{browser}_{uuid.uuid4().hex[:6]}{COOKIE_EXT}"
+        safe_browser_label = re.sub(r'[^a-zA-Z0-9_-]', '_', browser) or "browser"
+        temp_filename = f"{COOKIE_PREFIX}{safe_browser_label}_{uuid.uuid4().hex[:6]}{COOKIE_EXT}"
         temp_path = os.path.join(cookies_dir, temp_filename)
+        cookies_dir_real = os.path.realpath(cookies_dir)
+        temp_path_real = os.path.realpath(temp_path)
+        if os.path.commonpath([cookies_dir_real, temp_path_real]) != cookies_dir_real or os.path.dirname(temp_path_real) != cookies_dir_real:
+            logging.warning(f"Security: Blocked cookie temp path outside volatile directory for '{browser}'")
+            return None
 
         # Layer 3: Hard Refresh via yt-dlp
         settings = file_io.get_settings()

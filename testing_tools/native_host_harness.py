@@ -111,10 +111,8 @@ def read_native_response(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return None
-        msg, is_eof = _read_native_frame(proc, timeout=remaining)
+        msg, _is_eof = _read_native_frame(proc, timeout=remaining)
         if msg is None:
-            if is_eof:
-                return None
             return None
         if msg.get("request_id") == request_id or msg.get("requestId") == request_id:
             return msg

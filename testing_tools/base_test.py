@@ -1,10 +1,13 @@
-import os
-import sys
-import unittest
-import tempfile
-import shutil
 import logging
+import os
+import shutil
+import sys
+import tempfile
 import time
+import unittest
+
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 # Add project root to path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

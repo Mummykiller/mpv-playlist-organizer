@@ -17,11 +17,19 @@ sys.dont_write_bytecode = True
 GREEN = "\033[92m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
-BLUE = "\033[94m"
-MAGENTA = "\033[95m"
 CYAN = "\033[96m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
+
+SKIP_DIRS = {
+    ".git",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "yt-tools-legacy",
+    "yt-tools-standalone",
+    "mpv-playlist-organizer-release",
+}
 
 TESTING_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(TESTING_TOOLS_DIR)
@@ -193,7 +201,7 @@ def run_js_batch(verbose=False):
     # 2. All JS & Module JS Syntax and Empty Catch Block Check (parallel)
     js_files = []
     for root_dir, dirs, files in os.walk(PROJECT_ROOT):
-        dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', '.venv', 'yt-tools-legacy', 'yt-tools-standalone', 'mpv-playlist-organizer-release'}]
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         for f in sorted(files):
             if f.endswith('.js'):
                 js_files.append(os.path.join(root_dir, f))
@@ -246,7 +254,7 @@ def run_js_batch(verbose=False):
     # 3. Python Static Analysis (Hardened AST Syntax + Bare Except + Silent Pass Check)
     py_files = []
     for root_dir, dirs, files in os.walk(PROJECT_ROOT):
-        dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', '.venv', 'yt-tools-legacy', 'yt-tools-standalone', 'mpv-playlist-organizer-release'}]
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         for f in sorted(files):
             if f.endswith('.py'):
                 py_files.append(os.path.join(root_dir, f))
@@ -422,7 +430,7 @@ def run_js_batch(verbose=False):
     shellcheck_bin = shutil.which("shellcheck")
     sh_files = []
     for root_dir, dirs, files in os.walk(PROJECT_ROOT):
-        dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', '.venv', 'yt-tools-legacy', 'yt-tools-standalone', 'mpv-playlist-organizer-release'}]
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         for f in sorted(files):
             if f.endswith('.sh'):
                 sh_files.append(os.path.join(root_dir, f))
@@ -488,8 +496,6 @@ def discover_python_test_files():
         if f.startswith("test_") and f.endswith(".py")
     )
 
-
-PYTHON_TEST_FILES = discover_python_test_files()
 
 _WORKER_RESULT_PREFIX = "__WORKER_RESULT__:"
 

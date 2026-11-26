@@ -1,6 +1,26 @@
 const assert = require("node:assert").strict;
 const { JSDOM } = require("jsdom");
 
+function createMockNativePort() {
+    const messageListeners = [];
+    const disconnectListeners = [];
+    return {
+        onMessage: { addListener: (fn) => { messageListeners.push(fn); } },
+        onDisconnect: { addListener: (fn) => { disconnectListeners.push(fn); } },
+        postMessage: (msg) => {
+            queueMicrotask(() => {
+                const reply = { success: true };
+                if (msg && msg.request_id !== undefined) reply.request_id = msg.request_id;
+                if (msg && msg.action === "handshake") reply.action = "handshake_ack";
+                for (const fn of messageListeners) fn(reply);
+            });
+        },
+        disconnect: () => {
+            for (const fn of disconnectListeners) fn();
+        },
+    };
+}
+
 /**
  * Setup JSDOM environments for two separate controllers: Popup and ContentScript.
  */
@@ -23,7 +43,13 @@ function createControllerEnv(url) {
                     addListener: (listener) => { env.messageListener = listener; },
                     removeListener: () => {}
                 },
-                connect: () => ({ onMessage: { addListener: () => {} } })
+                connect: () => ({ onMessage: { addListener: () => {} } }),
+                connectNative: () => createMockNativePort()
+            },
+            contextMenus: {
+                create: () => {},
+                removeAll: (cb) => { if (typeof cb === "function") cb(); },
+                onClicked: { addListener: () => {} }
             },
             storage: {
                 local: {
@@ -57,6 +83,22 @@ function createControllerEnv(url) {
     env.window.navigator.clipboard = {
         writeText: () => Promise.resolve()
     };
+    try {
+        void env.window.localStorage;
+    } catch {
+        const store = new Map();
+        Object.defineProperty(env.window, "localStorage", {
+            configurable: true,
+            value: {
+                getItem: (k) => (store.has(String(k)) ? store.get(String(k)) : null),
+                setItem: (k, v) => { store.set(String(k), String(v)); },
+                removeItem: (k) => { store.delete(String(k)); },
+                clear: () => { store.clear(); },
+                get length() { return store.size; },
+                key: (i) => Array.from(store.keys())[i] ?? null,
+            },
+        });
+    }
 
     return env;
 }
@@ -115,7 +157,12 @@ global.chrome = {
         },
         onMessage: { addListener: () => {} },
         connect: () => ({ onMessage: { addListener: () => {} } }),
-        connectNative: () => ({ onMessage: { addListener: () => {} }, postMessage: () => {} })
+        connectNative: () => createMockNativePort()
+    },
+    contextMenus: {
+        create: () => {},
+        removeAll: (cb) => { if (typeof cb === "function") cb(); },
+        onClicked: { addListener: () => {} }
     }
 };
 
@@ -363,35 +410,41 @@ async function testUiSync() {
     `;
     popupEnv.document.body.appendChild(settingsContainer);
 
-    let savedPreferences = null;
-    const optionsManager = new OptionsManager({
-        sendMessageAsync: (msg) => {
-            if (msg.action === "set_ui_preferences") {
-                savedPreferences = msg.preferences;
-                return Promise.resolve({ success: true });
-            }
-            return Promise.resolve({ success: true });
-        },
-        showStatus: () => {},
-        fetchAniListReleases: () => Promise.resolve()
-    });
-
-    // Verify preferenceMappings definition contains valid structure
-    assert.ok(Array.isArray(optionsManager.preferenceMappings), "preferenceMappings should be an array");
-    assert.ok(optionsManager.preferenceMappings.length >= 20, "Should have mapped numerous preference controls");
-    for (const mapping of optionsManager.preferenceMappings) {
-        assert.ok(mapping.key, "Each mapping must define key");
-        assert.ok(mapping.elementId, `Mapping for ${mapping.key} must define elementId`);
-        assert.ok(["checkbox", "select", "input", "color", "slider", "custom"].includes(mapping.type), `Mapping ${mapping.key} has invalid type ${mapping.type}`);
-    }
-
-    // Temporarily point global document to popupEnv.document for OptionsManager methods
+    // Temporarily point global document/window/localStorage to popupEnv for OptionsManager
     const savedDoc = global.document;
     const savedWin = global.window;
+    const savedLocalStorageDesc = Object.getOwnPropertyDescriptor(global, "localStorage");
     global.document = popupEnv.document;
     global.window = popupEnv.window;
+    Object.defineProperty(global, "localStorage", {
+        configurable: true,
+        writable: true,
+        value: popupEnv.window.localStorage,
+    });
 
+    let savedPreferences = null;
     try {
+        const optionsManager = new OptionsManager({
+            sendMessageAsync: (msg) => {
+                if (msg.action === "set_ui_preferences") {
+                    savedPreferences = msg.preferences;
+                    return Promise.resolve({ success: true });
+                }
+                return Promise.resolve({ success: true });
+            },
+            showStatus: () => {},
+            fetchAniListReleases: () => Promise.resolve()
+        });
+
+        // Verify preferenceMappings definition contains valid structure
+        assert.ok(Array.isArray(optionsManager.preferenceMappings), "preferenceMappings should be an array");
+        assert.ok(optionsManager.preferenceMappings.length >= 20, "Should have mapped numerous preference controls");
+        for (const mapping of optionsManager.preferenceMappings) {
+            assert.ok(mapping.key, "Each mapping must define key");
+            assert.ok(mapping.elementId, `Mapping for ${mapping.key} must define elementId`);
+            assert.ok(["checkbox", "select", "input", "color", "slider", "custom"].includes(mapping.type), `Mapping ${mapping.key} has invalid type ${mapping.type}`);
+        }
+
         optionsManager.saveAllPreferences();
         await new Promise(r => setTimeout(r, 20));
 
@@ -516,8 +569,75 @@ async function testUiSync() {
         // Restore globals even if an assertion fails
         global.document = savedDoc;
         global.window = savedWin;
+        if (savedLocalStorageDesc) {
+            Object.defineProperty(global, "localStorage", savedLocalStorageDesc);
+        } else {
+            delete global.localStorage;
+        }
     }
     console.log("  ✅ Favorites filtering and state updates verified.");
+
+    // --- Step 7b: populateFolderDropdowns preserves selection and respects lastUsedFolderId ---
+    console.log("Step 7b: Verifying populateFolderDropdowns selection preservation...");
+    {
+        const { createFolderManager } = await import("../../popup/popup_folders.js");
+        const dropDom = new JSDOM(
+            `<!DOCTYPE html><html><body>
+                <select id="remove-folder-select"></select>
+                <select id="mini-folder-select"></select>
+                <button id="btn-remove-folder"></button>
+                <button id="btn-rename-folder"></button>
+            </body></html>`,
+            { url: "chrome-extension://id/popup.html" },
+        );
+        const prevDoc = global.document;
+        global.document = dropDom.window.document;
+        try {
+            const removeFolderSelect = dropDom.window.document.getElementById("remove-folder-select");
+            const miniFolderSelect = dropDom.window.document.getElementById("mini-folder-select");
+            const removeFolderBtn = dropDom.window.document.getElementById("btn-remove-folder");
+            const renameFolderBtn = dropDom.window.document.getElementById("btn-rename-folder");
+            const folderManager = createFolderManager({
+                uiManager: { isMiniView: () => false },
+                showStatus: () => {},
+                showPopupConfirmation: async () => true,
+                removeFolderSelect,
+                miniFolderSelect,
+                removeFolderBtn,
+                renameFolderBtn,
+                getRefreshPlaylist: () => () => {},
+            });
+
+            // 1. Initial popup open (empty select) must honor response.lastUsedFolderId
+            folderManager.populateFolderDropdowns({
+                success: true,
+                folderIds: ["Default", "Anime", "Music"],
+                lastUsedFolderId: "Anime",
+            });
+            assert.strictEqual(miniFolderSelect.value, "Anime", "Initial populateFolderDropdowns must select lastUsedFolderId");
+            assert.strictEqual(removeFolderSelect.value, "Anime", "removeFolderSelect must mirror lastUsedFolderId");
+
+            // 2. Subsequent update must preserve user's currently selected folder instead of snapping to folderIds[0]
+            miniFolderSelect.value = "Music";
+            folderManager.populateFolderDropdowns({
+                success: true,
+                folderIds: ["Default", "Anime", "Music", "Docs"],
+                lastUsedFolderId: "Default",
+            });
+            assert.strictEqual(miniFolderSelect.value, "Music", "populateFolderDropdowns must preserve existing selection");
+
+            // 3. Removed current selection falls back to lastUsedFolderId
+            folderManager.populateFolderDropdowns({
+                success: true,
+                folderIds: ["Default", "Anime"],
+                lastUsedFolderId: "Anime",
+            });
+            assert.strictEqual(miniFolderSelect.value, "Anime", "Removed selection must fall back to lastUsedFolderId");
+        } finally {
+            global.document = prevDoc;
+        }
+    }
+    console.log("  ✅ populateFolderDropdowns selection preservation verified.");
 
     // --- Step 8: Folder Ordering Logic ---
     console.log("Step 8: Verifying Folder Ordering Logic & State Operations (real folder_management handlers)...");

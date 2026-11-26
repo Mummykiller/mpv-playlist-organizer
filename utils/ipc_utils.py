@@ -679,7 +679,11 @@ class IPCSocketManager:
                 self._sock = None
                 self._ipc_path = None
 
-        if self._event_reader_thread and self._event_reader_thread.is_alive():
+        if (
+            self._event_reader_thread
+            and self._event_reader_thread.is_alive()
+            and self._event_reader_thread is not threading.current_thread()
+        ):
             # Join with timeout to avoid hanging if readline is still blocking
             self._event_reader_thread.join(timeout=1.0)
             if self._event_reader_thread.is_alive():

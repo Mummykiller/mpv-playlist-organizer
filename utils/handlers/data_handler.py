@@ -172,12 +172,17 @@ class DataHandler(BaseHandler):
             os.makedirs(self.file_io.EXPORT_DIR, exist_ok=True)
             path = os.path.abspath(self.file_io.EXPORT_DIR)
             platform_name = self.file_io.get_settings().get('os_platform', platform.system())
+            popen_kwargs = {
+                'stdin': subprocess.DEVNULL,
+                'stdout': subprocess.DEVNULL,
+                'stderr': subprocess.DEVNULL,
+            }
             if platform_name == "Windows":
-                subprocess.Popen(['explorer', os.path.normpath(path)])
+                subprocess.Popen(['explorer', os.path.normpath(path)], **popen_kwargs)
             elif platform_name == "Darwin":
-                subprocess.run(['open', path], check=True)
+                subprocess.Popen(['open', path], start_new_session=True, **popen_kwargs)
             else:
-                subprocess.run(['xdg-open', path], check=True)
+                subprocess.Popen(['xdg-open', path], start_new_session=True, **popen_kwargs)
             return native_link.success(message="Opening export folder.")
         except Exception as e:
             msg = f"Failed to open folder: {e}"

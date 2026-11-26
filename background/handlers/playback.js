@@ -183,6 +183,7 @@ export async function handlePlaybackHealthChanged(data) {
 }
 
 export async function handleItemNaturalCompletion(data) {
+	await playbackManager.initPromise;
 	const { folderId, itemId } = data;
 	if (!folderId || !itemId) return;
 

@@ -7,6 +7,20 @@ import { processPlaylist } from "../../utils/item_processor.js";
 import { UI_ONLY_KEYS } from "./ui_state.js";
 import { setYtToolsEnabled } from "../yt_tools_service.js";
 
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const MAX_FOLDER_ID_LENGTH = 64;
+
+function isForbiddenKey(key) {
+	return typeof key !== "string" || FORBIDDEN_KEYS.has(key);
+}
+
+function sanitizeFolderKey(rawKey) {
+	if (typeof rawKey !== "string") return "";
+	const trimmed = sanitizeString(rawKey, true).slice(0, MAX_FOLDER_ID_LENGTH).trim();
+	if (!trimmed || isForbiddenKey(trimmed)) return "";
+	return trimmed;
+}
+
 export const handleImportFromFile = createHandler(async ({ request, data }) => {
 	const filename = request.filename;
 	const options = request.options || {
@@ -29,7 +43,7 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 		return { success: false, error: "Imported file data is empty or missing." };
 	}
 
-	const baseFolderName = sanitizeString(filename.replace(/\.json$/i, ""), true);
+	const baseFolderName = sanitizeFolderKey(filename.replace(/\.json$/i, ""));
 	if (!baseFolderName) return { success: false, error: "Invalid filename." };
 
 	let importedData;
@@ -49,7 +63,7 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 		return await _importSettingsLogic(importedData, data);
 	}
 
-	const foldersToImport = {};
+	const foldersToImport = Object.create(null);
 	const processorOptions = {
 		preserveTitle: options.preserveTitle,
 		preserveResumeTime: options.preserveLastPlayed
@@ -76,7 +90,9 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 				? importedData.folders
 				: importedData;
 		for (const key in source) {
-			if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+			if (!Object.hasOwn(source, key) || isForbiddenKey(key)) continue;
+			const sanitizedKey = sanitizeFolderKey(key);
+			if (!sanitizedKey) continue;
 			const rawFolderContent = source[key];
 			if (rawFolderContent && Array.isArray(rawFolderContent.playlist)) {
 				const folderContent = normalizeKeys(rawFolderContent);
@@ -86,7 +102,7 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 						folder.lastPlayedId = folderContent.lastPlayedId;
 					}
 				}
-				foldersToImport[key] = folder;
+				foldersToImport[sanitizedKey] = folder;
 			}
 		}
 	}
@@ -99,10 +115,12 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 
 	let importedCount = 0;
 	for (const [folderId, folderData] of Object.entries(foldersToImport)) {
-		let finalId = folderId;
+		if (isForbiddenKey(folderId)) continue;
+		let finalId = folderId.slice(0, MAX_FOLDER_ID_LENGTH);
 		let counter = 1;
-		while (data.folders[finalId]) {
-			finalId = `${folderId} (${counter})`;
+		while (Object.hasOwn(data.folders, finalId)) {
+			const suffix = ` (${counter})`;
+			finalId = `${folderId.slice(0, MAX_FOLDER_ID_LENGTH - suffix.length)}${suffix}`;
 			counter++;
 		}
 		data.folders[finalId] = folderData;
@@ -126,33 +144,58 @@ async function _importSettingsLogic(importedData, localData) {
 	const excludeKeys = ["lastUsedFolderId", "anilist_cache", "anilistCache"];
 
 	let restoredCount = 0;
-	for (const key in importedSettings) {
-		if (excludeKeys.includes(key)) continue;
-
-		if (key === "ui_preferences" || key === "uiPreferences") {
-			// Deep merge for uiPreferences to preserve domains and positions if they were missing in backup
-			const importedPrefs = importedSettings[key];
-			const localPrefs = localData.settings.uiPreferences || { global: {}, domains: {} };
-
-			// Restore global prefs but preserve existing keys if not present in backup
-			localPrefs.global = {
-				...localPrefs.global,
-				...(importedPrefs.global || {})
-			};
-
-			// Restore domains - merge them instead of overwriting
-			if (importedPrefs.domains) {
-				localPrefs.domains = {
-					...localPrefs.domains,
-					...importedPrefs.domains
-				};
+	if (importedSettings && typeof importedSettings === "object" && !Array.isArray(importedSettings)) {
+		for (const key in importedSettings) {
+			if (!Object.hasOwn(importedSettings, key) || isForbiddenKey(key) || excludeKeys.includes(key)) {
+				continue;
 			}
-			
-			localData.settings.uiPreferences = localPrefs;
-			restoredCount++;
-		} else {
-			localData.settings[key] = importedSettings[key];
-			restoredCount++;
+
+			if (key === "ui_preferences" || key === "uiPreferences") {
+				// Deep merge for uiPreferences to preserve domains and positions if they were missing in backup
+				const importedPrefs = importedSettings[key];
+				if (!importedPrefs || typeof importedPrefs !== "object" || Array.isArray(importedPrefs)) {
+					continue;
+				}
+				const localPrefs = localData.settings.uiPreferences || { global: {}, domains: {} };
+
+				// Restore global prefs but preserve existing keys if not present in backup
+				if (importedPrefs.global && typeof importedPrefs.global === "object" && !Array.isArray(importedPrefs.global)) {
+					const mergedGlobal = { ...(localPrefs.global || {}) };
+					for (const gKey in importedPrefs.global) {
+						if (Object.hasOwn(importedPrefs.global, gKey) && !isForbiddenKey(gKey)) {
+							mergedGlobal[gKey] = importedPrefs.global[gKey];
+						}
+					}
+					localPrefs.global = mergedGlobal;
+				}
+
+				// Restore domains - merge them instead of overwriting
+				if (importedPrefs.domains && typeof importedPrefs.domains === "object" && !Array.isArray(importedPrefs.domains)) {
+					const mergedDomains = { ...(localPrefs.domains || {}) };
+					for (const domainKey in importedPrefs.domains) {
+						if (!Object.hasOwn(importedPrefs.domains, domainKey) || isForbiddenKey(domainKey)) {
+							continue;
+						}
+						const domainVal = importedPrefs.domains[domainKey];
+						if (domainVal && typeof domainVal === "object" && !Array.isArray(domainVal)) {
+							const safeDomainVal = {};
+							for (const propKey in domainVal) {
+								if (Object.hasOwn(domainVal, propKey) && !isForbiddenKey(propKey)) {
+									safeDomainVal[propKey] = domainVal[propKey];
+								}
+							}
+							mergedDomains[domainKey] = safeDomainVal;
+						}
+					}
+					localPrefs.domains = mergedDomains;
+				}
+				
+				localData.settings.uiPreferences = localPrefs;
+				restoredCount++;
+			} else {
+				localData.settings[key] = importedSettings[key];
+				restoredCount++;
+			}
 		}
 	}
 
@@ -168,9 +211,17 @@ async function _importSettingsLogic(importedData, localData) {
 						? existingYt.shinkuExtensionSettings
 						: {};
 				const mergedSettings = { ...prevSettings };
-				for (const [cat, vals] of Object.entries(ytBackup.settings)) {
+				for (const cat in ytBackup.settings) {
+					if (!Object.hasOwn(ytBackup.settings, cat) || isForbiddenKey(cat)) continue;
+					const vals = ytBackup.settings[cat];
 					if (vals && typeof vals === "object" && !Array.isArray(vals)) {
-						mergedSettings[cat] = { ...(prevSettings[cat] || {}), ...vals };
+						const safeVals = { ...(prevSettings[cat] || {}) };
+						for (const propKey in vals) {
+							if (Object.hasOwn(vals, propKey) && !isForbiddenKey(propKey)) {
+								safeVals[propKey] = vals[propKey];
+							}
+						}
+						mergedSettings[cat] = safeVals;
 					}
 				}
 				toWrite.shinkuExtensionSettings = mergedSettings;
@@ -181,8 +232,10 @@ async function _importSettingsLogic(importedData, localData) {
 						? existingYt.shinkuLibrary
 						: {};
 				const mergedLib = { ...prevLib };
-				for (const [vid, entry] of Object.entries(ytBackup.library)) {
-					if (vid !== "__proto__" && vid !== "constructor" && vid !== "prototype" && entry && typeof entry === "object") {
+				for (const vid in ytBackup.library) {
+					if (!Object.hasOwn(ytBackup.library, vid) || isForbiddenKey(vid)) continue;
+					const entry = ytBackup.library[vid];
+					if (entry && typeof entry === "object") {
 						mergedLib[vid] = entry;
 					}
 				}

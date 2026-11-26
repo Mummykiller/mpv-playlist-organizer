@@ -89,10 +89,11 @@ class TestReproCrash(BaseTestCase):
                     time.sleep(0.01)
 
                     with self.mpv_session.sync_lock:
-                        self.mpv_session.pid = 9999
+                        self.mpv_session.pid = None
+                        self.mpv_session.is_alive = False
                 except Exception as e:
                     errors.append(f"Launcher error: {e}")
-                time.sleep(0.02)
+                time.sleep(0.01)
 
         t1 = threading.Thread(target=poller)
         t2 = threading.Thread(target=launcher)
@@ -100,7 +101,7 @@ class TestReproCrash(BaseTestCase):
         t1.start()
         t2.start()
 
-        time.sleep(0.5)
+        time.sleep(0.2)
 
         stop_event.set()
         t1.join()
@@ -325,6 +326,9 @@ class TestReproCrash(BaseTestCase):
                 self.assertIn("dead", health_states)
             finally:
                 self.mpv_session.is_alive = False
+                watcher = getattr(self.mpv_session, "health_watcher_thread", None)
+                if watcher and watcher.is_alive():
+                    watcher.join(timeout=2.0)
 
     def test_mid_launch_cancellation_resilience(self):
         """Verifies that user cancelling an in-flight launch aborts cleanly without unhandled exceptions."""

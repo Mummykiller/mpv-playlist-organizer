@@ -157,23 +157,32 @@ class EnrichmentService(ItemProcessor):
                         logging.info(f"[PY][Session] Background: Pushing final batch of {len(enriched_batch)} history items.")
                         session.append_batch(enriched_batch, mode="prepend", folder_id=folder_id, quiet=True)
 
-                if not is_sync_valid():
-                    return
+                with session.sync_lock:
+                    if not is_sync_valid():
+                        return
+                    playlist_snapshot = list(session.playlist or [])
+                    ipc_mgr = session.ipc_manager
+                    tracker = session.playlist_tracker
 
-                if session.playlist_tracker:
-                    session.playlist_tracker.update_playlist_order(session.playlist)
+                if tracker:
+                    tracker.update_playlist_order(playlist_snapshot)
 
                 # --- REFRESH LUA INDICES AFTER MOVE ---
                 # Since we moved items, we must update Lua's index mapping.
-                if session.ipc_manager and session.ipc_manager.is_connected():
-                    for idx, item in enumerate(session.playlist):
+                if ipc_mgr and ipc_mgr.is_connected():
+                    for idx, item in enumerate(playlist_snapshot):
+                        if not is_sync_valid():
+                            return
                         lua_options, item_url = services.construct_lua_options(
                             item, settings, session.SCRIPT_DIR, index=idx
                         )
-                        session.ipc_manager.send({"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]})
+                        ipc_mgr.send(
+                            {"command": ["script-message", "set_url_options", item_url, json.dumps(lua_options), str(idx)]},
+                            expect_response=False,
+                        )
 
                     # Single consolidated OSD message
-                    session.ipc_manager.send({"command": ["show-text", "Playlist restored", 2000]})
+                    ipc_mgr.send({"command": ["show-text", "Playlist restored", 2000]}, expect_response=False)
 
                 logging.info("[PY][Session] Background: Batched restoration complete.")
             except Exception as e:
@@ -530,6 +539,7 @@ class LauncherService:
             pid = self.session.pid
             ipc_path = self.session.ipc_path
             ipc_manager = self.session.ipc_manager
+            close_gen = getattr(self.session, 'session_generation', None)
 
         # 1. Try to reconnect if needed to ensure graceful quit (OUTSIDE LOCK)
         if ipc_path:
@@ -614,10 +624,10 @@ class LauncherService:
                 logging.debug(f"Error shutting down enricher executor: {e}")
 
         if was_killed:
-            self.session.clear(mpv_return_code=0, session_generation=getattr(self.session, 'session_generation', None))
+            self.session.clear(mpv_return_code=0, session_generation=close_gen)
             return {"success": True, "message": "MPV session closed."}
         else:
             if not ipc_utils.is_pid_running(pid):
-                self.session.clear(mpv_return_code=0, session_generation=getattr(self.session, 'session_generation', None))
+                self.session.clear(mpv_return_code=0, session_generation=close_gen)
                 return {"success": True, "message": "MPV session cleared (already dead)."}
             return {"success": False, "error": "Failed to close MPV session."}

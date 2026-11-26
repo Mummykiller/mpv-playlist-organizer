@@ -28,6 +28,9 @@ yt-tools-legacy/
 yt-tools-standalone/
 yt-tools-standalone.zip
 mcp_server/.venv/
+mcp_server/*.db
+mcp_server/*.db-wal
+mcp_server/*.db-shm
 .gemini/settings.json
 .gemini/proposals/
 .ruff_cache/

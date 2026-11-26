@@ -212,6 +212,42 @@ async function runTests() {
     assert.ok(typeof diag.userAgent === "string" && diag.userAgent.length > 0, "Diagnostics userAgent should be non-empty string.");
     originalConsole.log("  [OK] Buffer Management, Flushing & Re-entrancy Guard");
 
+    // =========================================================================
+    // --- TEST 6: _flushBuffer with Synchronous / Non-Promise nativeSender ---
+    // =========================================================================
+    const { pathToFileURL } = require("node:url");
+    const modUrl = pathToFileURL(path.join(__dirname, "../../utils/SystemLogger.module.js")).href;
+    const { logger: modLogger } = await import(modUrl);
+    modLogger.nativeSender = null;
+    modLogger.buffer = [];
+    modLogger.globalLogCount = 0;
+    modLogger.globalWindowStart = 0;
+    modLogger.logCounts = {};
+
+    modLogger.error("Sync sender buffered 1");
+    modLogger.error("Sync sender buffered 2");
+    assert.strictEqual(modLogger.buffer.length, 2);
+
+    const syncReceived = [];
+    // Non-async sender returning undefined (no .catch method)
+    modLogger.setNativeSender((payload) => {
+        syncReceived.push(payload.message);
+    });
+    assert.strictEqual(syncReceived.length, 2, "_flushBuffer should handle non-Promise nativeSender");
+    assert.strictEqual(modLogger.buffer.length, 0);
+
+    // Synchronously throwing sender should not crash _flushBuffer
+    modLogger.nativeSender = null;
+    modLogger.error("Sync throw buffered");
+    assert.strictEqual(modLogger.buffer.length, 1);
+    assert.doesNotThrow(() => {
+        modLogger.setNativeSender(() => {
+            throw new Error("sync failure");
+        });
+    });
+    assert.strictEqual(modLogger.buffer.length, 0);
+    originalConsole.log("  [OK] _flushBuffer non-Promise & throwing nativeSender safety");
+
     originalConsole.log("\nALL SYSTEM LOGGER TESTS PASSED! 🛡️");
 }
 

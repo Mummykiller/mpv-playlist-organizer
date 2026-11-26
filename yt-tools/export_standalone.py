@@ -8,6 +8,12 @@ By default, writes the standalone extension to `yt-tools-standalone/` right next
 to `yt-tools/`.
 """
 
+import os
+import sys
+
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 import argparse
 import json
 import re
@@ -325,8 +331,35 @@ def adapt_service_for_standalone(service_src: str) -> str:
 	return adapted
 
 
-def export_standalone(out_dir: Path, make_zip: bool = False) -> Path:
+def _validate_out_dir(out_dir: Path, force: bool = False) -> None:
+	"""Refuse unsafe output directories or non-empty dirs lacking manifest.json unless forced."""
+	resolved = out_dir.resolve()
+	root_resolved = ROOT_DIR.resolve()
+	home_resolved = Path.home().resolve()
+	fs_root = Path(resolved.anchor)
+
+	if (
+		resolved == root_resolved
+		or resolved in root_resolved.parents
+		or resolved == home_resolved
+		or resolved == fs_root
+	):
+		raise ValueError(f"Refusing unsafe output directory: {resolved}")
+
+	if resolved.exists():
+		if not resolved.is_dir():
+			raise ValueError(f"Output path exists and is not a directory: {resolved}")
+		if any(resolved.iterdir()) and not (resolved / "manifest.json").is_file() and not force:
+			raise ValueError(
+				f"Refusing to overwrite non-empty directory without manifest.json: {resolved} "
+				"(pass --force to override)"
+			)
+
+
+def export_standalone(out_dir: Path, make_zip: bool = False, force: bool = False) -> Path:
 	"""Build a complete standalone YouTube Tools Chrome extension at `out_dir`."""
+	out_dir = out_dir.resolve()
+	_validate_out_dir(out_dir, force=force)
 	if out_dir.exists():
 		shutil.rmtree(out_dir)
 
@@ -367,7 +400,7 @@ def export_standalone(out_dir: Path, make_zip: bool = False) -> Path:
 	(out_dir / "popup.css").write_text(build_standalone_css(popup_css_text), encoding="utf-8")
 
 	if make_zip:
-		zip_path = out_dir.with_suffix(".zip")
+		zip_path = out_dir.parent / f"{out_dir.name}.zip"
 		with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
 			for file_path in sorted(out_dir.rglob("*")):
 				if file_path.is_file():
@@ -381,13 +414,18 @@ def main() -> None:
 	parser = argparse.ArgumentParser(description="Export Shinku's YouTube Tools as a standalone Chrome extension.")
 	parser.add_argument("--out", type=Path, default=DEFAULT_OUT_DIR, help="Output folder path")
 	parser.add_argument("--zip", action="store_true", help="Also create a .zip archive next to the output folder")
+	parser.add_argument(
+		"--force",
+		action="store_true",
+		help="Allow overwriting an existing non-empty directory lacking manifest.json",
+	)
 	args = parser.parse_args()
 
 	out_dir = args.out.resolve()
-	export_standalone(out_dir, make_zip=args.zip)
+	result_path = export_standalone(out_dir, make_zip=args.zip, force=args.force)
 	print(f"Exported standalone YouTube Tools extension to: {out_dir}")
 	if args.zip:
-		print(f"Created zip archive: {out_dir.with_suffix('.zip')}")
+		print(f"Created zip archive: {result_path}")
 
 
 if __name__ == "__main__":

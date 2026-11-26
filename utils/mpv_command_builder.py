@@ -298,7 +298,11 @@ class MpvCommandBuilder:
         args.append(f"--ytdl-format={ytdl_format}")
 
         # 1. Prepare Essential YTDL Options
-        existing_raw = str(self.ytdl_raw_options or "")
+        sanitized_existing = (
+            security.sanitize_ytdlp_options(self.ytdl_raw_options, allow_settings_flags=False)
+            if self.ytdl_raw_options else ""
+        )
+        existing_raw = sanitized_existing
         ytdl_opts_list = []
 
         # Security & Runtimes & Optimization
@@ -338,15 +342,13 @@ class MpvCommandBuilder:
                 # yt-dlp expects --ytdl-raw-options="user-agent=VALUE"
                 # IMPORTANT: Commas break the mpv parser for ytdl-raw-options.
                 # We strip them to keep the list valid without complex escaping.
-                safe_ua = str(ua).replace(",", "")
+                safe_ua = security.sanitize_string(str(ua)).replace(",", "")
                 ytdl_opts_list.append(f"user-agent={safe_ua}")
 
         # Combine: Existing options first (sanitized), then our injected essentials
         final_list = []
-        if self.ytdl_raw_options:
-            sanitized_existing = security.sanitize_ytdlp_options(self.ytdl_raw_options, allow_settings_flags=True)
-            if sanitized_existing:
-                final_list.append(sanitized_existing)
+        if sanitized_existing:
+            final_list.append(sanitized_existing)
         final_list.extend(ytdl_opts_list)
 
         final_ytdl_raw = ",".join(final_list)

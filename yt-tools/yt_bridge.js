@@ -14,6 +14,21 @@
   const LIBRARY_KEY = "shinkuLibrary";
   const TARGET_ORIGIN = window.location.origin;
   const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+  const VALID_VIDEO_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+  function isValidVideoId(id) {
+    return typeof id === "string" && VALID_VIDEO_ID_RE.test(id) && !FORBIDDEN_KEYS.has(id);
+  }
+
+  function isSafeHttpUrl(value) {
+    if (typeof value !== "string" || !value) return false;
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch (_err) {
+      return false;
+    }
+  }
 
   let cachedSettings = null;
   let lastNavSignature = "";
@@ -44,18 +59,26 @@
    */
   function mergeSettingsWithDefaults(saved) {
     const defaults = getDefaults();
-    const source = saved && typeof saved === "object" ? saved : {};
+    const source = saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
     const merged = {};
-    let changed = !saved || typeof saved !== "object";
+    let changed = !saved || typeof saved !== "object" || Array.isArray(saved);
 
     for (const category of Object.keys(defaults)) {
+      if (FORBIDDEN_KEYS.has(category)) continue;
       const defCat = defaults[category];
-      const savedCat = source[category] && typeof source[category] === "object" ? source[category] : null;
+      const savedCat =
+        Object.prototype.hasOwnProperty.call(source, category) &&
+        source[category] &&
+        typeof source[category] === "object" &&
+        !Array.isArray(source[category])
+          ? source[category]
+          : null;
       if (!savedCat) {
         changed = true;
       }
       merged[category] = {};
       for (const key of Object.keys(defCat)) {
+        if (FORBIDDEN_KEYS.has(key)) continue;
         if (savedCat && Object.prototype.hasOwnProperty.call(savedCat, key) && savedCat[key] !== undefined) {
           merged[category][key] = savedCat[key];
         } else if (
@@ -74,6 +97,10 @@
       // Preserve any extra keys from savedCat (except migrated legacy Video-settings)
       if (savedCat) {
         for (const key of Object.keys(savedCat)) {
+          if (FORBIDDEN_KEYS.has(key)) {
+            changed = true;
+            continue;
+          }
           if (category === "video-player-settings" && key === "Video-settings") {
             continue;
           }
@@ -85,8 +112,25 @@
     }
 
     for (const category of Object.keys(source)) {
+      if (FORBIDDEN_KEYS.has(category)) {
+        changed = true;
+        continue;
+      }
       if (!Object.prototype.hasOwnProperty.call(merged, category)) {
-        merged[category] = source[category];
+        const rawCat = source[category];
+        if (rawCat && typeof rawCat === "object" && !Array.isArray(rawCat)) {
+          const cleanCat = {};
+          for (const key of Object.keys(rawCat)) {
+            if (FORBIDDEN_KEYS.has(key)) {
+              changed = true;
+              continue;
+            }
+            cleanCat[key] = rawCat[key];
+          }
+          merged[category] = cleanCat;
+        } else {
+          merged[category] = rawCat;
+        }
       }
     }
 
@@ -239,12 +283,72 @@
     return out;
   }
 
+  function pickSanitizedEntryFields(source) {
+    const clean = {};
+    if (!source || typeof source !== "object" || Array.isArray(source)) {
+      return clean;
+    }
+    const stringFields = [
+      ["title", 500],
+      ["channel", 200],
+      ["uploader", 200],
+      ["author", 200]
+    ];
+    for (const [field, maxLen] of stringFields) {
+      if (Object.prototype.hasOwnProperty.call(source, field) && typeof source[field] === "string") {
+        clean[field] = source[field].slice(0, maxLen);
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "thumbnail") && isSafeHttpUrl(source.thumbnail)) {
+      clean.thumbnail = source.thumbnail;
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "url") && isSafeHttpUrl(source.url)) {
+      clean.url = source.url;
+    }
+    for (const numField of ["currentTime", "duration"]) {
+      if (Object.prototype.hasOwnProperty.call(source, numField)) {
+        const num = Number(source[numField]);
+        if (Number.isFinite(num) && num >= 0) {
+          clean[numField] = num;
+        }
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "progress")) {
+      const prog = Number(source.progress);
+      if (Number.isFinite(prog) && prog >= 0 && prog <= 100) {
+        clean.progress = prog;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "done") && typeof source.done === "boolean") {
+      clean.done = source.done;
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "doneAt")) {
+      if (source.doneAt === null) {
+        clean.doneAt = null;
+      } else {
+        const num = Number(source.doneAt);
+        if (Number.isFinite(num) && num > 0) {
+          clean.doneAt = num;
+        }
+      }
+    }
+    for (const tsField of ["updatedAt", "lastWatched", "timestamp"]) {
+      if (Object.prototype.hasOwnProperty.call(source, tsField)) {
+        const num = Number(source[tsField]);
+        if (Number.isFinite(num) && num > 0) {
+          clean[tsField] = num;
+        }
+      }
+    }
+    return clean;
+  }
+
   function handleSaveToLibrary(payload) {
     if (!payload || typeof payload !== "object") {
       return Promise.resolve();
     }
     const videoId = payload.videoId;
-    if (!videoId || typeof videoId !== "string" || FORBIDDEN_KEYS.has(videoId)) {
+    if (!isValidVideoId(videoId)) {
       return Promise.resolve();
     }
 
@@ -257,19 +361,23 @@
           delete library[videoId];
         } else {
           const entryData =
-            payload.entry && typeof payload.entry === "object" ? payload.entry : payload;
+            payload.entry && typeof payload.entry === "object" && !Array.isArray(payload.entry)
+              ? payload.entry
+              : payload;
           const existing =
             Object.prototype.hasOwnProperty.call(library, videoId) &&
             library[videoId] &&
             typeof library[videoId] === "object"
               ? library[videoId]
               : {};
+          const sanitizedExisting = pickSanitizedEntryFields(existing);
+          const sanitizedIncoming = pickSanitizedEntryFields(entryData);
           library[videoId] = {
-            ...existing,
-            ...entryData,
+            ...sanitizedExisting,
+            ...sanitizedIncoming,
             id: videoId,
             videoId,
-            updatedAt: entryData.updatedAt || Date.now()
+            updatedAt: sanitizedIncoming.updatedAt || Date.now()
           };
         }
 

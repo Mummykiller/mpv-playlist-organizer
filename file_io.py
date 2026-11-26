@@ -541,7 +541,7 @@ def get_mpv_executable():
     mpv_default_name = "mpv.exe" if current_platform == "Windows" else "mpv"
 
     # 1. Fallback to Configured Path (Highest priority if user set it)
-    config = _safe_json_load(CONFIG_FILE)
+    config = get_settings()
     configured_mpv_path = config.get("mpv_path")
     if configured_mpv_path:
         if os.path.isdir(configured_mpv_path):

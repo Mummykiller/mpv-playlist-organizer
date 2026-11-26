@@ -170,6 +170,9 @@ class ItemProcessor:
         # 4. Raw M3U fallback
         return parse_m3u(url_items_or_m3u), True
 
+    MAX_M3U_BYTES = 2 * 1024 * 1024  # 2 MiB cap for remote M3U playlists
+    _BINARY_CONTENT_TYPE_PREFIXES = ('video/', 'audio/', 'image/', 'application/octet-stream')
+
     def _fetch_remote_m3u(self, url, headers):
         """Fetches M3U content from a remote URL."""
         from urllib.request import Request, HTTPRedirectHandler, build_opener
@@ -194,7 +197,17 @@ class ItemProcessor:
             req = Request(url, headers=fetch_headers)
             opener = build_opener(SafeRedirectHandler())
             with opener.open(req, timeout=10) as response:
-                return response.read().decode('utf-8')
+                content_type = ""
+                if hasattr(response, "headers") and response.headers is not None:
+                    content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+                if content_type and any(content_type.startswith(prefix) for prefix in self._BINARY_CONTENT_TYPE_PREFIXES):
+                    logging.info(f"Skipping M3U fetch for binary Content-Type '{content_type}': {url}")
+                    return None
+                raw_bytes = response.read(self.MAX_M3U_BYTES + 1)
+                if len(raw_bytes) > self.MAX_M3U_BYTES:
+                    logging.warning(f"Aborted remote M3U fetch: response exceeded {self.MAX_M3U_BYTES} bytes for {url}")
+                    return None
+                return raw_bytes.decode('utf-8')
         except Exception as e:
             logging.error(f"Failed to fetch remote M3U: {e}")
             return None

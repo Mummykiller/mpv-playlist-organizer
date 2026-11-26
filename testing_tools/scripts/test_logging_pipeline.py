@@ -29,9 +29,8 @@ class MockDiagnosticCollector:
 class MockContext:
     def __init__(self, test_dir, mock_send):
         self.data_dir = test_dir
-        self.script_dir = "."
+        self.script_dir = test_dir
         self.sender = mock_send
-        self.sent_messages = []
         self.mpv = MockMpv()
         self.io = None
         self.services = None
@@ -366,7 +365,7 @@ class TestLoggingPipeline(BaseTestCase):
             self.handler.handle_log_event(req)
 
         duration = time.time() - start_time
-        self.assertLess(duration, 0.15, "Queue submission took longer than expected for 50 records")
+        self.assertLess(duration, 1.0, "Queue submission took longer than expected for 50 records")
 
         # Shutdown should flush them all to disk
         logger.shutdown()

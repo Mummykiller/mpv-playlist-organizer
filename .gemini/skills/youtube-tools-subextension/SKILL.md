@@ -33,12 +33,12 @@ An isolated, opt-in "extension within the extension" for YouTube playback comfor
 ## Standalone-First & Auto-Porting Workflow
 YouTube Tools can be developed independently in `yt-tools-standalone/` (loaded directly as an unpacked Chrome extension) and automatically ported into the main MPV Playlist Organizer extension—or exported back out to `yt-tools-standalone/` (and `yt-tools-standalone.zip`):
 
-- **Port Standalone → Main (`python3 yt-tools/port_to_main.py [--source DIR] [--dry-run]`):**
+- **Port Standalone → Main (`python3 -B yt-tools/port_to_main.py [--source DIR] [--dry-run]`):**
   1. Validates `yt-tools/yt_defaults.js`, `yt-tools/yt_bridge.js`, `yt-tools/yt_content.js`, `popup/popup_youtube.js`, and `background/yt_tools_service.js` in the source directory.
   2. Copies `yt-tools/*.js` into `yt-tools/`, `images/icon{16,32,48,128}.png` (or `icons/icon*.png`) into `yt-tools/icons/`, and `popup/popup_youtube.js` into `popup/`.
   3. Maps `const logger = console;` back to `import { logger } from "../utils/SystemLogger.module.js";` when writing `background/yt_tools_service.js`.
   4. Syncs the `<div id="yt-tools-settings-panel" ...>...</div>` group containers from `popup.html` and the `Shinku's YouTube Tools` CSS section from `popup.css` into the main extension's `popup.html` and `popup.css`.
-- **Export Main → Standalone (`python3 yt-tools/export_standalone.py [--out DIR] [--zip]`):**
+- **Export Main → Standalone (`python3 -B yt-tools/export_standalone.py [--out DIR] [--zip]`):**
   1. Copies `yt-tools/*.js`, `yt-tools/icons/icon*.png`, and `popup/popup_youtube.js` into `yt-tools-standalone/`.
   2. Adapts `background/yt_tools_service.js` (`logger` → `console`), writes standalone `manifest.json`, `background.js`, `popup.html`, `popup.js`, and extracts the YouTube Tools CSS section from `popup.css`.
 

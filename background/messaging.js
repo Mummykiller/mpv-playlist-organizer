@@ -65,7 +65,7 @@ export async function broadcastLog(logObject) {
 
 	const message = { action: "log", log: finalLog };
 	if (finalLog.type === "error") {
-		logger.error(finalLog.text, { persist: true });
+		logger.error(finalLog.text, { persist: false });
 	}
 	broadcastToTabs(message);
 }

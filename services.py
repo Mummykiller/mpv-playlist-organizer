@@ -8,6 +8,7 @@ Imports are intentionally deferred to minimize initial startup time for the Nati
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -73,12 +74,12 @@ def get_gpu_vendor():
     try:
         if system == "Windows":
             cmd = ["wmic", "path", "win32_VideoController", "get", "name"]
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True).lower()
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=5).lower()
         elif system == "Darwin":
             return "apple"
         else:
             if shutil.which("lspci"):
-                output = subprocess.check_output(["lspci"], stderr=subprocess.STDOUT, text=True).lower()
+                output = subprocess.check_output(["lspci"], stderr=subprocess.STDOUT, text=True, timeout=5).lower()
             else:
                 return "unknown"
         if "nvidia" in output:
@@ -212,7 +213,7 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
 
 def get_essential_ytdlp_flags(settings=None, bypass=False):
     """Returns the baseline yt-dlp flags required for reliable streaming and security."""
-    config = settings if settings else file_io._safe_json_load(file_io.CONFIG_FILE)
+    config = settings if settings else file_io.get_settings()
 
     # Base security and functionality flags
     flags_list = ["remote-components=ejs:github"]
@@ -229,13 +230,21 @@ def get_essential_ytdlp_flags(settings=None, bypass=False):
 
     # Performance Injectors - SKIP IF BYPASS ACTIVE
     if not bypass:
-        concurrent = config.get('ytdlp_concurrent_fragments', 4)
+        raw_concurrent = config.get('ytdlp_concurrent_fragments', 4)
+        try:
+            concurrent = int(raw_concurrent) if not isinstance(raw_concurrent, bool) else 4
+        except (ValueError, TypeError):
+            concurrent = 4
         if concurrent > 1:
             flags_list.append(f"concurrent-fragments={concurrent}")
 
         buf_size = config.get('stream_buffer_size', '10M')
         if buf_size:
-            flags_list.append(f"buffer-size={buf_size}")
+            buf_str = str(buf_size).strip()
+            if re.match(r'^[0-9]+[KMGkmg]?$', buf_str):
+                flags_list.append(f"buffer-size={buf_str}")
+            else:
+                logging.warning(f"[PY][Services] Ignored invalid stream_buffer_size '{buf_size}'.")
 
     ffmpeg_path = config.get("ffmpeg_path")
     if ffmpeg_path and os.path.exists(ffmpeg_path) and security.is_safe_executable_path(ffmpeg_path, "ffmpeg_path"):

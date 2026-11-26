@@ -224,7 +224,7 @@ def check_mpv_and_ytdlp_status(get_mpv_executable_func, send_message_func, force
 
     ffmpeg_exe_name = "ffmpeg.exe" if system == "Windows" else "ffmpeg"
     ffmpeg_path = shutil.which(ffmpeg_exe_name)
-    config = file_io._safe_json_load(file_io.CONFIG_FILE)
+    config = file_io.get_settings()
     if not ffmpeg_path:
         ffmpeg_path = config.get("ffmpeg_path")
         if ffmpeg_path and not (os.path.exists(ffmpeg_path) and os.access(ffmpeg_path, os.X_OK)):

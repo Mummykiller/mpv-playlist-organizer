@@ -12,32 +12,32 @@ When swapping between platforms in a single MPV session:
 
 The logic is centered in `mpv_scripts/adaptive_headers.lua` using a high-priority `on_load` hook.
 
-### 1. Hook Priority (`priority 10`)
-We use priority `10`. This is early enough to run before MPV's built-in `ytdl-hook` (which usually starts at `priority 15`), but late enough that the initial properties passed by the Python bridge are already registered in the property system.
+### 1. Hook Priority (`priority -100`)
+We use priority `-100` (`mp.add_hook("on_load", -100, ...)`). This runs early—well before MPV's built-in `ytdl-hook` (which runs at `priority 15`)—so per-item `ytdl`, header, and networking overrides are applied before extraction begins.
 
 ### 2. State Isolation (The Reset)
-Every time a new file starts loading, the script performs a "Master Reset":
+Every time a subsequent file starts loading (or on hot-swap), the script performs a "Master Reset":
 - Restores `user-agent` and `referrer` to the user's initial config values.
-- Clears `http-header-fields` to remove old hot-linking headers.
-- Resets `ytdl-raw-options` to the baseline provided by Python.
+- Clears `http-header-fields` and `cookies-file` to remove old hot-linking headers and cookies.
+- Resets `ytdl-raw-options`, `ytdl-format`, `ytdl`, and `demuxer-lavf-o` to the baseline provided at launch.
 - This ensures that a YouTube session doesn't "poison" the next Animepahe stream.
 
-### 3. Dynamic Source Detection
-The script uses both the `path` (current URL) and `original-url` (stored in `user-data`) to detect the platform:
-- **YouTube Detection**: Enables `ytdl=yes`.
-- **Animepahe Detection**: Specifically looks for `owocdn.top` or `kwik.cx`. It injects the mandatory `Referer: https://kwik.cx/` header automatically if the Python bridge hasn't provided it.
+### 3. Dynamic Source Detection & Header Application
+The script resolves per-item options from `id_options`, `url_options`, `indexed_options`, or the handshake/hot-swap manifest:
+- **YTDL Routing:** Applies `opts.use_ytdl_mpv` (`ytdl=yes` for YouTube/extractor-backed pages, `ytdl=no` for direct streams).
+- **Header & Animepahe Handling:** Applies `opts.headers` (`user-agent`, `referrer`, `http-header-fields`) supplied by Python (`services.py:force_sanitize_headers` enforces `Referer: https://kwik.cx/` and `Origin: https://kwik.cx` for `owocdn.top`, `uwucdn.top`, and `kwik.cx`) and activates native MPV networking bypass for Animepahe CDNs (`kwik.cx`, `owocdn.top`, `uwucdn.top`).
 
 ### 4. Hot Swap Manifest
 When the user clicks a video in the browser to "force play" it, Python sends a JSON manifest to `user-data/hot-swap-options`. 
-- The Lua script reads this **synchronously** during `on_load`.
+- The Lua script reads this **synchronously** during `on_load` and clears the property afterward.
 - This eliminates the race condition where MPV might start fetching the URL before the IPC `script-message` arrives.
 
 ## 🧪 Verification Steps
 If swapping stops working, check the MPV console (`~` key) for these logs:
-1. `AdaptiveHeaders: YouTube detected. Defaulting ytdl=yes`
-2. `AdaptiveHeaders: Auto-added Referer for Animepahe link.`
-3. `AdaptiveHeaders: Final ytdl state for this file: [yes/no]`
+1. `AdaptiveHeaders: Setting YTDL to: [yes/no] (from use_ytdl_mpv=...)`
+2. `AdaptiveHeaders: Setting Referrer: ...`
+3. `AdaptiveHeaders: True Native Bypass active. Using native MPV networking for speed.`
 
 ## ⚠️ Known Constraints
-- **ytdl-hook Conflict**: If another script sets `ytdl=yes` at priority `0-9`, it might override our `no` setting for direct streams. Keep this script at priority `10`.
+- **ytdl-hook Conflict**: If another script sets `ytdl=yes` at priority lower than `-100`, it could conflict with our `no` setting for direct streams. Keep this script at priority `-100`.
 - **Header Formatting**: When using `mp.set_property_native("http-header-fields", list)`, DO NOT escape commas. MPV's native property handler expects a clean list/array.

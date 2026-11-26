@@ -54,13 +54,24 @@ class AniListCache:
             logging.error(error_msg)
             return {"success": False, "error": error_msg}
 
+    def _read_cache_unlocked(self):
+        """Reads cache JSON without acquiring FileLock (caller must hold FileLock)."""
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
+            except (json.JSONDecodeError, IOError) as e:
+                logging.warning(f"Could not read {self.cache_file}: {e}. Will perform a full fetch.")
+        return {}
+
     def _load_cache(self):
         """Loads cache data from the cache file."""
         if os.path.exists(self.cache_file):
             try:
                 with FileLock(self.cache_file):
-                    with open(self.cache_file, 'r', encoding='utf-8') as f:
-                        return json.load(f)
+                    return self._read_cache_unlocked()
             except (json.JSONDecodeError, IOError) as e:
                 logging.warning(f"Could not read {self.cache_file}: {e}. Will perform a full fetch.")
         return {}
@@ -73,6 +84,28 @@ class AniListCache:
                     logging.info(f"{self.cache_file} updated with new data.")
         except IOError as e:
             logging.error(f"Failed to write new {self.cache_file}: {e}")
+
+    def _update_cache_atomic(self, day_key, entry=None, remove=False, today_timestamp=None):
+        """Re-reads, merges updated offsets[day_key]/today_timestamp, and atomically saves under one FileLock."""
+        try:
+            with FileLock(self.cache_file):
+                disk_cache = self._read_cache_unlocked()
+                disk_offsets = disk_cache.get("offsets")
+                if not isinstance(disk_offsets, dict):
+                    disk_offsets = {}
+                if remove:
+                    disk_offsets.pop(day_key, None)
+                elif entry is not None:
+                    disk_offsets[day_key] = entry
+                disk_cache["offsets"] = disk_offsets
+                if today_timestamp is not None:
+                    disk_cache["today_timestamp"] = today_timestamp
+                if self.file_io._atomic_json_dump(disk_cache, self.cache_file):
+                    logging.info(f"{self.cache_file} updated with new data.")
+                return disk_cache
+        except IOError as e:
+            logging.error(f"Failed to write new {self.cache_file}: {e}")
+            return None
 
 def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabled, days, cache_file, script_dir, send_message_func):
     """Handles fetching AniList releases with a multi-day file-based caching mechanism."""
@@ -96,11 +129,12 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
             logging.info("AniList Cache: New day detected. Wiping all offsets.")
             send_message_func({"log": {"text": "[AniList]: New day detected. Refreshing schedule...", "type": "info"}})
 
-        if os.path.exists(cache_file):
-            try:
-                os.remove(cache_file)
-            except OSError as e:
-                logging.debug(f"[AniList] Failed to remove cache file {cache_file}: {e}")
+        try:
+            with FileLock(cache_file):
+                if os.path.exists(cache_file):
+                    os.remove(cache_file)
+        except OSError as e:
+            logging.debug(f"[AniList] Failed to remove cache file {cache_file}: {e}")
         full_cache = {}
         today_ts = 0
 
@@ -129,17 +163,17 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
             try:
                 parsed_data = json.loads(res['output'])
                 raw_schedules = parsed_data.pop('raw_schedules_for_cache', []) if isinstance(parsed_data, dict) else []
-                offsets[str(target_days)] = {
+                entry = {
                     "timestamp": now,
                     "data": parsed_data,
                     "sorted_airing_ats": sorted([s['airingAt'] for s in raw_schedules if isinstance(s, dict) and 'airingAt' in s])
                 }
                 res['output'] = parsed_data
-                if target_days == 0:
-                    full_cache["today_timestamp"] = now
-
-                full_cache["offsets"] = offsets
-                anilist_cache._save_cache(full_cache)
+                anilist_cache._update_cache_atomic(
+                    str(target_days),
+                    entry=entry,
+                    today_timestamp=now if target_days == 0 else None,
+                )
             except Exception as e:
                 logging.error(f"Failed to process AniList fetch for cache: {e}")
         return res
@@ -159,9 +193,8 @@ def get_anilist_releases_with_cache(force_refresh, delete_cache, is_cache_disabl
                     send_message_func({"log": {"text": "[AniList]: New episode aired. Refreshing...", "type": "info"}})
             else:
                 logging.info(f"AniList Cache: Offset {days} expired by timer.")
+            anilist_cache._update_cache_atomic(day_key, remove=True)
             offsets.pop(day_key, None)
-            full_cache["offsets"] = offsets
-            anilist_cache._save_cache(full_cache)
             day_cache = None
 
     if not force_refresh and day_cache:

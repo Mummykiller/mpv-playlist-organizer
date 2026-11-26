@@ -445,26 +445,64 @@ export async function findM3u8InUrl(url, originalTab) {
 
 		scannerTab = await _createScannerWindow(url);
 
-		await new Promise((resolve, reject) => {
-			const cleanup = () => {
-				chrome.tabs.onUpdated.removeListener(onUpdated);
-				chrome.tabs.onRemoved.removeListener(onRemoved);
-			};
-			const onUpdated = (tabId, changeInfo) => {
-				if (tabId === scannerTab.id && changeInfo.status === "complete") {
+		if (scannerTab.status !== "complete") {
+			const loadTimeoutMs = Math.max(timeoutInSeconds, 15) * 1000;
+			await new Promise((resolve, reject) => {
+				let settled = false;
+				let timeoutId = null;
+				const cleanup = () => {
+					if (timeoutId !== null) {
+						clearTimeout(timeoutId);
+						timeoutId = null;
+					}
+					chrome.tabs.onUpdated.removeListener(onUpdated);
+					chrome.tabs.onRemoved.removeListener(onRemoved);
+				};
+				const settle = (fn, arg) => {
+					if (settled) return;
+					settled = true;
 					cleanup();
-					resolve();
+					fn(arg);
+				};
+				const onUpdated = (tabId, changeInfo) => {
+					if (tabId === scannerTab.id && changeInfo.status === "complete") {
+						settle(resolve);
+					}
+				};
+				const onRemoved = (tabId) => {
+					if (tabId === scannerTab.id) {
+						settle(
+							reject,
+							new Error("Scanner window was closed before loading completed."),
+						);
+					}
+				};
+				chrome.tabs.onUpdated.addListener(onUpdated);
+				chrome.tabs.onRemoved.addListener(onRemoved);
+				timeoutId = setTimeout(() => {
+					settle(
+						reject,
+						new Error(
+							`Scanner window timed out waiting for page load after ${loadTimeoutMs / 1000}s.`,
+						),
+					);
+				}, loadTimeoutMs);
+
+				// Re-query tab status after registering listeners to close any completion race
+				if (chrome.tabs.get) {
+					chrome.tabs.get(scannerTab.id, (currentTab) => {
+						if (chrome.runtime?.lastError || !currentTab) {
+							settle(
+								reject,
+								new Error("Scanner window was closed before loading completed."),
+							);
+						} else if (currentTab.status === "complete") {
+							settle(resolve);
+						}
+					});
 				}
-			};
-			const onRemoved = (tabId) => {
-				if (tabId === scannerTab.id) {
-					cleanup();
-					reject(new Error("Scanner window was closed before loading completed."));
-				}
-			};
-			chrome.tabs.onUpdated.addListener(onUpdated);
-			chrome.tabs.onRemoved.addListener(onRemoved);
-		});
+			});
+		}
 
 		const streamPromise = _waitForM3u8Detection(
 			scannerTab.id,

@@ -7,6 +7,12 @@ Usage:
 By default, ports from `yt-tools-standalone/` into the repository root.
 """
 
+import os
+import sys
+
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 import argparse
 import re
 import shutil

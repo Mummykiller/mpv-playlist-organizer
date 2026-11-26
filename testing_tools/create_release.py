@@ -5,12 +5,17 @@ import subprocess
 import sys
 
 sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 IGNORE_PATTERNS = (
     ".git",
+    ".venv",
+    ".vscode",
+    ".idea",
     "node_modules",
     "__pycache__",
     "*.pyc",
+    "*.pyo",
     ".pytest_cache",
     ".ruff_cache",
     "mpv-playlist-organizer-release",

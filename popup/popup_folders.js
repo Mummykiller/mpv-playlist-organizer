@@ -39,6 +39,8 @@ export function createFolderManager(ctx) {
 		const processResponse = (response) => {
 			if (!response?.success) return;
 
+			const currentVal = miniFolderSelect.value;
+
 			removeFolderSelect.innerHTML =
 				'<option value="">Select folder to remove...</option>';
 			miniFolderSelect.innerHTML = "";
@@ -51,7 +53,6 @@ export function createFolderManager(ctx) {
 				miniFolderSelect.appendChild(option);
 			});
 
-			const currentVal = miniFolderSelect.value;
 			const targetFolderId =
 				currentVal && response.folderIds.includes(currentVal)
 					? currentVal

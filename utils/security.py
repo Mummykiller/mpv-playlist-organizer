@@ -337,7 +337,7 @@ def is_safe_cookie_browser(browser: str) -> bool:
     if not browser or not isinstance(browser, str):
         return False
     spec = browser.strip()
-    if len(spec) > 256:
+    if len(spec) > 256 or ".." in spec:
         return False
     m = _COOKIE_BROWSER_RE.match(spec)
     if not m or m.group('name').lower() not in ALLOWED_COOKIE_BROWSERS:

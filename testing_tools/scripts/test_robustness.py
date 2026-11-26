@@ -23,6 +23,15 @@ from utils import native_link, security
 class TestRobustness(BaseTestCase):
     """Verifies system-level robustness (Heartbeat, Normalization, Handshakes, Parameter Validation, Unmanaged Launch)."""
 
+    def setUp(self):
+        super().setUp()
+        self.orig_data_dir = file_io.DATA_DIR
+        file_io.initialize_paths(self.test_dir)
+
+    def tearDown(self):
+        file_io.initialize_paths(self.orig_data_dir)
+        super().tearDown()
+
     def test_handshake_generation(self):
         """Verify services.create_handshake_file creates a 0o600 JSON handshake with expected metadata."""
         flag_dir = os.path.join(self.test_dir, "flags_test")
@@ -227,54 +236,53 @@ class TestRobustness(BaseTestCase):
             file_io.initialize_paths()
 
     def test_track_transition_timestamp_isolation(self):
-        """Verify that transitioning between playlist items does not leak timestamps."""
-        original_data_dir = file_io.DATA_DIR
-        file_io.DATA_DIR = self.test_dir
-        file_io.initialize_paths()
-        try:
-            test_folder_id = "transition_test_folder"
-            index = file_io.get_index()
-            index[test_folder_id] = {"name": "Test Folder", "playlist": []}
-            file_io.save_index(index)
+        """Verify that transitioning between playlist items attributes late EOF to the previous item without leaking timestamps."""
+        test_folder_id = "transition_test_folder"
+        index = file_io.get_index()
+        index[test_folder_id] = {"name": "Test Folder", "playlist": []}
+        file_io.save_index(index)
 
-            test_playlist = [
-                {"id": "item1", "url": "https://example.com/1.mp4", "resume_time": 0},
-                {"id": "item2", "url": "https://example.com/2.mp4", "resume_time": 0}
-            ]
-            file_io.save_playlist_shard(test_folder_id, test_playlist)
+        test_playlist = [
+            {"id": "item1", "url": "https://example.com/1.mp4", "resume_time": 0},
+            {"id": "item2", "url": "https://example.com/2.mp4", "resume_time": 0}
+        ]
+        file_io.save_playlist_shard(test_folder_id, test_playlist)
 
-            messages = []
-            tracker = PlaylistTracker(
-                folder_id=test_folder_id,
-                initial_playlist=test_playlist,
-                file_io=file_io,
-                settings={},
-                ipc_path="/tmp/mock_ipc_not_existing",
-                send_message_func=lambda m: messages.append(m)
-            )
+        messages = []
+        tracker = PlaylistTracker(
+            folder_id=test_folder_id,
+            initial_playlist=test_playlist,
+            file_io=file_io,
+            settings={},
+            ipc_path="/tmp/mock_ipc_not_existing",
+            send_message_func=lambda m: messages.append(m)
+        )
 
-            # Simulate item1 finishing at 1420s
-            tracker.current_id = "item1"
-            tracker.current_session_duration = 1420
-            tracker.last_time_pos = 1420
+        # Drive PlaylistTracker._track() with a mocked IPC event sequence:
+        # item1 plays to 1420.5s, transitions to item2, then a late end-file (eof) arrives before item2 plays >= 1s.
+        events = iter([
+            {"event": "property-change", "name": "user-data/id", "data": "item1"},
+            {"event": "property-change", "name": "time-pos", "data": 1419.5},
+            {"event": "property-change", "name": "time-pos", "data": 1420.5},
+            {"event": "property-change", "name": "user-data/id", "data": "item2"},
+            {"event": "end-file", "reason": "eof"},
+            {"event": "shutdown"},
+        ])
 
-            # Transition to item2
-            tracker.previous_id = "item1"
-            tracker.current_id = "item2"
-            tracker.current_session_duration = 0
-            tracker.last_time_pos = None
+        mock_ipc = MagicMock()
+        mock_ipc.connect.return_value = True
+        mock_ipc.is_connected.return_value = True
+        mock_ipc.receive_event.side_effect = lambda timeout=0.1: next(events, {"event": "shutdown"})
 
-            # Simulate late stop/quit event right after transition (< 1s duration)
-            # Must attribute to item1, NOT item2
-            target_id = tracker.current_id
-            if tracker.current_session_duration < 1 and tracker.previous_id:
-                target_id = tracker.previous_id
+        tracker.is_tracking = True
+        with patch("playlist_tracker.ipc_utils.IPCSocketManager", return_value=mock_ipc):
+            tracker._track()
 
-            self.assertEqual(target_id, "item1")
-            self.assertNotIn("item2", tracker.resume_cache)
-        finally:
-            file_io.DATA_DIR = original_data_dir
-            file_io.initialize_paths()
+        self.assertEqual(tracker.current_id, "item2")
+        self.assertEqual(tracker.previous_id, "item1")
+        self.assertIn("item1", tracker.played_item_ids)
+        self.assertNotIn("item2", tracker.played_item_ids)
+        self.assertNotIn("item2", tracker.resume_cache)
 
     def test_settings_synchronization(self):
         """Verify that shared settings keys in Python (file_io.py) and JS (storageManager.js) stay aligned."""
@@ -382,49 +390,58 @@ class TestRobustness(BaseTestCase):
         mock_args = MagicMock()
         mock_args.folder_id = "test_folder"
 
-        with patch('sys.stderr'), patch('builtins.print'):
-            # Case 1: Empty or missing data file -> exit 1
-            with patch.object(file_io, 'get_all_folders_from_file', return_value={}):
-                cli.file_io = file_io
-                with self.assertRaises(SystemExit) as cm:
+        orig_cli_deps = {
+            'file_io': getattr(cli, 'file_io', None),
+            'mpv_session': getattr(cli, 'mpv_session', None),
+            'ipc_utils': getattr(cli, 'ipc_utils', None),
+            'time': getattr(cli, 'time', None),
+        }
+        try:
+            with patch('sys.stderr'), patch('builtins.print'):
+                # Case 1: Empty or missing data file -> exit 1
+                with patch.object(file_io, 'get_all_folders_from_file', return_value={}):
+                    cli.file_io = file_io
+                    with self.assertRaises(SystemExit) as cm:
+                        cli._cli_play_folder(mock_args)
+                    self.assertEqual(cm.exception.code, 1)
+
+                # Case 2: Folder not found in library -> exit 1
+                with patch.object(file_io, 'get_all_folders_from_file', return_value={"other_folder": {"playlist": []}}):
+                    cli.file_io = file_io
+                    with self.assertRaises(SystemExit) as cm:
+                        cli._cli_play_folder(mock_args)
+                    self.assertEqual(cm.exception.code, 1)
+
+                # Case 3: Folder exists but has an empty playlist -> exit 0 (graceful exit)
+                with patch.object(file_io, 'get_all_folders_from_file', return_value={"test_folder": {"playlist": []}}):
+                    cli.file_io = file_io
+                    with self.assertRaises(SystemExit) as cm:
+                        cli._cli_play_folder(mock_args)
+                    self.assertEqual(cm.exception.code, 0)
+
+                # Case 4: Folder has valid items -> calls mpv_session.start
+                valid_items = [{"id": "item1", "url": "https://example.com/v1.mp4", "title": "V1"}]
+                mock_mpv_session = MagicMock()
+                mock_mpv_session.start.return_value = {"success": True, "handled_directly": True}
+                mock_mpv_session.pid = None
+                mock_ipc_utils = MagicMock()
+                mock_ipc_utils.is_process_alive.return_value = False
+
+                cli.inject_dependencies({
+                    'file_io': file_io,
+                    'mpv_session': mock_mpv_session,
+                    'ipc_utils': mock_ipc_utils,
+                    'time': MagicMock()
+                })
+
+                with patch.object(file_io, 'get_all_folders_from_file', return_value={"test_folder": {"playlist": valid_items}}):
                     cli._cli_play_folder(mock_args)
-                self.assertEqual(cm.exception.code, 1)
-
-            # Case 2: Folder not found in library -> exit 1
-            with patch.object(file_io, 'get_all_folders_from_file', return_value={"other_folder": {"playlist": []}}):
-                cli.file_io = file_io
-                with self.assertRaises(SystemExit) as cm:
-                    cli._cli_play_folder(mock_args)
-                self.assertEqual(cm.exception.code, 1)
-
-            # Case 3: Folder exists but has an empty playlist -> exit 0 (graceful exit)
-            with patch.object(file_io, 'get_all_folders_from_file', return_value={"test_folder": {"playlist": []}}):
-                cli.file_io = file_io
-                with self.assertRaises(SystemExit) as cm:
-                    cli._cli_play_folder(mock_args)
-                self.assertEqual(cm.exception.code, 0)
-
-            # Case 4: Folder has valid items -> calls mpv_session.start
-            valid_items = [{"id": "item1", "url": "https://example.com/v1.mp4", "title": "V1"}]
-            mock_mpv_session = MagicMock()
-            mock_mpv_session.start.return_value = {"success": True, "handled_directly": True}
-            mock_mpv_session.pid = None
-            mock_ipc_utils = MagicMock()
-            mock_ipc_utils.is_process_alive.return_value = False
-
-            cli.inject_dependencies({
-                'file_io': file_io,
-                'mpv_session': mock_mpv_session,
-                'ipc_utils': mock_ipc_utils,
-                'time': MagicMock()
-            })
-
-            with patch.object(file_io, 'get_all_folders_from_file', return_value={"test_folder": {"playlist": valid_items}}):
-                cli._cli_play_folder(mock_args)
-                mock_mpv_session.start.assert_called_once()
-                call_args = mock_mpv_session.start.call_args
-                self.assertEqual(call_args[0][0], valid_items[0])
-                self.assertEqual(call_args[0][1], "test_folder")
+                    mock_mpv_session.start.assert_called_once()
+                    call_args = mock_mpv_session.start.call_args
+                    self.assertEqual(call_args[0][0], valid_items[0])
+                    self.assertEqual(call_args[0][1], "test_folder")
+        finally:
+            cli.inject_dependencies(orig_cli_deps)
 
     def test_playback_handler_parameter_validation(self):
         """Verifies strict validation of folder_id and playlist items in PlaybackHandler."""

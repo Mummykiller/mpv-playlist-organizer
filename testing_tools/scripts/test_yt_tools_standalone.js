@@ -5,19 +5,26 @@
 const assert = require("node:assert").strict;
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
 const { pathToFileURL } = require("node:url");
 const { JSDOM } = require("jsdom");
 
 const ROOT = path.join(__dirname, "../..");
-const STANDALONE_DIR = path.join(ROOT, "yt-tools-standalone");
+const PY_ENV = { ...process.env, PYTHONDONTWRITEBYTECODE: "1" };
+let STANDALONE_DIR = "";
 
-function ensureStandaloneExported() {
-	execFileSync("python3", [path.join(ROOT, "yt-tools/export_standalone.py")], {
-		cwd: ROOT,
-		stdio: "pipe",
-	});
+function ensureStandaloneExported(outDir) {
+	execFileSync(
+		"python3",
+		["-B", path.join(ROOT, "yt-tools/export_standalone.py"), "--out", outDir],
+		{
+			cwd: ROOT,
+			env: PY_ENV,
+			stdio: "pipe",
+		}
+	);
 }
 
 function createChromeMock(initialLocal = {}) {
@@ -419,18 +426,41 @@ async function testStandaloneContentScripts() {
 	}
 }
 
-async function testPortToMainScript() {
+async function testPortToMainScript(tempBase) {
 	const dryOut = execFileSync(
 		"python3",
-		[path.join(ROOT, "yt-tools/port_to_main.py"), "--dry-run"],
-		{ cwd: ROOT, encoding: "utf8" }
+		["-B", path.join(ROOT, "yt-tools/port_to_main.py"), "--source", STANDALONE_DIR, "--dry-run"],
+		{ cwd: ROOT, env: PY_ENV, encoding: "utf8" }
 	);
 	assert.ok(dryOut.length > 0, "port_to_main.py --dry-run produces output");
 
-	execFileSync("python3", [path.join(ROOT, "yt-tools/port_to_main.py")], {
-		cwd: ROOT,
-		stdio: "pipe",
-	});
+	// Verify export_standalone.py refuses unsafe output paths and non-empty dirs without manifest.json
+	assert.throws(
+		() =>
+			execFileSync(
+				"python3",
+				["-B", path.join(ROOT, "yt-tools/export_standalone.py"), "--out", ROOT],
+				{ cwd: ROOT, env: PY_ENV, stdio: "pipe" }
+			),
+		"export_standalone.py must refuse ROOT_DIR as --out"
+	);
+
+	const nonEmptyDir = path.join(tempBase, "non-empty-no-manifest");
+	fs.mkdirSync(nonEmptyDir, { recursive: true });
+	fs.writeFileSync(path.join(nonEmptyDir, "keep.txt"), "do not delete", "utf8");
+	assert.throws(
+		() =>
+			execFileSync(
+				"python3",
+				["-B", path.join(ROOT, "yt-tools/export_standalone.py"), "--out", nonEmptyDir],
+				{ cwd: ROOT, env: PY_ENV, stdio: "pipe" }
+			),
+		"export_standalone.py must refuse non-empty dir without manifest.json unless --force"
+	);
+	assert.ok(
+		fs.existsSync(path.join(nonEmptyDir, "keep.txt")),
+		"Refused non-empty directory contents must remain intact"
+	);
 
 	const mainService = fs.readFileSync(
 		path.join(ROOT, "background/yt_tools_service.js"),
@@ -438,22 +468,28 @@ async function testPortToMainScript() {
 	);
 	assert.ok(
 		mainService.includes('import { logger } from "../utils/SystemLogger.module.js";'),
-		"port_to_main.py preserves SystemLogger import in main background/yt_tools_service.js"
+		"Main background/yt_tools_service.js retains SystemLogger import"
 	);
 	assert.ok(
 		!mainService.includes("const logger = console;"),
-		"port_to_main.py does not leave standalone console logger in main service"
+		"Main service does not contain standalone console logger"
 	);
 }
 
 async function main() {
-	ensureStandaloneExported();
-	await testManifestAndFiles();
-	await testStandaloneBackground();
-	await testStandalonePopup();
-	await testStandaloneContentScripts();
-	await testPortToMainScript();
-	console.log("All Standalone YouTube Tools tests passed!");
+	const tempBase = fs.mkdtempSync(path.join(os.tmpdir(), "shinku-yt-standalone-"));
+	STANDALONE_DIR = path.join(tempBase, "yt-tools-standalone");
+	try {
+		ensureStandaloneExported(STANDALONE_DIR);
+		await testManifestAndFiles();
+		await testStandaloneBackground();
+		await testStandalonePopup();
+		await testStandaloneContentScripts();
+		await testPortToMainScript(tempBase);
+		console.log("All Standalone YouTube Tools tests passed!");
+	} finally {
+		fs.rmSync(tempBase, { recursive: true, force: true });
+	}
 }
 
 main().catch((err) => {

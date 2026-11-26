@@ -1,5 +1,11 @@
-import re
 import os
+import re
+import sys
+
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CONFIG = [
     {
@@ -114,26 +120,27 @@ def render_module_js(config, project_root=None):
     return "\n".join(output)
 
 
-def process_file(config, verbose=False):
-    source_path = config["source"]
-    target_path = config["target"]
+def process_file(config, verbose=False, project_root=PROJECT_ROOT):
+    source_rel = config["source"]
+    target_rel = config["target"]
+    source_path = source_rel if os.path.isabs(source_rel) else os.path.join(project_root, source_rel)
+    target_path = target_rel if os.path.isabs(target_rel) else os.path.join(project_root, target_rel)
     namespace = config["namespace"]
 
     if verbose:
-        print(f"Processing {source_path} -> {target_path} ({namespace})")
+        print(f"Processing {source_rel} -> {target_rel} ({namespace})")
 
     if not os.path.exists(source_path):
         print(f"❌ ERROR: Source file {source_path} not found.")
         return False
 
-    rendered = render_module_js(config, project_root=os.getcwd())
+    rendered = render_module_js(config, project_root=project_root)
     with open(target_path, "w", encoding="utf-8") as f:
         f.write(rendered)
     return True
 
 if __name__ == "__main__":
-    import sys
-    verbose = "--verbose" in sys.argv
+    verbose = "--verbose" in sys.argv or "-v" in sys.argv
     built = 0
     for config in CONFIG:
         if process_file(config, verbose=verbose):

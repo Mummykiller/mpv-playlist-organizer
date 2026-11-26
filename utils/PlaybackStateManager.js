@@ -249,7 +249,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 	}
 
-	// Singleton instance
-	MPV.playbackStateManager = new PlaybackStateManager();
 	MPV.PlaybackStatus = PlaybackStatus;
+
+	// Singleton instance (top-frame only; destroy any prior instance on re-injection)
+	if (typeof window !== "undefined" && window.self === window.top) {
+		MPV.playbackStateManager?.destroy?.();
+		MPV.playbackStateManager = new PlaybackStateManager();
+	}
 })();

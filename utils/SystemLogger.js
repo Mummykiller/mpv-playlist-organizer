@@ -221,7 +221,11 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// Send individually to keep simple
 			batch.forEach(payload => {
-				this.nativeSender(payload).catch(e => console.error("Failed to flush log:", e));
+				try {
+					Promise.resolve(this.nativeSender(payload)).catch(e => console.error("Failed to flush log:", e));
+				} catch (e) {
+					console.error("Failed to flush log:", e);
+				}
 			});
 		}
 

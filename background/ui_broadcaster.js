@@ -95,6 +95,7 @@ export async function getVisualPlaybackState(folderId, playlist = null) {
  * Standardizes the payload structure to prevent UI flicker/mismatches.
  */
 export async function broadcastPlaylistState(folderId, playlist = null, action = "playlist_dirty") {
+	await playbackManager.initPromise;
 	const data = await storage.get();
 	const actualFolderId =
 		(folderId &&

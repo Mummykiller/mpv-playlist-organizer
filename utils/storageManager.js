@@ -18,6 +18,7 @@ export class StorageManager {
 		this._initComplete = false;
 		this.broadcastLog = broadcastLog;
 		this.writeQueue = Promise.resolve();
+		this._lockQueue = Promise.resolve();
 		this._cache = null;
 	}
 
@@ -231,6 +232,7 @@ export class StorageManager {
 					}
 				}
 			} catch (e) {
+				this._cache = null;
 				console.error("Storage set failed:", e);
 				if (this.broadcastLog)
 					this.broadcastLog({
@@ -242,6 +244,25 @@ export class StorageManager {
 		});
 		this.writeQueue = writePromise.catch(() => {});
 		return writePromise;
+	}
+
+	/**
+	 * Serializes read-modify-write operations so concurrent callers cannot clobber each other.
+	 * Waits for any prior queued writes before invoking `fn` without deadlocking nested `set()` calls.
+	 * @template T
+	 * @param {() => Promise<T> | T} fn
+	 * @returns {Promise<T>}
+	 */
+	async withLock(fn) {
+		if (typeof fn !== "function") {
+			throw new TypeError("withLock requires a callback function");
+		}
+		const run = this._lockQueue.then(async () => {
+			await this.writeQueue;
+			return await fn();
+		});
+		this._lockQueue = run.catch(() => {});
+		return run;
 	}
 
 	_validateFolder(id, folder) {

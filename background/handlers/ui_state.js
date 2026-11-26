@@ -94,6 +94,7 @@ export async function handleContentScriptInit(request, sender) {
 		}).catch(() => {});
 
 		// STICKY PROMPT: If there's a pending clear for THIS folder, re-trigger it
+		await playbackManager.initPromise;
 		const session = playbackManager.findSessionByFolderId(folderId);
 		if (session && session.pendingClear) {
 			const { playedIds, sessionIds, scope, titles, isQuitting } = session.pendingClear;

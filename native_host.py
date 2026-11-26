@@ -56,18 +56,9 @@ def _get_emergency_log_path():
     elif sys.platform.startswith("darwin"):
         base = os.path.join(home, 'Library/Application Support')
     else:
-        base = os.path.join(home, '.local/share')
+        base = os.getenv('XDG_DATA_HOME') or os.path.join(home, '.local/share')
 
-    path = os.path.join(base, app_name)
-    try:
-        os.makedirs(path, exist_ok=True)
-        if not os.access(path, os.W_OK):
-            raise OSError("Directory not writable")
-        return os.path.join(path, "native_host_crash.log")
-    except OSError as e:
-        sys.stderr.write(f"Could not create emergency log directory {path}: {e}\n")
-        import tempfile
-        return os.path.join(tempfile.gettempdir(), "native_host_crash.log")
+    return os.path.join(base, app_name, "native_host_crash.log")
 
 # --- Failsafe Crash Handler ---
 FAILSAFE_LOG_PATH = _get_emergency_log_path()
@@ -629,11 +620,19 @@ except Exception as e:
     )
     try:
         try:
+            os.makedirs(os.path.dirname(log_path_to_use), exist_ok=True)
             with open(log_path_to_use, "a", encoding="utf-8") as f:
                 f.write(crash_entry)
         except OSError:
-            with open(FAILSAFE_LOG_PATH, "a", encoding="utf-8") as f:
-                f.write(crash_entry)
+            try:
+                os.makedirs(os.path.dirname(FAILSAFE_LOG_PATH), exist_ok=True)
+                with open(FAILSAFE_LOG_PATH, "a", encoding="utf-8") as f:
+                    f.write(crash_entry)
+            except OSError:
+                import tempfile
+                tmp_crash_log = os.path.join(tempfile.gettempdir(), "native_host_crash.log")
+                with open(tmp_crash_log, "a", encoding="utf-8") as f:
+                    f.write(crash_entry)
     except Exception as log_err:
         sys.stderr.write(f"Failed to write to crash log ({log_path_to_use}): {log_err}\n")
         sys.stderr.flush()

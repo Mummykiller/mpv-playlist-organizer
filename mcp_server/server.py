@@ -13,6 +13,7 @@ try:
 except ImportError:  # pragma: no cover
     from mcp.server.fastmcp import FastMCP as MCPServer  # type: ignore[import-not-found,no-redef]
 
+import bug_store
 import tools_impl
 
 mcp = MCPServer("mpv-playlist-organizer")
@@ -81,6 +82,78 @@ def test_mpv_pipeline(
     """Dry-run mpv argv/M3U builder or run short-lived headless mpv with Lua scripts and temp IPC."""
     return tools_impl.compact_json(
         tools_impl.test_mpv_pipeline(mode=mode, urls=urls, options=options)
+    )
+
+
+@mcp.tool(structured_output=False)
+def log_bug_pattern(
+    slug: str,
+    title: str,
+    location: str,
+    category: str = "general",
+    severity: str = "medium",
+    note: str = "",
+    details: str = "",
+    suggested_check: str = "",
+) -> str:
+    """Log or bump a repeatable bug pattern and its file:symbol occurrence in the local SQLite store."""
+    return tools_impl.compact_json(
+        bug_store.log_bug_pattern(
+            slug=slug,
+            title=title,
+            location=location,
+            category=category,
+            severity=severity,
+            note=note,
+            details=details,
+            suggested_check=suggested_check,
+        )
+    )
+
+
+@mcp.tool(structured_output=False)
+def query_bug_patterns(
+    search: str | None = None,
+    category: str | None = None,
+    severity: str | None = None,
+    status: str | None = None,
+    min_hits: int | None = None,
+    include_graduated: bool = False,
+    limit: int = 30,
+) -> str:
+    """Query the compact bug-pattern index (omits full details; excludes graduated unless requested)."""
+    return tools_impl.compact_json(
+        bug_store.query_bug_patterns(
+            search=search,
+            category=category,
+            severity=severity,
+            status=status,
+            min_hits=min_hits,
+            include_graduated=include_graduated,
+            limit=limit,
+        )
+    )
+
+
+@mcp.tool(structured_output=False)
+def get_bug_pattern(slug: str) -> str:
+    """Fetch full details, suggested_check, test_ref, and all occurrences for one bug pattern."""
+    return tools_impl.compact_json(bug_store.get_bug_pattern(slug=slug))
+
+
+@mcp.tool(structured_output=False)
+def graduate_bug_pattern(slug: str, test_ref: str, note: str = "") -> str:
+    """Mark a bug pattern as graduated with its regression test or static check reference."""
+    return tools_impl.compact_json(
+        bug_store.graduate_bug_pattern(slug=slug, test_ref=test_ref, note=note)
+    )
+
+
+@mcp.tool(structured_output=False)
+def remove_bug_pattern(slug: str, location: str | None = None, reason: str = "") -> str:
+    """Remove a mistaken/false-positive bug pattern or a single occurrence from the SQLite store."""
+    return tools_impl.compact_json(
+        bug_store.remove_bug_pattern(slug=slug, location=location, reason=reason)
     )
 
 

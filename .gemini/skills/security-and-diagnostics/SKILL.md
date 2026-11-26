@@ -37,7 +37,7 @@ This skill defines the high-level security invariants, validation entry points, 
 - **Extension, Shadow DOM & YouTube Tools Isolation:**
   - `manifest.json` enforces `"script-src 'self'; object-src 'none'"` and `use_dynamic_url: true` for CSS/images only.
   - Native Host manifest (`installer_src/installer_logic.py:validate_extension_id`) validates `^[a-p]{32}$` and locks `allowed_origins` to the single extension ID.
-  - On-page UI renders in Shadow DOM (`#mpv-organizer-root`) with `<style>.textContent` injection and XSS-safe `createElement` + `textContent` rendering.
+  - On-page UI renders in Shadow DOM hosts (`#m3u8-controller-host`, `#m3u8-minimized-host`, `#anilist-panel-host`) with `<style>.textContent` injection and XSS-safe `createElement` + `textContent` rendering.
   - YouTube Tools (`background/yt_tools_service.js`, `yt-tools/`) is opt-in (`shinkuYtToolsEnabled: false`), dynamically registered via `chrome.scripting`, isolates `MAIN`-world `yt_content.js` from `chrome.*` APIs via `ISOLATED`-world `yt_bridge.js` (checking `event.source === window && event.origin === window.location.origin`), blocks `__proto__`/`constructor`/`prototype`, and validates video IDs (`VALID_VIDEO_ID_RE`).
 
 ---
@@ -50,7 +50,7 @@ This skill defines the high-level security invariants, validation entry points, 
 4. **Settings, Binary & Flag Allowlists:**
    - Settings updates (`file_io.py:set_settings`) filter keys against `ALLOWED_SETTINGS_KEYS` and verify binaries (`mpv_path`, `ytdlp_path`, `ffmpeg_path`, `node_path`, `terminal_emulator`) via `is_safe_executable_path` (`APPROVED_BINARY_NAMES`, `FORBIDDEN_PATH_CHARS`, `os.X_OK`).
    - `yt-dlp` options use a two-tier allowlist (`sanitize_ytdlp_options`): untrusted item payloads are restricted to `YTDLP_SAFE_FLAGS_ALLOWLIST` (`allow_settings_flags=False`), while `YTDLP_SETTINGS_ONLY_FLAGS` (`proxy`, `ffmpeg-location`, `js-runtimes`, `remote-components`, etc.) are restricted to trusted settings (`allow_settings_flags=True`).
-   - MPV flags are filtered against `SAFE_MPV_FLAGS_ALLOWLIST` in `MpvCommandBuilder.build`, which also merges custom `--script-opts=` safely so internal handshake options cannot be overwritten.
+   - MPV flags are filtered against `SAFE_MPV_FLAGS_ALLOWLIST` in `MpvCommandBuilder.build` (and custom `--script-opts=` tokens are dropped so only internal handshake/script options reach MPV).
 5. **PID Identity & Executor Isolation:** Verify reconnected MPV processes via `utils/ipc_utils.py:verify_mpv_process` before signaling. Keep `CONTROL_ACTIONS` on `control_executor` in `native_host.py:select_executor`.
 
 ---

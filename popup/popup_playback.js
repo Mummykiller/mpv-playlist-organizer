@@ -31,6 +31,9 @@ export function createPlaybackManager(ctx) {
 	let isPickStartModeActive = false;
 	let isLiveReorderModeActive = false;
 	let reorderDebounceTimer = null;
+	let refreshSeqId = 0;
+	let lastRenderedFolderId = null;
+	let isMiniAddInFlight = false;
 
 	function setPlaybackLoading(isLoading) {
 		isPlaybackLoading = isLoading;
@@ -80,15 +83,21 @@ export function createPlaybackManager(ctx) {
 		completedIds = null,
 		preventScroll = false,
 	) {
+		const currentFolderId = miniFolderSelect?.value || null;
+		if (currentFolderId !== lastRenderedFolderId) {
+			lastRenderedFolderId = currentFolderId;
+			popupState.lastPlayedId = null;
+		}
 		if (playlist) popupState.currentPlaylist = playlist;
-		if (lastPlayedId) popupState.lastPlayedId = lastPlayedId;
+		if (lastPlayedId !== undefined) popupState.lastPlayedId = lastPlayedId;
 		if (typeof isFolderActive === "boolean") popupState.isFolderActive = isFolderActive;
 		if (typeof isPaused === "boolean") popupState.isPaused = isPaused;
 		if (typeof needsAppend === "boolean") popupState.needsAppend = needsAppend;
 		if (completedIds) popupState.completedIds = completedIds;
 
 		const effectivePlaylist = playlist || popupState.currentPlaylist || [];
-		const effectiveLastPlayedId = lastPlayedId || popupState.lastPlayedId;
+		const effectiveLastPlayedId =
+			lastPlayedId !== undefined ? lastPlayedId : popupState.lastPlayedId;
 		const effectiveIsFolderActive =
 			typeof isFolderActive === "boolean"
 				? isFolderActive
@@ -147,7 +156,10 @@ export function createPlaybackManager(ctx) {
 
 	async function refreshPlaylist(data = null, preventScroll = false) {
 		const MPV = window.MPV_INTERNAL;
-		const processResponse = (response) => {
+		const seqId = ++refreshSeqId;
+		const processResponse = (response, expectedFolderId = null) => {
+			if (seqId !== refreshSeqId) return;
+			if (expectedFolderId && miniFolderSelect?.value !== expectedFolderId) return;
 			if (response?.success) {
 				const currentFolder = miniFolderSelect?.value;
 				const pbActive = MPV.playbackStateManager.state;
@@ -170,7 +182,7 @@ export function createPlaybackManager(ctx) {
 
 				renderPlaylist(
 					response.list,
-					response.lastPlayedId,
+					response.lastPlayedId ?? null,
 					response.isRunning,
 					response.isPaused,
 					response.needsAppend,
@@ -193,7 +205,7 @@ export function createPlaybackManager(ctx) {
 				action: "get_playlist",
 				folderId,
 			});
-			processResponse(response);
+			processResponse(response, folderId);
 		} catch (e) {
 			console.error("Failed to refresh playlist:", e);
 		}
@@ -285,13 +297,16 @@ export function createPlaybackManager(ctx) {
 	}
 
 	async function handleMiniAdd() {
+		if (isMiniAddInFlight) return;
 		const folderId = miniFolderSelect.value;
 		if (!folderId) return showStatus("Please select a folder.", true);
 
 		const addBtn = document.getElementById("btn-mini-add");
 		if (!addBtn) return;
 
+		isMiniAddInFlight = true;
 		const originalIcon = addBtn.innerHTML;
+		let resetScheduled = false;
 
 		try {
 			const [activeTab] = await chrome.tabs.query({
@@ -341,9 +356,11 @@ export function createPlaybackManager(ctx) {
 
 				setTimeout(() => refreshPlaylist(), 50);
 
+				resetScheduled = true;
 				setTimeout(() => {
 					addBtn.innerHTML = originalIcon;
 					addBtn.disabled = !addBtn.classList.contains("stream-present");
+					isMiniAddInFlight = false;
 				}, 2000);
 			} else {
 				showStatus(addResponse.error || "Failed to add URL.", true);
@@ -358,6 +375,10 @@ export function createPlaybackManager(ctx) {
 			if (addBtn) {
 				addBtn.innerHTML = originalIcon;
 				addBtn.disabled = false;
+			}
+		} finally {
+			if (!resetScheduled) {
+				isMiniAddInFlight = false;
 			}
 		}
 	}

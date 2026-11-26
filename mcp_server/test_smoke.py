@@ -2,6 +2,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,11 @@ EXPECTED_TOOLS = {
     "inspect_runtime",
     "simulate_native_message",
     "test_mpv_pipeline",
+    "log_bug_pattern",
+    "query_bug_patterns",
+    "get_bug_pattern",
+    "graduate_bug_pattern",
+    "remove_bug_pattern",
 }
 
 
@@ -68,8 +74,15 @@ def _call_tool(proc: subprocess.Popen[str], req_id: int, name: str, arguments: d
 
 def main() -> None:
     mcp_dir = os.path.dirname(os.path.abspath(__file__))
+    bug_tmp_dir = tempfile.mkdtemp(prefix="mpv_mcp_bugdb_")
+    bug_db_path = os.path.join(bug_tmp_dir, "smoke_bugs.db")
+    real_bug_db = os.path.join(mcp_dir, "bug_patterns.db")
+    had_real_bug_db = os.path.exists(real_bug_db)
+    real_bug_db_mtime = os.stat(real_bug_db).st_mtime_ns if had_real_bug_db else None
+
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["MPV_MCP_BUG_DB_PATH"] = bug_db_path
 
     proc = subprocess.Popen(
         ["uv", "run", "--frozen", "--quiet", "--directory", mcp_dir, "python", "server.py"],
@@ -100,12 +113,12 @@ def main() -> None:
 
         _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
 
-        # 2. tools/list — enforce 5-tool schema budget
+        # 2. tools/list — enforce expected tool schema
         _send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         list_resp = _recv_id(proc, 2)
         tools = list_resp["result"]["tools"]
         names = {t["name"] for t in tools}
-        assert len(tools) == 5, f"Tool budget mismatch: {len(tools)} != 5 ({names})"
+        assert len(tools) == len(EXPECTED_TOOLS), f"Tool budget mismatch: {len(tools)} != {len(EXPECTED_TOOLS)} ({names})"
         assert names == EXPECTED_TOOLS, f"Tool set mismatch: {names} vs {EXPECTED_TOOLS}"
         schema_bytes = len(json.dumps(tools, separators=(",", ":")))
 
@@ -154,7 +167,10 @@ def main() -> None:
         real_last_cmd = os.path.join(real_base, "MPVPlaylistOrganizer", "last_mpv_command.txt")
         had_last_cmd = os.path.exists(real_last_cmd)
         last_cmd_stat = os.stat(real_last_cmd).st_mtime_ns if had_last_cmd else None
-        last_cmd_bytes = open(real_last_cmd, "rb").read() if had_last_cmd else None
+        last_cmd_bytes = None
+        if had_last_cmd:
+            with open(real_last_cmd, "rb") as fh:
+                last_cmd_bytes = fh.read()
         dry_before = set(glob.glob(os.path.join(tmp_root, "mpv_dryrun_*")))
 
         dry = _call_tool(
@@ -176,7 +192,8 @@ def main() -> None:
         assert dry_after <= dry_before, f"Leaked dry_run temp dirs: {dry_after - dry_before}"
         if had_last_cmd:
             assert os.stat(real_last_cmd).st_mtime_ns == last_cmd_stat, "Real last_mpv_command.txt mtime changed!"
-            assert open(real_last_cmd, "rb").read() == last_cmd_bytes, "Real last_mpv_command.txt content changed!"
+            with open(real_last_cmd, "rb") as fh:
+                assert fh.read() == last_cmd_bytes, "Real last_mpv_command.txt content changed!"
         else:
             assert not os.path.exists(real_last_cmd), "Real last_mpv_command.txt was created by dry_run!"
 
@@ -198,6 +215,62 @@ def main() -> None:
 
         lint = _call_tool(proc, 12, "verify_repo", {"mode": "lint"})
         assert lint["ok"] is True, lint
+
+        # 4. Bug-pattern SQLite MCP tools (isolated temp DB)
+        b1 = _call_tool(
+            proc,
+            13,
+            "log_bug_pattern",
+            {
+                "slug": "smoke-test-pattern",
+                "title": "Smoke test repeatable pattern",
+                "location": "foo.py:bar",
+                "details": "Detailed root cause note",
+            },
+        )
+        assert b1["ok"] is True and b1["hits"] == 1 and b1["status"] == "watching", b1
+
+        b2 = _call_tool(
+            proc,
+            14,
+            "log_bug_pattern",
+            {
+                "slug": "smoke-test-pattern",
+                "title": "Smoke test repeatable pattern",
+                "location": "foo.py:bar",
+                "note": "Regressed again",
+            },
+        )
+        assert b2["ok"] is True and b2["hits"] == 2 and b2["status"] == "promote_candidate", b2
+
+        bq = _call_tool(proc, 15, "query_bug_patterns", {"search": "smoke-test"})
+        assert bq["ok"] is True and bq["count"] == 1 and "details" not in bq["items"][0], bq
+
+        bg = _call_tool(proc, 16, "get_bug_pattern", {"slug": "smoke-test-pattern"})
+        assert bg["ok"] is True and bg["pattern"]["details"] == "Detailed root cause note", bg
+        assert bg["pattern"]["occurrences"][0]["occurrence_count"] == 2, bg
+
+        bgrad = _call_tool(
+            proc,
+            17,
+            "graduate_bug_pattern",
+            {"slug": "smoke-test-pattern", "test_ref": "testing_tools/scripts/test_mcp_server.py::test_bug_store"},
+        )
+        assert bgrad["ok"] is True and bgrad["status"] == "graduated", bgrad
+
+        bq_active = _call_tool(proc, 18, "query_bug_patterns", {"search": "smoke-test"})
+        assert bq_active["ok"] is True and bq_active["count"] == 0, bq_active
+
+        bq_all = _call_tool(proc, 19, "query_bug_patterns", {"search": "smoke-test", "include_graduated": True})
+        assert bq_all["ok"] is True and bq_all["count"] == 1 and bq_all["items"][0]["status"] == "graduated", bq_all
+
+        brem = _call_tool(proc, 20, "remove_bug_pattern", {"slug": "smoke-test-pattern", "reason": "smoke cleanup"})
+        assert brem["ok"] is True and brem["removed"] == "pattern", brem
+
+        if had_real_bug_db:
+            assert os.stat(real_bug_db).st_mtime_ns == real_bug_db_mtime, "Real bug_patterns.db was modified by smoke test!"
+        else:
+            assert not os.path.exists(real_bug_db), "Real bug_patterns.db was created by smoke test!"
 
         if proc.stdin:
             proc.stdin.close()
@@ -221,6 +294,7 @@ def main() -> None:
         if proc.poll() is None:
             proc.kill()
             proc.wait(timeout=5)
+        shutil.rmtree(bug_tmp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

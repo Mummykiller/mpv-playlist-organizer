@@ -8,7 +8,7 @@ This reference documents the JavaScript `chrome.storage.local` bucket schema, th
 
 | Bucket Key | Type | Description |
 | :--- | :--- | :--- |
-| `mpv_storage_version` | `number` | Schema version (`CURRENT_VERSION = 2`). |
+| `mpv_storage_version` | `number` | Schema version (`2`; migrated from v1 in `StorageManager.initialize`). |
 | `mpv_folder_index` | `string[]` | Ordered array of folder IDs (e.g., `["Default", "Anime"]`). |
 | `mpv_folder_data_<folderId>` | `object` | Per-folder shard containing `{ playlist: Item[], lastPlayedId: string }`. |
 | `mpv_settings` | `object` | Global settings, UI preferences (`uiPreferences.global` and `uiPreferences.domains`), keybindings, and domain overrides. |

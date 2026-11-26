@@ -378,7 +378,7 @@ class PlaybackHandler(BaseHandler):
         logging.info(f"[PY][Handler] update_item_marked_as_watched result: {res}")
         return res
 
-    def _check_session_liveness(self, is_alive, pid, ipc_manager, ipc_path):
+    def _check_session_liveness(self, is_alive, pid, ipc_manager, ipc_path, snap_gen=None):
         """Verifies a session's MPV process is alive and not a zombie or reused PID."""
         is_running = is_alive and pid is not None
 
@@ -398,11 +398,15 @@ class PlaybackHandler(BaseHandler):
             else:
                 is_running = self.ipc_utils.is_process_alive(pid, ipc_path)
 
-        if not is_running:
+        if not is_running and pid is not None:
             with self.mpv_session.sync_lock:
-                should_clear = bool(self.mpv_session.pid or self.mpv_session.is_alive)
+                current_gen = getattr(self.mpv_session, 'session_generation', None)
+                should_clear = (
+                    bool(self.mpv_session.pid or self.mpv_session.is_alive)
+                    and current_gen == snap_gen
+                )
             if should_clear:
-                self.mpv_session.clear()
+                self.mpv_session.clear(session_generation=snap_gen)
 
         return is_running
 
@@ -414,8 +418,9 @@ class PlaybackHandler(BaseHandler):
             ipc_manager = self.mpv_session.ipc_manager
             ipc_path = self.mpv_session.ipc_path
             owner_folder_id = self.mpv_session.owner_folder_id
+            snap_gen = getattr(self.mpv_session, 'session_generation', None)
 
-        is_running = self._check_session_liveness(is_alive, pid, ipc_manager, ipc_path)
+        is_running = self._check_session_liveness(is_alive, pid, ipc_manager, ipc_path, snap_gen=snap_gen)
 
         return native_link.success({
             "is_running": is_running,
@@ -430,11 +435,12 @@ class PlaybackHandler(BaseHandler):
             ipc_manager = self.mpv_session.ipc_manager
             ipc_path = self.mpv_session.ipc_path
             owner_folder_id = self.mpv_session.owner_folder_id
+            snap_gen = getattr(self.mpv_session, 'session_generation', None)
             playlist_snapshot = list(self.mpv_session.playlist or [])
             playlist_tracker = self.mpv_session.playlist_tracker
             last_played_id_cache = getattr(self.mpv_session, 'last_played_id_cache', None)
 
-        if not self._check_session_liveness(is_alive, pid, ipc_manager, ipc_path):
+        if not self._check_session_liveness(is_alive, pid, ipc_manager, ipc_path, snap_gen=snap_gen):
             return native_link.success({"is_running": False, "is_paused": False})
 
         is_paused = self.mpv_session.get_pause_state()
