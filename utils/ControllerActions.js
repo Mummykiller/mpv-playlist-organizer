@@ -216,6 +216,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			// If not active, force needsAppend to false to clean up UI
 			const effectiveNeedsAppend = isActive ? needsAppend : false;
+			if (!isActive && c.playlistUI?.isSmartSyncPending) {
+				c.playlistUI.isSmartSyncPending = false;
+				c.playlistUI._refreshQuickActionsBar?.();
+			}
 
 			c.state.update({
 				isFolderActive: isActive,
@@ -280,15 +284,19 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (!folderId) return;
 
 			// Stage 2: Sync to MPV (if already glowing)
-			if (btn.classList.contains("smart-sync-pending")) {
+			if (c.playlistUI?.isSmartSyncPending || btn?.classList?.contains("smart-sync-pending")) {
 				const itemIds = c.playlistUI?.currentPlaylist?.map(item => item.id);
 				if (!itemIds) return;
 
 				const res = await MPV.MpvInterface.reorderLive(folderId, itemIds);
 				if (res.success) {
 					c.addLogEntry({ text: "[Content]: MPV playlist synchronized.", type: "info" });
-					btn.classList.remove("smart-sync-pending");
-					if (btn.dataset.originalTitle) {
+					if (c.playlistUI) {
+						c.playlistUI.isSmartSyncPending = false;
+						c.playlistUI._refreshQuickActionsBar?.();
+					}
+					btn?.classList?.remove("smart-sync-pending");
+					if (btn?.dataset?.originalTitle) {
 						btn.title = btn.dataset.originalTitle;
 						delete btn.dataset.originalTitle;
 					}
@@ -302,6 +310,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			c.addLogEntry({ text: "[Content]: Calculating smart order...", type: "info" });
 			const res = await MPV.MpvInterface.getSmartReorder(folderId);
 			if (res.success && res.playlist) {
+				if (c.playlistUI) {
+					c.playlistUI.isSmartSyncPending = Boolean(c.state.state.isFolderActive);
+				}
 				c.playlistUI?.render(
 					res.playlist,
 					c.state.state.lastPlayedId,
@@ -310,9 +321,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				c.addLogEntry({ text: "[Content]: Playlist organized. Right-click again to sync MPV.", type: "info" });
 
 				if (c.state.state.isFolderActive) {
-					btn.classList.add("smart-sync-pending");
-					btn.dataset.originalTitle = btn.title;
-					btn.title = "Right-click again to sync MPV playlist";
+					if (c.playlistUI?._refreshQuickActionsBar) {
+						c.playlistUI._refreshQuickActionsBar();
+					} else if (btn) {
+						btn.classList.add("smart-sync-pending");
+						btn.dataset.originalTitle = btn.title;
+						btn.title = "Right-click again to sync MPV playlist";
+					}
 				}
 			} else {
 				c.addLogEntry({ text: `[Content]: Smart reorder failed: ${res.error}`, type: "error" });

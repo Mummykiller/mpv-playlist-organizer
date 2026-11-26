@@ -135,7 +135,8 @@ class ItemProcessor:
         # String-based input (URL, Path, or raw M3U)
         from urllib.parse import urlparse
         from .m3u_parser import parse_m3u
-        from .url_analyzer import is_safe_url, is_youtube_playlist_url
+        from .url_analyzer import is_youtube_playlist_url
+        from . import security
         import os
 
         # 1. YouTube Playlist Check
@@ -158,7 +159,7 @@ class ItemProcessor:
 
         # 3. URL Check
         if urlparse(url_items_or_m3u).scheme in ['http', 'https']:
-            if not is_safe_url(url_items_or_m3u):
+            if not security.is_safe_web_url(url_items_or_m3u):
                 logging.error(f"SSRF Protection: Blocked access to {url_items_or_m3u}")
                 return [], False
 
@@ -175,17 +176,25 @@ class ItemProcessor:
 
     def _fetch_remote_m3u(self, url, headers):
         """Fetches M3U content from a remote URL."""
-        from urllib.request import Request, HTTPRedirectHandler, build_opener
+        from urllib.request import (
+            Request,
+            OpenerDirector,
+            HTTPHandler,
+            HTTPSHandler,
+            HTTPRedirectHandler,
+            HTTPErrorProcessor,
+            HTTPDefaultErrorHandler,
+        )
         from urllib.error import HTTPError
-        from .url_analyzer import is_safe_url
+        from . import security
 
-        if not is_safe_url(url):
+        if not security.is_safe_web_url(url):
             logging.error(f"SSRF Protection: Blocked fetch of unsafe M3U URL: {url}")
             return None
 
         class SafeRedirectHandler(HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl):
-                if not is_safe_url(newurl):
+                if not security.is_safe_web_url(newurl):
                     logging.error(f"SSRF Protection: Blocked unsafe redirect to: {newurl}")
                     raise HTTPError(newurl, 403, "Blocked unsafe redirect", headers, fp)
                 return super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -193,9 +202,17 @@ class ItemProcessor:
         try:
             fetch_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
             if headers:
-                fetch_headers.update(headers)
+                fetch_headers.update(security.sanitize_http_headers(headers))
             req = Request(url, headers=fetch_headers)
-            opener = build_opener(SafeRedirectHandler())
+            opener = OpenerDirector()
+            for handler in (
+                HTTPHandler(),
+                HTTPSHandler(),
+                SafeRedirectHandler(),
+                HTTPErrorProcessor(),
+                HTTPDefaultErrorHandler(),
+            ):
+                opener.add_handler(handler)
             with opener.open(req, timeout=10) as response:
                 content_type = ""
                 if hasattr(response, "headers") and response.headers is not None:

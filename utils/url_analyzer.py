@@ -126,29 +126,32 @@ class VolatileCookieManager:
 
         system = platform.system()
         user_home = os.path.expanduser("~")
+        base_browser = re.split(r'[:+]', (browser or '').strip(), maxsplit=1)[0].lower()
+        if not base_browser:
+            return False
 
         # Determine the database path based on OS and browser
         db_rel_path = None
         if system == "Linux":
             # Search candidates for Linux (Standard, Flatpak, Snap)
             bases = []
-            if browser.lower() == "chrome":
+            if base_browser == "chrome":
                 bases = [
                     os.path.join(user_home, ".config/google-chrome"),
                     os.path.join(user_home, ".var/app/com.google.Chrome/config/google-chrome")
                 ]
-            elif browser.lower() == "brave":
+            elif base_browser == "brave":
                 bases = [
                     os.path.join(user_home, ".config/BraveSoftware/Brave-Browser"),
                     os.path.join(user_home, ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser")
                 ]
-            elif browser.lower() == "chromium":
+            elif base_browser == "chromium":
                 bases = [
                     os.path.join(user_home, ".config/chromium"),
                     os.path.join(user_home, "snap/chromium/common/chromium"),
                     os.path.join(user_home, ".var/app/org.chromium.Chromium/config/chromium")
                 ]
-            elif browser.lower() == "edge":
+            elif base_browser == "edge":
                 bases = [
                     os.path.join(user_home, ".config/microsoft-edge"),
                     os.path.join(user_home, ".var/app/com.microsoft.Edge/config/microsoft-edge")
@@ -163,7 +166,7 @@ class VolatileCookieManager:
                     matches = glob.glob(pat)
                     candidates.extend(matches)
 
-            db_rel_path = next((p for p in candidates if os.path.exists(p)), None)
+            db_rel_path = next((p for p in candidates if os.path.isfile(p)), None)
 
             if not db_rel_path:
                 # Fallback to the old simple mapping if no specific candidate matched
@@ -176,19 +179,22 @@ class VolatileCookieManager:
                     "vivaldi": "vivaldi/Default/Cookies",
                     "opera": "opera/Cookies"
                 }
-                db_rel_path = os.path.join(base, mapping.get(browser.lower(), ""))
+                rel = mapping.get(base_browser)
+                if not rel:
+                    return False
+                db_rel_path = os.path.join(base, rel)
         elif system == "Windows":
             base = os.environ.get('LOCALAPPDATA', "")
 
             # Windows Profile Patterns
             win_bases = []
-            if browser.lower() == "chrome":
+            if base_browser == "chrome":
                 win_bases = [os.path.join(base, "Google/Chrome/User Data")]
-            elif browser.lower() == "brave":
+            elif base_browser == "brave":
                 win_bases = [os.path.join(base, "BraveSoftware/Brave-Browser/User Data")]
-            elif browser.lower() == "edge":
+            elif base_browser == "edge":
                 win_bases = [os.path.join(base, "Microsoft/Edge/User Data")]
-            elif browser.lower() == "vivaldi":
+            elif base_browser == "vivaldi":
                 win_bases = [os.path.join(base, "Vivaldi/User Data")]
 
             candidates = []
@@ -200,7 +206,7 @@ class VolatileCookieManager:
                     candidates.extend(glob.glob(pat_new))
                     candidates.extend(glob.glob(pat_old))
 
-            db_rel_path = next((p for p in candidates if os.path.exists(p)), None)
+            db_rel_path = next((p for p in candidates if os.path.isfile(p)), None)
 
             if not db_rel_path:
                 mapping = {
@@ -209,9 +215,12 @@ class VolatileCookieManager:
                     "edge": "Microsoft/Edge/User Data/Default/Network/Cookies",
                     "vivaldi": "Vivaldi/User Data/Default/Network/Cookies"
                 }
-                db_rel_path = os.path.join(base, mapping.get(browser.lower(), ""))
+                rel = mapping.get(base_browser)
+                if not rel:
+                    return False
+                db_rel_path = os.path.join(base, rel)
 
-        if not db_rel_path or not os.path.exists(db_rel_path):
+        if not db_rel_path or not os.path.isfile(db_rel_path):
             logging.debug(f"Shadow Copy: Could not locate database for {browser} at {db_rel_path}")
             return False
 
@@ -248,7 +257,7 @@ class VolatileCookieManager:
 
             cmd = [
                 ytdlp_path,
-                '--cookies-from-browser', f"{browser}:{shadow_root}",
+                '--cookies-from-browser', f"{base_browser}:{shadow_root}",
                 '--cookies', target_path,
                 '--skip-download', '--quiet', '--no-warnings', '--', url
             ]

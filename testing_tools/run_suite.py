@@ -35,6 +35,11 @@ TESTING_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(TESTING_TOOLS_DIR)
 sys.path.insert(0, TESTING_TOOLS_DIR)
 
+CONTRACT_SYNC_TIMEOUT = 30
+JS_TEST_TIMEOUT = 60
+JS_SYNTAX_TIMEOUT = 30
+PY_WORKER_TIMEOUT = 120
+
 
 class ConciseTestResult(unittest.TestResult):
     """Quiet on success, immediately verbose on any failure or error."""
@@ -117,8 +122,8 @@ def run_python_batch(name, pattern, verbose=False):
 
     total = suite.countTestCases()
     if total == 0:
-        print(f"  {YELLOW}⚠️  {name}: 0 tests found{RESET}")
-        return True, 0, 0
+        print(f"  {RED}{BOLD}❌ {name}: 0 tests found{RESET}")
+        return False, 0, 0
 
     result = ConciseTestResult(verbose=verbose)
     suite.run(result)
@@ -134,29 +139,40 @@ def run_python_batch(name, pattern, verbose=False):
         return False, result.passed, total
 
 
-def run_js_batch(verbose=False):
-    """Runs contract sync, JS unit tests, JS syntax checks, and Python static checks."""
-    all_success = True
-    total_passed = 0
-    total_checks = 0
-
-    # 0. Sync the Communication Contract
+def _sync_bridge_contract():
+    """Synchronizes bridge_contract.js from Python models with a bounded timeout."""
     try:
         subprocess.run(
             [sys.executable, os.path.join(TESTING_TOOLS_DIR, "generate_bridge_contract.py")],
             check=True,
             capture_output=True,
             text=True,
+            timeout=CONTRACT_SYNC_TIMEOUT,
         )
+        return True
+    except subprocess.TimeoutExpired:
+        print(f"  {RED}{BOLD}❌ Contract Sync TIMED OUT after {CONTRACT_SYNC_TIMEOUT}s.{RESET}")
+        return False
     except subprocess.CalledProcessError as e:
         print(f"  {RED}{BOLD}❌ Contract Sync FAILED:{RESET}\n{RED}{e.stderr or e.stdout}{RESET}")
+        return False
+
+
+def run_js_batch(verbose=False, sync_contract=True):
+    """Runs contract sync, JS unit tests, JS syntax checks, and Python static checks."""
+    all_success = True
+    total_passed = 0
+    total_checks = 0
+
+    # 0. Sync the Communication Contract (skipped when run_all_tests already synced before spawning workers)
+    if sync_contract and not _sync_bridge_contract():
         return False, 0, 1, 0, 0, 0, 0
 
     # Check if node is installed (required for JS unit tests & syntax checks)
     node_available = True
     try:
-        subprocess.run(["node", "--version"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        subprocess.run(["node", "--version"], capture_output=True, check=True, timeout=15)
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         print(f"  {RED}{BOLD}❌ Required tool 'node' is not installed; cannot run JS tests or syntax checks.{RESET}")
         all_success = False
         node_available = False
@@ -169,14 +185,26 @@ def run_js_batch(verbose=False):
     if node_available:
         def _run_one_js_test(test_file):
             js_test_path = os.path.join(scripts_dir, test_file)
-            return test_file, subprocess.run(["node", js_test_path], capture_output=True, text=True)
+            try:
+                res = subprocess.run(
+                    ["node", js_test_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=JS_TEST_TIMEOUT,
+                )
+                return test_file, res, None
+            except subprocess.TimeoutExpired:
+                return test_file, None, f"Timed out after {JS_TEST_TIMEOUT}s"
 
         max_js_workers = min(len(js_tests), os.cpu_count() or 4) if js_tests else 1
         with ThreadPoolExecutor(max_workers=max_js_workers) as pool:
             js_results = list(pool.map(_run_one_js_test, js_tests))
 
-        for test_file, result in js_results:
-            if result.returncode == 0:
+        for test_file, result, timeout_err in js_results:
+            if timeout_err is not None:
+                print(f"\n  {RED}{BOLD}❌ JS Test TIMED OUT: {test_file} ({timeout_err}){RESET}")
+                all_success = False
+            elif result.returncode == 0:
                 js_passed += 1
                 if verbose:
                     print(f"    {GREEN}✅ {test_file}{RESET}")
@@ -214,7 +242,15 @@ def run_js_batch(verbose=False):
 
         def _check_one_js_file(js_file):
             rel_name = os.path.relpath(js_file, PROJECT_ROOT)
-            check = subprocess.run(["node", "--check", js_file], capture_output=True, text=True)
+            try:
+                check = subprocess.run(
+                    ["node", "--check", js_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=JS_SYNTAX_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                check = None
             empty_catches = []
             read_err = None
             try:
@@ -233,19 +269,28 @@ def run_js_batch(verbose=False):
             syntax_results = list(pool.map(_check_one_js_file, js_files))
 
         for rel_name, check, empty_catches, read_err in syntax_results:
-            if check.returncode == 0:
-                syntax_ok += 1
-            else:
+            file_ok = True
+            if check is None:
+                print(f"\n  {RED}{BOLD}❌ JS SYNTAX CHECK TIMED OUT in {rel_name} (after {JS_SYNTAX_TIMEOUT}s){RESET}")
+                all_success = False
+                file_ok = False
+            elif check.returncode != 0:
                 print(f"\n  {RED}{BOLD}❌ JS SYNTAX ERROR in {rel_name}:{RESET}")
                 print(f"{RED}{check.stderr.strip()}{RESET}")
                 all_success = False
+                file_ok = False
 
             if read_err is not None:
                 print(f"\n  {RED}{BOLD}❌ Could not read {rel_name}: {read_err}{RESET}")
                 all_success = False
+                file_ok = False
             elif empty_catches:
                 print(f"\n  {RED}{BOLD}❌ JS AST Gate: Silent empty/comment-only catch block found in {rel_name} at line(s) {empty_catches}{RESET}")
                 all_success = False
+                file_ok = False
+
+            if file_ok:
+                syntax_ok += 1
 
         if syntax_ok != len(js_files) or verbose:
             status_icon = f"{GREEN}✅" if syntax_ok == len(js_files) else f"{RED}{BOLD}❌"
@@ -506,7 +551,17 @@ def _run_python_worker(test_file, verbose=False):
     cmd = [sys.executable, rel_suite, "--worker", test_file]
     if verbose:
         cmd.append("--verbose")
-    proc = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=PY_WORKER_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        msg = f"  {RED}{BOLD}❌ Python worker TIMED OUT after {PY_WORKER_TIMEOUT}s: {test_file}{RESET}"
+        return test_file, False, 0, 0, msg, ""
 
     ok = proc.returncode == 0
     passed = 0
@@ -532,13 +587,22 @@ def run_all_tests(verbose=False):
     """Main entry point running all test batches concurrently."""
     t_start = time.time()
 
+    # Sync bridge_contract.js before spawning concurrent workers to avoid write/read races
+    if not _sync_bridge_contract():
+        elapsed = time.time() - t_start
+        print(f"\n{RED}{BOLD}🛑 Suite failed (contract sync failed) in {elapsed:.1f}s{RESET}")
+        return False
+
     python_test_files = discover_python_test_files()
     max_py_workers = max(1, min(len(python_test_files), os.cpu_count() or 4))
     with ThreadPoolExecutor(max_workers=max_py_workers) as pool:
         py_futures = [pool.submit(_run_python_worker, tf, verbose) for tf in python_test_files]
 
         # Run JS tests, syntax checks, AST gates, and linters concurrently with Python workers
-        b2_ok, b2_pass, b2_total, syntax_ok, js_total_files, py_ok, py_total_files = run_js_batch(verbose=verbose)
+        b2_ok, b2_pass, b2_total, syntax_ok, js_total_files, py_ok, py_total_files = run_js_batch(
+            verbose=verbose,
+            sync_contract=False,
+        )
 
         py_results = [f.result() for f in py_futures]
 

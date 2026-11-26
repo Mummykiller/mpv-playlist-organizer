@@ -496,6 +496,28 @@ def sanitize_string(s, is_filename=False, is_url=False):
 
     return s.strip()
 
+_HTTP_HEADER_NAME_RE = re.compile(r'\A[A-Za-z0-9-]+\Z')
+
+
+def sanitize_http_headers(headers):
+    """
+    Validates HTTP header names against \\A[A-Za-z0-9-]+\\Z and strips CR, LF, and NUL
+    from header values. Drops invalid keys and non-string keys/values.
+    """
+    if not isinstance(headers, dict):
+        return {}
+    clean = {}
+    for k, v in headers.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            continue
+        if not _HTTP_HEADER_NAME_RE.fullmatch(k):
+            logging.warning(f"Security: Dropped invalid HTTP header name: {k!r}")
+            continue
+        clean_v = v.replace('\r', '').replace('\n', '').replace('\x00', '')
+        clean[k] = clean_v
+    return clean
+
+
 def sanitize_ytdlp_options(options_str, allow_settings_flags=False):
     """
     Enforces an allowlist of yt-dlp flags.
@@ -553,6 +575,18 @@ def sanitize_ytdlp_options(options_str, allow_settings_flags=False):
             )
             if clean_key != 'extractor-args':
                 clean_value = clean_value.replace(';', '')
+            if clean_key == 'cookies':
+                clean_value = clean_value.strip()
+                if not is_safe_cookie_file(clean_value):
+                    logging.warning("Security: Removed unsafe yt-dlp cookies path.")
+                    last_clean_key = None
+                    continue
+            elif clean_key == 'cookies-from-browser':
+                clean_value = clean_value.strip()
+                if not is_safe_cookie_browser(clean_value):
+                    logging.warning("Security: Removed unsafe yt-dlp cookies-from-browser spec.")
+                    last_clean_key = None
+                    continue
             safe_options.append(f"{key.strip()}={clean_value}")
         else:
             logging.warning(f"Security: Removed unsafe or disallowed yt-dlp flag '{clean_key}'")

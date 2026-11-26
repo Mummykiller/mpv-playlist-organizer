@@ -39,7 +39,6 @@ CONFIG = [
         "target": "utils/nativeConnection.js",
         "namespace": "MPV_INTERNAL",
         "dependencies": {
-            "../background/messaging.js": "window.MPV_INTERNAL",
             "./security.module.js": "window.MPV_SECURITY",
             "./commUtils.module.js": "window.MPV_INTERNAL",
             "./SystemLogger.module.js": "window.MPV_INTERNAL"
@@ -63,7 +62,8 @@ CONFIG = [
 
 def render_module_js(config, project_root=None):
     base_dir = project_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    source_path = config["source"]
+    source_rel = config["source"]
+    source_path = source_rel
     if not os.path.isabs(source_path):
         source_path = os.path.join(base_dir, source_path)
     namespace = config["namespace"]
@@ -82,8 +82,7 @@ def render_module_js(config, project_root=None):
             dep_ns = dependencies[path]
             lines = [f'const {i} = {dep_ns}.{i};' for i in imports]
             return '\n'.join(lines)
-        else:
-            return f'// import {{ {", ".join(imports)} }} from "{path}"; // UNMAPPED'
+        raise ValueError(f"Unmapped import in {source_rel}: {path}")
 
     content = re.sub(r'import\s+\{\s*([\s\S]*?)\s*\}\s+from\s+"(.*?)";', handle_import, content)
 
@@ -93,7 +92,7 @@ def render_module_js(config, project_root=None):
         path = match.group(2)
         if path in dependencies:
             return f'const {alias} = {dependencies[path]};'
-        return f'// import * as {alias} from "{path}"; // UNMAPPED'
+        raise ValueError(f"Unmapped import in {source_rel}: {path}")
 
     content = re.sub(r'import\s+\*\s+as\s+(\w+)\s+from\s+"(.*?)";', handle_star_import, content)
 

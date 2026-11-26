@@ -511,7 +511,11 @@ def _safe_json_load(filepath, default_factory=dict):
                 content = f.read()
                 if not content.strip():
                     return None
-                return json.loads(content)
+                loaded = json.loads(content)
+                if default_factory is dict and not isinstance(loaded, dict):
+                    logging.error(f"[PY][IO] Expected JSON object in {path}, got {type(loaded).__name__}")
+                    return None
+                return loaded
         except (json.JSONDecodeError, IOError) as e:
             logging.error(f"[PY][IO] Failed to load JSON from {path}: {e}")
             return None
@@ -836,11 +840,6 @@ def get_settings():
             current_settings = default_settings
         else:
             current_settings = _safe_json_load(CONFIG_FILE)
-            if current_settings is None:
-                # File exists on disk but could not be parsed / read error.
-                # DO NOT overwrite user config with defaults (PY-M8).
-                logging.warning(f"[PY][IO] {CONFIG_FILE} exists but could not be parsed; preserving file on disk and using defaults/cache.")
-                current_settings = {}
 
     # Merge current settings with defaults, prioritizing current_settings
     settings = {**default_settings, **current_settings}

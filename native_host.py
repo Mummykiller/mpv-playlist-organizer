@@ -478,7 +478,11 @@ try:
 
             @logger.catch(ui_alert=True)
             def task_wrapper(message):
-                req_id = message.get('request_id') if isinstance(message, dict) else None
+                req_id = (
+                    message.get('request_id')
+                    if message.get('request_id') is not None
+                    else message.get('requestId')
+                ) if isinstance(message, dict) else None
                 token = logger.request_id_var.set(req_id)
 
                 try:

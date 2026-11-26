@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "mpv-playlist-organizer": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--frozen",
+        "--quiet",
+        "--directory",
+        "mcp_server",
+        "python",
+        "server.py"
+      ],
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1"
+      }
+    }
+  }
+}

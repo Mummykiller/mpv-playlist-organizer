@@ -120,6 +120,28 @@ def main() -> None:
         names = {t["name"] for t in tools}
         assert len(tools) == len(EXPECTED_TOOLS), f"Tool budget mismatch: {len(tools)} != {len(EXPECTED_TOOLS)} ({names})"
         assert names == EXPECTED_TOOLS, f"Tool set mismatch: {names} vs {EXPECTED_TOOLS}"
+        # Regression check: every tool must expose non-empty properties, typed array items, and no bare additionalProperties
+        def _assert_clean_schema(tool_name: str, node: object, path: str = "") -> None:
+            if not isinstance(node, dict):
+                return
+            if path == "":
+                assert node.get("type") == "object", f"{tool_name}: root type must be object: {node}"
+                props = node.get("properties")
+                assert isinstance(props, dict) and len(props) > 0, f"{tool_name}: empty properties breaks MCP clients"
+            if node.get("type") == "array":
+                items = node.get("items")
+                assert isinstance(items, dict) and "type" in items, f"{tool_name}{path}: array items missing type: {node}"
+            if node.get("additionalProperties") is True:
+                raise AssertionError(f"{tool_name}{path}: bare additionalProperties:true is incompatible with strict MCP clients")
+            for k, v in node.items():
+                if isinstance(v, dict):
+                    _assert_clean_schema(tool_name, v, f"{path}.{k}")
+                elif isinstance(v, list):
+                    for idx, elem in enumerate(v):
+                        _assert_clean_schema(tool_name, elem, f"{path}.{k}[{idx}]")
+
+        for tool_def in tools:
+            _assert_clean_schema(tool_def["name"], tool_def.get("inputSchema"))
         schema_bytes = len(json.dumps(tools, separators=(",", ":")))
 
         # 3. Call all read-only & sandboxed tools
@@ -149,8 +171,8 @@ def main() -> None:
             9,
             "simulate_native_message",
             {
-                "payload": {"action": "ping", "request_id": "smoke-ping-1"},
-                "seed_state": {"config": {"ytdl_quality": "1080"}},
+                "payload": json.dumps({"action": "ping", "request_id": "smoke-ping-1"}),
+                "seed_state": json.dumps({"config": {"ytdl_quality": "1080"}}),
                 "timeout": 5,
             },
         )
@@ -181,9 +203,9 @@ def main() -> None:
                 "mode": "dry_run",
                 "urls": [
                     "https://example.com/a.mp4",
-                    {"id": "vid2", "title": "Video 2", "url": "https://example.com/b.mp4"},
+                    json.dumps({"id": "vid2", "title": "Video 2", "url": "https://example.com/b.mp4"}),
                 ],
-                "options": {"start_paused": True, "geometry": "1280x720"},
+                "options": json.dumps({"start_paused": True, "geometry": "1280x720"}),
             },
         )
         dry_after = set(glob.glob(os.path.join(tmp_root, "mpv_dryrun_*")))

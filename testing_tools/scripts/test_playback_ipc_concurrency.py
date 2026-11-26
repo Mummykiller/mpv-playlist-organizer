@@ -716,5 +716,168 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
         t.join(timeout=2.0)
         self.assertEqual(errors, [])
 
+    def test_ipc_send_wakes_immediately_on_eof_and_guards_sock_under_lock(self):
+        """Regression: IPCSocketManager.send() returns immediately when reader stops (EOF) and handles None _sock."""
+        import time
+
+        mgr = ipc_utils.IPCSocketManager()
+        mgr._sock = MagicMock()
+        mgr._event_reader_running = True
+
+        def stop_reader_soon():
+            time.sleep(0.05)
+            with mgr._buffer_lock:
+                mgr._event_reader_running = False
+                mgr._buffer_lock.notify_all()
+
+        t = threading.Thread(target=stop_reader_soon)
+        t.start()
+        start = time.monotonic()
+        res = mgr.send({"command": ["get_property", "pid"]}, timeout=5.0, expect_response=True)
+        elapsed = time.monotonic() - start
+        t.join(timeout=1.0)
+
+        self.assertIsNone(res)
+        self.assertLess(elapsed, 1.0)
+
+        # None _sock inside _send_lock returns None cleanly
+        mgr._sock = None
+        self.assertIsNone(mgr.send({"command": ["get_property", "pid"]}))
+
+    def test_enrichment_service_aborts_on_session_generation_change(self):
+        """Regression: EnrichmentService.handle_standard_flow_launch aborts when session_generation advances."""
+        enricher = session_services.EnrichmentService(MagicMock(), MagicMock(), file_io)
+        session = MagicMock()
+        session.session_generation = 1
+        session.is_alive = True
+        session.launch_cancelled = False
+        session.owner_folder_id = "Anime"
+        session.sync_lock = threading.RLock()
+        session.ipc_manager.is_connected.return_value = True
+        session.ipc_manager.get_property.return_value = 1234
+        session.playlist = []
+
+        def bump_gen(*_args, **_kwargs):
+            session.session_generation = 2
+            return [{"id": "2", "url": "https://example.com/2.mp4"}]
+
+        enricher.enrich_single_item = MagicMock(side_effect=bump_gen)
+        items = [{"id": "1", "url": "https://example.com/1.mp4"}, {"id": "2", "url": "https://example.com/2.mp4"}]
+        enricher.handle_standard_flow_launch(session, items, 0, "Anime", {}, file_io)
+        enricher.shutdown(wait=True)
+
+        session.append_batch.assert_not_called()
+        self.assertIsNone(enricher._active_sync_generation)
+
+    def test_launcher_launch_failure_rolls_back_session_state(self):
+        """Regression: LauncherService.launch stops tracker and clears owner_folder_id/playlist/session_file on error."""
+        session_file = os.path.join(self.test_dir, "rollback_session.json")
+        with open(session_file, "w", encoding="utf-8") as f:
+            f.write("{}")
+
+        session = MagicMock()
+        session.FLAG_DIR = os.path.join(self.test_dir, "flags")
+        session.SCRIPT_DIR = self.test_dir
+        session.session_file = session_file
+        session.launch_cancelled = False
+        session.get_mpv_executable.return_value = "mpv"
+        session.ipc_manager = None
+        tracker_mock = MagicMock()
+        session.playlist_tracker = tracker_mock
+
+        launcher = session_services.LauncherService(session)
+        with patch.object(ipc_utils, "get_ipc_path", return_value=os.path.join(self.test_dir, "mpv.sock")), \
+             patch("services.create_handshake_file", side_effect=RuntimeError("boom")):
+            res = launcher.launch({"id": "1", "url": "https://example.com/1.mp4"}, "Anime", {}, file_io)
+
+        self.assertFalse(res.get("success"))
+        tracker_mock.stop_tracking.assert_called_once()
+        self.assertIsNone(session.owner_folder_id)
+        self.assertEqual(session.playlist, [])
+        self.assertFalse(os.path.exists(session_file))
+
+    def test_handle_append_session_guard_and_cancellation(self):
+        """Regression: handle_append checks active session before shard write and aborts cleanly on cancellation."""
+        from utils.handlers.playback_handler import PlaybackHandler
+        from utils import native_link
+
+        ctx = MagicMock()
+        ctx.io = file_io
+        ctx.mpv.sync_lock = threading.RLock()
+        ctx.mpv.is_alive = False
+        ctx.mpv.owner_folder_id = "Anime"
+        ctx.mpv.playlist = []
+        ctx.script_dir = self.test_dir
+        ctx.temp_playlists_dir = os.path.join(self.test_dir, "temp_playlists")
+        handler = PlaybackHandler(ctx)
+
+        req = native_link.PlaybackRequest(action="append", folder_id="Anime", url_item={"id": "x1", "url": "https://example.com/x1.mp4"})
+        with patch.object(file_io, "update_shard") as mock_update:
+            res = handler.handle_append(req)
+        self.assertFalse(res.get("success"))
+        mock_update.assert_not_called()
+
+        # Cancellation aborts without shard mutation or append_batch
+        ctx.mpv.is_alive = True
+        ctx.task_manager.create_job.return_value = "job-1"
+        ctx.task_manager.is_cancelled.return_value = True
+        req_multi = native_link.PlaybackRequest(
+            action="append",
+            folder_id="Anime",
+            url_items=[{"id": "x1", "url": "https://example.com/1.mp4"}, {"id": "x2", "url": "https://example.com/2.mp4"}],
+        )
+        with patch.object(file_io, "update_shard") as mock_update:
+            res_cancel = handler.handle_append(req_multi)
+        self.assertFalse(res_cancel.get("success"))
+        self.assertIn("cancelled", res_cancel.get("error", "").lower())
+        mock_update.assert_not_called()
+        ctx.mpv.append_batch.assert_not_called()
+
+    def test_start_releases_sync_lock_during_launcher_launch(self):
+        """Regression: MpvSessionManager.start() must not hold sync_lock across blocking launcher.launch()."""
+        deps = {
+            "get_all_folders_from_file": lambda: {},
+            "get_mpv_executable": lambda: "mpv",
+            "log_stream": lambda **kw: (lambda s: None),
+            "send_message": lambda m: None,
+            "SCRIPT_DIR": self.test_dir,
+            "TEMP_PLAYLISTS_DIR": os.path.join(self.test_dir, "temp_playlists"),
+        }
+        mgr = MpvSessionManager(os.path.join(self.test_dir, "session.json"), deps)
+        in_launch = threading.Event()
+        release_launch = threading.Event()
+
+        def slow_launch(*_args, **_kwargs):
+            in_launch.set()
+            release_launch.wait(timeout=2.0)
+            return {"success": True, "message": "ok"}
+
+        mgr.launcher.launch = MagicMock(side_effect=slow_launch)
+        mgr.register_ipc_callbacks = MagicMock()
+        mgr._start_health_watcher = MagicMock()
+
+        item = {"id": "item-1", "url": "https://example.com/v.mp4", "title": "V"}
+        result_box = {}
+
+        def run_start():
+            result_box["res"] = mgr.start(item, "Anime", {}, file_io, enriched_items_list=[item])
+
+        t = threading.Thread(target=run_start, daemon=True)
+        t.start()
+        self.assertTrue(in_launch.wait(timeout=2.0))
+
+        # Another thread (e.g. CONTROL_ACTIONS) must be able to acquire sync_lock immediately
+        acquired = mgr.sync_lock.acquire(blocking=False)
+        try:
+            self.assertTrue(acquired, "sync_lock must not be held during blocking launcher.launch()")
+        finally:
+            if acquired:
+                mgr.sync_lock.release()
+            release_launch.set()
+
+        t.join(timeout=2.0)
+        self.assertTrue(result_box.get("res", {}).get("success"))
+        self.assertFalse(mgr._is_launching)
+
 if __name__ == '__main__':
     unittest.main()

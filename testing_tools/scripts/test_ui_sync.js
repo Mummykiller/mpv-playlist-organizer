@@ -968,6 +968,185 @@ async function testUiSync() {
     }
     console.log("  ✅ _safeScrapeDetails fast-path, backoff & snapshot guard verified.");
 
+    // Operation 11: Smart Reorder Stage 2 survives async PlaylistUI.render()
+    console.log("Testing Smart Reorder Stage 2 persistence across async PlaylistUI.render()...");
+    require("../../utils/ControllerActions.js");
+    {
+        const srEnv = createControllerEnv("https://example.com");
+        const folderSel = srEnv.document.getElementById("folder-select");
+        const opt = srEnv.document.createElement("option");
+        opt.value = "Default";
+        opt.textContent = "Default";
+        folderSel.appendChild(opt);
+        folderSel.value = "Default";
+
+        const origDoc = global.document;
+        const origChromeGet = global.chrome.storage.local.get;
+        const origMpvInterface = MPV.MpvInterface;
+
+        global.document = srEnv.document;
+        global.chrome.storage.local.get = (keys, cb) => {
+            setTimeout(() => cb({}), 15);
+        };
+
+        const reorderLiveCalls = [];
+        MPV.MpvInterface = {
+            getSmartReorder: async () => ({
+                success: true,
+                playlist: [
+                    { id: "b", title: "B", url: "https://example.com/b" },
+                    { id: "a", title: "A", url: "https://example.com/a" },
+                ],
+            }),
+            reorderLive: async (folderId, itemIds) => {
+                reorderLiveCalls.push({ folderId, itemIds });
+                return { success: true };
+            },
+        };
+
+        try {
+            const srController = {
+                ui: { shadowRoot: srEnv.document },
+                state: {
+                    state: { isFolderActive: true, lastPlayedId: null, settings: {} },
+                    update: () => {},
+                },
+                checkContext: () => true,
+                updateAddButtonState: () => {},
+                addLogEntry: () => {},
+            };
+            const srPlaylistUI = new MPV.PlaylistUI(srController, { shadowRoot: srEnv.document });
+            srController.playlistUI = srPlaylistUI;
+            const srActions = new MPV.ControllerActions(srController);
+            srController.handleSmartReorder = (e, b) => srActions.handleSmartReorder(e, b);
+
+            srPlaylistUI.render([{ id: "a", title: "A", url: "https://example.com/a" }, { id: "b", title: "B", url: "https://example.com/b" }], null, true);
+            await new Promise((r) => setTimeout(r, 35));
+
+            const initialBtnC = srEnv.document.getElementById("btn-osc-quick-c");
+            assert.ok(initialBtnC, "Quick action C button should render");
+
+            // Stage 1: Smart reorder triggers async render()
+            await srActions.handleSmartReorder({ preventDefault() {}, stopPropagation() {} }, initialBtnC);
+            await new Promise((r) => setTimeout(r, 35));
+
+            const rebuiltBtnC = srEnv.document.getElementById("btn-osc-quick-c");
+            assert.notStrictEqual(rebuiltBtnC, initialBtnC, "Async render should rebuild quick action bar");
+            assert.strictEqual(srPlaylistUI.isSmartSyncPending, true, "isSmartSyncPending must persist across async render");
+            assert.ok(rebuiltBtnC.classList.contains("smart-sync-pending"), "Rebuilt button must retain .smart-sync-pending");
+            assert.strictEqual(rebuiltBtnC.title, "Right-click again to sync MPV playlist");
+
+            // Stage 2: Second right-click syncs live order to MPV and clears pending state
+            await srActions.handleSmartReorder({ preventDefault() {}, stopPropagation() {} }, rebuiltBtnC);
+            assert.strictEqual(reorderLiveCalls.length, 1);
+            assert.deepStrictEqual(reorderLiveCalls[0], { folderId: "Default", itemIds: ["b", "a"] });
+            assert.strictEqual(srPlaylistUI.isSmartSyncPending, false);
+            assert.strictEqual(rebuiltBtnC.classList.contains("smart-sync-pending"), false);
+
+            // Conflicting mode click or inactive render clears isSmartSyncPending
+            srPlaylistUI.isSmartSyncPending = true;
+            rebuiltBtnC.onclick({ stopPropagation() {} });
+            assert.strictEqual(srPlaylistUI.isSmartSyncPending, false, "Entering live reorder mode clears smart sync pending");
+
+            srPlaylistUI.isSmartSyncPending = true;
+            srPlaylistUI.render([], null, false);
+            assert.strictEqual(srPlaylistUI.isSmartSyncPending, false, "Inactive folder render clears smart sync pending");
+        } finally {
+            global.document = origDoc;
+            global.chrome.storage.local.get = origChromeGet;
+            MPV.MpvInterface = origMpvInterface;
+        }
+    }
+    console.log("  ✅ Smart Reorder Stage 2 persistence verified.");
+
+    // Operation 12: Live prefs sync (keybinds + filter words), e.key guards, YouTube URL & PageScraper host checks
+    console.log("Testing live prefs sync, e.key guards, and YouTube URL/hostname checks...");
+    require("../../utils/ControllerView.js");
+    require("../../utils/PageScraper.js");
+    {
+        const updatedDeltas = [];
+        let updatedWords = null;
+        const viewController = {
+            ui: { shadowRoot: {}, controllerHost: {} },
+            state: {
+                state: { settings: {} },
+                update: (delta) => updatedDeltas.push(delta),
+            },
+            pageScraper: {
+                updateFilterWords: (w) => { updatedWords = w; },
+            },
+        };
+        const view = new MPV.ControllerView(viewController);
+        view.applyPreferences({
+            kbAddPlaylist: "Alt+A",
+            kbToggleController: "Alt+T",
+            kbOpenPopup: "Alt+P",
+            kbPlayPlaylist: "Alt+X",
+            kbSwitchPlaylist: "Alt+S",
+            scraperFilterWords: ["myfilter"],
+        });
+        assert.strictEqual(updatedDeltas.length, 1);
+        assert.strictEqual(updatedDeltas[0].kbAddPlaylist, "Alt+A");
+        assert.strictEqual(updatedDeltas[0].kbToggleController, "Alt+T");
+        assert.strictEqual(updatedDeltas[0].kbOpenPopup, "Alt+P");
+        assert.strictEqual(updatedDeltas[0].kbPlayPlaylist, "Alt+X");
+        assert.strictEqual(updatedDeltas[0].kbSwitchPlaylist, "Alt+S");
+        assert.deepStrictEqual(updatedWords, ["myfilter"]);
+
+        // Unguarded e.key in ControllerView.normalizeKeyCombo & settings_ui.startRecording
+        assert.strictEqual(view.normalizeKeyCombo({ key: undefined }), null);
+        assert.strictEqual(view.normalizeKeyCombo({ key: "" }), null);
+        assert.strictEqual(view.normalizeKeyCombo({ ctrlKey: true, key: "A" }), "ctrl+a");
+
+        const { startRecording, stopRecording } = await import("../../popup/settings_ui.js");
+        const recDom = new JSDOM("<!DOCTYPE html><html><body><button id='rec'></button><input id='inp' value='Alt+K' /></body></html>");
+        const prevWin = global.window;
+        global.window = recDom.window;
+        try {
+            const recCtx = { activeRecorder: null, keyHandler: null, debouncedSaveAllPreferences: () => {} };
+            const recBtn = recDom.window.document.getElementById("rec");
+            const recInp = recDom.window.document.getElementById("inp");
+            startRecording(recCtx, recBtn, recInp);
+            // Synthetic autofill-like event with undefined key must not throw or end recording
+            assert.doesNotThrow(() => recCtx.keyHandler({ key: undefined, preventDefault() {}, stopPropagation() {} }));
+            assert.strictEqual(recInp.value, "Press combination...");
+            stopRecording(recCtx);
+        } finally {
+            global.window = prevWin;
+        }
+
+        // Strict YouTube video URL detection (popup & popup_playback)
+        const { isYouTubeVideoUrl } = await import("../../popup/popup_playback.js");
+        assert.strictEqual(isYouTubeVideoUrl("https://www.youtube.com/watch?v=abc123"), true);
+        assert.strictEqual(isYouTubeVideoUrl("https://m.youtube.com/shorts/short123"), true);
+        assert.strictEqual(isYouTubeVideoUrl("https://youtube.com/live/live123"), true);
+        assert.strictEqual(isYouTubeVideoUrl("https://notyoutube.com/watch?v=abc123"), false);
+        assert.strictEqual(isYouTubeVideoUrl("https://evil.example/?u=youtube.com/watch"), false);
+        assert.strictEqual(isYouTubeVideoUrl("https://www.youtube.com/playlist?list=PL123"), false);
+        assert.strictEqual(isYouTubeVideoUrl("javascript:youtube.com/watch"), false);
+
+        // PageScraper hostname check must reject lookalike domains like notyoutube.com
+        const fakeYtDom = new JSDOM("<!DOCTYPE html><html><head><title>NotYT Playlist</title></head><body><h1>Real H1</h1></body></html>", {
+            url: "https://notyoutube.com/playlist",
+        });
+        const prevDoc2 = global.document;
+        const prevWin2 = global.window;
+        const prevSanitize = MPV.sanitizeString;
+        global.document = fakeYtDom.window.document;
+        global.window = fakeYtDom.window;
+        MPV.sanitizeString = (s) => s;
+        try {
+            const scraper = new MPV.PageScraper();
+            const scraped = scraper.scrapePageDetails("https://notyoutube.com/playlist");
+            assert.strictEqual(scraped.title, "Real H1", "Lookalike notyoutube.com must use generic scraper, not YouTube /playlist early return");
+        } finally {
+            global.document = prevDoc2;
+            global.window = prevWin2;
+            MPV.sanitizeString = prevSanitize;
+        }
+    }
+    console.log("  ✅ Live prefs sync, e.key guards, and YouTube URL/hostname checks verified.");
+
     console.log("\n✨ UI SYNC TEST PASSED! ✨");
 }
 

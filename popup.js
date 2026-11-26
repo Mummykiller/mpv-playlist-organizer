@@ -11,7 +11,7 @@ import { PlaylistRenderer } from "./utils/PlaylistRenderer.js";
 import { createFolderManager } from "./popup/popup_folders.js";
 import { createBackupManager } from "./popup/popup_backup.js";
 import { createAniListManager } from "./popup/popup_anilist.js";
-import { createPlaybackManager } from "./popup/popup_playback.js";
+import { createPlaybackManager, isYouTubeVideoUrl } from "./popup/popup_playback.js";
 import { createYouTubeToolsManager } from "./popup/popup_youtube.js";
 
 // Global Popup Error Handlers (Forward uncaught exceptions to browser_errors.log)
@@ -657,11 +657,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 		 */
 		function handleGlobalKeydown(e) {
 			if (!popupKeybinds.openPopup) return;
+			if (!e || typeof e.key !== "string" || !e.key) return;
 
 			// Ignore if typing in an input (including keybind recording)
 			if (
-				["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName) ||
-				e.target.isContentEditable
+				e.target &&
+				(["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName) ||
+					e.target.isContentEditable)
 			) {
 				return;
 			}
@@ -907,9 +909,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 						// Update Add button state based on detected URL
 						if (activeTab && miniAddBtn) {
-							const isYouTube = activeTab.url
-								? activeTab.url.includes("youtube.com/watch")
-								: false;
+							const isYouTube = isYouTubeVideoUrl(activeTab.url);
 							const detectedUrl = uiState?.detectedUrl;
 							if (detectedUrl) currentDetectedUrl = detectedUrl;
 
@@ -1031,7 +1031,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 			}
 
 			// Handle folder data changes (e.g. IDs assigned after playback starts)
-			if (request.foldersChanged) {
+			if (request.action === "folders_changed" || request.foldersChanged) {
 				populateFolderDropdowns();
 			}
 
@@ -1044,7 +1044,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 						if (activeTab && activeTab.id === request.tabId && miniAddBtn) {
 							currentDetectedUrl = request.url;
 
-							const isYouTube = !!activeTab?.url?.includes("youtube.com/watch");
+							const isYouTube = isYouTubeVideoUrl(activeTab?.url);
 							const hasStream = !!request.url || isYouTube;
 
 							miniAddBtn.classList.toggle("stream-present", hasStream);

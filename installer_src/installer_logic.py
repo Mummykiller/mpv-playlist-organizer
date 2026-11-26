@@ -481,14 +481,25 @@ class UnixLogic(InstallerLogic):
             json.dump({"name": HOST_NAME, "description": HOST_DESCRIPTION, "path": wrapper_path, "type": "stdio", "allowed_origins": [f"chrome-extension://{extension_id}/"]}, f, indent=4)
 
         browser_paths = self.get_browser_configs()
+        linked_count = 0
         for browser, path in browser_paths.items():
             if os.path.isdir(os.path.dirname(path)):
-                os.makedirs(path, exist_ok=True)
-                symlink_target = os.path.join(path, f"{HOST_NAME}.json")
-                if os.path.lexists(symlink_target):
-                    os.remove(symlink_target)
-                os.symlink(native_manifest_path, symlink_target)
-                self.log(f"Linked manifest for {browser}.")
+                try:
+                    os.makedirs(path, exist_ok=True)
+                    symlink_target = os.path.join(path, f"{HOST_NAME}.json")
+                    if os.path.lexists(symlink_target):
+                        os.remove(symlink_target)
+                    os.symlink(native_manifest_path, symlink_target)
+                    linked_count += 1
+                    self.log(f"Linked manifest for {browser}.")
+                except OSError as e:
+                    self.log(f"WARNING: Failed to link manifest for {browser} at {path}: {e}")
+
+        if linked_count == 0:
+            self.log(
+                f"WARNING: No browser NativeMessagingHosts directories were linked. "
+                f"Manifest was written to {native_manifest_path}, but no browser was registered."
+            )
 
     def uninstall(self):
         browser_paths = self.get_browser_configs()

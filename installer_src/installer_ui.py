@@ -241,8 +241,14 @@ class HostManagerApp:
         except ValueError as e:
             messagebox.showerror("Error", str(e))
             return
+        create_bypass = self.create_bypass_var.get()
+        browser_for_bypass = self.browser_var.get()
+        enable_youtube_bypass = self.enable_youtube_bypass_var.get()
         self.install_button.config(state=tk.DISABLED)
-        threading.Thread(target=self._install_thread, args=(extension_id,)).start()
+        threading.Thread(
+            target=self._install_thread,
+            args=(extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass),
+        ).start()
 
     def run_uninstall(self):
         if not messagebox.askyesno("Confirm Uninstall", "Are you sure?"):
@@ -255,10 +261,12 @@ class HostManagerApp:
     def _toggle_url_analysis_widgets(self):
         enabled = self.create_bypass_var.get()
         state = tk.NORMAL if enabled else tk.DISABLED
-        self.browser_combobox.config(state="readonly" if enabled else "disabled")
-        self.diagnostics_btn.config(state=state)
+        # Keep browser selector and diagnostics enabled so users can detect Extension ID
+        # or run diagnostics without turning on Advanced URL Analysis.
+        self.browser_combobox.config(state="readonly")
+        self.diagnostics_btn.config(state=tk.NORMAL)
+        self.browser_label.config(state=tk.NORMAL)
         self.yt_bypass_checkbutton.config(state=state)
-        self.browser_label.config(state=state)
         self.yt_bypass_label.config(state=state)
 
     def run_add_to_path(self):
@@ -345,9 +353,9 @@ class HostManagerApp:
                 self.root.after(0, lambda: messagebox.showwarning("Not Found", "Could not find extension ID."))
         threading.Thread(target=_detect, daemon=True).start()
 
-    def _install_thread(self, extension_id):
+    def _install_thread(self, extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass):
         try:
-            self.logic.install(extension_id, self.create_bypass_var.get(), self.browser_var.get(), self.enable_youtube_bypass_var.get())
+            self.logic.install(extension_id, create_bypass, browser_for_bypass, enable_youtube_bypass)
             self.log("Installation Finished!")
         except Exception as e:
             self.log(f"Error: {e}")

@@ -27,6 +27,8 @@ IGNORE_PATTERNS = (
     "port_to_main.py",
     ".gitignore",
     ".gemini*",
+    ".agents",
+    "vulkan_fallback.lua",
     "testing_tools",
     "mcp_server",
     "biome.json",

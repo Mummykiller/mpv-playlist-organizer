@@ -358,6 +358,135 @@ async function runTests() {
 	}
 	console.log("  [OK] import_export prototype-pollution filtering & 64-char folder ID limit");
 
+	// 15. StorageManager.get() returns a deep clone so failed mutations never corrupt _cache
+	const clonedA = await sm.get();
+	clonedA.folders.Default.playlist.push({ id: "corrupt", url: "https://evil.example/x", title: "Corrupt" });
+	const clonedB = await sm.get();
+	assert.strictEqual(
+		clonedB.folders.Default.playlist.some((i) => i.id === "corrupt"),
+		false,
+		"Mutating object returned by StorageManager.get() must not corrupt internal _cache",
+	);
+	console.log("  [OK] StorageManager.get() deep-clone cache isolation");
+
+	// 16. createHandler serializes concurrent non-manualPersistence RMW mutations via withLock
+	const { createHandler } = await import(pathToFileURL(path.join(__dirname, "../../background/handler_factory.js")).href);
+	const factoryOrder = [];
+	const origBgGet = bgStorage.get.bind(bgStorage);
+	const origBgSet = bgStorage.set.bind(bgStorage);
+	try {
+		const factoryData = sm._getDefaultData();
+		bgStorage.get = async () => structuredClone(factoryData);
+		bgStorage.set = async (nextData) => {
+			Object.assign(factoryData, structuredClone(nextData));
+		};
+		const slowMutator = createHandler(async ({ request, data }) => {
+			factoryOrder.push(`start-${request.tag}`);
+			await new Promise((r) => setTimeout(r, request.delayMs));
+			data.folders.Default.playlist.push({ id: request.tag, url: `https://example.com/${request.tag}`, title: request.tag });
+			factoryOrder.push(`end-${request.tag}`);
+			return { success: true };
+		});
+		await Promise.all([
+			slowMutator({ tag: "a", delayMs: 20 }, {}),
+			slowMutator({ tag: "b", delayMs: 0 }, {}),
+		]);
+		assert.deepStrictEqual(factoryOrder, ["start-a", "end-a", "start-b", "end-b"]);
+		assert.strictEqual(factoryData.folders.Default.playlist.length, 2);
+	} finally {
+		bgStorage.get = origBgGet;
+		bgStorage.set = origBgSet;
+	}
+	console.log("  [OK] createHandler serializes auto-persisted RMW with storage.withLock");
+
+	// 17. promptUserConfirmation bounds waits with a timeout when popup/tab never responds
+	const commMod = await import(pathToFileURL(path.join(__dirname, "../../utils/commUtils.module.js")).href);
+	const origSendMsg = global.chrome.runtime.sendMessage;
+	const origTabs = global.chrome.tabs;
+	try {
+		global.chrome.runtime.lastError = null;
+		global.chrome.runtime.sendMessage = (_msg, _cb) => {
+			// Intentionally never invoke cb to simulate unresponsive popup
+		};
+		global.chrome.tabs = {
+			query: async () => [{ id: 77 }],
+			sendMessage: (_tabId, _msg, _cb) => {
+				// Intentionally never invoke cb to simulate unresponsive tab
+			},
+		};
+		const startMs = Date.now();
+		const confirmed = await commMod.promptUserConfirmation("Confirm?", 77, true, 30);
+		const elapsedMs = Date.now() - startMs;
+		assert.strictEqual(confirmed, true, "Timed-out confirmation must fall back to defaultOnUnreachable");
+		assert.ok(elapsedMs < 1000, `promptUserConfirmation should time out promptly, took ${elapsedMs}ms`);
+	} finally {
+		global.chrome.runtime.sendMessage = origSendMsg;
+		global.chrome.tabs = origTabs;
+	}
+	console.log("  [OK] promptUserConfirmation bounded timeout");
+
+	// 18. MessageBridge.send() resolves instead of hanging when destroyed in-flight
+	const mbPath = path.join(__dirname, "../../utils/MessageBridge.js");
+	global.window = { MPV_INTERNAL: { isExtensionReloadError: () => false } };
+	delete require.cache[require.resolve(mbPath)];
+	require(mbPath);
+	let capturedCb = null;
+	const origMbSend = global.chrome.runtime.sendMessage;
+	try {
+		global.chrome.runtime.sendMessage = (_payload, cb) => {
+			capturedCb = cb;
+		};
+		const bridge = new global.window.MPV_INTERNAL.MessageBridge();
+		const sendPromise = bridge.send("ping");
+		bridge.destroy();
+		capturedCb({ success: true });
+		const res = await sendPromise;
+		assert.strictEqual(res.success, false);
+		assert.strictEqual(res.error, "Bridge destroyed");
+	} finally {
+		global.chrome.runtime.sendMessage = origMbSend;
+	}
+	console.log("  [OK] MessageBridge.send() resolves cleanly when destroyed in-flight");
+
+	// 19. nativeConnection preserves raw URL keys in data for get_metadata_cache
+	const nativeMod = await import(`${pathToFileURL(path.join(__dirname, "../../utils/nativeConnection.module.js")).href}?meta=${Date.now()}`);
+	const origConnectNative = global.chrome.runtime.connectNative;
+	try {
+		const messageListeners = [];
+		const mockPort = {
+			onDisconnect: { addListener: () => {} },
+			onMessage: { addListener: (fn) => messageListeners.push(fn) },
+			postMessage: (msg) => {
+				queueMicrotask(() => {
+					if (msg.action === "restore_session") {
+						messageListeners.forEach((fn) => fn({ request_id: msg.request_id, status: "ok" }));
+					} else if (msg.action === "get_metadata_cache") {
+						messageListeners.forEach((fn) =>
+							fn({
+								request_id: msg.request_id,
+								success: true,
+								data: {
+									"https://example.com/my_video_1": { title: "Raw Key" },
+								},
+							}),
+						);
+					}
+				});
+			},
+			disconnect: () => {},
+		};
+		global.chrome.runtime.connectNative = () => mockPort;
+		const metaRes = await nativeMod.callNativeHost({ action: "get_metadata_cache", shard: "0" });
+		assert.strictEqual(metaRes.success, true);
+		assert.ok(
+			Object.hasOwn(metaRes.data, "https://example.com/my_video_1"),
+			"get_metadata_cache must preserve snake_case/URL keys inside data",
+		);
+	} finally {
+		global.chrome.runtime.connectNative = origConnectNative;
+	}
+	console.log("  [OK] callNativeHost preserves verbatim data keys for get_metadata_cache");
+
 	console.log("\nALL JS BRIDGE PROTOCOL & UTILITY TESTS PASSED! ✨");
 }
 

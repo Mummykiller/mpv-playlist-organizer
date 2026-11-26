@@ -1,13 +1,13 @@
 {
   "mcpServers": {
-    "mpv-playlist-organizer": {
+    "mpv": {
       "command": "uv",
       "args": [
         "run",
         "--frozen",
         "--quiet",
         "--directory",
-        "mcp_server",
+        "${PLUGIN_ROOT}/../../../mcp_server",
         "python",
         "server.py"
       ],

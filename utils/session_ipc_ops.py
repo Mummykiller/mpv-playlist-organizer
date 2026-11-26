@@ -442,8 +442,9 @@ def hot_swap_item(session, launch_item, folder_id, settings, url_items_list):
         session.ipc_manager.send({"command": ["set_property", "cookies-file", raw_cookies_file]})
 
     if lua_options.get('headers') and isinstance(lua_options['headers'], dict):
-        ua = lua_options['headers'].get('User-Agent')
-        ref = lua_options['headers'].get('Referer')
+        safe_headers = security.sanitize_http_headers(lua_options['headers'])
+        ua = safe_headers.get('User-Agent')
+        ref = safe_headers.get('Referer')
         if ua:
             session.ipc_manager.send({"command": ["set_property", "user-agent", ua]})
         if ref:

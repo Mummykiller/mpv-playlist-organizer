@@ -7,11 +7,13 @@ os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.dont_write_bytecode = True
 
 # --- Windows Console Hiding Logic ---
-if sys.platform == "win32" and sys.executable.endswith("python.exe") and "--cli" not in sys.argv:
-    import subprocess
-    # Re-launch with pythonw.exe to hide the console
-    subprocess.Popen([sys.executable.replace("python.exe", "pythonw.exe"), __file__] + sys.argv[1:])
-    sys.exit(0)
+if sys.platform == "win32" and sys.executable.lower().endswith("python.exe") and "--cli" not in sys.argv:
+    pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    if os.path.isfile(pythonw):
+        import subprocess
+        # Re-launch with pythonw.exe to hide the console
+        subprocess.Popen([pythonw, __file__] + sys.argv[1:])
+        sys.exit(0)
 
 # --- GUI Detection ---
 GUI_AVAILABLE = True
@@ -31,8 +33,14 @@ def main():
         app = CommandLineApp()
         app.run()
     else:
-        # Launch the Tkinter GUI
-        root = tk.Tk()
+        # Launch the Tkinter GUI; fall back to CLI if no display is available
+        try:
+            root = tk.Tk()
+        except tk.TclError as e:
+            print(f"GUI unavailable ({e}); falling back to CLI mode.", file=sys.stderr)
+            app = CommandLineApp()
+            app.run()
+            return
         app = HostManagerApp(root)
         root.mainloop()
 

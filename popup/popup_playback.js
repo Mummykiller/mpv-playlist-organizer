@@ -5,6 +5,23 @@ import { domUtils } from "../utils/domUtils.module.js";
 import { sendMessageAsync } from "../utils/commUtils.module.js";
 import { MpvInterface } from "../utils/MpvInterface.module.js";
 
+export function isYouTubeVideoUrl(urlStr) {
+	if (!urlStr || typeof urlStr !== "string") return false;
+	try {
+		const parsed = new URL(urlStr);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+		const host = parsed.hostname.toLowerCase();
+		const isYouTubeHost = host === "youtube.com" || host.endsWith(".youtube.com");
+		const path = parsed.pathname;
+		return (
+			isYouTubeHost &&
+			(path === "/watch" || path.startsWith("/shorts/") || path.startsWith("/live/"))
+		);
+	} catch {
+		return false;
+	}
+}
+
 export function createPlaybackManager(ctx) {
 	const {
 		popupState,
@@ -319,7 +336,7 @@ export function createPlaybackManager(ctx) {
 				throw new Error("No active tab");
 			}
 
-			const isYouTube = !!activeTab?.url?.includes("youtube.com/watch");
+			const isYouTube = isYouTubeVideoUrl(activeTab?.url);
 			const streamUrl =
 				getCurrentDetectedUrl() || (isYouTube ? activeTab.url : null);
 

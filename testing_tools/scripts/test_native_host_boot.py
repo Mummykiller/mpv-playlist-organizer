@@ -95,6 +95,7 @@ class TestNativeHostBoot(BaseTestCase):
     def test_host_clean_exit_on_stdin_eof(self):
         """Verifies host process detects stdin EOF cleanly and exits with code 0."""
         proc = self.spawn_host(self.test_dir)
+        self.assertTrue(os.path.isdir(os.path.join(self.test_dir, "tmp")), "spawn_native_host must create isolated tmp subdir")
 
         # Close stdin to trigger EOF in get_message
         proc.stdin.close()

@@ -180,27 +180,56 @@ export function normalizeKeys(data, preserveChildKeys = false) {
 	return normalized;
 }
 
+const CONFIRMATION_TIMEOUT_MS = 60000;
+
 /**
  * Prompts the user for confirmation via the open popup or the active tab's on-page controller.
  * @param {string} message - The confirmation question/message to display.
  * @param {number|null} preferredTabId - Optional tab ID to prompt if popup is closed.
  * @param {boolean} defaultOnUnreachable - Value to return if neither popup nor tab can be reached.
+ * @param {number} [timeoutMs=60000] - Maximum time to wait for a response before falling back.
  * @returns {Promise<boolean>}
  */
-export async function promptUserConfirmation(message, preferredTabId = null, defaultOnUnreachable = false) {
+export async function promptUserConfirmation(
+	message,
+	preferredTabId = null,
+	defaultOnUnreachable = false,
+	timeoutMs = CONFIRMATION_TIMEOUT_MS,
+) {
+	const sendWithTimeout = (invoke) =>
+		new Promise((resolve) => {
+			let settled = false;
+			let timer = null;
+			const finish = (val) => {
+				if (settled) return;
+				settled = true;
+				if (timer !== null) {
+					clearTimeout(timer);
+					timer = null;
+				}
+				resolve(val);
+			};
+			timer = setTimeout(() => finish(null), timeoutMs);
+			try {
+				invoke((res) => {
+					if (chrome.runtime.lastError) finish(null);
+					else finish(res);
+				});
+			} catch (_e) {
+				finish(null);
+			}
+		});
+
 	// 1. Try sending to open popup first
-	const popupResponse = await new Promise((resolve) => {
-		if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
-			return resolve(null);
-		}
-		chrome.runtime.sendMessage(
-			{ action: "show_popup_confirmation", message },
-			(res) => {
-				if (chrome.runtime.lastError) resolve(null);
-				else resolve(res);
-			},
-		);
-	});
+	const popupResponse =
+		typeof chrome !== "undefined" && chrome.runtime?.sendMessage
+			? await sendWithTimeout((cb) =>
+					chrome.runtime.sendMessage(
+						{ action: "show_popup_confirmation", message },
+						cb,
+					),
+				)
+			: null;
 	if (popupResponse && typeof popupResponse.confirmed === "boolean") {
 		return popupResponse.confirmed;
 	}
@@ -213,16 +242,13 @@ export async function promptUserConfirmation(message, preferredTabId = null, def
 	}
 
 	if (targetTabId && typeof chrome !== "undefined" && chrome.tabs?.sendMessage) {
-		const tabResponse = await new Promise((resolve) => {
+		const tabResponse = await sendWithTimeout((cb) =>
 			chrome.tabs.sendMessage(
 				targetTabId,
 				{ action: "show_confirmation", message },
-				(res) => {
-					if (chrome.runtime.lastError) resolve(null);
-					else resolve(res);
-				},
-			);
-		});
+				cb,
+			),
+		);
 		if (tabResponse && typeof tabResponse.confirmed === "boolean") {
 			return tabResponse.confirmed;
 		}

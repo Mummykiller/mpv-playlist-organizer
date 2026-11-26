@@ -322,16 +322,22 @@ local function apply_adaptive_settings()
     if opts.headers then
         local h_list = {}
         for k, v in pairs(opts.headers) do
-            local kl = k:lower()
-            if kl == "user-agent" then 
-                debug_log("Setting User-Agent: " .. v)
-                set_property_if_diff("user-agent", v)
-            elseif kl == "referer" then 
-                debug_log("Setting Referrer: " .. v)
-                set_property_if_diff("referrer", v)
-            else 
-                debug_log("Adding to http-header-fields: " .. k .. ": " .. v)
-                table.insert(h_list, k .. ": " .. v) 
+            if type(k) == "string" and type(v) == "string" then
+                local clean_k = k:gsub("[\r\n]", "")
+                local clean_v = v:gsub("[\r\n]", "")
+                if clean_k ~= "" then
+                    local kl = clean_k:lower()
+                    if kl == "user-agent" then
+                        debug_log("Setting User-Agent: " .. clean_v)
+                        set_property_if_diff("user-agent", clean_v)
+                    elseif kl == "referer" then
+                        debug_log("Setting Referrer: " .. clean_v)
+                        set_property_if_diff("referrer", clean_v)
+                    else
+                        debug_log("Adding to http-header-fields: " .. clean_k .. ": " .. clean_v)
+                        table.insert(h_list, clean_k .. ": " .. clean_v)
+                    end
+                end
             end
         end
         if #h_list > 0 then mp.set_property_native("http-header-fields", h_list) end

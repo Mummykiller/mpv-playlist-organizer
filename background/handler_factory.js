@@ -41,24 +41,40 @@ export function createHandler(logic, options = {}) {
 				return { success: false, error: "Missing folderId." };
 			}
 
-			// Context Setup: Fetch storage
-			const data = await storage.get();
-			context.data = data;
-			context.storage = storage;
+			const runCore = async () => {
+				// Context Setup: Fetch storage
+				const data = await storage.get();
+				context.data = data;
+				context.storage = storage;
 
-			// Execution: Run the specific logic
-			const result = await logic(context);
+				// Execution: Run the specific logic
+				const result = await logic(context);
 
-			if (!result || result.success === false) {
-				const failResult = result || { success: false, error: "Unknown error in handler logic." };
-				if (onError) await onError(failResult, context);
-				return failResult;
+				if (!result || result.success === false) {
+					return {
+						ok: false,
+						result: result || { success: false, error: "Unknown error in handler logic." },
+					};
+				}
+
+				// Persistence: Auto-save if logic was successful and not manual
+				if (!manualPersistence) {
+					await storage.set(context.data, context.folderId);
+				}
+
+				return { ok: true, result };
+			};
+
+			const outcome =
+				!manualPersistence && typeof storage.withLock === "function"
+					? await storage.withLock(runCore)
+					: await runCore();
+
+			if (!outcome.ok) {
+				if (onError) await onError(outcome.result, context);
+				return outcome.result;
 			}
-
-			// Persistence: Auto-save if logic was successful and not manual
-			if (!manualPersistence) {
-				await storage.set(context.data, context.folderId);
-			}
+			const result = outcome.result;
 
 			// Side-Effects
 			if (syncToNative) {
@@ -73,7 +89,7 @@ export function createHandler(logic, options = {}) {
 
 			if (broadcastFolders) {
 				broadcastToTabs({ 
-					action: "foldersChanged", 
+					action: "folders_changed", 
 					foldersChanged: true, 
 					folderId: result.folderId || context.folderId 
 				});

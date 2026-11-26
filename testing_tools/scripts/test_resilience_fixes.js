@@ -512,6 +512,172 @@ async function testSleepWakeStalePlaybackReconciliation() {
 	}
 }
 
+async function testBackgroundBridgeAuditFixes() {
+	// 1. broadcastPlaylistState must not clobber active_playback_state for another running folder
+	const localStore = {
+		mpv_playback_cache: {
+			folderId: "PlayingFolder",
+			isRunning: true,
+			isLaunching: false,
+			sessionIds: ["p1"],
+			lastPlayedId: "p1",
+		},
+		active_playback_state: {
+			folderId: "PlayingFolder",
+			isRunning: true,
+			isLaunching: false,
+			sessionIds: ["p1"],
+		},
+	};
+	const tabMessages = [];
+	const storageData = {
+		folders: {
+			PlayingFolder: { playlist: [{ id: "p1", url: "https://example.com/p1", title: "P1" }], lastPlayedId: "p1" },
+			IdleFolder: { playlist: [{ id: "i1", url: "https://example.com/i1", title: "I1" }], lastPlayedId: null },
+		},
+		folderOrder: ["PlayingFolder", "IdleFolder"],
+		settings: { lastUsedFolderId: "PlayingFolder", uiPreferences: { global: {} } },
+	};
+
+	global.chrome = {
+		...global.chrome,
+		runtime: {
+			id: "test-ext-id",
+			sendMessage: async () => ({}),
+			onMessage: { addListener: () => {} },
+		},
+		tabs: {
+			query: async () => [{ id: 10 }],
+			sendMessage: async (_id, msg) => { tabMessages.push(msg); },
+		},
+		contextMenus: { removeAll: async () => {}, create: () => {} },
+		storage: {
+			local: {
+				get: async (keys) => {
+					if (typeof keys === "string") return { [keys]: localStore[keys] };
+					if (Array.isArray(keys)) {
+						const out = {};
+						for (const k of keys) out[k] = localStore[k];
+						return out;
+					}
+					return { ...localStore };
+				},
+				set: async (obj) => { Object.assign(localStore, obj); },
+				remove: async (k) => { delete localStore[k]; },
+			},
+			session: {
+				get: async () => ({}),
+				set: async () => {},
+				remove: async () => {},
+			},
+			onChanged: { addListener: () => {} },
+		},
+	};
+
+	const { storage } = await import(pathToFileURL(path.join(ROOT, "background/storage_instance.js")).href);
+	const origGet = storage.get.bind(storage);
+	const origSet = storage.set.bind(storage);
+	const { nativeLink } = await import(pathToFileURL(path.join(ROOT, "utils/nativeLink.js")).href);
+	const origGetPlaybackStatus = nativeLink.getPlaybackStatus;
+
+	try {
+		storage.get = async () => structuredClone(storageData);
+		storage.set = async () => {};
+		nativeLink.getPlaybackStatus = async () => ({
+			success: true,
+			isRunning: true,
+			folderId: "PlayingFolder",
+			isPaused: false,
+			sessionIds: ["p1"],
+			lastPlayedId: "p1",
+		});
+
+		const { playbackManager } = await import(pathToFileURL(path.join(ROOT, "background/playback_manager.js")).href);
+		const { broadcastPlaylistState } = await import(pathToFileURL(path.join(ROOT, "background/ui_broadcaster.js")).href);
+		await playbackManager.setPlaybackCache(localStore.mpv_playback_cache);
+
+		await broadcastPlaylistState("IdleFolder", storageData.folders.IdleFolder.playlist);
+		assert.strictEqual(
+			localStore.active_playback_state.folderId,
+			"PlayingFolder",
+			"broadcastPlaylistState for inactive folder must preserve active folder's active_playback_state",
+		);
+		assert.strictEqual(localStore.active_playback_state.isRunning, true);
+		assert.ok(
+			tabMessages.some((m) => m.action === "playlist_dirty" && m.folderId === "IdleFolder"),
+			"broadcastPlaylistState must still broadcast playlist_dirty to tabs",
+		);
+
+		// 2. PlaybackManager case-insensitive getSession/cleanupSession + setPlaybackCache/clearPlaybackCache
+		const sA = playbackManager.getSession("CaseFolder");
+		const sB = playbackManager.getSession("casefolder");
+		assert.strictEqual(sA, sB, "getSession must resolve existing sessions case-insensitively");
+		playbackManager.cleanupSession("CASEFOLDER");
+		assert.strictEqual(
+			playbackManager.findSessionByFolderId("CaseFolder"),
+			null,
+			"cleanupSession must delete matched canonical key case-insensitively",
+		);
+
+		await playbackManager.clearPlaybackCache();
+		assert.strictEqual(playbackManager.syncCache, null, "clearPlaybackCache must clear syncCache");
+		assert.strictEqual(localStore.mpv_playback_cache, undefined, "clearPlaybackCache must remove storage cache");
+
+		// 3. handleSwitchPlaylist with <=1 folder must not write storage or broadcast undefined folderId
+		let setCalls = 0;
+		storage.get = async () => ({
+			folders: { OnlyOne: { playlist: [] } },
+			folderOrder: ["OnlyOne"],
+			settings: { lastUsedFolderId: "OnlyOne", uiPreferences: { global: {} } },
+		});
+		storage.set = async () => { setCalls++; };
+		tabMessages.length = 0;
+		const { handleSwitchPlaylist } = await import(pathToFileURL(path.join(ROOT, "background/handlers/ui_state.js")).href);
+		const switchRes = await handleSwitchPlaylist({}, {});
+		assert.strictEqual(switchRes.success, true);
+		assert.strictEqual(switchRes.folderId, undefined);
+		assert.strictEqual(setCalls, 0, "handleSwitchPlaylist with <=1 folder must not write storage");
+		assert.strictEqual(
+			tabMessages.some((m) => m.action === "last_folder_changed"),
+			false,
+			"handleSwitchPlaylist must not broadcast last_folder_changed when folderId is undefined",
+		);
+	} finally {
+		storage.get = origGet;
+		storage.set = origSet;
+		nativeLink.getPlaybackStatus = origGetPlaybackStatus;
+	}
+
+	// 4. m3u8_scanner cold-wake persistScannerState must wait for scannerInitPromise
+	let resolveScannerGet;
+	const scannerSession = {
+		m3u8_scanner_state: {
+			detectedUrlsState: { 1: "https://example.com/old.m3u8" },
+			lastDetectedUrls: { 1: { url: "https://example.com/old.m3u8", timestamp: Date.now() } },
+		},
+	};
+	global.chrome = {
+		...global.chrome,
+		storage: {
+			...global.chrome.storage,
+			session: {
+				get: () => new Promise((r) => { resolveScannerGet = () => r(structuredClone(scannerSession)); }),
+				set: async (obj) => { Object.assign(scannerSession, structuredClone(obj)); },
+				remove: async (k) => { delete scannerSession[k]; },
+			},
+		},
+	};
+	const scannerMod = await import(`${pathToFileURL(path.join(ROOT, "background/handlers/m3u8_scanner.js")).href}?coldwake=${Date.now()}`);
+	scannerMod.handleUpdateDetectedUrlForTab(2, "https://example.com/new.m3u8");
+	// Before scannerInitPromise resolves, persisted state must still have tab 1
+	assert.strictEqual(scannerSession.m3u8_scanner_state.detectedUrlsState["1"], "https://example.com/old.m3u8");
+	resolveScannerGet();
+	await scannerMod.scannerInitPromise;
+	await new Promise((r) => setTimeout(r, 20));
+	assert.strictEqual(scannerSession.m3u8_scanner_state.detectedUrlsState["1"], "https://example.com/old.m3u8");
+	assert.strictEqual(scannerSession.m3u8_scanner_state.detectedUrlsState["2"], "https://example.com/new.m3u8");
+}
+
 async function main() {
 	await testSystemLoggerPersistRejectionSafety();
 	await testPlaylistRendererClipboardFailureSafety();
@@ -520,6 +686,7 @@ async function main() {
 	await testPlaybackCanonicalFolderAndEarlyClearCasing();
 	await testCrossSideMpvYouTubeRegressionFixes();
 	await testSleepWakeStalePlaybackReconciliation();
+	await testBackgroundBridgeAuditFixes();
 	console.log("All resilience fix tests passed!");
 }
 

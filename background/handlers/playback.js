@@ -341,10 +341,7 @@ export async function handleMpvExited(data) {
 	}
 
 	// Clear cache on exit before broadcasting state
-	if (chrome.storage?.local?.remove) {
-		await chrome.storage.local.remove("mpv_playback_cache");
-	}
-	playbackManager.syncCache = null;
+	await playbackManager.clearPlaybackCache();
 
 	// 1. Immediate UI Reset
 	await broadcastPlaybackState(folderId, { isRunning: false, isClosing: false, isIdle: false });
@@ -731,7 +728,7 @@ async function setLaunchingCache(folderId, playNewInstance) {
 			isLaunching: true,
 			timestamp: Date.now(),
 		};
-		await chrome.storage.local.set({ mpv_playback_cache: cacheData });
+		await playbackManager.setPlaybackCache(cacheData);
 		broadcastPlaybackState(folderId, { isLaunching: true, isRunning: true });
 	}
 }
@@ -771,9 +768,7 @@ async function _handlePlayLogic(context) {
         if (response.success && !playNewInstance) {
             const { mpv_playback_cache: current } = await chrome.storage.local.get("mpv_playback_cache");
             if (current && current.folderId === folderId) {
-                await chrome.storage.local.set({
-                    mpv_playback_cache: { ...current, isLaunching: false }
-                });
+                await playbackManager.setPlaybackCache({ ...current, isLaunching: false });
             }
 
             const session = playbackManager.getSession(folderId);
@@ -794,7 +789,7 @@ async function _handlePlayLogic(context) {
                 isLastInFolder: isLast,
             };
         } else if (!response.success && !playNewInstance && folderId) {
-            await chrome.storage.local.remove("mpv_playback_cache");
+            await playbackManager.clearPlaybackCache();
             broadcastPlaybackState(folderId, { isLaunching: false, isRunning: false, isIdle: false });
         }
         return response;
@@ -825,7 +820,7 @@ export const handlePlay = createHandler(_handlePlayLogic, {
     broadcastPlaylist: true,
     onError: async (error, { folderId }) => {
         if (folderId) {
-            await chrome.storage.local.remove("mpv_playback_cache");
+            await playbackManager.clearPlaybackCache();
             broadcastPlaybackState(folderId, { isLaunching: false, isRunning: false, isIdle: false });
         }
     }
@@ -865,9 +860,7 @@ async function _handlePlayM3ULogic(request, data) {
 	if (response.success && !playNewInstance) {
 		const { mpv_playback_cache: current } = await chrome.storage.local.get("mpv_playback_cache");
 		if (current && current.folderId === folderId) {
-			await chrome.storage.local.set({
-				mpv_playback_cache: { ...current, isLaunching: false }
-			});
+			await playbackManager.setPlaybackCache({ ...current, isLaunching: false });
 		}
 
 		const session = playbackManager.getSession(folderId);
@@ -901,7 +894,7 @@ async function _handlePlayM3ULogic(request, data) {
 			playlistItems: response.playlistItems,
 		};
 	} else if (!response.success && !playNewInstance && folderId) {
-		await chrome.storage.local.remove("mpv_playback_cache");
+		await playbackManager.clearPlaybackCache();
 		broadcastPlaybackState(folderId, { isLaunching: false, isRunning: false, isIdle: false });
 	}
     return response;
@@ -914,7 +907,7 @@ export const handlePlayM3U = createHandler(async (context) => {
 	broadcastPlaylist: true,
 	onError: async (error, { folderId }) => {
 		if (folderId) {
-			await chrome.storage.local.remove("mpv_playback_cache");
+			await playbackManager.clearPlaybackCache();
 			broadcastPlaybackState(folderId, { isLaunching: false, isRunning: false, isIdle: false });
 		}
 	}
@@ -951,7 +944,7 @@ export async function handleUpdateLastPlayed(data) {
 			if (currentCache.folderId?.toLowerCase() === folderId.toLowerCase()) {
 				currentCache.isIdle = false;
 				currentCache.isRunning = true;
-				await chrome.storage.local.set({ mpv_playback_cache: currentCache });
+				await playbackManager.setPlaybackCache(currentCache);
 			}
 			
 			// Force sync to disk so shard reflects the change
@@ -1015,8 +1008,7 @@ export async function handlePlaybackStatusChanged(data) {
 		timestamp: Date.now(),
 	};
 
-	await chrome.storage.local.set({ mpv_playback_cache: cacheData });
-	playbackManager.syncCache = cacheData;
+	await playbackManager.setPlaybackCache(cacheData);
 
 	const session = playbackManager.getSession(actualFolderId);
 	if (watchedIds && Array.isArray(watchedIds)) {
@@ -1267,8 +1259,7 @@ export async function handleSessionRestored(request) {
 			isLaunching: false,
 			timestamp: Date.now(),
 		};
-		await chrome.storage.local.set({ mpv_playback_cache: cacheData });
-		playbackManager.syncCache = cacheData;
+		await playbackManager.setPlaybackCache(cacheData);
 
 		const storageData = await storage.get();
 		const rawFolderId = result.folderId;

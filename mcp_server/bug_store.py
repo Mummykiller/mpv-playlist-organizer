@@ -4,7 +4,7 @@ import os
 import re
 import sqlite3
 import sys
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -79,13 +79,31 @@ def _connect(db_path: str | None = None) -> sqlite3.Connection:
     parent = os.path.dirname(os.path.abspath(resolved))
     if parent:
         os.makedirs(parent, exist_ok=True)
-    conn = sqlite3.connect(resolved, timeout=5.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    conn.executescript(SCHEMA_SQL)
+    conn = sqlite3.connect(resolved, timeout=5.0, isolation_level=None)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.executescript(SCHEMA_SQL)
+    except Exception:
+        conn.close()
+        raise
     return conn
+
+
+@contextmanager
+def _write_tx(conn: sqlite3.Connection):
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    else:
+        if conn.in_transaction:
+            conn.execute("COMMIT")
 
 
 def _validate_slug(slug: Any) -> tuple[str | None, str | None]:
@@ -106,7 +124,7 @@ def log_bug_pattern(
     title: str,
     location: str,
     category: str = "general",
-    severity: str = "medium",
+    severity: str | None = None,
     note: str = "",
     details: str = "",
     suggested_check: str = "",
@@ -128,9 +146,11 @@ def log_bug_pattern(
     if clean_cat not in VALID_CATEGORIES:
         return {"ok": False, "error": f"Invalid category '{category}'. Use one of: {sorted(VALID_CATEGORIES)}"}
 
-    clean_sev = severity.strip().lower() if isinstance(severity, str) else ""
-    if clean_sev not in VALID_SEVERITIES:
-        return {"ok": False, "error": f"Invalid severity '{severity}'. Use one of: {sorted(VALID_SEVERITIES)}"}
+    clean_sev: str | None = None
+    if severity is not None:
+        clean_sev = severity.strip().lower() if isinstance(severity, str) else ""
+        if clean_sev not in VALID_SEVERITIES:
+            return {"ok": False, "error": f"Invalid severity '{severity}'. Use one of: {sorted(VALID_SEVERITIES)}"}
 
     clean_note = note.strip()[:500] if isinstance(note, str) else ""
     clean_details = details.strip()[:4000] if isinstance(details, str) else ""
@@ -138,7 +158,7 @@ def log_bug_pattern(
     now = _utc_now()
 
     with closing(_connect(db_path)) as conn:
-        with conn:
+        with _write_tx(conn):
             existing = conn.execute(
                 "SELECT slug, title, category, severity, status, details, suggested_check, test_ref "
                 "FROM bug_patterns WHERE slug = ?",
@@ -147,16 +167,18 @@ def log_bug_pattern(
 
             reopened = False
             if existing is None:
+                insert_sev = clean_sev if clean_sev is not None else "medium"
                 conn.execute(
                     """
                     INSERT INTO bug_patterns
                         (slug, title, category, severity, hits, status, details, suggested_check, test_ref, created_at, updated_at)
                     VALUES (?, ?, ?, ?, 1, 'watching', ?, ?, NULL, ?, ?)
                     """,
-                    (clean_slug, clean_title, clean_cat, clean_sev, clean_details, clean_check, now, now),
+                    (clean_slug, clean_title, clean_cat, insert_sev, clean_details, clean_check, now, now),
                 )
             else:
                 new_category = existing["category"] if (clean_cat == "general" and existing["category"] != "general") else clean_cat
+                new_severity = clean_sev if clean_sev is not None else existing["severity"]
                 new_details = clean_details or existing["details"]
                 new_check = clean_check or existing["suggested_check"]
                 reopened = existing["status"] == "graduated"
@@ -166,7 +188,7 @@ def log_bug_pattern(
                     SET title = ?, category = ?, severity = ?, details = ?, suggested_check = ?, updated_at = ?
                     WHERE slug = ?
                     """,
-                    (clean_title, new_category, clean_sev, new_details, new_check, now, clean_slug),
+                    (clean_title, new_category, new_severity, new_details, new_check, now, clean_slug),
                 )
 
             occ = conn.execute(
@@ -391,7 +413,7 @@ def graduate_bug_pattern(
     now = _utc_now()
 
     with closing(_connect(db_path)) as conn:
-        with conn:
+        with _write_tx(conn):
             row = conn.execute(
                 "SELECT slug, hits, details FROM bug_patterns WHERE slug = ?",
                 (clean_slug,),
@@ -427,12 +449,17 @@ def remove_bug_pattern(
     if err or clean_slug is None:
         return {"ok": False, "error": err or "Invalid slug"}
 
-    clean_loc = location.strip() if isinstance(location, str) else ""
+    clean_loc: str | None = None
+    if location is not None:
+        clean_loc = location.strip() if isinstance(location, str) else ""
+        if not clean_loc:
+            return {"ok": False, "error": "Invalid location: must be a non-empty string when provided"}
+
     clean_reason = reason.strip()[:300] if isinstance(reason, str) else ""
     now = _utc_now()
 
     with closing(_connect(db_path)) as conn:
-        with conn:
+        with _write_tx(conn):
             row = conn.execute(
                 "SELECT slug, status FROM bug_patterns WHERE slug = ?",
                 (clean_slug,),
@@ -440,7 +467,7 @@ def remove_bug_pattern(
             if row is None:
                 return {"ok": False, "error": f"Bug pattern '{clean_slug}' not found"}
 
-            if not clean_loc:
+            if clean_loc is None:
                 conn.execute("DELETE FROM bug_patterns WHERE slug = ?", (clean_slug,))
                 res: dict[str, Any] = {
                     "ok": True,

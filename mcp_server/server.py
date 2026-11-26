@@ -1,7 +1,6 @@
 import logging
 import os
 import sys
-from typing import Any
 
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -26,9 +25,9 @@ def verify_repo(mode: str = "full", target: str | None = None, sync_contract: bo
 
 
 @mcp.tool(structured_output=False)
-def check_repo_drift() -> str:
-    """Check transpiled JS, bridge contract, yt-tools-standalone, generated-file edits, and __pycache__."""
-    return tools_impl.compact_json(tools_impl.check_repo_drift())
+def check_repo_drift(include_pycache: bool = True) -> str:
+    """Check transpiled JS, bridge contract, yt-tools-standalone, generated-file edits, and optional __pycache__."""
+    return tools_impl.compact_json(tools_impl.check_repo_drift(include_pycache=include_pycache))
 
 
 @mcp.tool(structured_output=False)
@@ -63,25 +62,25 @@ def inspect_runtime(
 
 @mcp.tool(structured_output=False)
 def simulate_native_message(
-    payload: dict[str, Any] | list[dict[str, Any]] | str,
-    seed_state: dict[str, Any] | None = None,
+    payload: str,
+    seed_state: str = "",
     timeout: float = 5.0,
 ) -> str:
-    """Sandboxed native_host.py test against temp DATA_DIR using 4-byte length-prefixed JSON framing."""
+    """Sandboxed native_host.py test against temp DATA_DIR using 4-byte length-prefixed JSON framing. Pass payload and optional seed_state as JSON strings."""
     return tools_impl.compact_json(
-        tools_impl.simulate_native_message(payload=payload, seed_state=seed_state, timeout=timeout)
+        tools_impl.simulate_native_message(payload=payload, seed_state=seed_state or None, timeout=timeout)
     )
 
 
 @mcp.tool(structured_output=False)
 def test_mpv_pipeline(
     mode: str = "dry_run",
-    urls: list[Any] | None = None,
-    options: dict[str, Any] | None = None,
+    urls: list[str] | None = None,
+    options: str = "",
 ) -> str:
-    """Dry-run mpv argv/M3U builder or run short-lived headless mpv with Lua scripts and temp IPC."""
+    """Dry-run mpv argv/M3U builder or run short-lived headless mpv with Lua scripts and temp IPC. urls entries may be URLs or JSON item objects; options is an optional JSON object string."""
     return tools_impl.compact_json(
-        tools_impl.test_mpv_pipeline(mode=mode, urls=urls, options=options)
+        tools_impl.test_mpv_pipeline(mode=mode, urls=urls, options=options or None)
     )
 
 
@@ -91,7 +90,7 @@ def log_bug_pattern(
     title: str,
     location: str,
     category: str = "general",
-    severity: str = "medium",
+    severity: str | None = None,
     note: str = "",
     details: str = "",
     suggested_check: str = "",

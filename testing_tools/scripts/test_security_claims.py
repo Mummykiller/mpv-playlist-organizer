@@ -695,24 +695,105 @@ class TestSecurityClaims(BaseTestCase):
                 return False
 
         # 1. Binary Content-Type bails early
-        opener_bin = MagicMock()
-        opener_bin.open.return_value = FakeResp(b"binary-video-data", "video/mp4")
-        with patch("urllib.request.build_opener", return_value=opener_bin):
+        with patch("urllib.request.OpenerDirector.open", return_value=FakeResp(b"binary-video-data", "video/mp4")):
             self.assertIsNone(proc._fetch_remote_m3u("https://example.com/video.mp4", None))
 
         # 2. Oversized M3U (> 2 MiB) aborted
         oversized = b"#EXTM3U\n" + (b"A" * (proc.MAX_M3U_BYTES + 100))
-        opener_big = MagicMock()
-        opener_big.open.return_value = FakeResp(oversized, "application/vnd.apple.mpegurl")
-        with patch("urllib.request.build_opener", return_value=opener_big):
+        with patch("urllib.request.OpenerDirector.open", return_value=FakeResp(oversized, "application/vnd.apple.mpegurl")):
             self.assertIsNone(proc._fetch_remote_m3u("https://example.com/big.m3u8", None))
 
         # 3. Normal small M3U succeeds
         small = b"#EXTM3U\nhttps://example.com/stream.m3u8\n"
-        opener_ok = MagicMock()
-        opener_ok.open.return_value = FakeResp(small, "application/vnd.apple.mpegurl; charset=utf-8")
-        with patch("urllib.request.build_opener", return_value=opener_ok):
+        with patch("urllib.request.OpenerDirector.open", return_value=FakeResp(small, "application/vnd.apple.mpegurl; charset=utf-8")):
             self.assertEqual(proc._fetch_remote_m3u("https://example.com/list.m3u8", None), small.decode("utf-8"))
+
+        # 4. Non-web URL (file://) blocked before opening; opener excludes FileHandler/FTPHandler
+        self.assertIsNone(proc._fetch_remote_m3u("file:///etc/passwd", None))
+        import urllib.request
+        captured_handlers = []
+        orig_add = urllib.request.OpenerDirector.add_handler
+        def spy_add(self_opener, handler):
+            captured_handlers.append(type(handler).__name__)
+            return orig_add(self_opener, handler)
+        with patch("urllib.request.OpenerDirector.add_handler", spy_add), \
+             patch("urllib.request.OpenerDirector.open", return_value=FakeResp(small, "text/plain")):
+            proc._fetch_remote_m3u("https://example.com/list.m3u8", None)
+        self.assertNotIn("FileHandler", captured_handlers)
+        self.assertNotIn("FTPHandler", captured_handlers)
+        self.assertIn("HTTPHandler", captured_handlers)
+        self.assertIn("HTTPSHandler", captured_handlers)
+
+    def test_ytdlp_cookie_option_injection_and_http_header_crlf_sanitization(self):
+        """Regression: sanitize_ytdlp_options validates cookies/cookies-from-browser; sanitize_http_headers strips CRLF."""
+        import services
+        from utils.m3u_parser import parse_m3u
+        from utils import session_ipc_ops
+        from unittest.mock import MagicMock
+
+        # 1. Cookie file/browser injection in sanitize_ytdlp_options
+        safe_cookie = os.path.join(file_io.TEMP_DIR, "mpv_cookies_test.txt")
+        self.assertEqual(
+            security.sanitize_ytdlp_options("cookies=/etc/passwd,cookies-from-browser=evil;id,format=best"),
+            "format=best",
+        )
+        ok_opts = security.sanitize_ytdlp_options(f"cookies={safe_cookie},cookies-from-browser=chrome:Profile 1")
+        self.assertIn(f"cookies={safe_cookie}", ok_opts)
+        self.assertIn("cookies-from-browser=chrome:Profile 1", ok_opts)
+
+        # 2. sanitize_http_headers helper
+        dirty = {
+            "User-Agent": "Agent\r\nX-Injected: 1\x00",
+            "Referer": "https://example.com/\r\nEvil: yes",
+            "Referer\n": "https://evil.example.com/",
+            "Bad Header": "val",
+            "Bad:Name": "val",
+            "NonString": 123,
+        }
+        cleaned = security.sanitize_http_headers(dirty)
+        self.assertEqual(cleaned, {
+            "User-Agent": "AgentX-Injected: 1",
+            "Referer": "https://example.com/Evil: yes",
+        })
+
+        # 3. Applied in construct_lua_options, parse_m3u, and hot_swap_item
+        lua_opts, _ = services.construct_lua_options(
+            {"id": "1", "url": "https://example.com/v.mp4", "headers": dirty}, {}, PROJECT_ROOT
+        )
+        self.assertNotIn("Bad Header", lua_opts["headers"])
+        self.assertNotIn("\r", lua_opts["headers"]["User-Agent"])
+        self.assertNotIn("\n", lua_opts["headers"]["Referer"])
+
+        m3u_items = parse_m3u("#EXTM3U\n#EXT-X-HEADERS:Bad Key=1|X-Good=ok\r\nhttps://example.com/a.mp4\n")
+        self.assertEqual(m3u_items[0]["headers"], {"X-Good": "ok"})
+
+        mock_session = MagicMock()
+        mock_session.SCRIPT_DIR = PROJECT_ROOT
+        mock_session.ipc_manager.is_connected.return_value = True
+        mock_session.ipc_manager.get_property.side_effect = [[{"filename": "https://example.com/a.mp4"}], 1]
+        session_ipc_ops.hot_swap_item(
+            mock_session,
+            {"id": "1", "url": "https://example.com/a.mp4", "headers": {"User-Agent": "UA\r\nBad", "Referer": "https://a.com/\nX"}},
+            "Folder",
+            {},
+            [],
+        )
+        ua_calls = [c[0][0]["command"][2] for c in mock_session.ipc_manager.send.call_args_list if c[0][0].get("command", [])[:2] == ["set_property", "user-agent"]]
+        self.assertEqual(ua_calls, ["UABad"])
+
+    def test_log_event_level_allowlist(self):
+        """Regression: handle_log_event uses explicit allowlist instead of arbitrary getattr(logging, ...)."""
+        from unittest.mock import MagicMock, patch
+        from utils.handlers.data_handler import DataHandler
+        from utils import native_link
+        import logging
+
+        handler = DataHandler(MagicMock())
+        req = native_link.LogRequest(action="log_event", level="getLogger", message="hi", context="BG")
+        with patch("logging.log") as mock_log:
+            res = handler.handle_log_event(req)
+        self.assertTrue(res.get("success"))
+        self.assertEqual(mock_log.call_args[0][0], logging.INFO)
 
     def test_emergency_log_path_honors_xdg_without_import_makedirs(self):
         """Regression: _get_emergency_log_path honors XDG_DATA_HOME on Unix and does not call os.makedirs."""

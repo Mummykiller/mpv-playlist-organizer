@@ -324,7 +324,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						}, DEFAULT_REQUEST_TIMEOUT_MS);
 
 						requestPromises[requestId] = {
-							preserveDataKeys: message.action === "import_from_file",
+							preserveDataKeys:
+								message.action === "import_from_file" ||
+								message.action === "get_metadata_cache",
 							resolve: (data) => {
 								cleanup();
 								resolve(data);

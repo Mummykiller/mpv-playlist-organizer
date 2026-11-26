@@ -428,6 +428,12 @@ class IPCSocketManager:
             return None
 
         with self._send_lock:
+            sock = self._sock
+            sock_file = self._sock_file
+            if sock is None:
+                logging.warning(f"Attempted to send command '{command_dict.get('command')}' but IPC socket is not connected.")
+                return None
+
             # Assign a unique request_id to ensure we match the correct response
             if "request_id" not in command_dict:
                 self._request_id_counter = (self._request_id_counter + 1) % 100000
@@ -443,10 +449,10 @@ class IPCSocketManager:
                 encoded = command_str.encode('utf-8')
                 if self._system == "Windows":
                     # For Windows named pipes, writing and flushing is the way to send.
-                    self._sock.write(encoded)
-                    self._sock.flush()
+                    sock.write(encoded)
+                    sock.flush()
                 else: # Linux/macOS
-                    self._sock.sendall(encoded)
+                    sock.sendall(encoded)
 
                 if not expect_response:
                     return {"error": "success"} # Command sent, no response expected
@@ -458,12 +464,12 @@ class IPCSocketManager:
                     while time.time() - start_wait < timeout:
                         remaining_timeout = max(0.01, timeout - (time.time() - start_wait))
                         try:
-                            if self._system != "Windows" and self._sock:
-                                readable, _, _ = select.select([self._sock], [], [], remaining_timeout)
+                            if self._system != "Windows" and sock:
+                                readable, _, _ = select.select([sock], [], [], remaining_timeout)
                                 if not readable:
                                     break
-                                if isinstance(self._sock, socket.socket):
-                                    chunk = self._sock.recv(4096)
+                                if isinstance(sock, socket.socket):
+                                    chunk = sock.recv(4096)
                                     if not chunk:
                                         break
                                     sync_buffer.extend(chunk)
@@ -482,11 +488,13 @@ class IPCSocketManager:
                                     continue
 
                             # Direct read from file handle (Windows or mocked handle)
-                            if self._system == "Windows" and self._sock_file:
-                                if not _pipe_has_data_windows(self._sock_file):
+                            if sock_file is None:
+                                break
+                            if self._system == "Windows":
+                                if not _pipe_has_data_windows(sock_file):
                                     time.sleep(0.02)
                                     continue
-                            line = self._sock_file.readline()
+                            line = sock_file.readline()
                             if not line:
                                 break
                             resp = json.loads(line.decode('utf-8'))
@@ -511,6 +519,9 @@ class IPCSocketManager:
                                 response = item
                                 ipc_logger.debug(f"IPC RECV (from buffer): {json.dumps(response)}")
                                 return response
+
+                        if not self._event_reader_running:
+                            return None
 
                         elapsed = time.time() - start_read_time
                         if elapsed >= timeout:

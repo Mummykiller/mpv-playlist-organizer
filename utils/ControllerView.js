@@ -352,6 +352,20 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				updateDelta.anilistVisible = prefs.anilistPanelVisible;
 			if (prefs.anilistImageHeight !== undefined)
 				updateDelta.anilistImageHeight = prefs.anilistImageHeight;
+			if (prefs.kbAddPlaylist !== undefined)
+				updateDelta.kbAddPlaylist = prefs.kbAddPlaylist;
+			if (prefs.kbToggleController !== undefined)
+				updateDelta.kbToggleController = prefs.kbToggleController;
+			if (prefs.kbOpenPopup !== undefined)
+				updateDelta.kbOpenPopup = prefs.kbOpenPopup;
+			if (prefs.kbPlayPlaylist !== undefined)
+				updateDelta.kbPlayPlaylist = prefs.kbPlayPlaylist;
+			if (prefs.kbSwitchPlaylist !== undefined)
+				updateDelta.kbSwitchPlaylist = prefs.kbSwitchPlaylist;
+
+			if (prefs.scraperFilterWords !== undefined) {
+				c.pageScraper?.updateFilterWords(prefs.scraperFilterWords);
+			}
 
 			c.state.update(updateDelta);
 
@@ -378,6 +392,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (!c.ui.shadowRoot) return;
 			const full = c.ui.shadowRoot.getElementById("folder-select");
 			if (full && full.value !== req.folderId) {
+				if (c.playlistUI) c.playlistUI.isSmartSyncPending = false;
 				full.value = req.folderId;
 				const compact = c.ui.shadowRoot.getElementById("compact-folder-select");
 				if (compact) compact.value = req.folderId;
@@ -863,6 +878,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 
 			const combo = this.normalizeKeyCombo(e);
+			if (!combo) return;
 			const state = c.state.state;
 			const normalize = (str) =>
 				(str || "")
@@ -912,6 +928,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		}
 
 		normalizeKeyCombo(e) {
+			if (!e || typeof e.key !== "string" || !e.key) return null;
 			const modifiers = [];
 			if (e.ctrlKey) modifiers.push("ctrl");
 			if (e.shiftKey) modifiers.push("shift");

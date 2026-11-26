@@ -809,5 +809,69 @@ class TestRobustness(BaseTestCase):
         # 4. create_release excludes .ruff_cache
         self.assertTrue(any(fnmatch.fnmatch(".ruff_cache", p) for p in create_release.IGNORE_PATTERNS))
 
+    def test_safe_json_load_rejects_non_dict_and_falls_back(self):
+        """Regression: _safe_json_load rejects non-dict JSON when default_factory is dict, falling back to .bak then {}."""
+        target = os.path.join(self.test_dir, "non_dict.json")
+        bak = f"{target}.bak"
+
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("[1, 2, 3]")
+        with open(bak, "w", encoding="utf-8") as f:
+            json.dump({"ok": True}, f)
+
+        loaded = file_io._safe_json_load(target)
+        self.assertEqual(loaded, {"ok": True})
+
+        with open(target, "w", encoding="utf-8") as f:
+            f.write('"just-a-string"')
+        with open(bak, "w", encoding="utf-8") as f:
+            f.write("42")
+        self.assertEqual(file_io._safe_json_load(target), {})
+
+    def test_shadow_copy_browser_parsing_and_isfile_guard(self):
+        """Regression: extract_with_shadow_copy strips :PROFILE/+KEYRING, rejects unmapped browsers, and checks isfile."""
+        from utils import url_analyzer
+
+        with patch("platform.system", return_value="Linux"):
+            # Unmapped browser returns False instead of passing ~/.config directory
+            self.assertFalse(url_analyzer.VolatileCookieManager.extract_with_shadow_copy("firefox:default", "https://example.com", "/tmp/out.txt"))
+            # Profile/keyring suffix parsed to base browser; missing Cookies file returns False
+            with patch("os.path.expanduser", return_value=self.test_dir):
+                os.makedirs(os.path.join(self.test_dir, ".config", "google-chrome", "Default", "Cookies"), exist_ok=True)
+                # Cookies path is a directory, not a file -> must return False
+                self.assertFalse(url_analyzer.VolatileCookieManager.extract_with_shadow_copy("chrome+gnomekeyring:Profile 1", "https://example.com", "/tmp/out.txt"))
+
+    def test_janitor_clean_temp_dir_scans_without_creating_volatile_dir(self):
+        """Regression: Janitor.clean_temp_dir does not call get_volatile_dir() and cleans stale dead-PID cookie dirs."""
+        from utils.janitor import Janitor
+        from utils import url_analyzer
+
+        temp_sub = os.path.join(self.test_dir, "janitor_temp")
+        volatile_parent = os.path.join(self.test_dir, "volatile_base")
+        os.makedirs(temp_sub, exist_ok=True)
+        os.makedirs(volatile_parent, exist_ok=True)
+
+        stale_dir = os.path.join(volatile_parent, "mpv_cookies_99999999_stale")
+        os.makedirs(stale_dir, exist_ok=True)
+        old_time = time.time() - (48 * 3600)
+        os.utime(stale_dir, (old_time, old_time))
+
+        janitor = Janitor(self.test_dir, temp_sub)
+        with patch.object(url_analyzer.VolatileCookieManager, "get_volatile_dir", side_effect=AssertionError("must not create volatile dir")), \
+             patch("platform.system", return_value="Darwin"), \
+             patch.object(file_io, "TEMP_DIR", volatile_parent), \
+             patch("utils.janitor.is_pid_running", return_value=False):
+            janitor.clean_temp_dir()
+
+        self.assertFalse(os.path.exists(stale_dir))
+
+    def test_python_loader_unmanaged_isolation_guards(self):
+        """Regression: python_loader.lua does not pass --time/--last-played when is_unmanaged and returns early without creds."""
+        lua_path = os.path.join(PROJECT_ROOT, "mpv_scripts", "python_loader.lua")
+        with open(lua_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("if not is_unmanaged then", content)
+        self.assertIn("elseif is_unmanaged then", content)
+
 if __name__ == '__main__':
     unittest.main()

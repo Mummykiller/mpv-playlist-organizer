@@ -133,7 +133,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						playlist: this.playlistUI?.currentPlaylist,
 					});
 				},
-				foldersChanged: (req) =>
+				folders_changed: (req) =>
 					this.updateFolderDropdowns(
 						req.folderId,
 						req.lastPlayedId,
@@ -536,7 +536,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		handleMessage(request, sender, sendResponse) {
 			if (this.isTearingDown || !request || typeof request !== "object") return;
 			const action =
-				request.action || (request.foldersChanged ? "foldersChanged" : null);
+				request.action || (request.foldersChanged ? "folders_changed" : null);
 			const handler = Object.hasOwn(this.actionMap, action) ? this.actionMap[action] : null;
 
 			if (handler) {

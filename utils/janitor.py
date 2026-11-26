@@ -1,9 +1,11 @@
 import os
 import logging
 import platform
+import shutil
 import sys
 import time
 import re
+import file_io
 from utils.ipc_utils import IPC_DIR_LINUX, is_pid_running, IPCSocketManager
 import mpv_session
 from utils import url_analyzer, m3u_server
@@ -50,12 +52,39 @@ class Janitor:
         ]
 
         scan_dirs = [self.temp_dir]
-        try:
-            volatile_dir = url_analyzer.VolatileCookieManager.get_volatile_dir()
-            if volatile_dir and os.path.exists(volatile_dir) and volatile_dir not in scan_dirs:
-                scan_dirs.append(volatile_dir)
-        except (AttributeError, OSError) as e:
-            logging.debug(f"Janitor: Could not get volatile dir: {e}")
+
+        # Clean up stale per-process volatile cookie directories without creating a new one
+        volatile_base = None
+        if platform.system() == "Linux" and os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK):
+            volatile_base = "/dev/shm"
+        else:
+            volatile_base = getattr(file_io, "TEMP_DIR", None)
+
+        if volatile_base and os.path.isdir(volatile_base):
+            volatile_dir_re = re.compile(r'^mpv_cookies_(?P<pid>\d+)_')
+            try:
+                for entry in os.listdir(volatile_base):
+                    match = volatile_dir_re.match(entry)
+                    if not match:
+                        continue
+                    dir_path = os.path.join(volatile_base, entry)
+                    if not os.path.isdir(dir_path):
+                        continue
+                    try:
+                        pid = int(match.group('pid'))
+                        if is_pid_running(pid):
+                            continue
+                        if os.path.getmtime(dir_path) >= one_day_ago:
+                            continue
+                        if platform.system() != "Windows" and hasattr(os, "getuid"):
+                            if os.stat(dir_path).st_uid != os.getuid():
+                                continue
+                        logging.info(f"Janitor: Removing stale volatile cookie directory: {entry}")
+                        shutil.rmtree(dir_path, ignore_errors=True)
+                    except (FileNotFoundError, ValueError, OSError) as e:
+                        logging.debug(f"Janitor: Could not clean volatile dir {dir_path}: {e}")
+            except OSError as e:
+                logging.debug(f"Janitor: Could not scan volatile base {volatile_base}: {e}")
 
         # Use topdown=False to allow cleaning empty directories after their content
         for scan_dir in scan_dirs:

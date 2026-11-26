@@ -118,10 +118,12 @@ def parse_m3u(m3u_content: str) -> List[Dict]:
                 else None
             )
 
+            sanitized_headers = security.sanitize_http_headers(current_headers) if current_headers else None
+
             url_item = {
                 'url': sanitized_url,
                 'title': current_title if current_title else sanitized_url,
-                'headers': current_headers if current_headers else None,
+                'headers': sanitized_headers if sanitized_headers else None,
                 'ytdl_raw_options': sanitized_ytdl_opts if sanitized_ytdl_opts else None,
                 'use_ytdl_mpv': False,
                 'is_youtube': 'youtube.com/' in sanitized_url or 'youtu.be/' in sanitized_url

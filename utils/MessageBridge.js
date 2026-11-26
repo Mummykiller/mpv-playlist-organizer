@@ -28,7 +28,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 
 				chrome.runtime.sendMessage(payload, (response) => {
-					if (this.isDestroyed) return;
+					if (this.isDestroyed) {
+						return resolve({ success: false, error: "Bridge destroyed" });
+					}
 
 					if (chrome.runtime.lastError) {
 						const err = chrome.runtime.lastError;

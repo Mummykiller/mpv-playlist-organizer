@@ -51,5 +51,5 @@ Run via `verify_repo(mode="build"|"lint"|"test"|"targeted"|"fix"|"full")` or `PY
 1. **Regression tests required:** Every bugfix and security change ships with a test in `testing_tools/scripts/`. Update `testing_tools/scripts/test_security_claims.py` whenever a security allowlist or limit changes. For repeatable bug classes, log them via MCP (`log_bug_pattern`) and graduate them (`graduate_bug_pattern` with `test_ref`) once covered by tests or static checks.
 2. **Isolate test state:** Inherit from `testing_tools/base_test.py:BaseTestCase` (`self.test_dir`) so tests never touch live `DATA_DIR` or leak log handlers, subprocesses, sockets, or temp dirs.
 3. **No skipped/ignored linter errors:** Any error from an installed linter is a hard failure.
-4. **Release hygiene (`testing_tools/create_release.py`):** Excludes `*.log`, `*.tmp`, `*.bak`, `data`, `flags`, `.gemini*`, `mcp_server`, `testing_tools`, `yt-tools-legacy`, and `yt-tools-standalone*`.
+4. **Release hygiene (`testing_tools/create_release.py`):** Excludes `*.log`, `*.tmp`, `*.bak`, `data`, `flags`, `.gemini*`, `.agents`, `vulkan_fallback.lua`, `mcp_server`, `testing_tools`, `yt-tools-legacy`, and `yt-tools-standalone*`.
 5. **Code comments:** Explain *intent* (logic guards, race mitigations, OS/CSP/IPC workarounds), never narrate obvious code.

@@ -192,7 +192,7 @@ async function _scrapeAndAddUrl(
 
 		try {
 			const { isPlaylist, oEmbedUrl } = buildYouTubeOEmbedUrl(urlToAdd);
-			const response = await fetch(oEmbedUrl);
+			const response = await fetch(oEmbedUrl, { signal: AbortSignal.timeout(5000) });
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status}`);
 			}
@@ -423,26 +423,31 @@ export const handleGetSmartReorder = createHandler(async (context) => {
 	const response = await nativeLink.getSmartReorder(folderId);
 	
 	if (response.success && response.playlist) {
-		// RE-FETCH FRESH DATA to avoid overwriting concurrent changes (e.g. from heartbeats or other tabs)
-		// while we were waiting for the Python reorder.
-		const freshData = await storage.get(true);
-		context.data = freshData;
+		return await storage.withLock(async () => {
+			// RE-FETCH FRESH DATA to avoid overwriting concurrent changes (e.g. from heartbeats or other tabs)
+			// while we were waiting for the Python reorder.
+			const freshData = await storage.get(true);
+			context.data = freshData;
 
-		const actualFolderId = Object.keys(freshData.folders).find(
-			(id) => id.toLowerCase() === folderId.toLowerCase()
-		);
+			const actualFolderId = Object.keys(freshData.folders).find(
+				(id) => id.toLowerCase() === folderId.toLowerCase()
+			);
 
-		if (actualFolderId && freshData.folders[actualFolderId]) {
-			context.folderId = actualFolderId;
-			freshData.folders[actualFolderId].playlist = response.playlist;
-			return { success: true, folderId: actualFolderId, playlist: response.playlist };
-		}
+			if (actualFolderId && freshData.folders[actualFolderId]) {
+				context.folderId = actualFolderId;
+				freshData.folders[actualFolderId].playlist = response.playlist;
+				await storage.set(freshData, actualFolderId);
+				return { success: true, folderId: actualFolderId, playlist: response.playlist };
+			}
+			return response;
+		});
 	}
 	
 	return response;
 }, {
 	requireFolder: true,
-	broadcastPlaylist: true
+	broadcastPlaylist: true,
+	manualPersistence: true,
 });
 
 export async function handleAddFromContextMenu(folderId, urlToAdd, title, tab) {
@@ -499,7 +504,7 @@ export async function handleGetPlaylist(request) {
 						lastPlayedId: finalStatus.lastPlayedId,
 						timestamp: Date.now()
 					};
-					chrome.storage.local.set({ mpv_playback_cache: freshCache });
+					await playbackManager.setPlaybackCache(freshCache);
 				}
 			}
 		}

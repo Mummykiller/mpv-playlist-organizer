@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import tempfile
 from dataclasses import fields, is_dataclass
 
 sys.dont_write_bytecode = True
@@ -74,8 +75,28 @@ def generate_contract():
     print("Generating Bridge Contract from Python Models...")
     js_content = render_bridge_contract()
     target_path = os.path.join(os.path.dirname(__file__), "scripts", "bridge_contract.js")
-    with open(target_path, "w", encoding="utf-8") as f:
-        f.write(js_content)
+    target_dir = os.path.dirname(target_path)
+    tmp_path = None
+    try:
+        # Atomic write via same-directory temp file + os.replace() to prevent concurrent readers seeing partial output
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target_dir,
+            prefix=".bridge_contract.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp_file:
+            tmp_path = tmp_file.name
+            tmp_file.write(js_content)
+        os.replace(tmp_path, target_path)
+        tmp_path = None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError as cleanup_err:
+                print(f"Warning: failed to remove temp contract file {tmp_path}: {cleanup_err}", file=sys.stderr)
     print(f"✅ Contract saved to {target_path}")
 
 if __name__ == "__main__":

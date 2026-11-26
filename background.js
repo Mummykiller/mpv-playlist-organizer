@@ -356,6 +356,8 @@ const actionHandlers = {
 		return {
 			folderId: data?.settings?.lastUsedFolderId || Object.keys(data?.folders || {})[0] || null,
 		};
+	}, {
+		manualPersistence: true,
 	}),
 	set_ui_preferences: ui_state_handlers.handleSetUiPreferences,
 	get_ui_preferences: ui_state_handlers.handleGetUiPreferences,

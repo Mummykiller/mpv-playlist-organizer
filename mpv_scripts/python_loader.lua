@@ -116,8 +116,10 @@ local function run_fallback_sync(params)
     -- Build arguments
     local args = {python_bin, script_path, "--folder", folder_id, "--item", item_id}
     
-    if params.time then table.insert(args, "--time") table.insert(args, tostring(params.time)) end
-    if params.last_played then table.insert(args, "--last-played") end
+    if not is_unmanaged then
+        if params.time then table.insert(args, "--time") table.insert(args, tostring(params.time)) end
+        if params.last_played then table.insert(args, "--last-played") end
+    end
     if params.mark_watched then
         local url = clean_value(mp.get_property("user-data/original-url")) or clean_value(mp.get_property("path"))
         local cookies = clean_value(mp.get_property("cookies-file"))
@@ -129,6 +131,8 @@ local function run_fallback_sync(params)
             table.insert(args, "--url") table.insert(args, url)
             table.insert(args, "--cookies") table.insert(args, cookies or browser)
             if ua then table.insert(args, "--ua") table.insert(args, ua) end
+        elseif is_unmanaged then
+            return
         end
     end
 

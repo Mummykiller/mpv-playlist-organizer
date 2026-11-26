@@ -18,23 +18,6 @@ const getSessionStorage = () => {
 	return chrome?.storage?.local || null;
 };
 
-function persistScannerState() {
-	try {
-		const store = getSessionStorage();
-		if (!store) return;
-		store
-			.set({
-				[SCANNER_STATE_KEY]: {
-					detectedUrlsState: { ..._detectedUrlsState },
-					lastDetectedUrls: { ...lastDetectedUrls },
-				},
-			})
-			.catch(() => {});
-	} catch (e) {
-		console.debug("[Scanner] Failed to persist state:", e?.message || e);
-	}
-}
-
 export const scannerInitPromise = (async () => {
 	try {
 		const store = getSessionStorage();
@@ -61,6 +44,25 @@ export const scannerInitPromise = (async () => {
 		console.debug("[Scanner] Failed to rehydrate state:", e?.message || e);
 	}
 })();
+
+function persistScannerState() {
+	try {
+		const store = getSessionStorage();
+		if (!store) return;
+		scannerInitPromise
+			.then(() =>
+				store.set({
+					[SCANNER_STATE_KEY]: {
+						detectedUrlsState: { ..._detectedUrlsState },
+						lastDetectedUrls: { ...lastDetectedUrls },
+					},
+				}),
+			)
+			.catch(() => {});
+	} catch (e) {
+		console.debug("[Scanner] Failed to persist state:", e?.message || e);
+	}
+}
 
 export function setDetectionCallback(cb) {
 	_onDetectionCallback = cb;

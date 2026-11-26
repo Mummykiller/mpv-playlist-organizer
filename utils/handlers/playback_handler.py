@@ -77,46 +77,51 @@ class PlaybackHandler(BaseHandler):
             return native_link.failure(msg, log={"text": f"[Native Host]: {msg}", "type": "error"})
 
         # 2. Active Session Pre-check
-        is_same_folder = bool(
-            self.mpv_session.owner_folder_id and folder_id and
-            self.mpv_session.owner_folder_id.lower() == folder_id.lower()
-        )
-        if not request.play_new_instance and self.mpv_session.is_alive and not getattr(self.mpv_session, 'is_closing', False) and is_same_folder:
-            logging.info(f"[PY][Handler] Session already alive for folder '{folder_id}'. Checking for pause cycle or unqueued items.")
-            if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
-                current_playing_id = self.mpv_session.ipc_manager.get_property("user-data/id", timeout=0.5)
+        pending_append_items = None
+        with self.mpv_session.sync_lock:
+            is_same_folder = bool(
+                self.mpv_session.owner_folder_id and folder_id and
+                self.mpv_session.owner_folder_id.lower() == folder_id.lower()
+            )
+            if not request.play_new_instance and self.mpv_session.is_alive and not getattr(self.mpv_session, 'is_closing', False) and is_same_folder:
+                logging.info(f"[PY][Handler] Session already alive for folder '{folder_id}'. Checking for pause cycle or unqueued items.")
+                if self.mpv_session.ipc_manager and self.mpv_session.ipc_manager.is_connected():
+                    current_playing_id = self.mpv_session.ipc_manager.get_property("user-data/id", timeout=0.5)
 
-                should_toggle_pause = False
-                if effective_input_type == 'single' and request.url_item:
-                    target_id = request.url_item.get('id')
-                    if target_id and current_playing_id == target_id:
-                        should_toggle_pause = True
-                elif (effective_input_type == 'batch' or effective_input_type == 'm3u') and not request.playlist_start_id:
-                    self.mpv_session._sync_playlist_from_mpv()
-                    current_ids = {item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')}
-                    new_items = [item for item in items if self.item_processor.ensure_id(item)['id'] not in current_ids]
-                    if not new_items:
-                        should_toggle_pause = True
-                    else:
-                        logging.info(f"[PY][Handler] Active session for '{folder_id}' has {len(new_items)} new unqueued items. Appending.")
-                        return self.handle_append(native_link.PlaybackRequest(
-                            action="append",
+                    should_toggle_pause = False
+                    if effective_input_type == 'single' and request.url_item:
+                        target_id = request.url_item.get('id')
+                        if target_id and current_playing_id == target_id:
+                            should_toggle_pause = True
+                    elif (effective_input_type == 'batch' or effective_input_type == 'm3u') and not request.playlist_start_id:
+                        self.mpv_session._sync_playlist_from_mpv()
+                        current_ids = {item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')}
+                        new_items = [item for item in items if self.item_processor.ensure_id(item)['id'] not in current_ids]
+                        if not new_items:
+                            should_toggle_pause = True
+                        else:
+                            logging.info(f"[PY][Handler] Active session for '{folder_id}' has {len(new_items)} new unqueued items. Appending.")
+                            pending_append_items = new_items
+
+                    if should_toggle_pause:
+                        logging.info("[PY][Handler] Toggling pause for active session.")
+                        self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
+                        session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
+                        return native_link.success(
+                            already_active=True,
                             folder_id=folder_id,
-                            url_items=new_items,
-                            settings=request.settings
-                        ))
+                            is_running=True,
+                            needs_append=False,
+                            session_ids=session_ids
+                        )
 
-                if should_toggle_pause:
-                    logging.info("[PY][Handler] Toggling pause for active session.")
-                    self.mpv_session.ipc_manager.send({"command": ["cycle", "pause"]})
-                    session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
-                    return native_link.success(
-                        already_active=True,
-                        folder_id=folder_id,
-                        is_running=True,
-                        needs_append=False,
-                        session_ids=session_ids
-                    )
+        if pending_append_items is not None:
+            return self.handle_append(native_link.PlaybackRequest(
+                action="append",
+                folder_id=folder_id,
+                url_items=pending_append_items,
+                settings=request.settings
+            ))
 
         # 3. Parallel Enrichment & Initial Launch
         logging.info("[PY][Handler] Starting enrichment and launch payload construction...")
@@ -214,6 +219,16 @@ class PlaybackHandler(BaseHandler):
             return native_link.failure("Missing folder_id or items for append action.")
 
         canonical_id = self.file_io._get_canonical_folder_id(folder_id)
+
+        with self.mpv_session.sync_lock:
+            is_alive = bool(self.mpv_session.is_alive)
+            owner_folder = self.mpv_session.owner_folder_id
+
+        if not is_alive:
+            return native_link.failure("No active session.")
+        if owner_folder and owner_folder.lower() != canonical_id.lower():
+            return native_link.failure("Folder mismatch for append_batch.")
+
         items_to_process = url_items_list if url_items_list else [url_item]
         settings = self._get_merged_settings(request.settings)
 
@@ -226,8 +241,10 @@ class PlaybackHandler(BaseHandler):
 
         final_processed_items = []
         processed_count = 0
+        cancelled = False
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        executor = ThreadPoolExecutor(max_workers=5)
+        try:
             def process_wrapper(item):
                 # Direct enrichment without folder context overhead
                 return self.item_processor.enrich_single_item(
@@ -242,6 +259,9 @@ class PlaybackHandler(BaseHandler):
             futures = [executor.submit(process_wrapper, itm) for itm in items_to_process]
             for future in futures:
                 if job_id and self.ctx.task_manager.is_cancelled(job_id):
+                    cancelled = True
+                    for f in futures:
+                        f.cancel()
                     break
 
                 try:
@@ -253,43 +273,52 @@ class PlaybackHandler(BaseHandler):
                 processed_count += 1
                 if job_id:
                     self.ctx.task_manager.update_job(job_id, progress=processed_count)
+        finally:
+            try:
+                executor.shutdown(wait=not cancelled, cancel_futures=cancelled)
+            except TypeError:
+                executor.shutdown(wait=not cancelled)
+
+        if job_id and (cancelled or self.ctx.task_manager.is_cancelled(job_id)):
+            self.ctx.task_manager.update_job(job_id, status="cancelled")
+            return native_link.failure("Append cancelled")
 
         if job_id:
-            status = "completed" if not self.ctx.task_manager.is_cancelled(job_id) else "cancelled"
-            self.ctx.task_manager.update_job(job_id, status=status)
+            self.ctx.task_manager.update_job(job_id, status="completed")
 
         # Filter out empty results (e.g. enrichment failures that returned empty list)
         final_processed_items = [i for i in final_processed_items if i]
 
         if not final_processed_items:
-            session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
+            with self.mpv_session.sync_lock:
+                is_running = bool(self.mpv_session.is_alive)
+                session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
             return native_link.success(
                 message="No new items to append.",
                 folder_id=canonical_id,
-                is_running=True,
-                is_paused=self.mpv_session.get_pause_state() or False,
+                is_running=is_running,
+                is_paused=(self.mpv_session.get_pause_state() or False) if is_running else False,
                 needs_append=False,
                 session_ids=session_ids
             )
 
-        # Update the local shard so that tracker and UI refreshes see the new data.
-        # Use a Set to prevent duplicates if the shard already has these IDs.
-        unique_new_items = []
-        def _append_to_shard(playlist, _index_entry):
-            nonlocal unique_new_items
-            existing_ids = {itm.get('id') for itm in playlist if itm.get('id')}
-            unique_new_items = [itm for itm in final_processed_items if itm.get('id') not in existing_ids]
-            if not unique_new_items:
-                return None
-            playlist.extend(unique_new_items)
-            return True
-
-        self.file_io.update_shard(canonical_id, _append_to_shard, update_index=True)
-
-        # Pass to session manager which handles internal list synchronization
+        # Pass to session manager first so disk shard is only mutated if live append succeeds
         res = self.mpv_session.append_batch(final_processed_items, folder_id=canonical_id)
         if res.get("success"):
-            session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
+            unique_new_items = []
+            def _append_to_shard(playlist, _index_entry):
+                nonlocal unique_new_items
+                existing_ids = {itm.get('id') for itm in playlist if itm.get('id')}
+                unique_new_items = [itm for itm in final_processed_items if itm.get('id') not in existing_ids]
+                if not unique_new_items:
+                    return None
+                playlist.extend(unique_new_items)
+                return True
+
+            self.file_io.update_shard(canonical_id, _append_to_shard, update_index=True)
+
+            with self.mpv_session.sync_lock:
+                session_ids = [item.get('id') for item in (self.mpv_session.playlist or []) if item.get('id')]
             return native_link.success(
                 message=res.get("message", f"Added {len(unique_new_items)} items."),
                 folder_id=canonical_id,

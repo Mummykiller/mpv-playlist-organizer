@@ -263,18 +263,30 @@ export class PlaybackManager {
 		}
 	}
 
-	getSession(folderId) {
-		if (!this.sessions.has(folderId)) {
-			this.sessions.set(
-				folderId,
-				new PlaybackSession(folderId, () => this.persistSessions()),
-			);
+	async setPlaybackCache(cache) {
+		this.syncCache = cache || null;
+		if (chrome.storage?.local?.set) {
+			await chrome.storage.local.set({ mpv_playback_cache: this.syncCache }).catch(() => {});
 		}
-		const session = this.sessions.get(folderId);
+	}
+
+	async clearPlaybackCache() {
+		this.syncCache = null;
+		if (chrome.storage?.local?.remove) {
+			await chrome.storage.local.remove("mpv_playback_cache").catch(() => {});
+		}
+	}
+
+	getSession(folderId) {
+		let session = this.findSessionByFolderId(folderId);
+		if (!session) {
+			session = new PlaybackSession(folderId, () => this.persistSessions());
+			this.sessions.set(folderId, session);
+		}
 
 		if (!session.isPlaying && this.syncCache) {
 			if (
-				this.syncCache.folderId === folderId &&
+				this.syncCache.folderId?.toLowerCase() === folderId?.toLowerCase() &&
 				this.syncCache.isRunning !== false &&
 				!this.syncCache.isIdle
 			) {
@@ -286,7 +298,18 @@ export class PlaybackManager {
 	}
 
 	cleanupSession(folderId) {
-		this.sessions.delete(folderId);
+		if (!folderId) return;
+		if (this.sessions.has(folderId)) {
+			this.sessions.delete(folderId);
+		} else {
+			const lower = folderId.toLowerCase();
+			for (const key of this.sessions.keys()) {
+				if (key.toLowerCase() === lower) {
+					this.sessions.delete(key);
+					break;
+				}
+			}
+		}
 		this.persistSessions();
 	}
 

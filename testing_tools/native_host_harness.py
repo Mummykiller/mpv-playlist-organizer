@@ -1,12 +1,16 @@
+from collections import Counter
 import json
 import logging
 import os
+import queue
 import selectors
 import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import weakref
 from typing import Any
 
 sys.dont_write_bytecode = True
@@ -14,6 +18,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAX_FRAME_BYTES = 5 * 1024 * 1024
+MAX_STDERR_BYTES = 256 * 1024
 
 _SEED_FILE_MAP = {
     "config": "config.json",
@@ -41,10 +46,84 @@ def send_native_message(proc: subprocess.Popen[bytes], msg: dict[str, Any]) -> N
     proc.stdin.flush()
 
 
+class _WinPipeReader:
+    """Daemon-thread + Queue reader for Windows pipes where selectors cannot watch pipes."""
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        self._queue: queue.Queue[bytes | None] = queue.Queue()
+        self._buf = bytearray()
+        self._eof = False
+        self._thread = threading.Thread(target=self._pump, name="NHWinPipeReader", daemon=True)
+        self._thread.start()
+
+    def _pump(self) -> None:
+        fd: int | None = None
+        try:
+            fd = self._stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            fd = None
+        try:
+            while True:
+                if fd is not None:
+                    chunk = os.read(fd, 4096)
+                else:
+                    chunk = self._stream.read(4096)
+                if not chunk:
+                    break
+                self._queue.put(chunk)
+        except OSError as exc:
+            logging.debug("WinPipeReader stopped on OSError: %s", exc)
+        finally:
+            self._queue.put(None)
+
+    def read_exact(self, size: int, deadline: float) -> tuple[bytes | None, bool]:
+        while len(self._buf) < size:
+            if self._eof:
+                out = bytes(self._buf)
+                self._buf.clear()
+                return out, True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None, False
+            try:
+                chunk = self._queue.get(timeout=remaining)
+            except queue.Empty:
+                return None, False
+            if chunk is None:
+                self._eof = True
+                out = bytes(self._buf)
+                self._buf.clear()
+                return out, True
+            self._buf.extend(chunk)
+        out = bytes(self._buf[:size])
+        del self._buf[:size]
+        return out, False
+
+
+_WIN_READERS: weakref.WeakKeyDictionary[Any, _WinPipeReader] = weakref.WeakKeyDictionary()
+_WIN_READERS_LOCK = threading.Lock()
+
+
+def _get_win_reader(stream: Any) -> _WinPipeReader:
+    with _WIN_READERS_LOCK:
+        reader = _WIN_READERS.get(stream)
+        if reader is None:
+            reader = _WinPipeReader(stream)
+            try:
+                _WIN_READERS[stream] = reader
+            except TypeError as exc:
+                logging.debug("Stream not weak-referenceable for WinPipeReader cache: %s", exc)
+        return reader
+
+
 def _read_exact_with_timeout(stream: Any, size: int, deadline: float) -> tuple[bytes | None, bool]:
     """Reads `size` bytes from `stream` before `deadline`. Returns (bytes_or_none, is_eof)."""
     if stream is None or size <= 0:
         return b"", True
+
+    if sys.platform == "win32":
+        return _get_win_reader(stream).read_exact(size, deadline)
 
     fd = stream.fileno()
     buf = bytearray()
@@ -123,15 +202,19 @@ def spawn_native_host(
     working_dir: str,
     project_root: str = PROJECT_ROOT,
     extra_env: dict[str, str] | None = None,
+    stderr: Any = subprocess.PIPE,
 ) -> subprocess.Popen[bytes]:
     """Spawns native_host.py isolated to `working_dir` with unbuffered stdio pipes."""
     xdg_runtime = os.path.join(working_dir, "xdg_runtime")
     os.makedirs(xdg_runtime, mode=0o700, exist_ok=True)
+    tmp_sub = os.path.join(working_dir, "tmp")
+    os.makedirs(tmp_sub, exist_ok=True)
 
     env = os.environ.copy()
     env["XDG_DATA_HOME"] = working_dir
     env["HOME"] = working_dir
     env["XDG_RUNTIME_DIR"] = xdg_runtime
+    env["TMPDIR"] = tmp_sub
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["NO_COLOR"] = "1"
     if extra_env:
@@ -142,7 +225,7 @@ def spawn_native_host(
         [sys.executable, script_path],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=stderr,
         bufsize=0,
         env=env,
         cwd=project_root,
@@ -212,6 +295,19 @@ def seed_data_dir(data_dir: str, seed_state: dict[str, Any]) -> None:
             raise ValueError(f"Unsupported seed_state key '{key}'. Allowed: {allowed}")
 
 
+def _read_bounded_stderr(stderr_path: str, max_bytes: int = MAX_STDERR_BYTES) -> str:
+    try:
+        size = os.path.getsize(stderr_path)
+        with open(stderr_path, "rb") as fh:
+            if size > max_bytes:
+                fh.seek(size - max_bytes)
+            raw = fh.read(max_bytes)
+        return raw.decode("utf-8", errors="replace")
+    except OSError as exc:
+        logging.debug("Error reading redirected stderr %s: %s", stderr_path, exc)
+        return ""
+
+
 def run_native_message_session(
     payloads: list[dict[str, Any]],
     seed_state: dict[str, Any] | None = None,
@@ -220,6 +316,17 @@ def run_native_message_session(
 ) -> dict[str, Any]:
     """Runs native_host.py against a throwaway temp DATA_DIR, sends framed JSON, and collects replies."""
     clamped_timeout = max(0.5, min(float(timeout), 5.0))
+    expected_ids: Counter[str | int] = Counter()
+    expected_unkeyed = 0
+    for item in payloads:
+        req_id = item.get("request_id") if "request_id" in item else item.get("requestId")
+        if req_id is not None:
+            if isinstance(req_id, bool) or not isinstance(req_id, (str, int)):
+                raise ValueError(f"Invalid request_id {req_id!r}: must be a string, integer, or null")
+            expected_ids[req_id] += 1
+        else:
+            expected_unkeyed += 1
+
     frames: list[dict[str, Any]] = []
     timed_out = False
     exit_code: int | None = None
@@ -231,23 +338,21 @@ def run_native_message_session(
         if seed_state is not None:
             seed_data_dir(data_dir, seed_state)
 
-        proc = spawn_native_host(tmp_dir, project_root=project_root)
+        stderr_path = os.path.join(tmp_dir, "native_host_stderr.log")
+        with open(stderr_path, "wb") as stderr_fh:
+            proc = spawn_native_host(tmp_dir, project_root=project_root, stderr=stderr_fh)
         try:
             deadline = time.monotonic() + clamped_timeout
-            expected_ids: set[Any] = set()
-            expected_unkeyed = 0
             for item in payloads:
-                req_id = item.get("request_id") if "request_id" in item else item.get("requestId")
-                if req_id is not None:
-                    expected_ids.add(req_id)
-                else:
-                    expected_unkeyed += 1
                 send_native_message(proc, item)
 
-            seen_ids: set[Any] = set()
+            seen_ids: Counter[str | int] = Counter()
             seen_unkeyed = 0
             while True:
-                all_seen = expected_ids.issubset(seen_ids) and seen_unkeyed >= expected_unkeyed
+                all_seen = (
+                    all(seen_ids[k] >= v for k, v in expected_ids.items())
+                    and seen_unkeyed >= expected_unkeyed
+                )
                 if all_seen:
                     # Brief drain check for any trailing frame
                     msg, is_eof = _read_native_frame(proc, timeout=0.05)
@@ -269,12 +374,17 @@ def run_native_message_session(
 
                 frames.append(msg)
                 resp_id = msg.get("request_id") if "request_id" in msg else msg.get("requestId")
-                if resp_id is not None and resp_id in expected_ids:
-                    seen_ids.add(resp_id)
+                if (
+                    resp_id is not None
+                    and not isinstance(resp_id, bool)
+                    and isinstance(resp_id, (str, int))
+                    and resp_id in expected_ids
+                ):
+                    seen_ids[resp_id] += 1
                 elif resp_id is None and msg.get("action") != "session_restored":
                     seen_unkeyed += 1
 
-            # Trigger clean EOF shutdown and drain stderr
+            # Trigger clean EOF shutdown
             if proc.stdin and not proc.stdin.closed:
                 try:
                     proc.stdin.close()
@@ -292,11 +402,10 @@ def run_native_message_session(
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     exit_code = proc.wait(timeout=0.5)
-
-            if proc.stderr and not proc.stderr.closed:
-                stderr_text = proc.stderr.read().decode("utf-8", errors="replace")
         finally:
             terminate_native_host(proc)
+
+        stderr_text = _read_bounded_stderr(stderr_path)
 
         return {
             "frames": frames,

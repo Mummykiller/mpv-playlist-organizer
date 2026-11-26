@@ -6,6 +6,21 @@ function generateUuid() {
 		: Math.random().toString(36).slice(2);
 }
 
+function cloneStorageData(value) {
+	if (value === null || value === undefined || typeof value !== "object") {
+		return value;
+	}
+	if (typeof structuredClone === "function") {
+		try {
+			return structuredClone(value);
+		} catch (e) {
+			// Fallback to JSON clone if value contains non-cloneable properties
+			console.debug("[Storage] structuredClone fallback:", e?.message || e);
+		}
+	}
+	return JSON.parse(JSON.stringify(value));
+}
+
 /**
  * Manages all data persistence and migration logic for the extension.
  * Uses a granular 'Bucket' system to improve performance and memory usage.
@@ -105,7 +120,7 @@ export class StorageManager {
 		if (this._initPromise && !this._initComplete && !fromInit) {
 			await this._initPromise;
 		}
-		if (this._cache && !force) return this._cache;
+		if (this._cache && !force) return cloneStorageData(this._cache);
 
 		try {
 			// Optimization: Only get the core keys first.
@@ -117,7 +132,7 @@ export class StorageManager {
 			if (!keys.mpv_settings) {
 				const legacy = await chrome.storage.local.get(this.STORAGE_KEY);
 				this._cache = legacy[this.STORAGE_KEY] || this._getDefaultData();
-				return this._cache;
+				return cloneStorageData(this._cache);
 			}
 
 			const settings = keys.mpv_settings;
@@ -137,7 +152,7 @@ export class StorageManager {
 			});
 
 			this._cache = { settings, folderOrder, folders };
-			return this._cache;
+			return cloneStorageData(this._cache);
 		} catch (e) {
 			console.error("Storage get failed:", e);
 			return this._getDefaultData();
@@ -198,7 +213,7 @@ export class StorageManager {
 					const indexChanged = JSON.stringify(currentOrder) !== JSON.stringify(existing.mpv_folder_index || []);
 
 					if (!folderChanged && !settingsChanged && !indexChanged) {
-						this._cache = data;
+						this._cache = cloneStorageData(data);
 						return;
 					}
 
@@ -208,7 +223,7 @@ export class StorageManager {
 					if (indexChanged) update["mpv_folder_index"] = currentOrder;
 
 					await chrome.storage.local.set(update);
-					this._cache = data;
+					this._cache = cloneStorageData(data);
 				} else {
 					// Full validation and save
 					this._validateData(data);
@@ -222,7 +237,7 @@ export class StorageManager {
 						update[`mpv_folder_data_${fid}`] = fData;
 					}
 					await chrome.storage.local.set(update);
-					this._cache = data;
+					this._cache = cloneStorageData(data);
 
 					const orphanedKeys = prevIndex
 						.filter((fid) => !Object.prototype.hasOwnProperty.call(data.folders, fid))

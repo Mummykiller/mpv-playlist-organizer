@@ -18,6 +18,7 @@ class EnrichmentService(ItemProcessor):
         self._sync_in_progress = False
         self._active_sync_id = None
         self._active_sync_folder = None
+        self._active_sync_generation = None
         self._lock = threading.Lock()
         self._max_workers = max_workers
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="enrichment_worker")
@@ -58,12 +59,14 @@ class EnrichmentService(ItemProcessor):
 
     def handle_standard_flow_launch(self, session, url_items, start_index, folder_id, settings, file_io):
         """Handles the background restoration of playlist order and sequential metadata enrichment."""
+        session_gen = getattr(session, "session_generation", None)
         with self._lock:
             if (
                 self._sync_in_progress
                 and self._active_sync_folder
                 and folder_id
                 and self._active_sync_folder.lower() == folder_id.lower()
+                and self._active_sync_generation == session_gen
                 and session.is_alive
                 and session.owner_folder_id
                 and session.owner_folder_id.lower() == folder_id.lower()
@@ -73,10 +76,13 @@ class EnrichmentService(ItemProcessor):
             sync_id = uuid.uuid4().hex
             self._active_sync_id = sync_id
             self._active_sync_folder = folder_id
+            self._active_sync_generation = session_gen
             self._sync_in_progress = True
 
         def is_sync_valid():
             if self._active_sync_id != sync_id:
+                return False
+            if getattr(session, "session_generation", None) != session_gen:
                 return False
             if not session.is_alive or getattr(session, 'launch_cancelled', False):
                 return False
@@ -193,6 +199,7 @@ class EnrichmentService(ItemProcessor):
                         self._sync_in_progress = False
                         self._active_sync_id = None
                         self._active_sync_folder = None
+                        self._active_sync_generation = None
 
         self.submit(task)
 
@@ -449,14 +456,28 @@ class LauncherService:
                 except Exception as ipc_err:
                     logging.debug(f"[PY][Session] Failed to close IPC manager on launch failure: {ipc_err}")
                 self.session.ipc_manager = None
+            if getattr(self.session, 'playlist_tracker', None) is not None:
+                try:
+                    self.session.playlist_tracker.stop_tracking()
+                except Exception as tracker_err:
+                    logging.debug(f"[PY][Session] Failed to stop playlist tracker on launch failure: {tracker_err}")
+                self.session.playlist_tracker = None
             if handshake_path and os.path.exists(handshake_path):
                 try:
                     os.remove(handshake_path)
                 except OSError as hs_err:
                     logging.debug(f"[PY][Session] Failed to remove handshake file on launch failure: {hs_err}")
+            session_file = getattr(self.session, 'session_file', None)
+            if session_file and os.path.exists(session_file):
+                try:
+                    os.remove(session_file)
+                except OSError as sf_err:
+                    logging.debug(f"[PY][Session] Failed to remove session file on launch failure: {sf_err}")
             self.session.handshake_path = None
             self.session.ipc_path = None
             self.session.pid = None
+            self.session.owner_folder_id = None
+            self.session.playlist = []
             self.session.is_alive = False
             return {"success": False, "error": f"Error launching mpv: {str(e)}"}
 

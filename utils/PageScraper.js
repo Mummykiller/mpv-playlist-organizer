@@ -123,10 +123,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 			const fingerprint = this.getEpisodeFingerprint();
 
-			const hostname = window.location.hostname;
+			const hostname = (window.location.hostname || "").toLowerCase();
 
 			// --- 1. Specialized YouTube Logic ---
-			if (hostname.includes("youtube.com")) {
+			if (hostname === "youtube.com" || hostname.endsWith(".youtube.com")) {
 				if (window.location.pathname.includes("/playlist")) {
 					return { url: url, title: null, isProvisional: true };
 				}

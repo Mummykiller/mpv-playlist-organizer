@@ -39,6 +39,7 @@ class MpvSessionManager:
         self.session_cookies = set()
         self.launch_cancelled = False
         self.is_closing = False
+        self._is_launching = False
         self.last_played_id_cache = None
         self.handshake_path = None
         self.health = "ok"
@@ -339,6 +340,9 @@ class MpvSessionManager:
                 logging.info(f"[PY][Session] Start item enriched ({len(start_item_enriched)} item(s)): {start_item_enriched[0].get('title')}")
 
         action_needed = None
+        should_launch = False
+        launch_item = None
+
         with self.sync_lock:
             logging.info("[PY][Session] start() - Entered sync_lock.")
             is_final_pass = kwargs.get('enriched_items_list') is not None
@@ -349,6 +353,10 @@ class MpvSessionManager:
             if is_final_pass and kwargs.get('had_active_session') and not self.is_alive and not self.pid:
                 logging.info("[PY][Session] Pass 2 detected dead session. Aborting to prevent ghost relaunch.")
                 return {"success": True, "message": "Playback ended by user between passes."}
+
+            if self._is_launching:
+                logging.warning(f"[PY][Session] Another launch is already in progress; rejecting concurrent start for '{folder_id}'.")
+                return {"success": False, "error": "Another session launch is already in progress."}
 
             launch_item = _url_items_list[playlist_start_index]
             logging.info(f"[PY][Session] Final launch item resolved: {launch_item.get('title')} (ID: {launch_item.get('id')})")
@@ -383,23 +391,32 @@ class MpvSessionManager:
                     else:
                         action_needed = "clear"
 
-            if action_needed == "close":
-                self.close()
-            elif action_needed == "clear":
+            if action_needed == "clear":
                 self.clear(mpv_return_code=0)
 
-            if getattr(self, 'launch_cancelled', False):
-                logging.info(f"[PY][Session] Launch for folder '{folder_id}' aborted due to cancellation.")
-                return {"success": False, "error": "Launch cancelled."}
-
             if not launch_result.get("already_active"):
-                if self.pid:
-                    logging.warning(f"[PY][Session] Active PID {self.pid} still present after cleanup; aborting duplicate launch.")
-                    return {"success": False, "error": "Another session is already active."}
+                self._is_launching = True
+                should_launch = True
 
-                self.session_generation += 1
-                self.manual_quit = False
-                self.dispatched_exit_generations.discard(self.session_generation)
+        if should_launch:
+            try:
+                if action_needed == "close":
+                    self.close()
+
+                with self.sync_lock:
+                    if getattr(self, 'launch_cancelled', False):
+                        logging.info(f"[PY][Session] Launch for folder '{folder_id}' aborted due to cancellation.")
+                        return {"success": False, "error": "Launch cancelled."}
+
+                    if self.pid:
+                        logging.warning(f"[PY][Session] Active PID {self.pid} still present after cleanup; aborting duplicate launch.")
+                        return {"success": False, "error": "Another session is already active."}
+
+                    self.session_generation += 1
+                    launch_gen = self.session_generation
+                    self.manual_quit = False
+                    self.dispatched_exit_generations.discard(launch_gen)
+
                 logging.info("[PY][Session] No active session. Calling launcher.launch()...")
                 launch_result = self.launcher.launch(
                     launch_item, folder_id, settings, file_io_mod,
@@ -409,17 +426,30 @@ class MpvSessionManager:
                 )
                 logging.info(f"[PY][Session] launcher.launch() result: {launch_result.get('success')}")
 
+                cancelled_after_launch = False
                 if launch_result.get("success"):
-                    self.create_time = time.time()
-                    logging.info("[PY][Session] start() - Post-launch initialization.")
-                    if self.ipc_path and os.path.exists(self.ipc_path) and platform.system() != "Windows":
-                        try:
-                            os.chmod(self.ipc_path, 0o600)
-                        except OSError as e:
-                            logging.debug(f"[PY][Session] Could not set permissions on IPC socket {self.ipc_path}: {e}")
+                    with self.sync_lock:
+                        if getattr(self, 'launch_cancelled', False) or self.session_generation != launch_gen:
+                            cancelled_after_launch = True
+                        else:
+                            self.create_time = time.time()
+                            logging.info("[PY][Session] start() - Post-launch initialization.")
+                            if self.ipc_path and os.path.exists(self.ipc_path) and platform.system() != "Windows":
+                                try:
+                                    os.chmod(self.ipc_path, 0o600)
+                                except OSError as e:
+                                    logging.debug(f"[PY][Session] Could not set permissions on IPC socket {self.ipc_path}: {e}")
 
-                    self.register_ipc_callbacks()
-                    self._start_health_watcher()
+                            self.register_ipc_callbacks()
+                            self._start_health_watcher()
+
+                if cancelled_after_launch:
+                    logging.info(f"[PY][Session] Launch for folder '{folder_id}' cancelled during startup; closing.")
+                    self.close()
+                    return {"success": False, "error": "Launch cancelled."}
+            finally:
+                with self.sync_lock:
+                    self._is_launching = False
 
         if launch_result.get("success") and len(_url_items_list) > 1:
             if not launch_result.get("handled_directly") or launch_result.get("already_active"):

@@ -13,14 +13,17 @@ class DataHandler(BaseHandler):
 
     @command('log_event')
     def handle_log_event(self, request: native_link.LogRequest):
-        # Determine level
-        level_name = request.level.upper()
-
-        # Map JS FATAL to Python CRITICAL
-        if level_name == "FATAL":
-            level = logging.CRITICAL
-        else:
-            level = getattr(logging, level_name, logging.INFO)
+        level_map = {
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARN": logging.WARNING,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR,
+            "CRITICAL": logging.CRITICAL,
+            "FATAL": logging.CRITICAL,
+        }
+        level_name = str(request.level or "INFO").upper()
+        level = level_map.get(level_name, logging.INFO)
 
         msg = str(request.message or "")[:4096]
         stack = str(getattr(request, 'stack', None) or "")[:4096]

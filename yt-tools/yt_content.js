@@ -2914,6 +2914,9 @@ html.${HOVER_GUARD_LOCKED_CLASS} .ytp-modern-videowall-still-preview {
   }
 
   function initContentFilter() {
+    if (!toolsEnabled) {
+      return;
+    }
     applyConvertShortsToWatch();
     syncCodecPreference();
     if (!document.body) {
@@ -3085,6 +3088,7 @@ html.${HOVER_GUARD_LOCKED_CLASS} .ytp-modern-videowall-still-preview {
 
   function disableToolsState() {
     toolsEnabled = false;
+    document.removeEventListener("DOMContentLoaded", initContentFilter);
     // Reset playback rate before sessionCleanup() clears speedAppliedForId
     applyPlaybackSpeed(true);
     sessionCleanup();

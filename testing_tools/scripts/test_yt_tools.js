@@ -2236,6 +2236,65 @@ async function testYtIntegrationAndRegressionFixes() {
 	}
 }
 
+async function testYtDisableBeforeDomContentLoaded() {
+	const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>", {
+		url: "https://www.youtube.com/",
+		runScripts: "outside-only",
+	});
+	const realBody = dom.window.document.body;
+	let currentBody = null;
+	Object.defineProperty(dom.window.document, "body", {
+		configurable: true,
+		get: () => currentBody,
+	});
+
+	let observeCalls = 0;
+	class SpyMutationObserver {
+		observe() {
+			observeCalls++;
+		}
+		disconnect() {}
+	}
+
+	try {
+		runScriptInDom(dom, "yt-tools/yt_defaults.js");
+		runScriptInDom(dom, "yt-tools/yt_content.js", {
+			MutationObserver: SpyMutationObserver,
+		});
+
+		// Trigger initContentFilter while document.body is null -> registers DOMContentLoaded
+		dom.window.dispatchEvent(
+			new dom.window.MessageEvent("message", {
+				data: { type: "SHINKU__userSetting", data: dom.window.SHINKU_YT_DEFAULTS },
+				source: dom.window,
+				origin: dom.window.location.origin,
+			})
+		);
+		assert.strictEqual(observeCalls, 0, "Observer should not attach while body is null");
+
+		// Disable tools before DOMContentLoaded fires
+		dom.window.dispatchEvent(
+			new dom.window.MessageEvent("message", {
+				data: { type: "SHINKU__toolsDisabled" },
+				source: dom.window,
+				origin: dom.window.location.origin,
+			})
+		);
+
+		// Now body becomes available and DOMContentLoaded fires
+		currentBody = realBody;
+		dom.window.document.dispatchEvent(new dom.window.Event("DOMContentLoaded"));
+
+		assert.strictEqual(
+			observeCalls,
+			0,
+			"DOMContentLoaded after disableToolsState must not attach feedObserver"
+		);
+	} finally {
+		dom.window.close();
+	}
+}
+
 async function main() {
 	await testYtDefaults();
 	await testYtBridge();
@@ -2246,6 +2305,7 @@ async function main() {
 	await testYtToolsService();
 	await testPopupYoutube();
 	await testYtIntegrationAndRegressionFixes();
+	await testYtDisableBeforeDomContentLoaded();
 	console.log("All YouTube Tools unit tests passed!");
 }
 

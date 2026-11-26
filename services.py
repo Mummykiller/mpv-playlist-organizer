@@ -159,8 +159,10 @@ def construct_lua_options(item, settings, script_dir, index=None):
 
     logging.info(f"[PY][Services] construct_lua_options: item='{item.get('title')}', resume_time={resume_time}")
 
-    # FORCE SANITIZE: Override stale headers from browser storage
+    # FORCE SANITIZE: Override stale headers from browser storage and strip CRLF/invalid header names
     sanitized_headers = force_sanitize_headers(item_url, item.get('headers'))
+    if sanitized_headers is not None:
+        sanitized_headers = security.sanitize_http_headers(sanitized_headers) or None
 
     lua_options = {
         "id": item.get('id'),

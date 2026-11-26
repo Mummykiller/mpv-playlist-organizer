@@ -299,6 +299,235 @@ class TestServerAndInstaller(BaseTestCase):
         self.assertTrue(camel_payload.get("payloadTruncated"))
         self.assertEqual(camel_payload.get("keep"), "ok")
 
+    # --- Tooling & installer regressions ---
+
+    def test_create_release_excludes_agents_and_vulkan_fallback(self):
+        """create_release.IGNORE_PATTERNS excludes .agents and vulkan_fallback.lua."""
+        import create_release
+
+        self.assertIn(".agents", create_release.IGNORE_PATTERNS)
+        self.assertIn("vulkan_fallback.lua", create_release.IGNORE_PATTERNS)
+
+    def test_generate_bridge_contract_writes_atomically_via_os_replace(self):
+        """generate_contract writes to a temp file in scripts/ and atomically replaces bridge_contract.js."""
+        import generate_bridge_contract
+
+        scripts_dir = os.path.join(self.test_dir, "scripts")
+        os.makedirs(scripts_dir, exist_ok=True)
+        fake_mod_file = os.path.join(self.test_dir, "generate_bridge_contract.py")
+        replace_calls = []
+        real_replace = os.replace
+
+        def tracking_replace(src, dst):
+            replace_calls.append((src, dst))
+            return real_replace(src, dst)
+
+        with patch.object(generate_bridge_contract, "__file__", fake_mod_file), \
+             patch.object(generate_bridge_contract.os, "replace", side_effect=tracking_replace), \
+             patch("sys.stdout", new_callable=io.StringIO):
+            generate_bridge_contract.generate_contract()
+
+        expected_target = os.path.join(scripts_dir, "bridge_contract.js")
+        self.assertTrue(os.path.isfile(expected_target))
+        self.assertEqual(len(replace_calls), 1)
+        src_path, dst_path = replace_calls[0]
+        self.assertEqual(dst_path, expected_target)
+        self.assertEqual(os.path.dirname(src_path), scripts_dir)
+        self.assertNotEqual(src_path, dst_path)
+
+    def test_run_suite_zero_tests_fails_and_worker_timeout_handled(self):
+        """run_python_batch fails when 0 tests match and _run_python_worker handles TimeoutExpired."""
+        import run_suite
+
+        with patch("sys.stdout", new_callable=io.StringIO):
+            ok, passed, total = run_suite.run_python_batch("EmptyBatch", "test_nonexistent_xyz_*.py")
+        self.assertFalse(ok)
+        self.assertEqual((passed, total), (0, 0))
+
+        with patch.object(
+            run_suite.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(cmd=["python"], timeout=run_suite.PY_WORKER_TIMEOUT),
+        ):
+            tf, wok, wpass, wtotal, out, _err = run_suite._run_python_worker("test_dummy.py")
+        self.assertEqual(tf, "test_dummy.py")
+        self.assertFalse(wok)
+        self.assertEqual((wpass, wtotal), (0, 0))
+        self.assertIn("TIMED OUT", out)
+
+    def test_run_suite_syncs_contract_before_workers(self):
+        """run_all_tests syncs bridge_contract.js before spawning workers and skips re-sync in run_js_batch."""
+        import run_suite
+
+        events = []
+
+        def fake_sync():
+            events.append("sync")
+            return True
+
+        def fake_worker(tf, _verbose=False):
+            events.append(f"worker:{tf}")
+            return tf, True, 1, 1, "", ""
+
+        def fake_js_batch(verbose=False, sync_contract=True):
+            events.append(f"js_batch:sync={sync_contract}")
+            return True, 1, 1, 1, 1, 1, 1
+
+        with patch.object(run_suite, "_sync_bridge_contract", side_effect=fake_sync), \
+             patch.object(run_suite, "discover_python_test_files", return_value=["test_one.py"]), \
+             patch.object(run_suite, "_run_python_worker", side_effect=fake_worker), \
+             patch.object(run_suite, "run_js_batch", side_effect=fake_js_batch), \
+             patch("sys.stdout", new_callable=io.StringIO):
+            ok = run_suite.run_all_tests(verbose=False)
+
+        self.assertTrue(ok)
+        self.assertEqual(events[0], "sync")
+        self.assertIn("js_batch:sync=False", events)
+
+    def test_generate_js_fails_fast_on_unmapped_imports_and_no_stale_messaging_dep(self):
+        """generate_js raises ValueError on unmapped imports and omits stale ../background/messaging.js."""
+        import generate_js
+
+        for entry in generate_js.CONFIG:
+            self.assertNotIn("../background/messaging.js", entry["dependencies"])
+
+        mod_path = os.path.join(self.test_dir, "sample.module.js")
+        with open(mod_path, "w", encoding="utf-8") as f:
+            f.write('import { foo } from "./missing.module.js";\nexport const x = foo;\n')
+        with self.assertRaises(ValueError) as ctx:
+            generate_js.render_module_js(
+                {"source": "sample.module.js", "namespace": "MPV_TEST", "dependencies": {}},
+                project_root=self.test_dir,
+            )
+        self.assertIn("Unmapped import in sample.module.js: ./missing.module.js", str(ctx.exception))
+
+        with open(mod_path, "w", encoding="utf-8") as f:
+            f.write('import * as Bar from "./missing_star.module.js";\nexport const x = Bar;\n')
+        with self.assertRaises(ValueError) as ctx2:
+            generate_js.render_module_js(
+                {"source": "sample.module.js", "namespace": "MPV_TEST", "dependencies": {}},
+                project_root=self.test_dir,
+            )
+        self.assertIn("Unmapped import in sample.module.js: ./missing_star.module.js", str(ctx2.exception))
+
+    def test_installer_falls_back_to_cli_on_tcl_error(self):
+        """installer.main falls back cleanly to CommandLineApp when tk.Tk() raises TclError."""
+        import installer
+
+        class FakeTclError(Exception):
+            pass
+
+        fake_tk = MagicMock()
+        fake_tk.TclError = FakeTclError
+        fake_tk.Tk.side_effect = FakeTclError("no display name")
+        fake_cli_instance = MagicMock()
+        fake_cli_cls = MagicMock(return_value=fake_cli_instance)
+
+        with patch.object(installer, "GUI_AVAILABLE", True), \
+             patch.object(installer, "tk", fake_tk, create=True), \
+             patch.object(installer, "CommandLineApp", fake_cli_cls), \
+             patch.object(sys, "argv", ["installer.py"]), \
+             patch("sys.stderr", new_callable=io.StringIO):
+            installer.main()
+
+        fake_cli_cls.assert_called_once()
+        fake_cli_instance.run.assert_called_once()
+
+    def test_unix_install_handles_per_browser_oserror_and_warns_on_zero_linked(self):
+        """UnixLogic.install continues past per-browser OSError and warns when 0 browsers are linked."""
+        fake_script = os.path.join(self.test_dir, installer_logic.SCRIPT_NAME)
+        with open(fake_script, "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env python3\n")
+        fake_data_dir = os.path.join(self.test_dir, "data")
+        os.makedirs(fake_data_dir, exist_ok=True)
+        fake_status = {
+            "ffmpeg": {"found": False, "path": None},
+            "node": {"found": False, "path": None},
+        }
+        valid_id = "abcdefghijklmnopabcdefghijklmnop"
+
+        # Case 1: 0 browser dirs exist -> logs warning
+        logs_zero = []
+        logic_zero = installer_logic.LinuxLogic(logs_zero.append)
+        with patch.object(installer_logic, "INSTALL_DIR", self.test_dir), \
+             patch.object(installer_logic, "DATA_DIR", fake_data_dir), \
+             patch.object(installer_logic.file_io, "DATA_DIR", fake_data_dir), \
+             patch.object(installer_logic.file_io, "set_settings"), \
+             patch.object(installer_logic.services, "get_gpu_vendor", return_value="intel"), \
+             patch.object(installer_logic.services, "check_mpv_and_ytdlp_status", return_value=fake_status), \
+             patch.object(logic_zero, "get_browser_configs", return_value={
+                 "MissingBrowser": os.path.join(self.test_dir, "nonexistent_parent", "NativeMessagingHosts")
+             }):
+            logic_zero.install(valid_id, False, "brave", False)
+        self.assertTrue(any("WARNING" in line and "no browser" in line.lower() for line in logs_zero), logs_zero)
+
+        # Case 2: first browser fails with OSError, second browser succeeds
+        parent_a = os.path.join(self.test_dir, "browser_a")
+        parent_b = os.path.join(self.test_dir, "browser_b")
+        os.makedirs(parent_a, exist_ok=True)
+        os.makedirs(parent_b, exist_ok=True)
+        path_a = os.path.join(parent_a, "NativeMessagingHosts")
+        path_b = os.path.join(parent_b, "NativeMessagingHosts")
+
+        logs_partial = []
+        logic_partial = installer_logic.LinuxLogic(logs_partial.append)
+        real_symlink = os.symlink
+
+        def flaky_symlink(src, dst):
+            if dst.startswith(path_a):
+                raise PermissionError("read-only dir")
+            return real_symlink(src, dst)
+
+        with patch.object(installer_logic, "INSTALL_DIR", self.test_dir), \
+             patch.object(installer_logic, "DATA_DIR", fake_data_dir), \
+             patch.object(installer_logic.file_io, "DATA_DIR", fake_data_dir), \
+             patch.object(installer_logic.file_io, "set_settings"), \
+             patch.object(installer_logic.services, "get_gpu_vendor", return_value="intel"), \
+             patch.object(installer_logic.services, "check_mpv_and_ytdlp_status", return_value=fake_status), \
+             patch.object(installer_logic.os, "symlink", side_effect=flaky_symlink), \
+             patch.object(logic_partial, "get_browser_configs", return_value={
+                 "BrowserA": path_a,
+                 "BrowserB": path_b,
+             }):
+            logic_partial.install(valid_id, False, "brave", False)
+
+        self.assertTrue(any("BrowserA" in line and "WARNING" in line for line in logs_partial), logs_partial)
+        self.assertTrue(any("Linked manifest for BrowserB" in line for line in logs_partial), logs_partial)
+        self.assertTrue(os.path.islink(os.path.join(path_b, f"{installer_logic.HOST_NAME}.json")))
+
+    def test_installer_ui_thread_safe_install_and_browser_selector_enabled(self):
+        """HostManagerApp reads Tk vars on main thread for install and keeps browser/diagnostics enabled."""
+        from installer_src import installer_ui
+
+        app = installer_ui.HostManagerApp.__new__(installer_ui.HostManagerApp)
+        app.extension_id_var = MagicMock()
+        app.extension_id_var.get.return_value = "abcdefghijklmnopabcdefghijklmnop"
+        app.create_bypass_var = MagicMock()
+        app.create_bypass_var.get.return_value = False
+        app.browser_var = MagicMock()
+        app.browser_var.get.return_value = "chrome"
+        app.enable_youtube_bypass_var = MagicMock()
+        app.enable_youtube_bypass_var.get.return_value = True
+        app.install_button = MagicMock()
+        app.browser_combobox = MagicMock()
+        app.diagnostics_btn = MagicMock()
+        app.browser_label = MagicMock()
+        app.yt_bypass_checkbutton = MagicMock()
+        app.yt_bypass_label = MagicMock()
+
+        app._toggle_url_analysis_widgets()
+        app.browser_combobox.config.assert_called_with(state="readonly")
+        app.diagnostics_btn.config.assert_called_with(state=installer_ui.tk.NORMAL)
+        app.yt_bypass_checkbutton.config.assert_called_with(state=installer_ui.tk.DISABLED)
+
+        with patch.object(installer_ui.threading, "Thread") as mock_thread:
+            app.run_install()
+        mock_thread.assert_called_once_with(
+            target=app._install_thread,
+            args=("abcdefghijklmnopabcdefghijklmnop", False, "chrome", True),
+        )
+        mock_thread.return_value.start.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

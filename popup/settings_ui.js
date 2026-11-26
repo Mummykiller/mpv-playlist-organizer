@@ -432,6 +432,7 @@ export function startRecording(ctx, btn, input) {
 	input.classList.add("recording-active");
 
 	ctx.keyHandler = (e) => {
+		if (!e || typeof e.key !== "string" || !e.key) return;
 		e.preventDefault();
 		e.stopPropagation();
 

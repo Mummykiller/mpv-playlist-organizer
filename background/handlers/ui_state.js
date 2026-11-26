@@ -190,18 +190,28 @@ export const handleSetLastFolderId = createHandler(async ({ request, data }) => 
 	}
 });
 
-export const handleSwitchPlaylist = createHandler(async ({ data }) => {
-	const folderOrder = data.folderOrder || Object.keys(data.folders);
-	if (folderOrder.length <= 1) return { success: true };
+export const handleSwitchPlaylist = createHandler(async () => {
+	const nextFolderId = await storage.withLock(async () => {
+		const data = await storage.get();
+		const folderOrder = data.folderOrder || Object.keys(data.folders);
+		if (folderOrder.length <= 1) return null;
 
-	const currentFolderId = data.settings.lastUsedFolderId || folderOrder[0];
-	const currentIndex = folderOrder.indexOf(currentFolderId);
-	const nextFolderId = folderOrder[(currentIndex + 1) % folderOrder.length];
+		const currentFolderId = data.settings.lastUsedFolderId || folderOrder[0];
+		const currentIndex = folderOrder.indexOf(currentFolderId);
+		const candidate = folderOrder[(currentIndex + 1) % folderOrder.length];
+		if (!candidate || candidate === currentFolderId) return null;
 
-	data.settings.lastUsedFolderId = nextFolderId;
+		data.settings.lastUsedFolderId = candidate;
+		await storage.set(data);
+		return candidate;
+	});
+
+	if (!nextFolderId) return { success: true };
 	return { success: true, folderId: nextFolderId };
 }, {
+	manualPersistence: true,
 	onSuccess: async (result) => {
+		if (!result.folderId) return;
 		await broadcastPlaylistState(result.folderId, null, "last_folder_changed");
 		updateContextMenus(storage).catch((e) => console.error("Failed to update context menus:", e));
 	}
@@ -475,22 +485,29 @@ export function handleForceReloadSettings() {
 	return { success: true };
 }
 
-export const handleForceRefreshDependencies = createHandler(async ({ data }) => {
+export const handleForceRefreshDependencies = createHandler(async () => {
 	_nativeInfoCache.decoder = null;
 	_nativeInfoCache.timestamp = 0;
 	const response = await nativeLink.call("check_dependencies", { forceRefresh: true });
 
 	if (response.success) {
-		data.settings.uiPreferences.global.dependencyStatus = {
+		const dependencyStatus = {
 			mpv: response.mpv, ytdlp: response.ytdlp, ffmpeg: response.ffmpeg, node: response.node,
 		};
+		await storage.withLock(async () => {
+			const freshData = await storage.get();
+			freshData.settings.uiPreferences.global.dependencyStatus = dependencyStatus;
+			await storage.set(freshData);
+		});
 		broadcastToTabs({
 			action: "preferences_changed",
-			preferences: { dependencyStatus: data.settings.uiPreferences.global.dependencyStatus },
+			preferences: { dependencyStatus },
 		});
 		broadcastLog({ text: "[Background]: Dependency status refreshed successfully.", type: "info" });
 	}
 	return response;
+}, {
+	manualPersistence: true,
 });
 
 export async function handleOpenPopup(request, sender) {

@@ -31,6 +31,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.isSelectionModeActive = false;
 			this.isPickStartModeActive = false;
 			this.isLiveReorderModeActive = false;
+			this.isSmartSyncPending = false;
 			this.reorderDebounceTimer = null;
 			this._renderGeneration = 0;
 			this._transientTimers = new Set();
@@ -54,6 +55,9 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		render(playlist, lastPlayedId, isFolderActive = false, completedIds = []) {
 			this._renderGeneration = (this._renderGeneration || 0) + 1;
 			const renderGen = this._renderGeneration;
+			if (!isFolderActive) {
+				this.isSmartSyncPending = false;
+			}
 			const completedSet = new Set(completedIds || []);
 			let effectivePlaylist = playlist || [];
 			
@@ -220,6 +224,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						// ENFORCE MUTUAL EXCLUSIVITY
 						this.isSelectionModeActive = false;
 						this.isLiveReorderModeActive = false;
+						this.isSmartSyncPending = false;
 						this.isPickStartModeActive = !this.isPickStartModeActive;
 						this._refreshQuickActionsBar();
 					};
@@ -238,6 +243,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						// ENFORCE MUTUAL EXCLUSIVITY
 						this.isPickStartModeActive = false;
 						this.isSelectionModeActive = false;
+						this.isSmartSyncPending = false;
 						this.isLiveReorderModeActive = !this.isLiveReorderModeActive;
 						this._refreshQuickActionsBar();
 					};
@@ -260,6 +266,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 						// ENFORCE MUTUAL EXCLUSIVITY
 						this.isPickStartModeActive = false;
 						this.isLiveReorderModeActive = false;
+						this.isSmartSyncPending = false;
 						this.isSelectionModeActive = !this.isSelectionModeActive;
 						this._refreshQuickActionsBar();
 					};
@@ -297,6 +304,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 					btn.classList.toggle("active", this.isPickStartModeActive);
 				} else if (btn.id === "btn-osc-quick-c") {
 					btn.classList.toggle("active", this.isLiveReorderModeActive);
+					btn.classList.toggle("smart-sync-pending", this.isSmartSyncPending);
+					btn.title = this.isSmartSyncPending
+						? "Right-click again to sync MPV playlist"
+						: "Live Reorder: Mirror changes to MPV | Right-click: Smart Reorder";
 				} else if (btn.classList.contains("btn-disconnected-toggle")) {
 					btn.classList.toggle("active", this.isSelectionModeActive);
 				}
@@ -307,6 +318,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 		 * Efficiently updates the active/last-played highlight classes without a full re-render.
 		 */
 		syncActiveHighlight(lastPlayedId, isFolderActive) {
+			if (!isFolderActive && this.isSmartSyncPending) {
+				this.isSmartSyncPending = false;
+				this._refreshQuickActionsBar();
+			}
 			if (!this.fullContainer) return;
 
 			const highlightEnabled =
@@ -337,6 +352,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				return;
 			const handleFolderChange = (newFolderId) => {
 				if (!this.controller.checkContext()) return;
+				this.isSmartSyncPending = false;
 				this.folderSelect.value = newFolderId;
 				this.compactFolderSelect.value = newFolderId;
 

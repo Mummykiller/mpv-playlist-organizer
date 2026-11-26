@@ -115,24 +115,47 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
 	// Fetch current cache for flag persistence (launching/idle/health)
 	const { mpv_playback_cache: storageCache } = await chrome.storage.local.get("mpv_playback_cache");
 	const mpv_playback_cache = storageCache || playbackManager.syncCache;
+	const cacheMatchesFolder = Boolean(
+		mpv_playback_cache &&
+			mpv_playback_cache.folderId?.toLowerCase() === actualFolderId?.toLowerCase(),
+	);
 
 	// Standardize state object to ensure all flags are present for UI syncing.
 	const pbState = {
 		folderId: actualFolderId,
 		isRunning: isActive,
-		isLaunching: !!mpv_playback_cache?.isLaunching,
+		isLaunching: Boolean(cacheMatchesFolder && mpv_playback_cache?.isLaunching),
 		isAppending: false, // Background is source of truth
 		isPaused: isPaused,
-		isIdle: !!mpv_playback_cache?.isIdle,
+		isIdle: Boolean(cacheMatchesFolder && mpv_playback_cache?.isIdle),
 		needsAppend: needsAppend,
-		health: mpv_playback_cache?.health || "ok",
-		lastPlayedId: lastPlayedId || mpv_playback_cache?.last_played_id || mpv_playback_cache?.lastPlayedId || data.folders?.[actualFolderId]?.lastPlayedId,
-		sessionIds: isActive ? (sessionIds?.length ? sessionIds : mpv_playback_cache?.sessionIds || []) : [],
-		completedIds: completedIds
+		health: (cacheMatchesFolder && mpv_playback_cache?.health) || "ok",
+		lastPlayedId:
+			lastPlayedId ||
+			(cacheMatchesFolder
+				? mpv_playback_cache?.last_played_id || mpv_playback_cache?.lastPlayedId
+				: null) ||
+			data.folders?.[actualFolderId]?.lastPlayedId,
+		sessionIds: isActive
+			? sessionIds?.length
+				? sessionIds
+				: cacheMatchesFolder
+					? mpv_playback_cache?.sessionIds || []
+					: []
+			: [],
+		completedIds: completedIds,
 	};
 
-	// PROACTIVE: Sync to storage so all tabs see it instantly without broadcast
-	await chrome.storage.local.set({ active_playback_state: pbState });
+	// PROACTIVE: Sync to storage so all tabs see it instantly without broadcast,
+	// but never clobber active_playback_state when a different folder is running/launching.
+	const shouldUpdateActiveState =
+		isActive ||
+		!mpv_playback_cache ||
+		mpv_playback_cache.isRunning === false ||
+		cacheMatchesFolder;
+	if (shouldUpdateActiveState) {
+		await chrome.storage.local.set({ active_playback_state: pbState });
+	}
 
 	broadcastToTabs({
 		action: action,
@@ -152,6 +175,7 @@ export async function broadcastPlaylistState(folderId, playlist = null, action =
  * Broadcasts a lightweight playback state update to all UI components.
  */
 export async function broadcastPlaybackState(folderId, statusOverride = {}) {
+	await playbackManager.initPromise;
 	const { mpv_playback_cache: storageCache } = await chrome.storage.local.get("mpv_playback_cache");
 	const mpv_playback_cache = storageCache || playbackManager.syncCache;
 	

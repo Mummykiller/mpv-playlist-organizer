@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -11,7 +12,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from typing import Any
 
@@ -213,9 +213,10 @@ def _lint_ruff() -> dict[str, Any]:
     try:
         items = json.loads(out) if out.strip() else []
         for item in items:
+            fname = item.get("filename", "")
             diags.append(
                 {
-                    "file": os.path.relpath(item.get("filename", ""), REPO_ROOT),
+                    "file": os.path.relpath(fname, REPO_ROOT) if fname else "",
                     "line": (item.get("location") or {}).get("row"),
                     "rule": item.get("code"),
                     "message": item.get("message"),
@@ -226,8 +227,12 @@ def _lint_ruff() -> dict[str, Any]:
         for line in (out or err).splitlines():
             if line.strip():
                 diags.append({"message": line.strip()})
+    if not diags and err.strip():
+        for line in err.strip().splitlines():
+            if line.strip():
+                diags.append({"message": line.strip()})
     capped, trunc = _cap_diags(diags)
-    return {"ok": False, "errors": len(diags), "diagnostics": capped, "truncated": trunc}
+    return {"ok": False, "errors": max(1, len(diags)), "diagnostics": capped, "truncated": trunc}
 
 
 def _lint_biome() -> dict[str, Any]:
@@ -288,9 +293,10 @@ def _lint_pyright() -> dict[str, Any]:
         payload = json.loads(out)
         for d in payload.get("generalDiagnostics", []):
             if d.get("severity") == "error":
+                fname = d.get("file", "")
                 diags.append(
                     {
-                        "file": os.path.relpath(d.get("file", ""), REPO_ROOT),
+                        "file": os.path.relpath(fname, REPO_ROOT) if fname else "",
                         "line": ((d.get("range") or {}).get("start") or {}).get("line", 0) + 1,
                         "rule": d.get("rule"),
                         "message": d.get("message"),
@@ -380,9 +386,10 @@ def _lint_shellcheck() -> dict[str, Any]:
     diags: list[dict[str, Any]] = []
     try:
         for item in json.loads(out):
+            fname = item.get("file", "")
             diags.append(
                 {
-                    "file": os.path.relpath(item.get("file", ""), REPO_ROOT),
+                    "file": os.path.relpath(fname, REPO_ROOT) if fname else "",
                     "line": item.get("line"),
                     "rule": f"SC{item.get('code')}",
                     "message": item.get("message"),
@@ -579,6 +586,7 @@ def _check_yt_tools_standalone_drift() -> dict[str, Any]:
     expected_text["popup.js"] = mod.STANDALONE_POPUP_JS
 
     diffs: list[dict[str, str]] = []
+    expected_files: set[str] = set(expected_text.keys())
     checked = 0
 
     for rel_path, expected_content in sorted(expected_text.items()):
@@ -603,6 +611,7 @@ def _check_yt_tools_standalone_drift() -> dict[str, Any]:
             continue
         checked += 1
         rel_icon = f"images/{icon_name}"
+        expected_files.add(rel_icon)
         actual_icon = os.path.join(standalone_dir, rel_icon)
         if not os.path.isfile(actual_icon):
             diffs.append({"file": rel_icon, "status": "missing"})
@@ -615,6 +624,14 @@ def _check_yt_tools_standalone_drift() -> dict[str, Any]:
             logger.debug("standalone icon read error %s: %s", rel_icon, exc)
             diffs.append({"file": rel_icon, "status": "read_error"})
 
+    for root_dir, dirs, files in os.walk(standalone_dir):
+        dirs[:] = [d for d in sorted(dirs) if d != ".git"]
+        for fname in sorted(files):
+            abs_path = os.path.join(root_dir, fname)
+            rel_path = os.path.relpath(abs_path, standalone_dir).replace(os.sep, "/")
+            if rel_path not in expected_files:
+                diffs.append({"file": rel_path, "status": "extra"})
+
     return {
         "present": True,
         "drifted": len(diffs) > 0,
@@ -624,62 +641,146 @@ def _check_yt_tools_standalone_drift() -> dict[str, Any]:
     }
 
 
-def check_repo_drift() -> dict[str, Any]:
-    _ensure_repo_on_path()
-    with contextlib.redirect_stdout(io.StringIO()):
-        from testing_tools import generate_bridge_contract, generate_js
+_DRIFT_SUBPROCESS_SCRIPT = r"""
+import contextlib, io, json, os, sys
+repo_root = sys.argv[1]
+bridge_contract_rel = sys.argv[2]
+sys.path.insert(0, repo_root)
+with contextlib.redirect_stdout(io.StringIO()):
+    from testing_tools import generate_bridge_contract, generate_js
 
-    js_drift: list[dict[str, Any]] = []
-    for cfg in generate_js.CONFIG:
-        src_abs = os.path.join(REPO_ROOT, cfg["source"])
-        tgt_abs = os.path.join(REPO_ROOT, cfg["target"])
-        target_missing = not os.path.isfile(tgt_abs)
-        source_newer = False
-        content_diff = target_missing
-        if not target_missing and os.path.isfile(src_abs):
-            source_newer = os.path.getmtime(src_abs) > os.path.getmtime(tgt_abs)
-            with open(tgt_abs, "r", encoding="utf-8") as fh:
-                actual = fh.read()
-            expected = generate_js.render_module_js(cfg, project_root=REPO_ROOT)
-            content_diff = actual != expected
-        if target_missing or content_diff or source_newer:
-            js_drift.append(
-                {
-                    "source": cfg["source"],
-                    "target": cfg["target"],
-                    "target_missing": target_missing,
-                    "content_diff": content_diff,
-                    "source_newer": source_newer,
-                }
-            )
-
-    contract_abs = os.path.join(REPO_ROOT, BRIDGE_CONTRACT_REL)
-    contract_missing = not os.path.isfile(contract_abs)
-    contract_content_diff = contract_missing
-    contract_source_newer = False
-    if not contract_missing:
-        models_abs = os.path.join(REPO_ROOT, "utils", "native_link", "models.py")
-        trans_abs = os.path.join(REPO_ROOT, "utils", "native_link", "translator.py")
-        contract_mtime = os.path.getmtime(contract_abs)
-        contract_source_newer = max(os.path.getmtime(models_abs), os.path.getmtime(trans_abs)) > contract_mtime
-        with open(contract_abs, "r", encoding="utf-8") as fh:
-            actual_contract = fh.read()
-        contract_content_diff = actual_contract != generate_bridge_contract.render_bridge_contract()
-    contract_drift = {
-        "drifted": contract_missing or contract_content_diff,
-        "target": BRIDGE_CONTRACT_REL,
-        "target_missing": contract_missing,
-        "content_diff": contract_content_diff,
-        "source_newer": contract_source_newer,
+js_drift = []
+js_targets = {}
+for cfg in generate_js.CONFIG:
+    src_abs = os.path.join(repo_root, cfg["source"])
+    tgt_abs = os.path.join(repo_root, cfg["target"])
+    source_missing = not os.path.isfile(src_abs)
+    target_missing = not os.path.isfile(tgt_abs)
+    source_newer = False
+    content_diff = target_missing
+    if not target_missing and not source_missing:
+        source_newer = os.path.getmtime(src_abs) > os.path.getmtime(tgt_abs)
+        with open(tgt_abs, "r", encoding="utf-8") as fh:
+            actual = fh.read()
+        with contextlib.redirect_stdout(io.StringIO()):
+            expected = generate_js.render_module_js(cfg, project_root=repo_root)
+        content_diff = actual != expected
+    js_targets[cfg["target"]] = {
+        "source": cfg["source"],
+        "target_missing": target_missing,
+        "source_missing": source_missing,
+        "content_diff": content_diff,
+        "source_newer": source_newer,
     }
+    if target_missing or content_diff or source_missing:
+        js_drift.append({
+            "source": cfg["source"],
+            "target": cfg["target"],
+            "source_missing": source_missing,
+            "target_missing": target_missing,
+            "content_diff": content_diff,
+            "source_newer": source_newer,
+        })
 
-    generated_readonly_files = tuple(cfg["target"] for cfg in generate_js.CONFIG) + (BRIDGE_CONTRACT_REL,)
-    rc, git_out, _git_err = _run_cmd(["git", "status", "--porcelain", "--", *generated_readonly_files])
+contract_abs = os.path.join(repo_root, bridge_contract_rel)
+contract_missing = not os.path.isfile(contract_abs)
+contract_content_diff = contract_missing
+contract_source_newer = False
+if not contract_missing:
+    models_abs = os.path.join(repo_root, "utils", "native_link", "models.py")
+    trans_abs = os.path.join(repo_root, "utils", "native_link", "translator.py")
+    contract_mtime = os.path.getmtime(contract_abs)
+    src_mtimes = [os.path.getmtime(p) for p in (models_abs, trans_abs) if os.path.isfile(p)]
+    if src_mtimes:
+        contract_source_newer = max(src_mtimes) > contract_mtime
+    with open(contract_abs, "r", encoding="utf-8") as fh:
+        actual_contract = fh.read()
+    with contextlib.redirect_stdout(io.StringIO()):
+        expected_contract = generate_bridge_contract.render_bridge_contract()
+    contract_content_diff = actual_contract != expected_contract
+
+contract_drift = {
+    "drifted": contract_missing or contract_content_diff,
+    "target": bridge_contract_rel,
+    "target_missing": contract_missing,
+    "content_diff": contract_content_diff,
+    "source_newer": contract_source_newer,
+}
+sys.stdout.write(json.dumps({
+    "js_drift": js_drift,
+    "contract_drift": contract_drift,
+    "js_targets": js_targets,
+}))
+"""
+
+
+def _compute_generated_drift(repo_root: str) -> dict[str, Any]:
+    rc, out, err = _run_cmd(
+        [_python_bin(), "-B", "-c", _DRIFT_SUBPROCESS_SCRIPT, repo_root, BRIDGE_CONTRACT_REL],
+        timeout=30,
+    )
+    if rc != 0:
+        msg = (err or out or f"drift subprocess exited with code {rc}").strip()
+        raise RuntimeError(msg)
+    return json.loads(out)
+
+
+def _parse_git_porcelain(git_out: str) -> dict[str, str]:
+    modified: dict[str, str] = {}
+    for ln in git_out.splitlines():
+        if len(ln) < 4:
+            continue
+        raw_path = ln[3:].strip()
+        if " -> " in raw_path:
+            raw_path = raw_path.split(" -> ", 1)[1].strip()
+        raw_path = raw_path.strip('"').replace(os.sep, "/")
+        modified[raw_path] = ln.strip()
+    return modified
+
+
+def check_repo_drift(include_pycache: bool = True) -> dict[str, Any]:
+    try:
+        computed = _compute_generated_drift(REPO_ROOT)
+    except (RuntimeError, json.JSONDecodeError) as exc:
+        return {"ok": False, "error": f"Failed to compute generated drift: {exc}"}
+
+    js_drift: list[dict[str, Any]] = computed["js_drift"]
+    contract_drift: dict[str, Any] = computed["contract_drift"]
+    js_targets: dict[str, dict[str, Any]] = computed["js_targets"]
+
+    target_sources: dict[str, tuple[str, ...]] = {
+        tgt: (info["source"], "testing_tools/generate_js.py")
+        for tgt, info in js_targets.items()
+    }
+    target_sources[BRIDGE_CONTRACT_REL] = (
+        "utils/native_link/models.py",
+        "utils/native_link/translator.py",
+        "testing_tools/generate_bridge_contract.py",
+    )
+
+    git_query_paths: list[str] = []
+    seen_paths: set[str] = set()
+    for tgt, srcs in target_sources.items():
+        for p in (tgt, *srcs):
+            if p not in seen_paths:
+                seen_paths.add(p)
+                git_query_paths.append(p)
+
+    rc, git_out, _git_err = _run_cmd(["git", "status", "--porcelain", "--", *git_query_paths])
     generated_edits: list[str] = []
     if rc == 0:
-        for ln in git_out.splitlines():
-            if ln.strip():
-                generated_edits.append(ln.strip())
+        modified_paths = _parse_git_porcelain(git_out)
+        for tgt, srcs in target_sources.items():
+            if tgt not in modified_paths:
+                continue
+            has_content_diff = (
+                bool(contract_drift.get("content_diff"))
+                if tgt == BRIDGE_CONTRACT_REL
+                else bool(js_targets.get(tgt, {}).get("content_diff"))
+            )
+            source_modified = any(src in modified_paths for src in srcs)
+            if has_content_diff or not source_modified:
+                generated_edits.append(modified_paths[tgt])
 
     skip_dirs = {
         ".git",
@@ -690,13 +791,14 @@ def check_repo_drift() -> dict[str, Any]:
         "yt-tools-standalone",
     }
     pycache_items: list[str] = []
-    for root_dir, dirs, files in os.walk(REPO_ROOT):
-        if "__pycache__" in dirs:
-            pycache_items.append(os.path.relpath(os.path.join(root_dir, "__pycache__"), REPO_ROOT))
-        dirs[:] = [d for d in dirs if d not in skip_dirs and d != "__pycache__"]
-        for fname in files:
-            if fname.endswith((".pyc", ".pyo")):
-                pycache_items.append(os.path.relpath(os.path.join(root_dir, fname), REPO_ROOT))
+    if include_pycache:
+        for root_dir, dirs, files in os.walk(REPO_ROOT):
+            if "__pycache__" in dirs:
+                pycache_items.append(os.path.relpath(os.path.join(root_dir, "__pycache__"), REPO_ROOT))
+            dirs[:] = [d for d in dirs if d not in skip_dirs and d != "__pycache__"]
+            for fname in files:
+                if fname.endswith((".pyc", ".pyo")):
+                    pycache_items.append(os.path.relpath(os.path.join(root_dir, fname), REPO_ROOT))
 
     yt_standalone_drift = _check_yt_tools_standalone_drift()
     pycache_count = len(pycache_items)
@@ -809,6 +911,32 @@ def _load_folders_readonly(data_dir: str) -> dict[str, Any]:
     return {}
 
 
+def _resolve_safe_shard_path(data_dir: str, folder_id: str) -> str | None:
+    """Mirrors file_io._get_safe_shard_path naming and containment logic without mutating globals."""
+    if not folder_id or not isinstance(folder_id, str):
+        return None
+    clean_id = folder_id
+    if "/" in clean_id or "\\" in clean_id or ".." in clean_id or clean_id in (".", ".."):
+        _ensure_repo_on_path()
+        with contextlib.redirect_stdout(io.StringIO()):
+            import file_io
+
+            clean_id = file_io.sanitize_folder_name(clean_id).replace("..", "").strip(". ")
+    if not clean_id:
+        return None
+    playlists_dir = os.path.join(data_dir, "playlists")
+    playlists_real = os.path.realpath(playlists_dir)
+    shard_path = os.path.join(playlists_dir, f"{clean_id}.json")
+    shard_real = os.path.realpath(shard_path)
+    try:
+        in_dir = os.path.commonpath([playlists_real, shard_real]) == playlists_real
+    except ValueError:
+        in_dir = False
+    if not in_dir or os.path.dirname(shard_real) != playlists_real:
+        return None
+    return shard_path
+
+
 def _folder_item_count(data_dir: str, folder_id: str, meta: Any) -> int:
     if isinstance(meta, dict):
         if isinstance(meta.get("playlist"), list):
@@ -817,12 +945,9 @@ def _folder_item_count(data_dir: str, folder_id: str, meta: Any) -> int:
             return meta["count"]
         if isinstance(meta.get("item_count"), int):
             return meta["item_count"]
-    _ensure_repo_on_path()
-    with contextlib.redirect_stdout(io.StringIO()):
-        import file_io
-
-        safe_name = file_io.sanitize_folder_name(folder_id)
-    shard_path = os.path.join(data_dir, "playlists", f"{safe_name}.json")
+    shard_path = _resolve_safe_shard_path(data_dir, folder_id)
+    if not shard_path:
+        return 0
     shard, _ = _read_json_safe(shard_path)
     if isinstance(shard, list):
         return len(shard)
@@ -842,12 +967,8 @@ def _load_folder_urls(data_dir: str, folder_name: str) -> dict[str, Any]:
     if isinstance(meta, dict) and isinstance(meta.get("playlist"), list):
         items = meta["playlist"]
     else:
-        _ensure_repo_on_path()
-        with contextlib.redirect_stdout(io.StringIO()):
-            import file_io
-
-            safe_name = file_io.sanitize_folder_name(canonical)
-        shard, _ = _read_json_safe(os.path.join(data_dir, "playlists", f"{safe_name}.json"))
+        shard_path = _resolve_safe_shard_path(data_dir, canonical)
+        shard, _ = _read_json_safe(shard_path) if shard_path else (None, None)
         if isinstance(shard, list):
             items = shard
         elif isinstance(shard, dict) and isinstance(shard.get("playlist"), list):
@@ -1257,7 +1378,7 @@ def _redact_sim_obj(obj: Any, sim_data_dir: str, sim_tmp_dir: str) -> Any:
 
 def simulate_native_message(
     payload: dict[str, Any] | list[dict[str, Any]] | str,
-    seed_state: dict[str, Any] | None = None,
+    seed_state: dict[str, Any] | str | None = None,
     timeout: float = 5.0,
 ) -> dict[str, Any]:
     parsed = payload
@@ -1266,6 +1387,22 @@ def simulate_native_message(
             parsed = json.loads(payload)
         except json.JSONDecodeError as exc:
             return {"ok": False, "error": f"Invalid JSON payload: {exc}"}
+
+    parsed_seed: dict[str, Any] | None = None
+    if isinstance(seed_state, str):
+        stripped_seed = seed_state.strip()
+        if stripped_seed:
+            try:
+                loaded_seed = json.loads(stripped_seed)
+            except json.JSONDecodeError as exc:
+                return {"ok": False, "error": f"Invalid JSON seed_state: {exc}"}
+            if not isinstance(loaded_seed, dict):
+                return {"ok": False, "error": "seed_state must be a JSON object when provided"}
+            parsed_seed = loaded_seed
+    elif seed_state is not None:
+        if not isinstance(seed_state, dict):
+            return {"ok": False, "error": "seed_state must be a JSON object when provided"}
+        parsed_seed = seed_state
 
     if isinstance(parsed, dict):
         payloads = [parsed]
@@ -1283,7 +1420,7 @@ def simulate_native_message(
     try:
         sim_res = native_host_harness.run_native_message_session(
             payloads=payloads,
-            seed_state=seed_state,
+            seed_state=parsed_seed,
             timeout=timeout,
             project_root=REPO_ROOT,
         )
@@ -1316,8 +1453,75 @@ def simulate_native_message(
 # 10. test_mpv_pipeline
 # ---------------------------------------------------------------------------
 
-_DRY_RUN_LOCK = threading.Lock()
 _LUA_ERR_RE = re.compile(r"(?:lua error|error loading|stack traceback|syntax error)", re.IGNORECASE)
+
+_DRY_RUN_SUBPROCESS_SCRIPT = r"""
+import contextlib, io, json, os, sys
+
+payload = json.loads(sys.stdin.read())
+repo_root = payload["repo_root"]
+tmp_dir = payload["tmp_dir"]
+items = payload["items"]
+options = payload["options"]
+
+sys.path.insert(0, repo_root)
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        import file_io
+        import services
+        from utils import session_ipc_ops
+
+        tmp_data_dir = os.path.join(tmp_dir, "data")
+        tmp_flag_dir = os.path.join(tmp_data_dir, "flags")
+        os.makedirs(tmp_flag_dir, exist_ok=True)
+
+        file_io.TEMP_DIR = tmp_dir
+        file_io.initialize_paths(tmp_data_dir)
+
+        m3u_content = session_ipc_ops.generate_m3u_content(items)
+        first = items[0]
+        cmd_urls = [it["url"] for it in items]
+        use_ipc = bool(options.get("with_ipc", True))
+        load_scripts = bool(options.get("load_scripts", True))
+        ipc_path = os.path.join(tmp_dir, "mpv-dryrun.sock") if use_ipc else None
+
+        argv, has_terminal = services.construct_mpv_command(
+            mpv_exe=str(options.get("mpv_exe") or "mpv"),
+            ipc_path=ipc_path,
+            url=cmd_urls if len(cmd_urls) > 1 else cmd_urls[0],
+            is_youtube=bool(options.get("is_youtube", False)),
+            ytdl_raw_options=options.get("ytdl_raw_options"),
+            geometry=options.get("geometry"),
+            custom_width=options.get("custom_width"),
+            custom_height=options.get("custom_height"),
+            custom_mpv_flags=options.get("custom_mpv_flags"),
+            automatic_mpv_flags=options.get("automatic_mpv_flags"),
+            headers=options.get("headers"),
+            disable_http_persistent=bool(options.get("disable_http_persistent", False)),
+            start_paused=bool(options.get("start_paused", False)),
+            script_dir=repo_root if load_scripts else None,
+            load_on_completion_script=load_scripts,
+            title=options.get("title") or first.get("title"),
+            use_ytdl_mpv=bool(options.get("use_ytdl_mpv", False)),
+            is_youtube_override=bool(options.get("is_youtube_override", False)),
+            idle=bool(options.get("idle", False)),
+            force_terminal=bool(options.get("force_terminal", False)),
+            settings=options.get("settings") if isinstance(options.get("settings"), dict) else None,
+            flag_dir=tmp_flag_dir if load_scripts else None,
+            playlist_start_index=options.get("playlist_start_index"),
+            cookies_browser=options.get("cookies_browser"),
+            cookies_file=options.get("cookies_file"),
+            start_time=options.get("start_time"),
+        )
+    sys.stdout.write(json.dumps({
+        "ok": True,
+        "has_terminal_flag": bool(has_terminal),
+        "argv": [str(a) for a in argv],
+        "m3u_content": m3u_content,
+    }))
+except Exception as exc:
+    sys.stdout.write(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}))
+"""
 
 
 def _normalize_dry_run_urls(urls: list[Any] | None) -> tuple[list[dict[str, Any]] | None, str | None]:
@@ -1333,7 +1537,20 @@ def _normalize_dry_run_urls(urls: list[Any] | None) -> tuple[list[dict[str, Any]
     items: list[dict[str, Any]] = []
     for idx, entry in enumerate(urls, start=1):
         if isinstance(entry, str):
-            items.append({"id": f"dryrun-{idx}", "title": f"Item {idx}", "url": entry})
+            stripped = entry.strip()
+            if stripped.startswith("{"):
+                try:
+                    parsed_entry = json.loads(stripped)
+                except json.JSONDecodeError as exc:
+                    return None, f"Invalid JSON url entry at index {idx - 1}: {exc}"
+                if isinstance(parsed_entry, dict) and isinstance(parsed_entry.get("url"), str):
+                    item = dict(parsed_entry)
+                    item.setdefault("title", item["url"])
+                    items.append(item)
+                else:
+                    return None, f"Invalid url entry at index {idx - 1}: expected string or object with 'url'"
+            else:
+                items.append({"id": f"dryrun-{idx}", "title": f"Item {idx}", "url": entry})
         elif isinstance(entry, dict) and isinstance(entry.get("url"), str):
             item = dict(entry)
             item.setdefault("title", item["url"])
@@ -1348,63 +1565,50 @@ def _run_mpv_dry_run(urls: list[Any] | None, options: dict[str, Any]) -> dict[st
     if err or items is None:
         return {"ok": False, "mode": "dry_run", "error": err}
 
-    _ensure_repo_on_path()
-    with contextlib.redirect_stdout(io.StringIO()):
-        import file_io
-        import services
-        from utils import session_ipc_ops
-
-    with _DRY_RUN_LOCK, tempfile.TemporaryDirectory(prefix="mpv_dryrun_") as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="mpv_dryrun_") as tmp_dir:
         tmp_data_dir = os.path.join(tmp_dir, "data")
-        tmp_flag_dir = os.path.join(tmp_data_dir, "flags")
-        os.makedirs(tmp_flag_dir, exist_ok=True)
-
-        orig_data_dir = file_io.DATA_DIR
-        orig_temp_dir = file_io.TEMP_DIR
         try:
-            # Isolate file_io.TEMP_DIR and file_io.DATA_DIR (TEMP_DIR before initialize_paths
-            # so file_io.paths.temp_dir also points to tmp_dir) and never touch real DATA_DIR.
-            file_io.TEMP_DIR = tmp_dir
-            file_io.initialize_paths(tmp_data_dir)
-
-            m3u_content = session_ipc_ops.generate_m3u_content(items)
-            first = items[0]
-            cmd_urls = [it["url"] for it in items]
-            use_ipc = bool(options.get("with_ipc", True))
-            load_scripts = bool(options.get("load_scripts", True))
-            ipc_path = os.path.join(tmp_dir, "mpv-dryrun.sock") if use_ipc else None
-
-            argv, has_terminal = services.construct_mpv_command(
-                mpv_exe=str(options.get("mpv_exe") or "mpv"),
-                ipc_path=ipc_path,
-                url=cmd_urls if len(cmd_urls) > 1 else cmd_urls[0],
-                is_youtube=bool(options.get("is_youtube", False)),
-                ytdl_raw_options=options.get("ytdl_raw_options"),
-                geometry=options.get("geometry"),
-                custom_width=options.get("custom_width"),
-                custom_height=options.get("custom_height"),
-                custom_mpv_flags=options.get("custom_mpv_flags"),
-                automatic_mpv_flags=options.get("automatic_mpv_flags"),
-                headers=options.get("headers"),
-                disable_http_persistent=bool(options.get("disable_http_persistent", False)),
-                start_paused=bool(options.get("start_paused", False)),
-                script_dir=REPO_ROOT if load_scripts else None,
-                load_on_completion_script=load_scripts,
-                title=options.get("title") or first.get("title"),
-                use_ytdl_mpv=bool(options.get("use_ytdl_mpv", False)),
-                is_youtube_override=bool(options.get("is_youtube_override", False)),
-                idle=bool(options.get("idle", False)),
-                force_terminal=bool(options.get("force_terminal", False)),
-                settings=options.get("settings") if isinstance(options.get("settings"), dict) else None,
-                flag_dir=tmp_flag_dir if load_scripts else None,
-                playlist_start_index=options.get("playlist_start_index"),
-                cookies_browser=options.get("cookies_browser"),
-                cookies_file=options.get("cookies_file"),
-                start_time=options.get("start_time"),
+            req_json = json.dumps(
+                {
+                    "repo_root": REPO_ROOT,
+                    "tmp_dir": tmp_dir,
+                    "items": items,
+                    "options": options,
+                }
             )
-        finally:
-            file_io.TEMP_DIR = orig_temp_dir
-            file_io.initialize_paths(orig_data_dir)
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "mode": "dry_run", "error": f"Invalid options: {exc}"}
+
+        try:
+            proc = subprocess.run(
+                [_python_bin(), "-B", "-c", _DRY_RUN_SUBPROCESS_SCRIPT],
+                input=req_json,
+                cwd=REPO_ROOT,
+                env=_repo_env(),
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "mode": "dry_run", "error": "Dry-run builder subprocess timed out"}
+        except OSError as exc:
+            return {"ok": False, "mode": "dry_run", "error": f"Failed to launch dry-run subprocess: {exc}"}
+
+        if proc.returncode != 0:
+            err_msg = strip_ansi(proc.stderr or proc.stdout).strip() or f"exit code {proc.returncode}"
+            return {"ok": False, "mode": "dry_run", "error": f"Dry-run subprocess failed: {err_msg}"}
+
+        try:
+            sub_res = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            return {"ok": False, "mode": "dry_run", "error": f"Invalid dry-run subprocess output: {exc}"}
+
+        if not sub_res.get("ok"):
+            return {"ok": False, "mode": "dry_run", "error": str(sub_res.get("error") or "Dry-run builder error")}
+
+        argv = sub_res["argv"]
+        has_terminal = sub_res["has_terminal_flag"]
+        m3u_content = sub_res["m3u_content"]
 
         masked_argv = [
             _mask_text(str(arg), data_dir=tmp_data_dir).replace(tmp_dir, "<DRYRUN_TMP>")
@@ -1427,11 +1631,20 @@ def _run_mpv_dry_run(urls: list[Any] | None, options: dict[str, Any]) -> dict[st
 
 
 def _run_mpv_headless(options: dict[str, Any]) -> dict[str, Any]:
+    raw_timeout = options.get("timeout", 4.0)
+    if isinstance(raw_timeout, bool):
+        return {"ok": False, "mode": "headless", "error": f"Invalid timeout {raw_timeout!r}: must be a number"}
+    try:
+        timeout_val = float(raw_timeout)
+    except (TypeError, ValueError):
+        return {"ok": False, "mode": "headless", "error": f"Invalid timeout {raw_timeout!r}: must be a number"}
+    if not math.isfinite(timeout_val):
+        return {"ok": False, "mode": "headless", "error": f"Invalid timeout {raw_timeout!r}: must be finite"}
+    timeout = max(1.0, min(timeout_val, 5.0))
+
     mpv_bin = shutil.which("mpv")
     if not mpv_bin:
         return {"ok": False, "mode": "headless", "error": "mpv binary not found in PATH"}
-
-    timeout = max(1.0, min(float(options.get("timeout", 4.0)), 5.0))
     lua_dir = os.path.join(REPO_ROOT, "mpv_scripts")
     lua_files = (
         sorted(os.path.join(lua_dir, f) for f in os.listdir(lua_dir) if f.endswith(".lua"))
@@ -1574,14 +1787,26 @@ def _run_mpv_headless(options: dict[str, Any]) -> dict[str, Any]:
 def test_mpv_pipeline(
     mode: str = "dry_run",
     urls: list[Any] | None = None,
-    options: dict[str, Any] | None = None,
+    options: dict[str, Any] | str | None = None,
 ) -> dict[str, Any]:
     if mode not in {"dry_run", "headless"}:
         return {"ok": False, "error": f"Invalid mode '{mode}'. Allowed: ['dry_run', 'headless']"}
-    if options is not None and not isinstance(options, dict):
-        return {"ok": False, "error": "options must be a JSON object when provided"}
+    parsed_opts: dict[str, Any] = {}
+    if isinstance(options, str):
+        stripped_opts = options.strip()
+        if stripped_opts:
+            try:
+                loaded_opts = json.loads(stripped_opts)
+            except json.JSONDecodeError as exc:
+                return {"ok": False, "mode": mode, "error": f"Invalid JSON options: {exc}"}
+            if not isinstance(loaded_opts, dict):
+                return {"ok": False, "mode": mode, "error": "options must be a JSON object when provided"}
+            parsed_opts = loaded_opts
+    elif options is not None:
+        if not isinstance(options, dict):
+            return {"ok": False, "error": "options must be a JSON object when provided"}
+        parsed_opts = options
 
-    opts = options or {}
     if mode == "dry_run":
-        return _run_mpv_dry_run(urls=urls, options=opts)
-    return _run_mpv_headless(options=opts)
+        return _run_mpv_dry_run(urls=urls, options=parsed_opts)
+    return _run_mpv_headless(options=parsed_opts)
