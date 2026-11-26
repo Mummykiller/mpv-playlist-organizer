@@ -487,6 +487,40 @@ async function runTests() {
 	}
 	console.log("  [OK] callNativeHost preserves verbatim data keys for get_metadata_cache");
 
+	// 20. bridge_contract.js validateContract rejects unknown actions & SETTINGS_FIELDS on non-playback actions
+	const { validateContract } = require("./bridge_contract");
+
+	const unknownRes = validateContract({ action: "completely_unknown_action", request_id: "req_u1" });
+	assert.strictEqual(unknownRes.valid, false, "validateContract must reject unknown actions even with only base keys");
+	assert.ok(unknownRes.error?.includes("completely_unknown_action"), "Error should name the unknown action");
+
+	const protoActionRes = validateContract({ action: "toString", request_id: "req_u2" });
+	assert.strictEqual(protoActionRes.valid, false, "validateContract must reject Object.prototype keys as action names");
+
+	const settingsOnLog = validateContract({
+		action: "log_event",
+		level: "INFO",
+		message: "test",
+		ytdl_quality: "best",
+	});
+	assert.strictEqual(settingsOnLog.valid, false, "log_event must reject SETTINGS_FIELDS keys like ytdl_quality");
+	assert.ok(settingsOnLog.error?.includes("ytdl_quality"), "Error should mention rejected settings key");
+
+	const settingsOnService = validateContract({
+		action: "get_anilist_releases",
+		days: 7,
+		mpv_decoder: "auto",
+	});
+	assert.strictEqual(settingsOnService.valid, false, "get_anilist_releases must reject SETTINGS_FIELDS keys like mpv_decoder");
+
+	const settingsOnPlayback = validateContract({
+		action: "play",
+		folder_id: "Default",
+		ytdl_quality: "best",
+	});
+	assert.strictEqual(settingsOnPlayback.valid, true, "PlaybackRequest actions must still accept SETTINGS_FIELDS keys");
+	console.log("  [OK] validateContract rejects unknown actions and SETTINGS_FIELDS on non-playback actions");
+
 	console.log("\nALL JS BRIDGE PROTOCOL & UTILITY TESTS PASSED! ✨");
 }
 

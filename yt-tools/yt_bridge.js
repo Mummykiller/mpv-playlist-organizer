@@ -418,15 +418,14 @@
       return;
     }
 
-    if (msg.type.startsWith("SHINKU__")) {
-      mainContentAlive = true;
-    }
-
     if (msg.type === "SHINKU__saveToLibrary") {
+      mainContentAlive = true;
       handleSaveToLibrary(msg.data || msg);
     } else if (msg.type === "SHINKU__requestLibrary") {
+      mainContentAlive = true;
       handleRequestLibrary();
     } else if (msg.type === "SHINKU__requestSettings") {
+      mainContentAlive = true;
       if (!toolsEnabled) {
         postToMain("SHINKU__toolsDisabled", {});
       } else if (cachedSettings) {

@@ -151,6 +151,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// 4. AniList State
 			if (c.anilistUI) {
 				if (
+					!c.suppressedByWatchdog &&
 					c.anilistUI.panelHost.style.display === "none" &&
 					state.anilistVisible
 				) {
@@ -410,96 +411,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			}
 		}
 
-		handleRightClickScrape(send) {
-			const c = this.controller;
-			let url = window.location.href;
-			let title = null;
-
-			const isSafeWebUrl = (href) =>
-				typeof window !== "undefined" &&
-				window.MPV_SECURITY &&
-				typeof window.MPV_SECURITY.isValidWebUrl === "function"
-					? window.MPV_SECURITY.isValidWebUrl(href)
-					: href.startsWith("http://") || href.startsWith("https://");
-
-			const host = window.location.hostname.toLowerCase();
-			const isYouTubeHost = host === "youtube.com" || host.endsWith(".youtube.com");
-			if (
-				isYouTubeHost &&
-				c.lastRightClickedElement
-			) {
-				const videoContainer = c.lastRightClickedElement.closest(
-					"ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, yt-lockup-view-model",
-				);
-				if (videoContainer) {
-					const linkEl = videoContainer.querySelector(
-						"a#video-title-link, a#thumbnail, a.yt-lockup-view-model__content-image, a.yt-lockup-metadata-view-model__title, a.yt-simple-endpoint",
-					);
-					if (linkEl && linkEl.href && isSafeWebUrl(linkEl.href)) {
-						url = linkEl.href;
-					}
-
-					const titleSelectors = [
-						"#video-title",
-						".yt-lockup-metadata-view-model__title",
-						"h3",
-						"#title-text",
-						"span#video-title",
-						".ytp-title-link",
-					];
-					const channelSelectors = [
-						"#channel-name .yt-formatted-string",
-						".ytd-channel-name .yt-formatted-string",
-						"#byline-container .yt-formatted-string",
-						".yt-content-metadata-view-model__metadata-text",
-						"#owner-name a",
-					];
-
-					let videoTitle = null;
-					for (const selector of titleSelectors) {
-						const el = videoContainer.querySelector(selector);
-						if (el && el.textContent?.trim()) {
-							videoTitle = el.textContent.trim();
-							break;
-						}
-					}
-
-					let channelName = null;
-					for (const selector of channelSelectors) {
-						const el = videoContainer.querySelector(selector);
-						if (el && el.textContent?.trim()) {
-							channelName = el.textContent.trim();
-							break;
-						}
-					}
-
-					if (videoTitle) {
-						title = channelName ? `${channelName} - ${videoTitle}` : videoTitle;
-					}
-				}
-			}
-
-			if (!title && c.lastRightClickedElement) {
-				const linkElement = c.lastRightClickedElement.closest("a");
-				if (linkElement && linkElement.href && isSafeWebUrl(linkElement.href)) {
-					url = linkElement.href;
-					const clone = linkElement.cloneNode(true);
-					clone.querySelectorAll?.(".shinku-hover-shield, .shinku-thumb-bookmark-btn").forEach((el) => el.remove());
-					title = clone.textContent.trim();
-				}
-			}
-
-			if (!title || !url) {
-				const details = c.pageScraper.scrapePageDetails(
-					url || window.location.href,
-				);
-				url = url || details.url;
-				title = title || details.title;
-			}
-
-			send({ url, title });
-		}
-
 		async waitForAccurateDetails(url, timeoutMs = 1500, originPageUrl = null) {
 			const c = this.controller;
 			const currentUrl = window.location.href;
@@ -715,9 +626,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			if (!c.ui.shadowRoot) return;
 			const container = c.ui.shadowRoot.getElementById("log-container");
 			if (!container) return;
-
-			const placeholder = container.querySelector("#log-placeholder");
-			if (placeholder) placeholder.remove();
 
 			const entry = document.createElement("div");
 			entry.className = `log-item log-item-${log.type || "info"}`;

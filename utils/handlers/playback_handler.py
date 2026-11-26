@@ -125,7 +125,10 @@ class PlaybackHandler(BaseHandler):
 
         # 3. Parallel Enrichment & Initial Launch
         logging.info("[PY][Handler] Starting enrichment and launch payload construction...")
-        self.mpv_session.launch_cancelled = False # Reset for new attempt
+        with self.mpv_session.sync_lock:
+            self.mpv_session.launch_cancelled = False # Reset for new attempt
+            had_active_session = bool(self.mpv_session.is_alive or self.mpv_session.pid)
+            launch_gen = getattr(self.mpv_session, 'session_generation', 0)
         launch_payload = items if len(items) > 1 else items[0]
 
         # Log the intent to the browser
@@ -138,7 +141,6 @@ class PlaybackHandler(BaseHandler):
         self.ctx.sender({"action": "log_from_native_host", "log": {"text": log_text, "type": "info"}})
 
         try:
-            had_active_session = bool(self.mpv_session.is_alive or self.mpv_session.pid)
             logging.info("[PY][Handler] Calling mpv_session.start (first pass)...")
             first_call_result = self.mpv_session.start(
                 launch_payload, folder_id, settings, self.file_io,
@@ -151,11 +153,14 @@ class PlaybackHandler(BaseHandler):
             logging.info(f"[PY][Handler] First pass result: success={first_call_result.get('success')}, handled_directly={first_call_result.get('handled_directly')}")
 
             # --- CANCELLATION CHECK ---
-            if getattr(self.mpv_session, 'launch_cancelled', False):
+            with self.mpv_session.sync_lock:
+                is_cancelled = getattr(self.mpv_session, 'launch_cancelled', False)
+                session_alive = bool(self.mpv_session.is_alive)
+            if is_cancelled:
                 logging.info("[PY][Handler] Launch cancelled by user during Pass 1. Aborting Pass 2.")
                 return native_link.failure("Launch cancelled")
 
-            if not first_call_result["success"] or first_call_result.get("handled_directly") or self.mpv_session.is_alive:
+            if not first_call_result["success"] or first_call_result.get("handled_directly") or session_alive:
                 return first_call_result
 
             # Final Launch Orchestration
@@ -190,7 +195,7 @@ class PlaybackHandler(BaseHandler):
         except Exception as e:
             logging.error(f"[PY][Handler] Error during playback orchestration: {e}", exc_info=True)
             if "Launch cancelled" in str(e):
-                self.mpv_session.clear()
+                self.mpv_session.clear(session_generation=launch_gen)
                 return native_link.failure("Cancelled")
             raise e
 
@@ -341,27 +346,6 @@ class PlaybackHandler(BaseHandler):
         logging.info(f"[PY][Handler] remove_item_live final result for {request.item_id}: {res}")
         return res
 
-    @command('remove_items_live')
-    def handle_remove_items_live(self, request: native_link.LiveUpdateRequest):
-        logging.info(f"[PY][Handler] Received remove_items_live: folder_id='{request.folder_id}', item_ids={request.item_ids}")
-        if not request.item_ids:
-            return native_link.failure("Missing item_ids.")
-        canonical_id = self.file_io._get_canonical_folder_id(request.folder_id) if request.folder_id else self.mpv_session.owner_folder_id
-        failed_ids = []
-        for item_id in request.item_ids:
-            res = self.mpv_session.remove(item_id, canonical_id)
-            if isinstance(res, dict) and res.get("success") is False:
-                failed_ids.append(item_id)
-            elif res is False:
-                failed_ids.append(item_id)
-        if len(failed_ids) == len(request.item_ids):
-            return native_link.failure(f"Failed to remove items from live session: {failed_ids}")
-        removed_count = len(request.item_ids) - len(failed_ids)
-        return native_link.success(
-            message=f"Removed {removed_count} item(s) from live session.",
-            failed_ids=failed_ids
-        )
-
     @command('reorder_live')
     def handle_reorder_live(self, request: native_link.LiveUpdateRequest):
         if not request.folder_id or not request.new_order:
@@ -384,7 +368,8 @@ class PlaybackHandler(BaseHandler):
     @command('close_mpv')
     def handle_close_mpv(self, request: native_link.LiveUpdateRequest):
         # Force cancel any pending/in-flight launches
-        self.mpv_session.launch_cancelled = True
+        with self.mpv_session.sync_lock:
+            self.mpv_session.launch_cancelled = True
 
         response = self.mpv_session.close()
         self.m3u_server.stop()

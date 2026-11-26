@@ -3129,10 +3129,12 @@ html.${HOVER_GUARD_LOCKED_CLASS} .ytp-modern-videowall-still-preview {
         break;
       }
       case "SHINKU__toolsDisabled": {
+        bridgeConnected = true;
         disableToolsState();
         break;
       }
       case "SHINKU__toolsEnabled": {
+        bridgeConnected = true;
         toolsEnabled = true;
         if (msg.data && typeof msg.data === "object") {
           userSetting = msg.data;
@@ -3147,6 +3149,7 @@ html.${HOVER_GUARD_LOCKED_CLASS} .ytp-modern-videowall-still-preview {
         break;
       }
       case "SHINKU__userSetting": {
+        bridgeConnected = true;
         const isFirstInit = userSetting === null;
         const nextData = msg.data || {};
         const nextSig = JSON.stringify(nextData);
@@ -3174,6 +3177,7 @@ html.${HOVER_GUARD_LOCKED_CLASS} .ytp-modern-videowall-still-preview {
         break;
       }
       case "SHINKU__updateUserSetting": {
+        bridgeConnected = true;
         userSetting = msg.data || {};
         userSettingSig = JSON.stringify(userSetting);
         applySettingsHotReload();
@@ -3181,6 +3185,7 @@ html.${HOVER_GUARD_LOCKED_CLASS} .ytp-modern-videowall-still-preview {
       }
       case "SHINKU__Library":
       case "SHINKU__updatingLibrary": {
+        bridgeConnected = true;
         shinkuLibrary = msg.data && typeof msg.data === "object" ? msg.data : {};
         updatePlusButtonState();
         updateAllThumbnailBookmarkButtons();

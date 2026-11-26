@@ -21,7 +21,7 @@ function sanitizeFolderKey(rawKey) {
 	return trimmed;
 }
 
-export const handleImportFromFile = createHandler(async ({ request, data }) => {
+export const handleImportFromFile = createHandler(async ({ request, storage }) => {
 	const filename = request.filename;
 	const options = request.options || {
 		preserveTitle: true,
@@ -60,7 +60,7 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 		const message = `The file '${filename}' appears to be a settings backup. Restore your preferences?`;
 		const confirmed = await promptUserConfirmation(message);
 		if (!confirmed) return { success: true, message: "Settings restore cancelled." };
-		return await _importSettingsLogic(importedData, data);
+		return await _importSettingsLogic(importedData, storage);
 	}
 
 	const foldersToImport = Object.create(null);
@@ -111,93 +111,116 @@ export const handleImportFromFile = createHandler(async ({ request, data }) => {
 		return { success: true, message: `Import file was empty or incompatible.` };
 	}
 
-	if (!data.folderOrder) data.folderOrder = Object.keys(data.folders);
+	const importedCount = await storage.withLock(async () => {
+		const data = await storage.get();
+		if (!data.folderOrder) data.folderOrder = Object.keys(data.folders);
 
-	let importedCount = 0;
-	for (const [folderId, folderData] of Object.entries(foldersToImport)) {
-		if (isForbiddenKey(folderId)) continue;
-		let finalId = folderId.slice(0, MAX_FOLDER_ID_LENGTH);
-		let counter = 1;
-		while (Object.hasOwn(data.folders, finalId)) {
-			const suffix = ` (${counter})`;
-			finalId = `${folderId.slice(0, MAX_FOLDER_ID_LENGTH - suffix.length)}${suffix}`;
-			counter++;
+		let count = 0;
+		for (const [folderId, folderData] of Object.entries(foldersToImport)) {
+			if (isForbiddenKey(folderId)) continue;
+			let finalId = folderId.slice(0, MAX_FOLDER_ID_LENGTH);
+			let counter = 1;
+			while (Object.hasOwn(data.folders, finalId)) {
+				const suffix = ` (${counter})`;
+				finalId = `${folderId.slice(0, MAX_FOLDER_ID_LENGTH - suffix.length)}${suffix}`;
+				counter++;
+			}
+			data.folders[finalId] = folderData;
+			data.folderOrder.push(finalId);
+			count++;
 		}
-		data.folders[finalId] = folderData;
-		data.folderOrder.push(finalId);
-		importedCount++;
-	}
+
+		await storage.set(data);
+		return count;
+	});
 
 	return {
 		success: true,
 		message: `Successfully imported ${importedCount} folder(s).`,
 	};
 }, {
+	manualPersistence: true,
 	syncToNative: true,
 	broadcastFolders: true,
 	broadcastPreferences: true,
 	updateMenus: true
 });
 
-async function _importSettingsLogic(importedData, localData) {
+async function _importSettingsLogic(importedData, storageInstance) {
 	const importedSettings = importedData.settings;
 	const excludeKeys = ["lastUsedFolderId", "anilist_cache", "anilistCache"];
 
-	let restoredCount = 0;
-	if (importedSettings && typeof importedSettings === "object" && !Array.isArray(importedSettings)) {
-		for (const key in importedSettings) {
-			if (!Object.hasOwn(importedSettings, key) || isForbiddenKey(key) || excludeKeys.includes(key)) {
-				continue;
-			}
-
-			if (key === "ui_preferences" || key === "uiPreferences") {
-				// Deep merge for uiPreferences to preserve domains and positions if they were missing in backup
-				const importedPrefs = importedSettings[key];
-				if (!importedPrefs || typeof importedPrefs !== "object" || Array.isArray(importedPrefs)) {
+	const { restoredSettingsCount, syncPrefs } = await storageInstance.withLock(async () => {
+		const localData = await storageInstance.get();
+		let count = 0;
+		if (importedSettings && typeof importedSettings === "object" && !Array.isArray(importedSettings)) {
+			for (const key in importedSettings) {
+				if (!Object.hasOwn(importedSettings, key) || isForbiddenKey(key) || excludeKeys.includes(key)) {
 					continue;
 				}
-				const localPrefs = localData.settings.uiPreferences || { global: {}, domains: {} };
 
-				// Restore global prefs but preserve existing keys if not present in backup
-				if (importedPrefs.global && typeof importedPrefs.global === "object" && !Array.isArray(importedPrefs.global)) {
-					const mergedGlobal = { ...(localPrefs.global || {}) };
-					for (const gKey in importedPrefs.global) {
-						if (Object.hasOwn(importedPrefs.global, gKey) && !isForbiddenKey(gKey)) {
-							mergedGlobal[gKey] = importedPrefs.global[gKey];
-						}
+				if (key === "ui_preferences" || key === "uiPreferences") {
+					// Deep merge for uiPreferences to preserve domains and positions if they were missing in backup
+					const importedPrefs = importedSettings[key];
+					if (!importedPrefs || typeof importedPrefs !== "object" || Array.isArray(importedPrefs)) {
+						continue;
 					}
-					localPrefs.global = mergedGlobal;
-				}
+					const localPrefs = localData.settings.uiPreferences || { global: {}, domains: {} };
 
-				// Restore domains - merge them instead of overwriting
-				if (importedPrefs.domains && typeof importedPrefs.domains === "object" && !Array.isArray(importedPrefs.domains)) {
-					const mergedDomains = { ...(localPrefs.domains || {}) };
-					for (const domainKey in importedPrefs.domains) {
-						if (!Object.hasOwn(importedPrefs.domains, domainKey) || isForbiddenKey(domainKey)) {
-							continue;
-						}
-						const domainVal = importedPrefs.domains[domainKey];
-						if (domainVal && typeof domainVal === "object" && !Array.isArray(domainVal)) {
-							const safeDomainVal = {};
-							for (const propKey in domainVal) {
-								if (Object.hasOwn(domainVal, propKey) && !isForbiddenKey(propKey)) {
-									safeDomainVal[propKey] = domainVal[propKey];
-								}
+					// Restore global prefs but preserve existing keys if not present in backup
+					if (importedPrefs.global && typeof importedPrefs.global === "object" && !Array.isArray(importedPrefs.global)) {
+						const mergedGlobal = { ...(localPrefs.global || {}) };
+						for (const gKey in importedPrefs.global) {
+							if (Object.hasOwn(importedPrefs.global, gKey) && !isForbiddenKey(gKey)) {
+								mergedGlobal[gKey] = importedPrefs.global[gKey];
 							}
-							mergedDomains[domainKey] = safeDomainVal;
 						}
+						localPrefs.global = mergedGlobal;
 					}
-					localPrefs.domains = mergedDomains;
+
+					// Restore domains - merge them instead of overwriting
+					if (importedPrefs.domains && typeof importedPrefs.domains === "object" && !Array.isArray(importedPrefs.domains)) {
+						const mergedDomains = { ...(localPrefs.domains || {}) };
+						for (const domainKey in importedPrefs.domains) {
+							if (!Object.hasOwn(importedPrefs.domains, domainKey) || isForbiddenKey(domainKey)) {
+								continue;
+							}
+							const domainVal = importedPrefs.domains[domainKey];
+							if (domainVal && typeof domainVal === "object" && !Array.isArray(domainVal)) {
+								const safeDomainVal = {};
+								for (const propKey in domainVal) {
+									if (Object.hasOwn(domainVal, propKey) && !isForbiddenKey(propKey)) {
+										safeDomainVal[propKey] = domainVal[propKey];
+									}
+								}
+								mergedDomains[domainKey] = safeDomainVal;
+							}
+						}
+						localPrefs.domains = mergedDomains;
+					}
+					
+					localData.settings.uiPreferences = localPrefs;
+					count++;
+				} else {
+					localData.settings[key] = importedSettings[key];
+					count++;
 				}
-				
-				localData.settings.uiPreferences = localPrefs;
-				restoredCount++;
-			} else {
-				localData.settings[key] = importedSettings[key];
-				restoredCount++;
 			}
 		}
-	}
+
+		await storageInstance.set(localData);
+
+		const prefsToSync = {};
+		const globalPrefs = localData.settings.uiPreferences?.global || {};
+		for (const key in globalPrefs) {
+			if (!UI_ONLY_KEYS.includes(key) && globalPrefs[key] !== undefined) {
+				prefsToSync[key] = globalPrefs[key];
+			}
+		}
+		return { restoredSettingsCount: count, syncPrefs: prefsToSync };
+	});
+
+	let restoredCount = restoredSettingsCount;
 
 	// Restore YouTube Tools backup if included
 	const ytBackup = importedData.youtubeTools || importedData.youtube_tools;
@@ -255,13 +278,6 @@ async function _importSettingsLogic(importedData, localData) {
 
 	// Sync to native host
 	try {
-		const syncPrefs = {};
-		const globalPrefs = localData.settings.uiPreferences?.global || {};
-		for (const key in globalPrefs) {
-			if (!UI_ONLY_KEYS.includes(key) && globalPrefs[key] !== undefined) {
-				syncPrefs[key] = globalPrefs[key];
-			}
-		}
 		if (Object.keys(syncPrefs).length > 0) {
 			await nativeLink.setUiPreferences(syncPrefs);
 		}

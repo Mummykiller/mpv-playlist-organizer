@@ -153,6 +153,7 @@ class MpvSessionManager:
                 self.playlist = []
                 self.owner_folder_id = None
                 self.last_played_id_cache = None
+                self.create_time = None
 
                 if self.handshake_path and os.path.exists(self.handshake_path):
                     handshake_to_remove = self.handshake_path
@@ -432,7 +433,8 @@ class MpvSessionManager:
                         if getattr(self, 'launch_cancelled', False) or self.session_generation != launch_gen:
                             cancelled_after_launch = True
                         else:
-                            self.create_time = time.time()
+                            if self.create_time is None:
+                                self.create_time = time.time()
                             logging.info("[PY][Session] start() - Post-launch initialization.")
                             if self.ipc_path and os.path.exists(self.ipc_path) and platform.system() != "Windows":
                                 try:

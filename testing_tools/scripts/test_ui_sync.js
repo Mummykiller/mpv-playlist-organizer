@@ -1147,6 +1147,151 @@ async function testUiSync() {
     }
     console.log("  ✅ Live prefs sync, e.key guards, and YouTube URL/hostname checks verified.");
 
+    // Operation 13: domUtils (confirmStacked cross-folder, formatTitle missing URL, updateItemDelta, smoothScrollTo(0)),
+    // ControllerView watchdog AniList suppression, and PlaylistUI .removing rollback on { success: false }
+    console.log("Testing domUtils regressions, watchdog AniList suppression, and PlaylistUI .removing rollback...");
+    {
+        const { domUtils } = await import("../../utils/domUtils.module.js");
+        const dom = new JSDOM("<!DOCTYPE html><html><body><div id='scroll-box'></div></body></html>", {
+            url: "https://example.com/",
+        });
+        const prevDoc = global.document;
+        const prevWin = global.window;
+        global.document = dom.window.document;
+        global.window = dom.window;
+
+        try {
+            // 1. smoothScrollTo with duration <= 0 sets scrollTop directly without NaN
+            const scrollBox = dom.window.document.getElementById("scroll-box");
+            scrollBox.scrollTop = 10;
+            domUtils.smoothScrollTo(scrollBox, 120, 0);
+            assert.strictEqual(scrollBox.scrollTop, 120, "smoothScrollTo(0) sets scrollTop directly");
+            domUtils.smoothScrollTo(scrollBox, 45, -50);
+            assert.strictEqual(scrollBox.scrollTop, 45, "smoothScrollTo(negative) sets scrollTop directly");
+
+            // 2. formatTitle handles missing/undefined url without throwing
+            const titleSpan = dom.window.document.createElement("span");
+            assert.doesNotThrow(() => domUtils.formatTitle(titleSpan, { title: "S01E01 - Pilot" }));
+            assert.strictEqual(titleSpan.textContent, "S01E01 - Pilot");
+            const fallbackSpan = dom.window.document.createElement("span");
+            assert.doesNotThrow(() => domUtils.formatTitle(fallbackSpan, { title: "", url: undefined }));
+            assert.strictEqual(fallbackSpan.textContent, "");
+
+            // 3. updateItemDelta keeps .item-watched consistent with watched and markedAsWatched
+            const ytItem = domUtils.createPlaylistItemElement(
+                { id: "yt1", url: "https://www.youtube.com/watch?v=abc", title: "Chan - Vid", watched: false, markedAsWatched: false },
+                0
+            );
+            domUtils.updateItemDelta(ytItem, { markedAsWatched: true });
+            assert.strictEqual(ytItem.classList.contains("item-watched"), true, "markedAsWatched adds .item-watched");
+            assert.strictEqual(ytItem.querySelector(".checkbox-checkmark"), null, "markedAsWatched alone does not add local watched checkmark");
+            domUtils.updateItemDelta(ytItem, { watched: false });
+            assert.strictEqual(ytItem.classList.contains("item-watched"), true, "watched:false preserves .item-watched while markedAsWatched is true");
+            domUtils.updateItemDelta(ytItem, { markedAsWatched: false });
+            assert.strictEqual(ytItem.classList.contains("item-watched"), false, "Clearing both watched and markedAsWatched removes .item-watched");
+
+            // 4. confirmStacked cross-folder isolation
+            const firstPromise = domUtils.confirmStacked("FolderA", "Clear FolderA?", { folderId: "FolderA", count: 1 });
+            const host = dom.window.document.getElementById("mpv-page-level-modal-host");
+            assert.ok(host, "First confirmStacked creates modal host");
+            assert.strictEqual(host.dataset.folderId, "FolderA");
+
+            const crossFolderResult = await domUtils.confirmStacked("FolderB", "Clear FolderB?", { folderId: "FolderB", count: 9 });
+            assert.strictEqual(crossFolderResult, false, "Cross-folder confirmStacked resolves immediately to false");
+            assert.strictEqual(host.dataset.folderId, "FolderA", "Cross-folder call must not overwrite host folderId");
+            assert.strictEqual(
+                JSON.parse(host.dataset.latestRequest).folderId,
+                "FolderA",
+                "Cross-folder call must not corrupt host latestRequest"
+            );
+
+            // Confirm first modal to clean up host
+            host.shadowRoot.getElementById("confirm-btn").click();
+            const confirmedPayload = await firstPromise;
+            assert.deepStrictEqual(confirmedPayload, { folderId: "FolderA", count: 1 });
+        } finally {
+            global.document = prevDoc;
+            global.window = prevWin;
+        }
+
+        // 5. ControllerView.syncUiToState must not re-show AniList when suppressedByWatchdog is true
+        const aniDom = new JSDOM('<!DOCTYPE html><html><body><div id="status-banner"><span id="stream-status"></span></div></body></html>', {
+            url: "https://example.com/",
+        });
+        const prevWinAni = global.window;
+        global.window = aniDom.window;
+        try {
+            const aniHost = aniDom.window.document.createElement("div");
+            aniHost.style.display = "block";
+            const ctrlHost = aniDom.window.document.createElement("div");
+            const minHost = aniDom.window.document.createElement("div");
+            const toggleCalls = [];
+            const wdController = {
+                suppressedByWatchdog: true,
+                _lastUpdateHash: "",
+                ui: {
+                    shadowRoot: aniDom.window.document,
+                    controllerHost: ctrlHost,
+                    minimizedHost: minHost,
+                    anilistPanelHost: aniHost,
+                },
+                state: { state: { settings: {} } },
+                anilistUI: {
+                    panelHost: aniHost,
+                    toggleVisibility: (show, save) => toggleCalls.push({ show, save }),
+                    updateDynamicStyles: () => {},
+                    validatePosition: () => {},
+                },
+            };
+            const wdView = new MPV.ControllerView(wdController);
+            wdView.syncUiToState({
+                minimized: false,
+                pinned: false,
+                logVisible: false,
+                logFilters: { info: true, error: true },
+                uiMode: "full",
+                isFolderActive: false,
+                lastPlayedId: null,
+                isClosing: false,
+                anilistVisible: true,
+                anilistImageHeight: 126,
+                detectedUrl: null,
+                settings: { showMinimizedStub: true, enableAnilistIntegration: true },
+            });
+            assert.strictEqual(aniHost.style.display, "none", "Watchdog hides anilistPanelHost");
+            assert.strictEqual(
+                toggleCalls.filter((t) => t.show === true).length,
+                0,
+                "syncUiToState must not re-show AniList while suppressedByWatchdog is true"
+            );
+        } finally {
+            global.window = prevWinAni;
+        }
+
+        // 6. PlaylistUI rolls back .removing when remove_item resolves with { success: false }
+        const rmDom = new JSDOM(
+            '<!DOCTYPE html><html><body><div id="playlist-container"><div class="list-item" data-id="item-1"><button class="btn-remove-item" data-index="0">×</button></div></div><select id="folder-select"><option value="Default" selected>Default</option></select><select id="compact-folder-select"><option value="Default" selected>Default</option></select></body></html>'
+        );
+        const rmLogs = [];
+        const rmController = {
+            checkContext: () => true,
+            state: { state: { settings: {} } },
+            sendCommandToBackground: async () => ({ success: false, error: "Item locked" }),
+            addLogEntry: (entry) => rmLogs.push(entry),
+            refreshPlaylist: () => {},
+        };
+        const rmPlaylistUI = new MPV.PlaylistUI(rmController, { shadowRoot: rmDom.window.document });
+        rmPlaylistUI.bindEvents();
+        const rmItem = rmDom.window.document.querySelector(".list-item");
+        const rmBtn = rmDom.window.document.querySelector(".btn-remove-item");
+        rmBtn.click();
+        assert.strictEqual(rmItem.classList.contains("removing"), true, "Optimistic .removing added on click");
+        await new Promise((r) => setTimeout(r, 10));
+        assert.strictEqual(rmItem.classList.contains("removing"), false, ".removing rolled back when remove_item resolves with success:false");
+        assert.ok(rmLogs.some((l) => l.type === "error" && l.text.includes("Item locked")), "Error log recorded on remove_item failure");
+    }
+    console.log("  ✅ domUtils regressions, watchdog AniList suppression, and PlaylistUI .removing rollback verified.");
+
     console.log("\n✨ UI SYNC TEST PASSED! ✨");
 }
 

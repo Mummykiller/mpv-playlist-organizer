@@ -154,12 +154,16 @@ class SystemLogger {
 
 		if (this.nativeSender) {
 			this.isPersisting = true;
-			// Fire and forget
-			Promise.resolve(this.nativeSender(payload))
-				.catch(() => {})
-				.finally(() => {
-					this.isPersisting = false;
-				});
+			let sendResult;
+			try {
+				sendResult = this.nativeSender(payload);
+			} catch (e) {
+				console.warn("[SystemLogger] Synchronous nativeSender error:", e?.message || e);
+			} finally {
+				this.isPersisting = false;
+			}
+			// Fire and forget (guard async rejection)
+			Promise.resolve(sendResult).catch(() => {});
 		} else {
 			this.buffer.push(payload);
 			if (this.buffer.length > this.MAX_BUFFER) {

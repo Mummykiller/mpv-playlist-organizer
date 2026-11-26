@@ -213,7 +213,13 @@ export class StorageManager {
 					const indexChanged = JSON.stringify(currentOrder) !== JSON.stringify(existing.mpv_folder_index || []);
 
 					if (!folderChanged && !settingsChanged && !indexChanged) {
-						this._cache = cloneStorageData(data);
+						if (this._cache && this._cache.folders) {
+							if (!this._cache.folders[folderId]) {
+								this._cache.folders[folderId] = cloneStorageData(data.folders[folderId]);
+							}
+						} else {
+							this._cache = cloneStorageData(data);
+						}
 						return;
 					}
 
@@ -223,7 +229,19 @@ export class StorageManager {
 					if (indexChanged) update["mpv_folder_index"] = currentOrder;
 
 					await chrome.storage.local.set(update);
-					this._cache = cloneStorageData(data);
+					if (this._cache && this._cache.folders) {
+						if (folderChanged || !this._cache.folders[folderId]) {
+							this._cache.folders[folderId] = cloneStorageData(data.folders[folderId]);
+						}
+						if (settingsChanged) {
+							this._cache.settings = cloneStorageData(data.settings);
+						}
+						if (indexChanged) {
+							this._cache.folderOrder = cloneStorageData(currentOrder);
+						}
+					} else {
+						this._cache = cloneStorageData(data);
+					}
 				} else {
 					// Full validation and save
 					this._validateData(data);

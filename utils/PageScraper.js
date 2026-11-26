@@ -73,9 +73,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				console.debug("[PageScraper] Failed to check hostname for provisional title:", e);
 			}
 
-			// 5. Trust structured titles (h1 / episode / video selector) once placeholder/URL checks pass
-			if (options?.hasStructuredTitle) return false;
-
 			return false;
 		}
 
@@ -128,7 +125,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			// --- 1. Specialized YouTube Logic ---
 			if (hostname === "youtube.com" || hostname.endsWith(".youtube.com")) {
 				if (window.location.pathname.includes("/playlist")) {
-					return { url: url, title: null, isProvisional: true };
+					return { url: url, title: null, isProvisional: true, fingerprint };
 				}
 
 				const titleSelectors = [

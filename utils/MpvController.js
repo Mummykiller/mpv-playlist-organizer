@@ -15,7 +15,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.observedFolderKey = null; // Key for the currently watched folder bucket
 			this.preFullscreenPosition = null;
 			this.preResizePosition = null;
-			this.lastRightClickedElement = null;
 			this._lastUpdateHash = "";
 			this._lastPlaylistFingerprint = "";
 			this._isPlaylistDirty = false;
@@ -221,8 +220,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				auto_add_state_changed: (req) => {
 					this._updateAutoAddVisuals(req.active);
 				},
-				get_details_for_last_right_click: (req, send) =>
-					this._handleRightClickScrape(send),
 				ytdlp_update_confirm: () => this._handleYtdlpUpdateConfirm(),
 				scrape_and_get_details: async (req, send) => {
 					// Prefer the URL passed in the request (from background scanner)
@@ -238,7 +235,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this.handleMessage = this.handleMessage.bind(this);
 			this.handleGlobalKeydown = this.handleGlobalKeydown.bind(this);
 			this.handleFullscreenChange = this.handleFullscreenChange.bind(this);
-			this.handleMouseDown = this.handleMouseDown.bind(this);
 		}
 
 		_initPlaybackSubscription() {
@@ -502,7 +498,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			this._startVisualWatchdog();
 
 			// 6. Global Event Listeners
-			window.addEventListener("mousedown", this.handleMouseDown, true);
 			if (this.focusListener) {
 				window.removeEventListener("focus", this.focusListener);
 			}
@@ -525,12 +520,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				}
 			});
 			document.addEventListener("visibilitychange", this.visibilityChangeListener);
-		}
-
-		handleMouseDown(event) {
-			if (event.button === 2) {
-				this.lastRightClickedElement = event.target;
-			}
 		}
 
 		handleMessage(request, sender, sendResponse) {
@@ -607,7 +596,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 				this.handleFullscreenChange,
 			);
 			window.removeEventListener("keydown", this.handleGlobalKeydown, true);
-			window.removeEventListener("mousedown", this.handleMouseDown, true);
 			this.ui.teardown();
 			this.playlistUI?.destroy?.();
 			if (this.anilistUI?.destroy) this.anilistUI.destroy();
@@ -744,8 +732,6 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 			return result;
 		}
 
-		_handleRightClickScrape(send) { return this.view.handleRightClickScrape(send); }
-
 		async waitForAccurateDetails(url, timeoutMs = 1500, originPageUrl = null) { return this.view.waitForAccurateDetails(url, timeoutMs, originPageUrl); }
 
 		showStackedClearConfirmation(folderId, message, requestData) { return this.view.showStackedClearConfirmation(folderId, message, requestData); }
@@ -842,13 +828,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 
 		_handleResize() { return this.view.handleResize(); }
 
-		validateAndRepositionController() { return this.view.validateAndRepositionController(); }
-
-		validateAndRepositionMinimizedStub() { return this.view.validateAndRepositionMinimizedStub(); }
-
 		handleGlobalKeydown(e) { return this.view.handleGlobalKeydown(e); }
-
-		normalizeKeyCombo(e) { return this.view.normalizeKeyCombo(e); }
 
 		handleFullscreenChange() {
 			this.timers.checkVisibility();

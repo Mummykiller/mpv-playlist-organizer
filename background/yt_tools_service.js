@@ -79,7 +79,7 @@ export async function syncTabActionIcon(tabId, url, dominantOverride = null) {
 	}
 }
 
-export async function syncAllTabActionIcons() {
+async function syncAllTabActionIcons() {
 	if (!chrome?.tabs?.query || !chrome?.action?.setIcon) return;
 	try {
 		const dominantState = await getDominantIconState();

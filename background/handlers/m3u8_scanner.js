@@ -439,6 +439,7 @@ async function _focusOriginalTab(originalTab) {
  */
 export async function findM3u8InUrl(url, originalTab) {
 	let scannerTab; // The tab inside the new window
+	let handoffWindow = false;
 
 	try {
 		const data = await storage.get();
@@ -536,6 +537,7 @@ export async function findM3u8InUrl(url, originalTab) {
 
 		const finalUrl = detectedStreamUrl; // Only use the detected stream.
 		const finalTitle = scrapedDetails.title;
+		handoffWindow = Boolean(finalUrl);
 
 		return {
 			url: finalUrl,
@@ -544,6 +546,9 @@ export async function findM3u8InUrl(url, originalTab) {
 			originalUrl: url,
 		};
 	} finally {
+		if (!handoffWindow && scannerTab?.windowId && chrome?.windows?.remove) {
+			chrome.windows.remove(scannerTab.windowId).catch(() => {});
+		}
 		await _focusOriginalTab(originalTab);
 	}
 }

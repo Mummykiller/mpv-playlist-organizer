@@ -17,6 +17,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	         */
 	        smoothScrollTo(container, to, duration) {
 	            if (!container) return;
+	            if (!duration || duration <= 0) {
+	                container.scrollTop = to;
+	                return;
+	            }
 	            const start = container.scrollTop;
 	            const change = to - start;
 	            let startTime = null;
@@ -68,12 +72,13 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	         * @param {Object} item - The playlist item object.
 	         */
 	        formatTitle(urlSpan, item) {
+	            const url = String(item.url || "");
 	            if (!item.title) {
-	                urlSpan.textContent = item.url;
+	                urlSpan.textContent = url;
 	                return;
 	            }
 	            const titleParts = item.title.split(" - ");
-	            const isYT = item.url.includes("youtube.com/") || item.url.includes("youtu.be/");
+	            const isYT = url.includes("youtube.com/") || url.includes("youtu.be/");
 
 	            // Matches S01E01, E01, or YouTube titles with at least one " - "
 	            const episodeRegex = /^(s\d+)?e\d+(\.\d+)?$/i;
@@ -124,23 +129,7 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	                }
 	            }
 
-	            // 2. Gray out (watched)
-	            if (delta.watched !== undefined) {
-	                itemDiv.classList.toggle("item-watched", !!delta.watched);
-
-	                const existingIndexCheck = itemDiv.querySelector(".index-checkmark");
-	                if (delta.watched && !isYouTube && !existingIndexCheck) {
-	                    const check = document.createElement("span");
-	                    check.className = "watched-checkmark index-checkmark";
-	                    check.innerHTML = "✔";
-	                    const indexSpan = itemDiv.querySelector(".url-index");
-	                    if (indexSpan) indexSpan.after(check);
-	                } else if (!delta.watched && existingIndexCheck) {
-	                    existingIndexCheck.remove();
-	                }
-	            }
-
-	            // 2. Checkbox & Checkmark (markedAsWatched vs watched)
+	            // 2. Watched / markedAsWatched state (consistent with createPlaylistItemElement)
 	            if (delta.markedAsWatched !== undefined || delta.watched !== undefined) {
 	                const checkbox = itemDiv.querySelector(".item-watched-checkbox");
 
@@ -150,17 +139,36 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	                    checkbox.title = delta.markedAsWatched ? "Already marked as watched" : "Click to mark as watched on YouTube";
 	                }
 
-	                // Checkmark strictly follows local watched status
 	                const existingCheckboxCheck = itemDiv.querySelector(".checkbox-checkmark");
-	                if (isYouTube && checkbox) {
-	                    const currentlyWatched = delta.watched !== undefined ? delta.watched : !!itemDiv.classList.contains("item-watched");
+	                const effectiveWatched = delta.watched !== undefined
+	                    ? !!delta.watched
+	                    : (isYouTube && checkbox ? !!existingCheckboxCheck : itemDiv.classList.contains("item-watched"));
+	                const effectiveMarked = delta.markedAsWatched !== undefined
+	                    ? !!delta.markedAsWatched
+	                    : (checkbox ? !!checkbox.checked : false);
+	                const isEffectivelyWatched = effectiveWatched || effectiveMarked;
 
-	                    if (currentlyWatched && !existingCheckboxCheck) {
+	                itemDiv.classList.toggle("item-watched", isEffectivelyWatched);
+
+	                const existingIndexCheck = itemDiv.querySelector(".index-checkmark");
+	                if (isEffectivelyWatched && !isYouTube && !existingIndexCheck) {
+	                    const check = document.createElement("span");
+	                    check.className = "watched-checkmark index-checkmark";
+	                    check.innerHTML = "✔";
+	                    const indexSpan = itemDiv.querySelector(".url-index");
+	                    if (indexSpan) indexSpan.after(check);
+	                } else if (!isEffectivelyWatched && existingIndexCheck) {
+	                    existingIndexCheck.remove();
+	                }
+
+	                // Checkmark strictly follows local watched status
+	                if (isYouTube && checkbox && delta.watched !== undefined) {
+	                    if (effectiveWatched && !existingCheckboxCheck) {
 	                        const check = document.createElement("span");
 	                        check.className = "watched-checkmark checkbox-checkmark";
 	                        check.innerHTML = "✔";
 	                        checkbox.after(check);
-	                    } else if (!currentlyWatched && existingCheckboxCheck) {
+	                    } else if (!effectiveWatched && existingCheckboxCheck) {
 	                        existingCheckboxCheck.remove();
 	                    }
 	                }
@@ -297,7 +305,10 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 	         */
 	        confirmStacked(folderId, message, requestData) {
 	            const existingHost = document.getElementById("mpv-page-level-modal-host");
-	            if (existingHost && existingHost.dataset.folderId === folderId) {
+	            if (existingHost) {
+	                if (existingHost.dataset.folderId !== folderId) {
+	                    return Promise.resolve(false);
+	                }
 	                const shadow = existingHost.shadowRoot;
 	                const messageEl = shadow ? shadow.getElementById("message") : null;
 	                const contentEl = shadow ? shadow.querySelector(".modal-content") : null;

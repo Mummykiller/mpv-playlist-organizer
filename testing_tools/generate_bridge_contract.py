@@ -19,10 +19,15 @@ def render_bridge_contract():
 
     # 2. Map Actions to their expected fields
     action_schemas = {}
+    settings_actions = []
     for action, req_class in ACTION_MAP.items():
         if is_dataclass(req_class):
+            req_fields = fields(req_class)
             # Get all fields for this specific dataclass
-            allowed = [f.name for f in fields(req_class)]
+            allowed = [f.name for f in req_fields]
+            # Only actions whose dataclass defines `settings` (PlaybackRequest) accept SettingsOverrides keys
+            if any(f.name == "settings" for f in req_fields):
+                settings_actions.append(action)
             # Remove base fields to keep the JS schema clean
             action_schemas[action] = [f for f in allowed if f not in ['action', 'request_id', 'settings']]
 
@@ -34,6 +39,8 @@ def render_bridge_contract():
 
 const SETTINGS_FIELDS = new Set({json.dumps(settings_fields, indent=4)});
 
+const SETTINGS_ACTIONS = new Set({json.dumps(settings_actions, indent=4)});
+
 const ACTION_SCHEMAS = {json.dumps(action_schemas, indent=4)};
 
 /**
@@ -41,19 +48,25 @@ const ACTION_SCHEMAS = {json.dumps(action_schemas, indent=4)};
  * @param {{object}} snakedPayload - The object AFTER normalization.
  */
 function validateContract(snakedPayload) {{
-	const {{ action, request_id }} = snakedPayload;
-	if (!action) return {{ valid: false, error: "Missing 'action' key." }};
-
-	const allowedKeys = ACTION_SCHEMAS[action];
-	if (!allowedKeys) {{
-		// BaseRequest fallback
-		const baseKeys = ["action", "request_id"];
-		const extra = Object.keys(snakedPayload).filter(k => !baseKeys.includes(k));
-		if (extra.length > 0) return {{ valid: false, error: `Unknown action '${{action}}' or unexpected keys: ${{extra.join(", ")}}` }};
-		return {{ valid: true }};
+	if (!snakedPayload || typeof snakedPayload !== "object") {{
+		return {{ valid: false, error: "Payload must be an object." }};
+	}}
+	const {{ action }} = snakedPayload;
+	if (!action || typeof action !== "string") {{
+		return {{ valid: false, error: "Missing 'action' key." }};
 	}}
 
-	const validKeys = new Set([...allowedKeys, "action", "request_id", ...SETTINGS_FIELDS]);
+	if (!Object.hasOwn(ACTION_SCHEMAS, action)) {{
+		const baseKeys = ["action", "request_id"];
+		const extra = Object.keys(snakedPayload).filter((k) => !baseKeys.includes(k));
+		const detail = extra.length > 0 ? ` (unexpected keys: ${{extra.join(", ")}})` : "";
+		return {{ valid: false, error: `Unknown action '${{action}}'${{detail}}.` }};
+	}}
+
+	const allowedKeys = ACTION_SCHEMAS[action];
+	const validKeys = SETTINGS_ACTIONS.has(action)
+		? new Set([...allowedKeys, "action", "request_id", ...SETTINGS_FIELDS])
+		: new Set([...allowedKeys, "action", "request_id"]);
 	const payloadKeys = Object.keys(snakedPayload);
 
 	for (const key of payloadKeys) {{
@@ -66,7 +79,7 @@ function validateContract(snakedPayload) {{
 }}
 
 if (typeof module !== "undefined") {{
-	module.exports = {{ validateContract, ACTION_SCHEMAS }};
+	module.exports = {{ validateContract, ACTION_SCHEMAS, SETTINGS_FIELDS, SETTINGS_ACTIONS }};
 }}
 """
 

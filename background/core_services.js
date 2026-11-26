@@ -65,7 +65,7 @@ const syncInitPromise = (async () => {
 	}
 })();
 
-export const _syncToNativeHostFile = async (folderId = null) => {
+const _syncToNativeHostFile = async (folderId = null) => {
 	await syncInitPromise;
 	if (folderId === null) {
 		pendingFullSync = false;

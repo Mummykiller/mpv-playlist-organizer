@@ -35,6 +35,14 @@ const SETTINGS_FIELDS = new Set([
     "clear_on_item_finish"
 ]);
 
+const SETTINGS_ACTIONS = new Set([
+    "play",
+    "play_batch",
+    "play_m3u",
+    "append",
+    "play_new_instance"
+]);
+
 const ACTION_SCHEMAS = {
     "play": [
         "folder_id",
@@ -127,20 +135,6 @@ const ACTION_SCHEMAS = {
         "item_ids",
         "marked_as_watched",
         "watched",
-        "played_ids",
-        "watched_ids",
-        "session_ids",
-        "new_order"
-    ],
-    "remove_items_live": [
-        "folder_id",
-        "item_id",
-        "item_ids",
-        "marked_as_watched",
-        "watched",
-        "played_ids",
-        "watched_ids",
-        "session_ids",
         "new_order"
     ],
     "reorder_live": [
@@ -149,9 +143,6 @@ const ACTION_SCHEMAS = {
         "item_ids",
         "marked_as_watched",
         "watched",
-        "played_ids",
-        "watched_ids",
-        "session_ids",
         "new_order"
     ],
     "clear_live": [
@@ -160,9 +151,6 @@ const ACTION_SCHEMAS = {
         "item_ids",
         "marked_as_watched",
         "watched",
-        "played_ids",
-        "watched_ids",
-        "session_ids",
         "new_order"
     ],
     "update_item_marked_as_watched": [
@@ -171,9 +159,6 @@ const ACTION_SCHEMAS = {
         "item_ids",
         "marked_as_watched",
         "watched",
-        "played_ids",
-        "watched_ids",
-        "session_ids",
         "new_order"
     ],
     "is_mpv_running": [
@@ -182,9 +167,6 @@ const ACTION_SCHEMAS = {
         "item_ids",
         "marked_as_watched",
         "watched",
-        "played_ids",
-        "watched_ids",
-        "session_ids",
         "new_order"
     ],
     "get_playback_status": [
@@ -193,9 +175,6 @@ const ACTION_SCHEMAS = {
         "item_ids",
         "marked_as_watched",
         "watched",
-        "played_ids",
-        "watched_ids",
-        "session_ids",
         "new_order"
     ],
     "close_mpv": [
@@ -204,9 +183,6 @@ const ACTION_SCHEMAS = {
         "item_ids",
         "marked_as_watched",
         "watched",
-        "played_ids",
-        "watched_ids",
-        "session_ids",
         "new_order"
     ],
     "export_data": [
@@ -242,6 +218,7 @@ const ACTION_SCHEMAS = {
         "shard",
         "task_id"
     ],
+    "list_import_files": [],
     "import_from_file": [
         "folder_id",
         "data",
@@ -253,6 +230,8 @@ const ACTION_SCHEMAS = {
         "shard",
         "task_id"
     ],
+    "open_export_folder": [],
+    "get_ui_preferences": [],
     "set_ui_preferences": [
         "folder_id",
         "data",
@@ -264,6 +243,7 @@ const ACTION_SCHEMAS = {
         "shard",
         "task_id"
     ],
+    "get_default_automatic_flags": [],
     "get_unified_diagnostics": [
         "folder_id",
         "data",
@@ -322,6 +302,9 @@ const ACTION_SCHEMAS = {
         "days",
         "force_refresh"
     ],
+    "run_ytdlp_update": [],
+    "ping": [],
+    "restore_session": [],
     "log_event": [
         "level",
         "message",
@@ -340,19 +323,25 @@ const ACTION_SCHEMAS = {
  * @param {object} snakedPayload - The object AFTER normalization.
  */
 function validateContract(snakedPayload) {
-	const { action, request_id } = snakedPayload;
-	if (!action) return { valid: false, error: "Missing 'action' key." };
-
-	const allowedKeys = ACTION_SCHEMAS[action];
-	if (!allowedKeys) {
-		// BaseRequest fallback
-		const baseKeys = ["action", "request_id"];
-		const extra = Object.keys(snakedPayload).filter(k => !baseKeys.includes(k));
-		if (extra.length > 0) return { valid: false, error: `Unknown action '${action}' or unexpected keys: ${extra.join(", ")}` };
-		return { valid: true };
+	if (!snakedPayload || typeof snakedPayload !== "object") {
+		return { valid: false, error: "Payload must be an object." };
+	}
+	const { action } = snakedPayload;
+	if (!action || typeof action !== "string") {
+		return { valid: false, error: "Missing 'action' key." };
 	}
 
-	const validKeys = new Set([...allowedKeys, "action", "request_id", ...SETTINGS_FIELDS]);
+	if (!Object.hasOwn(ACTION_SCHEMAS, action)) {
+		const baseKeys = ["action", "request_id"];
+		const extra = Object.keys(snakedPayload).filter((k) => !baseKeys.includes(k));
+		const detail = extra.length > 0 ? ` (unexpected keys: ${extra.join(", ")})` : "";
+		return { valid: false, error: `Unknown action '${action}'${detail}.` };
+	}
+
+	const allowedKeys = ACTION_SCHEMAS[action];
+	const validKeys = SETTINGS_ACTIONS.has(action)
+		? new Set([...allowedKeys, "action", "request_id", ...SETTINGS_FIELDS])
+		: new Set([...allowedKeys, "action", "request_id"]);
 	const payloadKeys = Object.keys(snakedPayload);
 
 	for (const key of payloadKeys) {
@@ -365,5 +354,5 @@ function validateContract(snakedPayload) {
 }
 
 if (typeof module !== "undefined") {
-	module.exports = { validateContract, ACTION_SCHEMAS };
+	module.exports = { validateContract, ACTION_SCHEMAS, SETTINGS_FIELDS, SETTINGS_ACTIONS };
 }

@@ -660,7 +660,7 @@ def run_bypass_logic(url, browser, youtube_enabled, user_agent_str, yt_use_cooki
                 "is_youtube": False,
                 "disable_http_persistent": False,
                 "cookies_file": None,
-                "cookies_browser": None
+                "cookies_browser": browser if (is_other_cookies_enabled and browser and browser != "None") else None
             }
 
         return {

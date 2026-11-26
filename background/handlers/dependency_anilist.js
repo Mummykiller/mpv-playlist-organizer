@@ -6,7 +6,7 @@ import { broadcastLog } from "../messaging.js";
 import { createHandler } from "../handler_factory.js";
 
 // In-flight request tracker to prevent redundant calls to the native host
-let _inFlightReleasesRequest = null;
+const _inFlightReleasesRequests = new Map();
 
 export const handleGetAnilistReleases = createHandler(async ({ request, data }) => {
 	const forceRefresh = request.force ?? false;
@@ -14,24 +14,30 @@ export const handleGetAnilistReleases = createHandler(async ({ request, data }) 
 	const isCacheDisabled = data.settings.uiPreferences.global.disableAnilistCache ?? false;
 
 	const requestKey = `anilist_${daysOffset}_${forceRefresh}`;
-	if (_inFlightReleasesRequest === requestKey && !isCacheDisabled) {
-		return { success: true, message: "Request already in flight." };
+	if (!isCacheDisabled && _inFlightReleasesRequests.has(requestKey)) {
+		return _inFlightReleasesRequests.get(requestKey);
 	}
 
-	_inFlightReleasesRequest = requestKey;
+	const requestPromise = (async () => {
+		try {
+			return await nativeLink.getAnilistReleases({
+				force: forceRefresh || isCacheDisabled,
+				deleteCache: isCacheDisabled,
+				isCacheDisabled: isCacheDisabled,
+				days: daysOffset,
+			});
+		} finally {
+			if (_inFlightReleasesRequests.get(requestKey) === requestPromise) {
+				_inFlightReleasesRequests.delete(requestKey);
+			}
+		}
+	})();
 
-	try {
-		const nativeResponse = await nativeLink.getAnilistReleases({
-			force: forceRefresh || isCacheDisabled,
-			deleteCache: isCacheDisabled,
-			isCacheDisabled: isCacheDisabled,
-			days: daysOffset,
-		});
-
-		return nativeResponse;
-	} finally {
-		_inFlightReleasesRequest = null;
+	if (!isCacheDisabled) {
+		_inFlightReleasesRequests.set(requestKey, requestPromise);
 	}
+
+	return requestPromise;
 }, {
 	manualPersistence: true,
 });

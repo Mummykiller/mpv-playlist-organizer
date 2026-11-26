@@ -37,10 +37,6 @@ class EnrichmentService(ItemProcessor):
         """Submits a task to the shared bounded ThreadPoolExecutor."""
         return self.executor.submit(fn, *args, **kwargs)
 
-    def map(self, func, *iterables, timeout=None, chunksize=1):
-        """Maps a function over iterables using the bounded ThreadPoolExecutor."""
-        return self.executor.map(func, *iterables, timeout=timeout, chunksize=chunksize)
-
     def shutdown(self, wait=False, cancel_futures=True):
         """Cleanly shuts down the thread pool executor to prevent thread leaks."""
         with self._lock:
@@ -350,9 +346,10 @@ class LauncherService:
         if url_item.get('id'):
             launch_url += ("#" if "#" not in launch_url else "&") + f"mpv_organizer_id={url_item['id']}"
 
-        if getattr(self.session, 'launch_cancelled', False):
-            logging.info("[PY][Session] Launch cancelled flag detected.")
-            return {"success": False, "error": "Launch cancelled by user."}
+        with self.session.sync_lock:
+            if getattr(self.session, 'launch_cancelled', False):
+                logging.info("[PY][Session] Launch cancelled flag detected.")
+                return {"success": False, "error": "Launch cancelled by user."}
 
         process = None
         handshake_path = None
@@ -397,8 +394,9 @@ class LauncherService:
             logging.info(f"[PY][Session] Spawning mpv process: {mpv_exe}")
             env = self._prepare_launch_env(has_terminal_flag)
             process = subprocess.Popen(full_command, env=env, **services.get_mpv_popen_kwargs(has_terminal_flag))
-            self.session.process, self.session.ipc_path = process, ipc_path
-            self.session.handshake_path = handshake_path
+            with self.session.sync_lock:
+                self.session.process, self.session.ipc_path = process, ipc_path
+                self.session.handshake_path = handshake_path
 
             if process.stdout:
                 # Use the new non-blocking stream observer with yt-dlp failure detection
@@ -407,29 +405,37 @@ class LauncherService:
 
             # 5. Connect & Sync
             logging.info(f"[PY][Session] Connecting to IPC: {ipc_path}")
-            self.session.ipc_manager = ipc_utils.IPCSocketManager()
-            if not self.session.ipc_manager.connect(self.session.ipc_path, timeout=5.0):
+            ipc_mgr = ipc_utils.IPCSocketManager()
+            with self.session.sync_lock:
+                self.session.ipc_manager = ipc_mgr
+            if not ipc_mgr.connect(ipc_path, timeout=5.0):
                 logging.error(f"[PY][Session] IPC connection timeout: {ipc_path}")
-                raise RuntimeError(f"Failed to connect to MPV IPC at {self.session.ipc_path}")
+                raise RuntimeError(f"Failed to connect to MPV IPC at {ipc_path}")
 
-            mpv_pid = self.session.ipc_manager.get_property("pid", timeout=5.0)
+            mpv_pid = ipc_mgr.get_property("pid", timeout=5.0)
             if mpv_pid:
-                self.session.pid = mpv_pid
-                logging.info(f"[PY][Session] MPV PID resolved: {self.session.pid}")
+                resolved_pid = mpv_pid
+                logging.info(f"[PY][Session] MPV PID resolved: {resolved_pid}")
             else:
-                self.session.pid = process.pid
-                logging.warning(f"[PY][Session] Could not resolve MPV PID via IPC, using parent PID: {self.session.pid}")
+                resolved_pid = process.pid
+                logging.warning(f"[PY][Session] Could not resolve MPV PID via IPC, using parent PID: {resolved_pid}")
 
-            self.session.owner_folder_id, self.session.is_alive = folder_id, True
-            self.session.playlist = kwargs.get('full_playlist') or [url_item]
-            self.session.persist_session()
+            initial_playlist = kwargs.get('full_playlist') or [url_item]
+            with self.session.sync_lock:
+                self.session.pid = resolved_pid
+                self.session.owner_folder_id, self.session.is_alive = folder_id, True
+                self.session.playlist = initial_playlist
+                self.session.create_time = time.time()
+                self.session.persist_session()
 
             launch_lua_options, _ = services.construct_lua_options(url_item, settings, self.session.SCRIPT_DIR)
             self._sync_initial_state(url_item, folder_id, settings, playlist_start_index, launch_lua_options, launch_url)
 
             from playlist_tracker import PlaylistTracker
-            self.session.playlist_tracker = PlaylistTracker(folder_id, self.session.playlist, file_io, settings, self.session.ipc_path, self.session.send_message)
-            self.session.playlist_tracker.start_tracking()
+            tracker = PlaylistTracker(folder_id, initial_playlist, file_io, settings, ipc_path, self.session.send_message)
+            with self.session.sync_lock:
+                self.session.playlist_tracker = tracker
+            tracker.start_tracking()
 
             # 6. Exit Watcher
             self._start_exit_watcher(process, folder_id)
@@ -449,36 +455,40 @@ class LauncherService:
                             process.kill()
                 except Exception as proc_err:
                     logging.debug(f"[PY][Session] Failed to terminate process on launch failure: {proc_err}")
+            with self.session.sync_lock:
+                ipc_to_close = self.session.ipc_manager
+                tracker_to_stop = getattr(self.session, 'playlist_tracker', None)
+                session_file = getattr(self.session, 'session_file', None)
                 self.session.process = None
-            if self.session.ipc_manager is not None:
+                self.session.ipc_manager = None
+                self.session.playlist_tracker = None
+                self.session.handshake_path = None
+                self.session.ipc_path = None
+                self.session.pid = None
+                self.session.owner_folder_id = None
+                self.session.playlist = []
+                self.session.is_alive = False
+                self.session.create_time = None
+            if ipc_to_close is not None:
                 try:
-                    self.session.ipc_manager.close()
+                    ipc_to_close.close()
                 except Exception as ipc_err:
                     logging.debug(f"[PY][Session] Failed to close IPC manager on launch failure: {ipc_err}")
-                self.session.ipc_manager = None
-            if getattr(self.session, 'playlist_tracker', None) is not None:
+            if tracker_to_stop is not None:
                 try:
-                    self.session.playlist_tracker.stop_tracking()
+                    tracker_to_stop.stop_tracking()
                 except Exception as tracker_err:
                     logging.debug(f"[PY][Session] Failed to stop playlist tracker on launch failure: {tracker_err}")
-                self.session.playlist_tracker = None
             if handshake_path and os.path.exists(handshake_path):
                 try:
                     os.remove(handshake_path)
                 except OSError as hs_err:
                     logging.debug(f"[PY][Session] Failed to remove handshake file on launch failure: {hs_err}")
-            session_file = getattr(self.session, 'session_file', None)
             if session_file and os.path.exists(session_file):
                 try:
                     os.remove(session_file)
                 except OSError as sf_err:
                     logging.debug(f"[PY][Session] Failed to remove session file on launch failure: {sf_err}")
-            self.session.handshake_path = None
-            self.session.ipc_path = None
-            self.session.pid = None
-            self.session.owner_folder_id = None
-            self.session.playlist = []
-            self.session.is_alive = False
             return {"success": False, "error": f"Error launching mpv: {str(e)}"}
 
     def _start_exit_watcher(self, process, folder_id):

@@ -75,7 +75,7 @@ Pushed asynchronously from Python over `stdout` without a `request_id`:
 | Dataclass | Mapped `action` Values |
 | :--- | :--- |
 | **`PlaybackRequest`** | `play`, `play_batch`, `play_m3u`, `append`, `play_new_instance` |
-| **`LiveUpdateRequest`** | `remove_item_live`, `remove_items_live`, `reorder_live`, `clear_live`, `update_item_marked_as_watched`, `is_mpv_running`, `get_playback_status`, `close_mpv` |
+| **`LiveUpdateRequest`** | `remove_item_live`, `reorder_live`, `clear_live`, `update_item_marked_as_watched`, `is_mpv_running`, `get_playback_status`, `close_mpv` |
 | **`DataSyncRequest`** | `export_data`, `export_playlists`, `export_all_playlists_separately`, `import_from_file`, `set_ui_preferences`, `get_unified_diagnostics`, `get_smart_reorder`, `get_metadata_cache`, `cancel_task` |
 | **`ServiceRequest`** | `get_anilist_releases`, `check_dependencies` |
 | **`LogRequest`** | `log_event` |

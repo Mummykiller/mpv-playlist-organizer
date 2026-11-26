@@ -84,9 +84,6 @@ class LiveUpdateRequest(BaseRequest):
     item_ids: Optional[List[str]] = None
     marked_as_watched: Optional[bool] = None
     watched: Optional[bool] = None
-    played_ids: Optional[List[str]] = None
-    watched_ids: Optional[List[str]] = None
-    session_ids: Optional[List[str]] = None
     new_order: Optional[List[str]] = None
 
 @dataclass

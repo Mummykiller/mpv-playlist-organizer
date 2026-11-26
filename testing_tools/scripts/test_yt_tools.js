@@ -546,6 +546,16 @@ async function testYtContentGuardsAndSchema() {
 		);
 
 		video.dispatchEvent(new dom.window.Event("ended"));
+		const endSaveMsg = postedMessages.filter((m) => m.type === "SHINKU__saveToLibrary").pop();
+		if (endSaveMsg?.data?.saveId) {
+			dom.window.dispatchEvent(
+				new dom.window.MessageEvent("message", {
+					data: { type: "SHINKU__saveToLibraryAck", data: { saveId: endSaveMsg.data.saveId } },
+					source: dom.window,
+					origin: dom.window.location.origin,
+				})
+			);
+		}
 		// Sorted descending by updatedAt: [live1234567 (just bookmarked -> newest), newestVid02 (3000), olderVid001 (1000)]
 		// Next after live1234567 is newestVid02
 		assert.strictEqual(
@@ -2295,6 +2305,162 @@ async function testYtDisableBeforeDomContentLoaded() {
 	}
 }
 
+async function testYtBridgeAliveAndContentConnectedRegressions() {
+	// 1. yt_bridge: mainContentAlive must NOT be set by bridge's own postToMain echo
+	const bridgeDom = new JSDOM("<!DOCTYPE html><html><body></body></html>", {
+		url: "https://www.youtube.com/watch?v=echoTest123",
+		runScripts: "outside-only",
+	});
+	const bridgeIntervals = [];
+	const bridgeTimeouts = [];
+	const bridgeMock = createChromeMock({
+		shinkuYtToolsEnabled: true,
+		shinkuExtensionSettings: {},
+		shinkuLibrary: {},
+	});
+	const origBridgeSetInterval = bridgeDom.window.setInterval.bind(bridgeDom.window);
+	const origBridgeClearInterval = bridgeDom.window.clearInterval.bind(bridgeDom.window);
+	const origBridgeSetTimeout = bridgeDom.window.setTimeout.bind(bridgeDom.window);
+	const origBridgeClearTimeout = bridgeDom.window.clearTimeout.bind(bridgeDom.window);
+	bridgeDom.window.setInterval = (fn, ms, ...args) => {
+		const id = origBridgeSetInterval(fn, ms, ...args);
+		bridgeIntervals.push(id);
+		return id;
+	};
+	bridgeDom.window.setTimeout = (fn, ms, ...args) => {
+		const id = origBridgeSetTimeout(fn, ms, ...args);
+		bridgeTimeouts.push(id);
+		return id;
+	};
+
+	try {
+		runScriptInDom(bridgeDom, "yt-tools/yt_defaults.js");
+		runScriptInDom(bridgeDom, "yt-tools/yt_bridge.js", { chrome: bridgeMock.chrome });
+		await new Promise((r) => origBridgeSetTimeout(r, 30));
+
+		// Simulate bridge's own postToMain echo arriving on window
+		bridgeDom.window.dispatchEvent(
+			new bridgeDom.window.MessageEvent("message", {
+				data: { type: "SHINKU__bridgeReady", data: {} },
+				source: bridgeDom.window,
+				origin: bridgeDom.window.location.origin,
+			})
+		);
+		bridgeDom.window.dispatchEvent(
+			new bridgeDom.window.MessageEvent("message", {
+				data: { type: "SHINKU__userSetting", data: {} },
+				source: bridgeDom.window,
+				origin: bridgeDom.window.location.origin,
+			})
+		);
+
+		let saveResp = null;
+		for (const listener of bridgeMock.runtimeListeners) {
+			listener({ action: "shinku_yt_save_current_video" }, {}, (r) => {
+				saveResp = r;
+			});
+		}
+		assert.strictEqual(
+			saveResp?.success,
+			false,
+			"mainContentAlive must remain false after bridge-to-MAIN echo messages"
+		);
+		assert.strictEqual(saveResp?.saved, false);
+
+		// Once a genuine MAIN-to-bridge message arrives, mainContentAlive becomes true
+		bridgeDom.window.dispatchEvent(
+			new bridgeDom.window.MessageEvent("message", {
+				data: { type: "SHINKU__requestSettings" },
+				source: bridgeDom.window,
+				origin: bridgeDom.window.location.origin,
+			})
+		);
+		for (const listener of bridgeMock.runtimeListeners) {
+			listener({ action: "shinku_yt_save_current_video" }, {}, (r) => {
+				saveResp = r;
+			});
+		}
+		assert.strictEqual(saveResp?.success, true, "mainContentAlive becomes true after MAIN-to-bridge message");
+		assert.strictEqual(saveResp?.videoId, "echoTest123");
+	} finally {
+		for (const id of bridgeIntervals) origBridgeClearInterval(id);
+		for (const id of bridgeTimeouts) origBridgeClearTimeout(id);
+		bridgeDom.window.close();
+	}
+
+	// 2. yt_content: bridgeConnected becomes true on SHINKU__userSetting even without SHINKU__bridgeReady
+	const contentDom = new JSDOM(
+		`<!DOCTYPE html><html><body>
+			<div id="movie_player">
+				<video class="html5-main-video"></video>
+				<div class="ytp-right-controls"></div>
+			</div>
+		</body></html>`,
+		{ url: "https://www.youtube.com/watch?v=connVid0001", runScripts: "outside-only" }
+	);
+	const contentTimeouts = [];
+	const origContentSetTimeout = contentDom.window.setTimeout.bind(contentDom.window);
+	const origContentClearTimeout = contentDom.window.clearTimeout.bind(contentDom.window);
+	contentDom.window.setTimeout = (fn, ms, ...args) => {
+		const id = origContentSetTimeout(fn, ms, ...args);
+		contentTimeouts.push(id);
+		return id;
+	};
+	const postedMessages = [];
+	contentDom.window.postMessage = (msg) => {
+		postedMessages.push(msg);
+	};
+	const video = contentDom.window.document.querySelector("video");
+	Object.defineProperty(video, "duration", { configurable: true, get: () => 120 });
+	Object.defineProperty(video, "currentTime", { configurable: true, get: () => 119, set: () => {} });
+	Object.defineProperty(video, "readyState", { configurable: true, get: () => 2 });
+
+	try {
+		runScriptInDom(contentDom, "yt-tools/yt_defaults.js");
+		runScriptInDom(contentDom, "yt-tools/yt_content.js", {
+			requestAnimationFrame: () => 0,
+			cancelAnimationFrame: () => {},
+		});
+
+		const settings = JSON.parse(JSON.stringify(contentDom.window.SHINKU_YT_DEFAULTS));
+		settings["playlist-manager"]["playlist-manager"] = true;
+		settings["playlist-manager"]["auto-update-library"] = true;
+		settings["playlist-manager"]["auto-next"] = true;
+
+		// Send SHINKU__userSetting & SHINKU__Library WITHOUT SHINKU__bridgeReady
+		contentDom.window.dispatchEvent(
+			new contentDom.window.MessageEvent("message", {
+				data: { type: "SHINKU__userSetting", data: settings },
+				source: contentDom.window,
+				origin: contentDom.window.location.origin,
+			})
+		);
+		contentDom.window.dispatchEvent(
+			new contentDom.window.MessageEvent("message", {
+				data: {
+					type: "SHINKU__Library",
+					data: {
+						connVid0001: { id: "connVid0001", videoId: "connVid0001", updatedAt: 2000, done: false },
+						connVid0002: { id: "connVid0002", videoId: "connVid0002", updatedAt: 1000, done: false },
+					},
+				},
+				source: contentDom.window,
+				origin: contentDom.window.location.origin,
+			})
+		);
+
+		video.dispatchEvent(new contentDom.window.Event("ended"));
+		const endSaveMsg = postedMessages.filter((m) => m.type === "SHINKU__saveToLibrary").pop();
+		assert.ok(
+			typeof endSaveMsg?.data?.saveId === "string" && endSaveMsg.data.saveId.startsWith("end_"),
+			"bridgeConnected set via SHINKU__userSetting causes auto-next to attach saveId and wait for ack"
+		);
+	} finally {
+		for (const id of contentTimeouts) origContentClearTimeout(id);
+		contentDom.window.close();
+	}
+}
+
 async function main() {
 	await testYtDefaults();
 	await testYtBridge();
@@ -2306,6 +2472,7 @@ async function main() {
 	await testPopupYoutube();
 	await testYtIntegrationAndRegressionFixes();
 	await testYtDisableBeforeDomContentLoaded();
+	await testYtBridgeAliveAndContentConnectedRegressions();
 	console.log("All YouTube Tools unit tests passed!");
 }
 

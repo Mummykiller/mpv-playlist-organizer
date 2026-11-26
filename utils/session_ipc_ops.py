@@ -99,11 +99,12 @@ def sync_playlist_from_mpv(session):
 
 def perform_cookie_fallback(session):
     """Attempts volatile cookie extraction and live reload on YTDL cookie failure."""
-    with session.sync_lock:
-        if not session.is_alive or not session.ipc_manager:
-            return
+    try:
+        with session.sync_lock:
+            if not session.is_alive or not session.ipc_manager:
+                return
 
-        try:
+            session_gen = getattr(session, "session_generation", 0)
             item_id = session.ipc_manager.get_property("user-data/id", timeout=1.0)
             if not item_id:
                 logging.debug("Fallback: Could not identify current item ID.")
@@ -123,14 +124,25 @@ def perform_cookie_fallback(session):
             logging.info(f"Fallback: Extracting cookies to RAM for {browser}...")
             session.ipc_manager.send({"command": ["show-text", "Cookie Error: Retrying with fallback...", 5000]})
 
-            cookie_path = url_analyzer.get_cookies_file(browser, url, force_refresh=True)
+        cookie_path = url_analyzer.get_cookies_file(browser, url, force_refresh=True)
+
+        with session.sync_lock:
+            if (
+                not session.is_alive
+                or not session.ipc_manager
+                or getattr(session, "session_generation", 0) != session_gen
+            ):
+                logging.info("Fallback: Session changed or closed during cookie extraction. Aborting.")
+                return
+
             if cookie_path:
                 logging.info(f"Fallback: Success. Cookie path: {cookie_path}")
-                target_item['cookies_file'] = cookie_path
+                live_item = next((i for i in session.playlist if i.get('id') == item_id), target_item)
+                live_item['cookies_file'] = cookie_path
 
                 settings = file_io.get_settings()
                 essential_flags = services.get_essential_ytdlp_flags()
-                raw_opts = target_item.get('ytdl_raw_options')
+                raw_opts = live_item.get('ytdl_raw_options')
                 if raw_opts:
                     raw_opts = security.sanitize_ytdlp_options(raw_opts, allow_settings_flags=False)
 
@@ -138,7 +150,7 @@ def perform_cookie_fallback(session):
                 item_url = services.sanitize_url(url)
 
                 lua_options, _ = services.construct_lua_options(
-                    target_item, settings, session.SCRIPT_DIR
+                    live_item, settings, session.SCRIPT_DIR
                 )
                 lua_options["cookies_file"] = cookie_path
                 lua_options["use_ytdl_mpv"] = True
@@ -147,7 +159,7 @@ def perform_cookie_fallback(session):
                 session.ipc_manager.send({"command": ["set_property", "cookies-file", cookie_path]})
                 session.ipc_manager.send({"command": ["set_property", "ytdl-raw-options", final_opts]})
                 session.ipc_manager.send({"command": ["set_property", "user-data/folder-id", session.owner_folder_id]})
-                session.ipc_manager.send({"command": ["set_property", "user-data/cookies-browser", target_item.get('cookies_browser', "")]})
+                session.ipc_manager.send({"command": ["set_property", "user-data/cookies-browser", live_item.get('cookies_browser', "")]})
                 session.ipc_manager.send({"command": ["set_property", "user-data/project-root", session.SCRIPT_DIR]})
 
                 reload_url = url
@@ -159,8 +171,8 @@ def perform_cookie_fallback(session):
             else:
                 logging.warning("Fallback: Failed to extract cookies.")
                 session.ipc_manager.send({"command": ["show-text", "Fallback Failed: Could not extract cookies.", 5000]})
-        except Exception as e:
-            logging.error(f"Fallback failed: {e}")
+    except Exception as e:
+        logging.error(f"Fallback failed: {e}")
 
 
 def append_batch_internal(session, items, mode="append", folder_id=None, quiet=False):

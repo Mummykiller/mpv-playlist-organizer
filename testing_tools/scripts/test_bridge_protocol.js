@@ -168,22 +168,31 @@ function runTests() {
 	assert.strictEqual(result7a.valid, false);
 	assert.strictEqual(result7a.error, "Missing 'action' key.");
 
-	// 7b: Unknown action with unknown keys
+	// 7b: Unknown action with unknown keys (rejected as unknown action)
 	const unknownActionWithKeys = {
 		action: "some_imaginary_action",
 		unexpected_data: "forbidden"
 	};
 	const result7b = validateContract(toSnakeCase(unknownActionWithKeys));
 	assert.strictEqual(result7b.valid, false);
-	assert.ok(result7b.error.includes("unexpected_data"));
+	assert.ok(result7b.error.includes("Unknown action"));
 
-	// 7c: Unknown action with only BaseRequest keys (fallback allowed)
+	// 7c: Unknown action with only BaseRequest keys (fail-closed: rejected)
 	const unknownActionBaseOnly = {
 		action: "some_ping",
 		requestId: "req_ping_1"
 	};
 	const result7c = validateContract(toSnakeCase(unknownActionBaseOnly));
-	assert.ok(result7c.valid, "BaseRequest fallback should allow base keys for unknown actions");
+	assert.strictEqual(result7c.valid, false, "Unknown actions must be rejected (fail-closed)");
+	assert.ok(result7c.error.includes("Unknown action"));
+
+	// 7d: Registered BaseRequest action with base keys (allowed)
+	const knownPing = {
+		action: "ping",
+		requestId: "req_ping_1"
+	};
+	const result7d = validateContract(toSnakeCase(knownPing));
+	assert.ok(result7d.valid, `Registered BaseRequest action 'ping' should be valid. Error: ${result7d.error}`);
 	console.log("  [OK] Structural Contract Integrity (Missing/Unknown Actions)");
 
 	// --- TEST 8: Other Extended Action Contracts ---

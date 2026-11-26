@@ -294,7 +294,9 @@ chrome.runtime.onConnect.addListener((port) => {
 	if (port.name === "popup-lifecycle") {
 		ui_state_handlers.setPopupPort(port);
 		port.onDisconnect.addListener(() => {
-			ui_state_handlers.setPopupPort(null);
+			if (ui_state_handlers.getPopupPort() === port) {
+				ui_state_handlers.setPopupPort(null);
+			}
 		});
 	}
 });
@@ -401,12 +403,6 @@ const actionHandlers = {
 		}
 		return { success: true, active: autoAddActive };
 	},
-	report_detected_url: async (request, sender) => {
-		const tabId = sender.tab?.id;
-		if (tabId) {
-			m3u8_scanner_handlers.handleUpdateDetectedUrlForTab(tabId, request.url);
-		}
-	},
 	force_reload_settings: ui_state_handlers.handleForceReloadSettings,
 	force_refresh_dependencies: ui_state_handlers.handleForceRefreshDependencies,
 	open_popup: ui_state_handlers.handleOpenPopup,
@@ -437,8 +433,6 @@ const actionHandlers = {
 		playback_handlers.handleUpdateItemMarkedAsWatched,
 	play: playback_handlers.handlePlay,
 	play_new_instance: playback_handlers.handlePlayNewInstance,
-	play_m3u: playback_handlers.handlePlayM3U,
-	append: playback_handlers.handleAppend,
 	confirm_clear_playlist: playback_handlers.handleClearPlaylistConfirmation,
 	close_mpv: playback_handlers.handleCloseMpv,
 	add: playlistManager.handleAdd,
@@ -446,7 +440,6 @@ const actionHandlers = {
 	clear: playlistManager.handleClear,
 	remove_item: playlistManager.handleRemoveItem,
 	set_playlist_order: playlistManager.handleSetPlaylistOrder,
-	update_item_title: playlistManager.handleUpdateItemTitle,
 	reorder_live: async (request) => {
 		const newOrder = request.new_order || request.newOrder;
 		return nativeLink.reorderLive(request.folderId, newOrder);
@@ -465,7 +458,6 @@ const actionHandlers = {
 	list_import_files: import_export_handlers.handleListImportFiles,
 	open_export_folder: import_export_handlers.handleOpenExportFolder,
 	get_anilist_releases: dependency_anilist_handlers.handleGetAnilistReleases,
-	ytdlp_update_check: dependency_anilist_handlers.handleYtdlpUpdateCheck,
 	user_confirmed_ytdlp_update:
 		dependency_anilist_handlers.handleUserConfirmedYtdlpUpdate,
 	manual_ytdlp_update: dependency_anilist_handlers.handleManualYtdlpUpdate,
@@ -518,15 +510,17 @@ const activeTasksInitPromise = (async () => {
 	}
 })();
 
-addNativeListener("update_item_title", async (data) => {
+addNativeListener("ytdlp_update_check", dependency_anilist_handlers.handleYtdlpUpdateCheck);
+
+addNativeListener("native_disconnected", async () => {
 	try {
-		await playlistManager.handleUpdateItemTitle(data);
+		await activeTasksInitPromise;
+		activeTasks.clear();
+		await chrome.storage.local.remove("mpv_active_tasks").catch(() => {});
 	} catch (e) {
-		logger.warn(`[Background] update_item_title listener failed: ${e.message}`);
+		logger.debug(`[Background] Failed to clear activeTasks on disconnect: ${e?.message}`);
 	}
 });
-
-addNativeListener("ytdlp_update_check", dependency_anilist_handlers.handleYtdlpUpdateCheck);
 
 addNativeListener("task_update", async (data) => {
 	try {

@@ -678,6 +678,176 @@ async function testBackgroundBridgeAuditFixes() {
 	assert.strictEqual(scannerSession.m3u8_scanner_state.detectedUrlsState["2"], "https://example.com/new.m3u8");
 }
 
+async function testStoragePartialSaveCacheIsolation() {
+	const localStore = {
+		mpv_storage_version: 2,
+		mpv_camel_migrated: true,
+		mpv_settings: { lastUsedFolderId: "FolderA", uiPreferences: { global: {}, domains: {} } },
+		mpv_folder_index: ["FolderA", "FolderB"],
+		mpv_folder_data_FolderA: {
+			playlist: [{ id: "a1", url: "https://example.com/a1", title: "A1" }],
+			lastPlayedId: null,
+		},
+		mpv_folder_data_FolderB: {
+			playlist: [{ id: "b1", url: "https://example.com/b1", title: "B1" }],
+			lastPlayedId: null,
+		},
+	};
+
+	global.chrome = {
+		...global.chrome,
+		storage: {
+			...global.chrome.storage,
+			local: {
+				get: async (keys) => {
+					if (typeof keys === "string") return { [keys]: localStore[keys] };
+					if (Array.isArray(keys)) {
+						const out = {};
+						for (const k of keys) out[k] = localStore[k];
+						return out;
+					}
+					return { ...localStore };
+				},
+				set: async (obj) => {
+					Object.assign(localStore, structuredClone(obj));
+				},
+				remove: async (keys) => {
+					const arr = Array.isArray(keys) ? keys : [keys];
+					for (const k of arr) delete localStore[k];
+				},
+			},
+		},
+	};
+
+	const { StorageManager } = await import(pathToFileURL(path.join(ROOT, "utils/storageManager.js")).href);
+	const sm = new StorageManager("mpv_playlist_data", null);
+
+	// Populate _cache and capture a stale snapshot before FolderB mutates
+	const staleSnapshot = await sm.get();
+	const freshForB = await sm.get();
+	freshForB.folders.FolderB.playlist.push({ id: "b2", url: "https://example.com/b2", title: "B2" });
+	await sm.set(freshForB, "FolderB");
+
+	// Save FolderA using the stale snapshot (which still only has b1 in FolderB)
+	staleSnapshot.folders.FolderA.playlist.push({ id: "a2", url: "https://example.com/a2", title: "A2" });
+	await sm.set(staleSnapshot, "FolderA");
+
+	const cached = await sm.get();
+	assert.strictEqual(
+		cached.folders.FolderA.playlist.length,
+		2,
+		"Partial save of FolderA must update FolderA in _cache",
+	);
+	assert.strictEqual(
+		cached.folders.FolderB.playlist.length,
+		2,
+		"Partial save of FolderA must not clobber FolderB in _cache with stale snapshot",
+	);
+	assert.strictEqual(cached.folders.FolderB.playlist[1].id, "b2");
+}
+
+async function testSecurityTrailingDotFqdnSsrf() {
+	const { isSafeUrl } = await import(pathToFileURL(path.join(ROOT, "utils/security.module.js")).href);
+	assert.strictEqual(isSafeUrl("http://localhost."), false, "localhost. must be blocked");
+	assert.strictEqual(isSafeUrl("http://localhost..."), false, "localhost... must be blocked");
+	assert.strictEqual(isSafeUrl("http://metadata.google.internal."), false, "metadata.google.internal. must be blocked");
+	assert.strictEqual(isSafeUrl("http://foo.localhost."), false, "foo.localhost. must be blocked");
+	assert.strictEqual(isSafeUrl("http://printer.local."), false, "printer.local. must be blocked");
+	assert.strictEqual(isSafeUrl("https://example.com."), true, "Public trailing-dot FQDN should remain allowed");
+}
+
+async function testAnilistInFlightDeduplication() {
+	const { storage } = await import(pathToFileURL(path.join(ROOT, "background/storage_instance.js")).href);
+	const { nativeLink } = await import(pathToFileURL(path.join(ROOT, "utils/nativeLink.js")).href);
+	const { handleGetAnilistReleases } = await import(
+		pathToFileURL(path.join(ROOT, "background/handlers/dependency_anilist.js")).href
+	);
+
+	const origGet = storage.get.bind(storage);
+	const origGetReleases = nativeLink.getAnilistReleases;
+	let nativeCalls = 0;
+	let resolveNative;
+
+	try {
+		storage.get = async () => ({
+			folders: {},
+			settings: { uiPreferences: { global: { disableAnilistCache: false } } },
+		});
+		nativeLink.getAnilistReleases = () => {
+			nativeCalls++;
+			return new Promise((resolve) => {
+				resolveNative = resolve;
+			});
+		};
+
+		const p1 = handleGetAnilistReleases({ days: 0, force: false }, {});
+		const p2 = handleGetAnilistReleases({ days: 0, force: false }, {});
+		// Yield a tick so both callers enter the handler
+		await new Promise((r) => setTimeout(r, 10));
+
+		const payload = { success: true, output: [{ title: "Test Anime" }] };
+		resolveNative(payload);
+
+		const [r1, r2] = await Promise.all([p1, p2]);
+		assert.strictEqual(nativeCalls, 1, "Concurrent identical AniList requests must share one native call");
+		assert.deepStrictEqual(r1.output, [{ title: "Test Anime" }], "First caller must receive real output");
+		assert.deepStrictEqual(r2.output, [{ title: "Test Anime" }], "Second caller must receive real output");
+	} finally {
+		storage.get = origGet;
+		nativeLink.getAnilistReleases = origGetReleases;
+	}
+}
+
+async function testSystemLoggerConcurrentAsyncPersist() {
+	const { logger } = await import(
+		`${pathToFileURL(path.join(ROOT, "utils/SystemLogger.module.js")).href}?concurrent=${Date.now()}`
+	);
+	const prevSender = logger.nativeSender;
+	const sent = [];
+	const resolvers = [];
+
+	try {
+		logger.isPersisting = false;
+		logger.logCounts = {};
+		logger.globalLogCount = 0;
+		logger.globalWindowStart = 0;
+
+		logger.setNativeSender((payload) => {
+			sent.push(payload);
+			return new Promise((resolve) => {
+				resolvers.push(resolve);
+			});
+		});
+
+		// Fire two distinct ERROR logs concurrently before the first promise resolves
+		logger._persist("ERROR", "Concurrent Error 1", "Ctx1", "");
+		logger._persist("ERROR", "Concurrent Error 2", "Ctx2", "");
+
+		assert.strictEqual(
+			sent.length,
+			2,
+			"SystemLogger._persist must not drop concurrent logs while an async nativeSender call is in flight",
+		);
+		assert.strictEqual(sent[0].message, "Concurrent Error 1");
+		assert.strictEqual(sent[1].message, "Concurrent Error 2");
+		assert.strictEqual(logger.isPersisting, false);
+
+		resolvers.forEach((r) => r());
+
+		// Verify synchronous re-entrancy is still guarded
+		const syncSent = [];
+		logger.setNativeSender((payload) => {
+			syncSent.push(payload);
+			logger._persist("ERROR", "Recursive Sync Error", "CtxRec", "");
+			return Promise.resolve();
+		});
+		logger._persist("ERROR", "Outer Sync Error", "CtxOuter", "");
+		assert.strictEqual(syncSent.length, 1, "Synchronous re-entrant _persist call must still be guarded");
+	} finally {
+		logger.setNativeSender(prevSender);
+	}
+}
+
 async function main() {
 	await testSystemLoggerPersistRejectionSafety();
 	await testPlaylistRendererClipboardFailureSafety();
@@ -687,6 +857,10 @@ async function main() {
 	await testCrossSideMpvYouTubeRegressionFixes();
 	await testSleepWakeStalePlaybackReconciliation();
 	await testBackgroundBridgeAuditFixes();
+	await testStoragePartialSaveCacheIsolation();
+	await testSecurityTrailingDotFqdnSsrf();
+	await testAnilistInFlightDeduplication();
+	await testSystemLoggerConcurrentAsyncPersist();
 	console.log("All resilience fix tests passed!");
 }
 

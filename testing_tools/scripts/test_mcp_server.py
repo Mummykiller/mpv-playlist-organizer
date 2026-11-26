@@ -460,6 +460,53 @@ class TestMcpServer(unittest.TestCase):
             if w_fd >= 0:
                 os.close(w_fd)
 
+    def test_list_ipc_sockets_probes_real_mpv_pid_and_tail_one_log_deque(self):
+        """Regression: _list_ipc_sockets probes Unix socket for real MPV PID (not native_host filename PID) and _tail_one_log uses deque."""
+        with tempfile.TemporaryDirectory(prefix="mpv_ipc_probe_") as tmp_dir:
+            sock_path = os.path.join(tmp_dir, "mpv-socket-11111")
+            with open(sock_path, "w", encoding="utf-8") as fh:
+                fh.write("")
+
+            seen_pids = []
+
+            def fake_verify(pid):
+                seen_pids.append(pid)
+                return {"alive": True, "is_mpv": pid == 22222}
+
+            with (
+                patch.object(tools_impl, "_get_ipc_dir", return_value=tmp_dir),
+                patch.object(tools_impl.stat, "S_ISSOCK", return_value=True),
+                patch.object(tools_impl, "_query_mpv_properties", return_value={"values": {"pid": 22222}, "errors": {}}),
+                patch.object(tools_impl, "_verify_mpv_pid", side_effect=fake_verify),
+            ):
+                res = tools_impl._list_ipc_sockets()
+
+            self.assertTrue(res["ok"])
+            self.assertEqual(len(res["sockets"]), 1)
+            entry = res["sockets"][0]
+            self.assertEqual(seen_pids, [22222])
+            self.assertEqual(entry["pid"], 22222)
+            self.assertEqual(entry["host_pid"], 11111)
+            self.assertFalse(entry["stale"])
+            self.assertTrue(entry["alive"])
+            self.assertTrue(entry["is_mpv"])
+
+            # Verify _tail_one_log uses bounded deque and masks only the returned slice
+            log_path = os.path.join(tmp_dir, "native_host.log")
+            with open(log_path, "w", encoding="utf-8") as fh:
+                for i in range(10):
+                    fh.write(f"2026-01-01 - INFO - line {i} MPV_PLAYLIST_TOKEN=secret{i}\n")
+            with patch.object(tools_impl, "_mask_text", wraps=tools_impl._mask_text) as spy_mask:
+                tailed = tools_impl._tail_one_log(log_path, tmp_dir, max_lines=3, grep=None, level="INFO")
+            self.assertEqual(spy_mask.call_count, 3)
+            self.assertTrue(tailed["exists"])
+            self.assertEqual(tailed["total_matched"], 10)
+            self.assertEqual(tailed["returned"], 3)
+            self.assertTrue(tailed["truncated"])
+            self.assertEqual(len(tailed["lines"]), 3)
+            self.assertIn("line 9", tailed["lines"][-1])
+            self.assertNotIn("secret9", tailed["lines"][-1])
+
 
 if __name__ == "__main__":
     unittest.main()

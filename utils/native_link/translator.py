@@ -16,7 +16,6 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
 
     # Live Updates / Status
     'remove_item_live': LiveUpdateRequest,
-    'remove_items_live': LiveUpdateRequest,
     'reorder_live': LiveUpdateRequest,
     'clear_live': LiveUpdateRequest,
     'update_item_marked_as_watched': LiveUpdateRequest,
@@ -28,16 +27,23 @@ ACTION_MAP: Dict[str, Type[BaseRequest]] = {
     'export_data': DataSyncRequest,
     'export_playlists': DataSyncRequest,
     'export_all_playlists_separately': DataSyncRequest,
+    'list_import_files': BaseRequest,
     'import_from_file': DataSyncRequest,
+    'open_export_folder': BaseRequest,
+    'get_ui_preferences': BaseRequest,
     'set_ui_preferences': DataSyncRequest,
+    'get_default_automatic_flags': BaseRequest,
     'get_unified_diagnostics': DataSyncRequest,
     'get_smart_reorder': DataSyncRequest,
     'get_metadata_cache': DataSyncRequest,
     'cancel_task': DataSyncRequest,
 
-    # Services
+    # Services & Meta
     'get_anilist_releases': ServiceRequest,
     'check_dependencies': ServiceRequest,
+    'run_ytdlp_update': BaseRequest,
+    'ping': BaseRequest,
+    'restore_session': BaseRequest,
 
     # Logging
     'log_event': LogRequest,
@@ -142,9 +148,6 @@ def translate(message: Dict[str, Any]) -> BaseRequest:
             item_ids=norm_message.get('item_ids'),
             marked_as_watched=norm_message.get('marked_as_watched'),
             watched=norm_message.get('watched'),
-            played_ids=norm_message.get('played_ids'),
-            watched_ids=norm_message.get('watched_ids'),
-            session_ids=norm_message.get('session_ids'),
             new_order=norm_message.get('new_order')
         )
 

@@ -15,7 +15,7 @@ export function isFolderActive(folderId) {
 	return !!(session && session.isPlaying);
 }
 
-export const IDLE_VISUAL_STATE = Object.freeze({
+const IDLE_VISUAL_STATE = Object.freeze({
 	isActive: false,
 	isRunning: false,
 	isPaused: false,

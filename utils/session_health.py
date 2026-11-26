@@ -196,9 +196,6 @@ def restore_session(session):
                 session.current_token = token
                 session.is_alive = True
 
-                if actual_mpv_pid and actual_mpv_pid != pid:
-                    session.persist_session()
-
                 session.ipc_manager = ipc_utils.IPCSocketManager()
                 if not session.ipc_manager.connect(session.ipc_path, timeout=3.0):
                     logging.error("[PY][Session] Restore: Persistent IPC connection failed.")
@@ -248,6 +245,9 @@ def restore_session(session):
                 session.create_time = session_data.get("create_time", time.time())
                 session.dispatched_exit_generations.discard(session.session_generation)
 
+                if actual_mpv_pid and actual_mpv_pid != pid:
+                    session.persist_session()
+
                 session.playlist_tracker.start_tracking()
                 session._start_health_watcher()
                 session.launcher.start_restored_process_watcher(session.pid, ipc_path, owner_folder_id)
@@ -257,8 +257,8 @@ def restore_session(session):
                     "was_stale": False,
                     "folder_id": owner_folder_id,
                     "last_played_id": last_played_id,
-                    "is_paused": session.get_pause_state(),
-                    "is_idle": session.get_idle_state(),
+                    "is_paused": bool(session.get_pause_state()),
+                    "is_idle": bool(session.get_idle_state()),
                     "token": token,
                     "playlist": session.playlist
                 })

@@ -18,6 +18,8 @@ import * as playback_handlers from "./playback.js";
 // Cache for native host info to speed up UI preference retrieval
 const _nativeInfoCache = {
 	decoder: null,
+	ffmpegPath: null,
+	nodePath: null,
 	timestamp: 0,
 };
 const CACHE_TTL_MS = 600000; // 10 minutes
@@ -26,6 +28,9 @@ const CACHE_TTL_MS = 600000; // 10 minutes
 let popupPort = null;
 export function setPopupPort(port) {
 	popupPort = port;
+}
+export function getPopupPort() {
+	return popupPort;
 }
 
 export async function handleContentScriptInit(request, sender) {
@@ -59,8 +64,18 @@ export async function handleContentScriptInit(request, sender) {
 		const mpvStatus = await playback_handlers.handleIsMpvRunning().catch(() => ({ isRunning: false }));
 		const currentMpvFolderId = (mpvStatus?.success && mpvStatus.isRunning && mpvStatus.folderId) ? mpvStatus.folderId : null;
 		
-		const folderId = currentMpvFolderId || data.settings.lastUsedFolderId || Object.keys(data.folders)[0];
-		const isFolderActive = !!(currentMpvFolderId && currentMpvFolderId === folderId);
+		const rawFolderId = currentMpvFolderId || data.settings.lastUsedFolderId || Object.keys(data.folders)[0];
+		const folderId =
+			(rawFolderId &&
+				Object.keys(data.folders || {}).find(
+					(id) => id.toLowerCase() === rawFolderId.toLowerCase(),
+				)) ||
+			rawFolderId;
+		const isFolderActive = !!(
+			currentMpvFolderId &&
+			folderId &&
+			currentMpvFolderId.toLowerCase() === folderId.toLowerCase()
+		);
 		const folder = data.folders[folderId];
 		
 		let lastPlayedId = folder?.lastPlayedId;
@@ -384,6 +399,8 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 			...globalPrefs 
 		};
 		_nativeInfoCache.decoder = null;
+		_nativeInfoCache.ffmpegPath = null;
+		_nativeInfoCache.nodePath = null;
 		_nativeInfoCache.timestamp = 0;
 	}
 
@@ -397,16 +414,14 @@ export const handleSetUiPreferences = createHandler(async ({ request, data, send
 		};
 	}
 
-	// Broadcast IMMEDIATELY for responsiveness
-	broadcastToTabs({
-		action: "preferences_changed",
-		preferences: newPreferences,
-		domain: domain,
-	});
-
 	return { success: true, domain, newPreferences, globalPrefs, domainPrefs };
 }, {
 	onSuccess: async (result, { data }) => {
+		broadcastToTabs({
+			action: "preferences_changed",
+			preferences: result.newPreferences,
+			domain: result.domain,
+		});
 		if (Object.keys(result.globalPrefs || {}).length > 0) {
 			try {
 				const syncPrefs = {};
@@ -487,6 +502,8 @@ export function handleForceReloadSettings() {
 
 export const handleForceRefreshDependencies = createHandler(async () => {
 	_nativeInfoCache.decoder = null;
+	_nativeInfoCache.ffmpegPath = null;
+	_nativeInfoCache.nodePath = null;
 	_nativeInfoCache.timestamp = 0;
 	const response = await nativeLink.call("check_dependencies", { forceRefresh: true });
 

@@ -165,18 +165,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 					? document.getElementById("mini-new-folder-name")
 					: document.getElementById("new-folder-name");
 			}
-
-			get reorderContainer() {
-				return this.isMiniView()
-					? document.getElementById("mini-reorder-container")
-					: document.getElementById("reorder-container");
-			}
-
-			get reorderToggleBtn() {
-				return this.isMiniView()
-					? document.getElementById("btn-mini-toggle-reorder")
-					: document.getElementById("btn-toggle-reorder");
-			}
 		}
 
 		const uiManager = new UIModeManager();
@@ -226,7 +214,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 			"playlist-container",
 		);
 		let playlistRenderer = null;
-		let playbackUnsubscribe = null;
 
 		// Export/Import Elements
 		const exportDataBtn = document.getElementById("btn-export-data");
@@ -593,7 +580,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 		// Unified Playback State Subscription (Runs AFTER playlistRenderer initialization)
 		const MPV = window.MPV_INTERNAL;
-		playbackUnsubscribe = MPV.playbackStateManager.subscribe((pbState) => {
+		MPV.playbackStateManager.subscribe((pbState) => {
 			const currentFolderId = miniFolderSelect?.value;
 			const isCurrentFolder = pbState.folderId && currentFolderId && pbState.folderId.toLowerCase() === currentFolderId.toLowerCase();
 
@@ -1093,12 +1080,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 							e,
 						),
 					);
-			}
-
-			if (request.action === "show_status_banner") {
-				showStatus(request.message, !!request.isError);
-				if (sendResponse) sendResponse({ success: true });
-				return true;
 			}
 
 			// New: Handle confirmation requests from the background script

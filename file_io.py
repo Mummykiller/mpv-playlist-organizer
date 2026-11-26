@@ -104,13 +104,6 @@ except OSError as e:
 
 paths: PathConfig = None
 
-def get_paths() -> PathConfig:
-    """Returns the current structured PathConfig container."""
-    global paths
-    if paths is None:
-        initialize_paths()
-    return paths
-
 def initialize_paths(new_data_dir=None):
     """Updates all global paths based on DATA_DIR. Useful for testing."""
     global DATA_DIR, FOLDERS_FILE, INDEX_FILE, PLAYLISTS_DIR, CONFIG_FILE, EXPORT_DIR, TEMP_DIR, paths

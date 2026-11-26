@@ -285,7 +285,7 @@ export function createBackupManager(ctx) {
 			const filename = importFileSelect.value;
 			if (
 				!filename ||
-				importFileSelect.options[importFileSelect.selectedIndex].disabled
+				importFileSelect.options[importFileSelect.selectedIndex]?.disabled
 			)
 				return;
 

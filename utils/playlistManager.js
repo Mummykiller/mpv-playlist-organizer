@@ -4,6 +4,7 @@
 
 import { debouncedSyncToNativeHostFile } from "../background/core_services.js";
 import { findM3u8InUrl } from "../background/handlers/m3u8_scanner.js";
+import { clearResumeTimeThrottle } from "../background/handlers/playback.js";
 import { createHandler } from "../background/handler_factory.js";
 import { broadcastPlaylistState, broadcastItemUpdate, isFolderActive } from "../background/ui_broadcaster.js";
 import { broadcastLog } from "../background/messaging.js";
@@ -20,27 +21,38 @@ export async function handleUpdateItemTitle(req) {
 	const { folderId, itemId, newTitle } = req;
 	if (!folderId || !itemId || !newTitle) return { success: false };
 
-	const data = await storage.get();
-	const actualFolderId = Object.keys(data.folders).find(
-		(id) => id.toLowerCase() === folderId.toLowerCase()
-	);
-	
-	if (!actualFolderId || !data.folders[actualFolderId]) return { success: false };
+	const runLocked = (fn) =>
+		typeof storage.withLock === "function" ? storage.withLock(fn) : fn();
 
-	const folder = data.folders[actualFolderId];
-	const item = folder.playlist.find((i) => i.id === itemId);
-	if (!item) return { success: false };
+	const outcome = await runLocked(async () => {
+		const data = await storage.get();
+		const actualFolderId = Object.keys(data.folders).find(
+			(id) => id.toLowerCase() === folderId.toLowerCase()
+		);
 
-	if (item.title !== newTitle) {
-		item.title = newTitle;
-		item.lastModified = Date.now();
-		await storage.set(data, actualFolderId);
-		
+		if (!actualFolderId || !data.folders[actualFolderId]) return { found: false };
+
+		const folder = data.folders[actualFolderId];
+		const item = folder.playlist.find((i) => i.id === itemId);
+		if (!item) return { found: false };
+
+		let updated = false;
+		if (item.title !== newTitle) {
+			item.title = newTitle;
+			item.lastModified = Date.now();
+			await storage.set(data, actualFolderId);
+			updated = true;
+		}
+		return { found: true, updated, actualFolderId };
+	});
+
+	if (!outcome.found) return { success: false };
+	if (outcome.updated) {
 		// Surgical update for all UIs (instantly updates the single line)
-		broadcastItemUpdate(actualFolderId, itemId, { title: newTitle });
-		
+		broadcastItemUpdate(outcome.actualFolderId, itemId, { title: newTitle });
+
 		// Full state sync for consistency
-		broadcastPlaylistState(actualFolderId);
+		broadcastPlaylistState(outcome.actualFolderId);
 	}
 	return { success: true };
 }
@@ -58,36 +70,34 @@ async function addUrlToFolder(
 	isAutoAdd = false,
 ) {
 	try {
-		let data = await storage.get();
-		const actualFolderId = Object.keys(data.folders).find(
+		const normalizedUrl = normalizeYouTubeUrl(url);
+		const preCheckData = await storage.get();
+		const preActualFolderId = Object.keys(preCheckData.folders).find(
 			(id) => id.toLowerCase() === folderId.toLowerCase()
 		);
 
-		if (!actualFolderId || !data.folders[actualFolderId]) {
+		if (!preActualFolderId || !preCheckData.folders[preActualFolderId]) {
 			return { success: false, error: `Folder '${folderId}' not found.` };
 		}
 
-		const playlist = data.folders[actualFolderId].playlist;
-		const duplicateBehavior =
-			data.settings.uiPreferences.global.duplicateUrlBehavior || "ask";
-		const normalizedUrl = normalizeYouTubeUrl(url);
-
-		const isDuplicate = playlist.some(
+		const preDuplicateBehavior =
+			preCheckData.settings.uiPreferences.global.duplicateUrlBehavior || "ask";
+		const preIsDuplicate = preCheckData.folders[preActualFolderId].playlist.some(
 			(item) => normalizeYouTubeUrl(item.url) === normalizedUrl,
 		);
 
-		if (isDuplicate) {
+		if (preIsDuplicate) {
 			if (isAutoAdd) return { success: true, message: "Silent duplicate rejection." };
-			if (duplicateBehavior === "never") {
-				const logMessage = `[Background]: URL already in folder '${actualFolderId}'. "Never Add" is on.`;
+			if (preDuplicateBehavior === "never") {
+				const logMessage = `[Background]: URL already in folder '${preActualFolderId}'. "Never Add" is on.`;
 				broadcastLog({ text: logMessage, type: "info" });
 				return { success: true, message: logMessage };
 			}
 
-			if (duplicateBehavior === "ask") {
+			if (preDuplicateBehavior === "ask") {
 				const preferredTabId = originalTab?.id || sender?.tab?.id || null;
 				const confirmed = await promptUserConfirmation(
-					`URL is already in folder '${actualFolderId}'. Add it again?`,
+					`URL is already in folder '${preActualFolderId}'. Add it again?`,
 					preferredTabId,
 				);
 				if (!confirmed) return { success: true, message: "Add cancelled by user." };
@@ -98,8 +108,49 @@ async function addUrlToFolder(
 		const newItem = processPlaylistItem({ url, title });
 		if (!newItem) return { success: false, error: "Failed to process item." };
 
-		data.folders[actualFolderId].playlist.push(newItem);
-		await storage.set(data, actualFolderId);
+		const runLocked = (fn) =>
+			typeof storage.withLock === "function" ? storage.withLock(fn) : fn();
+
+		const lockResult = await runLocked(async () => {
+			const data = await storage.get();
+			const actualFolderId = Object.keys(data.folders).find(
+				(id) => id.toLowerCase() === folderId.toLowerCase()
+			);
+
+			if (!actualFolderId || !data.folders[actualFolderId]) {
+				return { earlyResponse: { success: false, error: `Folder '${folderId}' not found.` } };
+			}
+
+			const duplicateBehavior =
+				data.settings.uiPreferences.global.duplicateUrlBehavior || "ask";
+			const isDuplicate = data.folders[actualFolderId].playlist.some(
+				(item) => normalizeYouTubeUrl(item.url) === normalizedUrl,
+			);
+
+			if (isDuplicate) {
+				if (isAutoAdd) {
+					return { earlyResponse: { success: true, message: "Silent duplicate rejection." } };
+				}
+				if (duplicateBehavior === "never") {
+					const logMessage = `[Background]: URL already in folder '${actualFolderId}'. "Never Add" is on.`;
+					broadcastLog({ text: logMessage, type: "info" });
+					return { earlyResponse: { success: true, message: logMessage } };
+				}
+			}
+
+			data.folders[actualFolderId].playlist.push(newItem);
+			await storage.set(data, actualFolderId);
+			return {
+				actualFolderId,
+				autoAppendOnAdd: Boolean(data.settings.uiPreferences.global.autoAppendOnAdd),
+			};
+		});
+
+		if (lockResult.earlyResponse) {
+			return lockResult.earlyResponse;
+		}
+
+		const { actualFolderId, autoAppendOnAdd } = lockResult;
 
 		debouncedSyncToNativeHostFile(actualFolderId, true);
 
@@ -111,7 +162,7 @@ async function addUrlToFolder(
 		// Check for live append or broadcast playlist change
 		await playbackManager.initPromise;
 		const isActive = isFolderActive(actualFolderId);
-		if (isActive && data.settings.uiPreferences.global.autoAppendOnAdd) {
+		if (isActive && autoAppendOnAdd) {
 			nativeLink
 				.append(newItem, actualFolderId)
 				.then(() => broadcastPlaylistState(actualFolderId))
@@ -353,8 +404,10 @@ export const handleClear = createHandler(async (context) => {
 		return { success: false, error: "Folder not found." };
 
 	context.folderId = actualFolderId;
+	const removedIds = (data.folders[actualFolderId].playlist || []).map((i) => i.id).filter(Boolean);
 	data.folders[actualFolderId].playlist = [];
 	data.folders[actualFolderId].lastPlayedId = null;
+	clearResumeTimeThrottle(removedIds);
 
 	if (data.settings.uiPreferences.global.liveRemoval !== false) {
 		nativeLink.clearLive(actualFolderId).catch(() => {});
@@ -386,6 +439,7 @@ export const handleRemoveItem = createHandler(async (context) => {
 		if (finalIndex >= 0 && finalIndex < playlist.length) {
 			const itemToRemove = playlist[finalIndex];
 			playlist.splice(finalIndex, 1);
+			clearResumeTimeThrottle(itemToRemove.id);
 
 			if (data.folders[actualFolderId].lastPlayedId === itemToRemove.id) {
 				data.folders[actualFolderId].lastPlayedId = null;

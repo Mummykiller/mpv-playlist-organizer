@@ -76,15 +76,6 @@ class AniListCache:
                 logging.warning(f"Could not read {self.cache_file}: {e}. Will perform a full fetch.")
         return {}
 
-    def _save_cache(self, cache_data):
-        """Saves cache data to the cache file."""
-        try:
-            with FileLock(self.cache_file):
-                if self.file_io._atomic_json_dump(cache_data, self.cache_file):
-                    logging.info(f"{self.cache_file} updated with new data.")
-        except IOError as e:
-            logging.error(f"Failed to write new {self.cache_file}: {e}")
-
     def _update_cache_atomic(self, day_key, entry=None, remove=False, today_timestamp=None):
         """Re-reads, merges updated offsets[day_key]/today_timestamp, and atomically saves under one FileLock."""
         try:

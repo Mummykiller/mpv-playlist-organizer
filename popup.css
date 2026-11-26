@@ -2380,10 +2380,6 @@ button.btn-closing::after {
 	gap: 10px;
 }
 
-.yt-setting-master {
-	font-weight: 600;
-}
-
 .yt-setting-label {
 	flex: 1;
 	min-width: 0;

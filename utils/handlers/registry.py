@@ -24,10 +24,6 @@ class HandlerRegistry:
         return cls._handlers.get(name)
 
     @classmethod
-    def get_all_handlers(cls) -> Dict[str, Callable]:
-        return cls._handlers.copy()
-
-    @classmethod
     def bind_instance(cls, instance: Any):
         """
         Binds all registered commands found on the instance to the instance itself.

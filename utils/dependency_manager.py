@@ -84,6 +84,7 @@ def _get_linux_sudo_command_prefix(ytdlp_path, send_message_func):
                 send_message_func({"log": {"text": "[yt-dlp]: Please enter your password in the dialog to update yt-dlp.", "type": "info"}})
                 return [tool]
         send_message_func({"log": {"text": "[yt-dlp]: No graphical sudo tool found. Please run `sudo yt-dlp -U` in a terminal.", "type": "error"}})
+        return None
     return []
 
 def _run_update_command(command, send_message_func, timeout=300):
@@ -150,6 +151,8 @@ def update_ytdlp(send_message_func):
             send_message_func({"log": {"text": f"[yt-dlp]: Current version: {version_before}", "type": "info"}})
 
         command_prefix = _get_linux_sudo_command_prefix(current_path, send_message_func)
+        if command_prefix is None:
+            return {"success": False, "error": "Write access denied and no graphical sudo tool found. Please run `sudo yt-dlp -U` in a terminal."}
         full_command = command_prefix + [current_path, '-U']
         return_code = _run_update_command(full_command, send_message_func)
 

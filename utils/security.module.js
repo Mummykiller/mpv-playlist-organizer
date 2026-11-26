@@ -127,7 +127,7 @@ export function isSafeUrl(urlString, options = {}) {
 			return allowLocal && !parsed.hostname && !/^file:\/\/[^/]/i.test(urlString.trim());
 		}
 
-		let hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+		let hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
 		if (!hostname) return false;
 
 		// Strip IPv6 zone ID if present (e.g., fe80::1%eth0)

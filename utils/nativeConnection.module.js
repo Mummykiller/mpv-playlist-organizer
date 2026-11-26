@@ -44,7 +44,6 @@ const eventListeners = {
 	update_last_played: [],
 	update_item_resume_time: [],
 	update_item_marked_as_watched: [],
-	update_item_title: [],
 	playback_status_changed: [],
 	playback_health_changed: [],
 	item_natural_completion: [],
@@ -52,6 +51,7 @@ const eventListeners = {
 	session_restored: [],
 	task_update: [],
 	ytdlp_update_check: [],
+	native_disconnected: [],
 	log: [],
 };
 
@@ -130,6 +130,7 @@ function connectToNativeHost() {
 			connectionStatus = ConnectionStatus.DISCONNECTED;
 			requestPromises = {};
 			connectionPromise = null;
+			dispatchNativeEvent("native_disconnected", { error: friendlyError });
 		};
 
 		nativePort.onDisconnect.addListener(onDisconnect);

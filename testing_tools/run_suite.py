@@ -38,6 +38,8 @@ sys.path.insert(0, TESTING_TOOLS_DIR)
 CONTRACT_SYNC_TIMEOUT = 30
 JS_TEST_TIMEOUT = 60
 JS_SYNTAX_TIMEOUT = 30
+LINTER_TIMEOUT = 60
+PYRIGHT_TIMEOUT = 120
 PY_WORKER_TIMEOUT = 120
 
 
@@ -355,21 +357,26 @@ def run_js_batch(verbose=False, sync_contract=True):
         if os.path.isfile(ruff_cfg):
             ruff_cmd.extend(["--config", ruff_cfg])
         ruff_cmd.append(".")
-        ruff_res = subprocess.run(
-            ruff_cmd,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        if ruff_res.returncode == 0:
-            if verbose:
-                print(f"  {GREEN}✅ Ruff Linter: Clean{RESET}")
-        else:
-            print(f"\n  {RED}{BOLD}❌ Ruff Linter violations detected:{RESET}")
-            if ruff_res.stdout:
-                print(f"{RED}{ruff_res.stdout.strip()}{RESET}")
-            if ruff_res.stderr:
-                print(f"{RED}{ruff_res.stderr.strip()}{RESET}")
+        try:
+            ruff_res = subprocess.run(
+                ruff_cmd,
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=LINTER_TIMEOUT,
+            )
+            if ruff_res.returncode == 0:
+                if verbose:
+                    print(f"  {GREEN}✅ Ruff Linter: Clean{RESET}")
+            else:
+                print(f"\n  {RED}{BOLD}❌ Ruff Linter violations detected:{RESET}")
+                if ruff_res.stdout:
+                    print(f"{RED}{ruff_res.stdout.strip()}{RESET}")
+                if ruff_res.stderr:
+                    print(f"{RED}{ruff_res.stderr.strip()}{RESET}")
+                all_success = False
+        except subprocess.TimeoutExpired:
+            print(f"\n  {RED}{BOLD}❌ Ruff Linter TIMED OUT after {LINTER_TIMEOUT}s.{RESET}")
             all_success = False
     else:
         print(f"  {RED}{BOLD}❌ Required linter 'ruff' is not installed.{RESET}")
@@ -391,21 +398,26 @@ def run_js_batch(verbose=False, sync_contract=True):
         biome_cmd.append(".")
 
     if biome_cmd:
-        biome_res = subprocess.run(
-            biome_cmd,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        if biome_res.returncode == 0:
-            if verbose:
-                print(f"  {GREEN}✅ Biome Linter: Clean{RESET}")
-        else:
-            print(f"\n  {RED}{BOLD}❌ Biome Linter violations detected:{RESET}")
-            if biome_res.stdout:
-                print(f"{RED}{biome_res.stdout.strip()}{RESET}")
-            if biome_res.stderr:
-                print(f"{RED}{biome_res.stderr.strip()}{RESET}")
+        try:
+            biome_res = subprocess.run(
+                biome_cmd,
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=LINTER_TIMEOUT,
+            )
+            if biome_res.returncode == 0:
+                if verbose:
+                    print(f"  {GREEN}✅ Biome Linter: Clean{RESET}")
+            else:
+                print(f"\n  {RED}{BOLD}❌ Biome Linter violations detected:{RESET}")
+                if biome_res.stdout:
+                    print(f"{RED}{biome_res.stdout.strip()}{RESET}")
+                if biome_res.stderr:
+                    print(f"{RED}{biome_res.stderr.strip()}{RESET}")
+                all_success = False
+        except subprocess.TimeoutExpired:
+            print(f"\n  {RED}{BOLD}❌ Biome Linter TIMED OUT after {LINTER_TIMEOUT}s.{RESET}")
             all_success = False
     else:
         print(f"  {RED}{BOLD}❌ Required linter 'biome' is not installed.{RESET}")
@@ -423,12 +435,18 @@ def run_js_batch(verbose=False, sync_contract=True):
         lua_ok = 0
         for lua_file in lua_files:
             rel_lua = os.path.relpath(lua_file, PROJECT_ROOT)
-            lua_res = subprocess.run(
-                [luac_bin, "-p", lua_file],
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                lua_res = subprocess.run(
+                    [luac_bin, "-p", lua_file],
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=LINTER_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                print(f"\n  {RED}{BOLD}❌ Lua Syntax Check (luac -p) TIMED OUT on {rel_lua} after {LINTER_TIMEOUT}s.{RESET}")
+                all_success = False
+                continue
             if lua_res.returncode == 0:
                 lua_ok += 1
             else:
@@ -452,21 +470,26 @@ def run_js_batch(verbose=False, sync_contract=True):
         if os.path.isfile(luacheck_cfg):
             luacheck_cmd.extend(["--config", luacheck_cfg])
         luacheck_cmd.extend(lua_files)
-        lc_res = subprocess.run(
-            luacheck_cmd,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        if lc_res.returncode == 0:
-            if verbose:
-                print(f"  {GREEN}✅ Luacheck: Clean ({len(lua_files)}/{len(lua_files)} files){RESET}")
-        else:
-            print(f"\n  {RED}{BOLD}❌ Luacheck violations detected:{RESET}")
-            if lc_res.stdout:
-                print(f"{RED}{lc_res.stdout.strip()}{RESET}")
-            if lc_res.stderr:
-                print(f"{RED}{lc_res.stderr.strip()}{RESET}")
+        try:
+            lc_res = subprocess.run(
+                luacheck_cmd,
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=LINTER_TIMEOUT,
+            )
+            if lc_res.returncode == 0:
+                if verbose:
+                    print(f"  {GREEN}✅ Luacheck: Clean ({len(lua_files)}/{len(lua_files)} files){RESET}")
+            else:
+                print(f"\n  {RED}{BOLD}❌ Luacheck violations detected:{RESET}")
+                if lc_res.stdout:
+                    print(f"{RED}{lc_res.stdout.strip()}{RESET}")
+                if lc_res.stderr:
+                    print(f"{RED}{lc_res.stderr.strip()}{RESET}")
+                all_success = False
+        except subprocess.TimeoutExpired:
+            print(f"\n  {RED}{BOLD}❌ Luacheck TIMED OUT after {LINTER_TIMEOUT}s.{RESET}")
             all_success = False
     elif lua_files and not luacheck_bin:
         print(f"  {YELLOW}{BOLD}⚠️  WARNING: luacheck not found (skipped).{RESET}")
@@ -480,21 +503,26 @@ def run_js_batch(verbose=False, sync_contract=True):
             if f.endswith('.sh'):
                 sh_files.append(os.path.join(root_dir, f))
     if shellcheck_bin and sh_files:
-        sc_res = subprocess.run(
-            [shellcheck_bin, *sh_files],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        if sc_res.returncode == 0:
-            if verbose:
-                print(f"  {GREEN}✅ ShellCheck: Clean ({len(sh_files)}/{len(sh_files)} files){RESET}")
-        else:
-            print(f"\n  {RED}{BOLD}❌ ShellCheck violations detected:{RESET}")
-            if sc_res.stdout:
-                print(f"{RED}{sc_res.stdout.strip()}{RESET}")
-            if sc_res.stderr:
-                print(f"{RED}{sc_res.stderr.strip()}{RESET}")
+        try:
+            sc_res = subprocess.run(
+                [shellcheck_bin, *sh_files],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=LINTER_TIMEOUT,
+            )
+            if sc_res.returncode == 0:
+                if verbose:
+                    print(f"  {GREEN}✅ ShellCheck: Clean ({len(sh_files)}/{len(sh_files)} files){RESET}")
+            else:
+                print(f"\n  {RED}{BOLD}❌ ShellCheck violations detected:{RESET}")
+                if sc_res.stdout:
+                    print(f"{RED}{sc_res.stdout.strip()}{RESET}")
+                if sc_res.stderr:
+                    print(f"{RED}{sc_res.stderr.strip()}{RESET}")
+                all_success = False
+        except subprocess.TimeoutExpired:
+            print(f"\n  {RED}{BOLD}❌ ShellCheck TIMED OUT after {LINTER_TIMEOUT}s.{RESET}")
             all_success = False
     elif sh_files and not shellcheck_bin:
         print(f"  {YELLOW}{BOLD}⚠️  WARNING: shellcheck not found (skipped).{RESET}")
@@ -508,21 +536,26 @@ def run_js_batch(verbose=False, sync_contract=True):
             pyright_cmd.extend(["-p", pyright_cfg])
         else:
             pyright_cmd.append(".")
-        pr_res = subprocess.run(
-            pyright_cmd,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        if pr_res.returncode == 0:
-            if verbose:
-                print(f"  {GREEN}✅ Pyright Type Check: Clean{RESET}")
-        else:
-            print(f"\n  {RED}{BOLD}❌ Pyright violations detected:{RESET}")
-            if pr_res.stdout:
-                print(f"{RED}{pr_res.stdout.strip()}{RESET}")
-            if pr_res.stderr:
-                print(f"{RED}{pr_res.stderr.strip()}{RESET}")
+        try:
+            pr_res = subprocess.run(
+                pyright_cmd,
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=PYRIGHT_TIMEOUT,
+            )
+            if pr_res.returncode == 0:
+                if verbose:
+                    print(f"  {GREEN}✅ Pyright Type Check: Clean{RESET}")
+            else:
+                print(f"\n  {RED}{BOLD}❌ Pyright violations detected:{RESET}")
+                if pr_res.stdout:
+                    print(f"{RED}{pr_res.stdout.strip()}{RESET}")
+                if pr_res.stderr:
+                    print(f"{RED}{pr_res.stderr.strip()}{RESET}")
+                all_success = False
+        except subprocess.TimeoutExpired:
+            print(f"\n  {RED}{BOLD}❌ Pyright Type Check TIMED OUT after {PYRIGHT_TIMEOUT}s.{RESET}")
             all_success = False
     else:
         print(f"  {RED}{BOLD}❌ Required linter 'pyright' is not installed.{RESET}")
@@ -642,21 +675,58 @@ def start_watch_mode():
         print("   Install it with: pip install watchdog")
         return
 
+    import generate_js
+
+    generated_ignore_paths = {
+        os.path.normpath(os.path.join(TESTING_TOOLS_DIR, "scripts", "bridge_contract.js")),
+        *(
+            os.path.normpath(os.path.join(PROJECT_ROOT, cfg["target"]))
+            for cfg in generate_js.CONFIG
+        ),
+    }
+
     class TestWatchHandler(FileSystemEventHandler):
         def __init__(self):
-            self.last_run = 0
-            self.cooldown = 2
+            self.last_run = 0.0
+            self.cooldown = 2.0
 
         def on_modified(self, event):
             if event.is_directory:
                 return
-            if not any(event.src_path.endswith(ext) for ext in ['.py', '.js', '.module.js']):
+            src_path = os.path.normpath(os.path.abspath(str(event.src_path)))
+            if src_path in generated_ignore_paths:
+                return
+            try:
+                rel_path = os.path.relpath(src_path, PROJECT_ROOT)
+            except ValueError:
+                return
+            if any(part in SKIP_DIRS for part in rel_path.split(os.sep)):
+                return
+            if not src_path.endswith(('.py', '.js')):
                 return
             if time.time() - self.last_run < self.cooldown:
                 return
-            print(f"\n{YELLOW}🔄 Change detected in {os.path.basename(event.src_path)}. Re-running tests...{RESET}")
+            print(f"\n{YELLOW}🔄 Change detected in {rel_path}. Re-running tests...{RESET}")
             self.last_run = time.time()
+            if src_path.endswith(".module.js"):
+                try:
+                    subprocess.run(
+                        [sys.executable, os.path.join(TESTING_TOOLS_DIR, "generate_js.py")],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=CONTRACT_SYNC_TIMEOUT,
+                    )
+                except subprocess.TimeoutExpired:
+                    print(f"  {RED}{BOLD}❌ JS Build TIMED OUT after {CONTRACT_SYNC_TIMEOUT}s.{RESET}")
+                    self.last_run = time.time()
+                    return
+                except subprocess.CalledProcessError as e:
+                    print(f"  {RED}{BOLD}❌ JS Build FAILED:{RESET}\n{RED}{e.stderr or e.stdout}{RESET}")
+                    self.last_run = time.time()
+                    return
             run_all_tests()
+            self.last_run = time.time()
 
     event_handler = TestWatchHandler()
     observer = Observer()

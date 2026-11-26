@@ -23,10 +23,6 @@ from utils import url_analyzer, security
 from utils import dependency_manager, anilist_service, mpv_command_builder
 import file_io
 
-# Re-export security constants for backward compatibility
-ALLOWED_PROTOCOLS = security.ALLOWED_PROTOCOLS
-SAFE_MPV_FLAGS_ALLOWLIST = security.SAFE_MPV_FLAGS_ALLOWLIST
-
 def sanitize_url(url):
     """Sanitizes a URL by removing potentially dangerous characters."""
     return file_io.sanitize_string(url, is_filename=False)

@@ -12,8 +12,6 @@ from . import security
 sys.dont_write_bytecode = True
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
-ALLOWED_PROTOCOLS = security.ALLOWED_PROTOCOLS
-
 def _windows_quote(s):
     """
     Custom quoter for Windows that handles spaces and special characters
@@ -55,12 +53,9 @@ class MpvCommandBuilder:
         self.playlist_start = None
         self.idle_val = None
         self.ytdl_raw_options = None
-        self.disable_http_persistent_override = False
-        self.input_terminal = None
         self.has_terminal_flag = False
         self.is_forced_terminal = False
         self.start_time = None
-        self.properties = []
         if handshake_path:
             self.with_handshake_path(handshake_path)
 
@@ -144,7 +139,7 @@ class MpvCommandBuilder:
         return self
 
     def with_automatic_flags(self, flags):
-        self.automatic_flags = flags
+        self.automatic_flags = list(flags) if flags else None
         return self
 
     def with_force_terminal(self, force):
@@ -153,16 +148,8 @@ class MpvCommandBuilder:
             self.is_forced_terminal = True
         return self
 
-    def with_input_terminal(self, val):
-        self.input_terminal = val
-        return self
-
     def with_headers(self, headers):
         self.headers = headers
-        return self
-
-    def with_disable_http_persistent(self, val):
-        self.disable_http_persistent_override = val
         return self
 
     def with_start_paused(self, paused):
@@ -217,14 +204,12 @@ class MpvCommandBuilder:
         args = [self.mpv_exe]
         if self.ipc_path: args.append(f'--input-ipc-server={self.ipc_path}')
         if self.idle_val: args.append(f'--idle={self.idle_val if isinstance(self.idle_val, str) else "yes"}')
-        if self.input_terminal: args.append(f'--input-terminal={self.input_terminal}')
         for s in self.scripts: args.append(f'--script={s}')
 
         # --- COMBINED SCRIPT OPTS ---
         if final_script_opts:
             args.append(f"--script-opts={','.join(final_script_opts)}")
 
-        for p in self.properties: args.append(p)
         if self.title: args.append(f'--title={security.sanitize_string(self.title)}')
 
         # Debug: Force keep-open for unmanaged instances if it's likely a crash
@@ -467,14 +452,14 @@ class MpvCommandBuilder:
             logging.debug(f"[MPV_CMD] Could not save last MPV command to file: {e}")
         return full_command, self.has_terminal_flag
 
-def construct_mpv_command(mpv_exe, ipc_path=None, url=None, is_youtube=False, ytdl_raw_options=None, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, headers=None, disable_http_persistent=False, start_paused=False, script_dir=None, load_on_completion_script=False, title=None, use_ytdl_mpv=False, is_youtube_override=False, idle=False, force_terminal=False, input_terminal=None, settings=None, flag_dir=None, playlist_start_index=None, cookies_browser=None, cookies_file=None, start_time=None, handshake_path=None):
+def construct_mpv_command(mpv_exe, ipc_path=None, url=None, is_youtube=False, ytdl_raw_options=None, geometry=None, custom_width=None, custom_height=None, custom_mpv_flags=None, automatic_mpv_flags=None, headers=None, disable_http_persistent=False, start_paused=False, script_dir=None, load_on_completion_script=False, title=None, use_ytdl_mpv=False, is_youtube_override=False, idle=False, force_terminal=False, settings=None, flag_dir=None, playlist_start_index=None, cookies_browser=None, cookies_file=None, start_time=None, handshake_path=None):
     b = MpvCommandBuilder(mpv_exe, use_ytdl_mpv, is_youtube_override, is_youtube, settings, cookies_browser, cookies_file=cookies_file, handshake_path=handshake_path)
     b.with_ipc_path(ipc_path).with_url(url).with_title(title).with_headers(headers)
     b.with_geometry(geometry, custom_width, custom_height).with_playlist_start(playlist_start_index)
     b.with_start_time(start_time)
     b.with_automatic_flags(automatic_mpv_flags).with_custom_flags(custom_mpv_flags)
-    b.with_force_terminal(force_terminal).with_input_terminal(input_terminal)
-    b.with_disable_http_persistent(disable_http_persistent).with_start_paused(start_paused)
+    b.with_force_terminal(force_terminal)
+    b.with_start_paused(start_paused)
     b.with_idle(idle).with_youtube_options(is_youtube, ytdl_raw_options)
 
     if script_dir:

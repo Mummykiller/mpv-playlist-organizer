@@ -368,10 +368,12 @@ export function createFolderManager(ctx) {
 				const response = await sendMessageAsync({
 					action: "get_all_folder_ids",
 				});
+				if (!isReorderModeActive) return;
 				if (response.success) {
 					renderReorderList(container, response.folderIds);
 				}
 			} catch (e) {
+				if (!isReorderModeActive) return;
 				showStatus("Failed to load folders for reordering.", true);
 			}
 		} else {

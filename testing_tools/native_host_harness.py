@@ -314,7 +314,13 @@ def run_native_message_session(
     timeout: float = 5.0,
     project_root: str = PROJECT_ROOT,
 ) -> dict[str, Any]:
-    """Runs native_host.py against a throwaway temp DATA_DIR, sends framed JSON, and collects replies."""
+    """Runs native_host.py against a throwaway temp DATA_DIR, sends framed JSON, and collects replies.
+
+    Note: The returned ``data_dir`` and ``tmp_dir`` strings refer to the ephemeral directories
+    used during the session, which are deleted before this function returns. Callers (such as
+    ``mcp_server/tools_impl.py``) use those strings solely to redact temp paths from captured
+    frames and stderr output—do not attempt filesystem access on them after return.
+    """
     clamped_timeout = max(0.5, min(float(timeout), 5.0))
     expected_ids: Counter[str | int] = Counter()
     expected_unkeyed = 0

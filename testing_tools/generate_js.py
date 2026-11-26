@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import tempfile
 
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -134,8 +135,28 @@ def process_file(config, verbose=False, project_root=PROJECT_ROOT):
         return False
 
     rendered = render_module_js(config, project_root=project_root)
-    with open(target_path, "w", encoding="utf-8") as f:
-        f.write(rendered)
+    target_dir = os.path.dirname(target_path)
+    target_name = os.path.basename(target_path)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target_dir,
+            prefix=f".{target_name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp_file:
+            tmp_path = tmp_file.name
+            tmp_file.write(rendered)
+        os.replace(tmp_path, target_path)
+        tmp_path = None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError as cleanup_err:
+                print(f"Warning: failed to remove temp JS file {tmp_path}: {cleanup_err}", file=sys.stderr)
     return True
 
 if __name__ == "__main__":

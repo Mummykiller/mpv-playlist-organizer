@@ -879,5 +879,146 @@ class TestPlaybackIPCConcurrency(BaseTestCase):
         self.assertTrue(result_box.get("res", {}).get("success"))
         self.assertFalse(mgr._is_launching)
 
+    def test_perform_cookie_fallback_releases_sync_lock_and_checks_generation(self):
+        """Regression: perform_cookie_fallback releases sync_lock during get_cookies_file and aborts on generation change."""
+        from utils import session_ipc_ops
+
+        session = MagicMock()
+        session.sync_lock = threading.RLock()
+        session.is_alive = True
+        session.session_generation = 3
+        session.owner_folder_id = "Anime"
+        session.SCRIPT_DIR = self.test_dir
+        session.playlist = [{"id": "vid-1", "url": "https://www.youtube.com/watch?v=abc", "cookies_browser": "firefox"}]
+        session.ipc_manager = MagicMock()
+        session.ipc_manager.get_property.return_value = "vid-1"
+
+        in_extract = threading.Event()
+        release_extract = threading.Event()
+        lock_acquired_during_extract = {"ok": False}
+
+        def slow_extract(browser, url, force_refresh=False):
+            in_extract.set()
+            release_extract.wait(timeout=2.0)
+            return "/dev/shm/fake_cookies.txt"
+
+        with patch.object(url_analyzer, "get_cookies_file", side_effect=slow_extract):
+            t = threading.Thread(target=session_ipc_ops.perform_cookie_fallback, args=(session,), daemon=True)
+            t.start()
+            self.assertTrue(in_extract.wait(timeout=2.0))
+
+            # Another thread must be able to acquire sync_lock while get_cookies_file runs
+            acquired = session.sync_lock.acquire(blocking=False)
+            lock_acquired_during_extract["ok"] = acquired
+            try:
+                if acquired:
+                    session.session_generation = 4  # Advance generation while extraction is in flight
+            finally:
+                if acquired:
+                    session.sync_lock.release()
+                release_extract.set()
+
+            t.join(timeout=2.0)
+
+        self.assertTrue(lock_acquired_during_extract["ok"], "sync_lock must be released during get_cookies_file()")
+        # Because generation advanced from 3 -> 4, loadfile must NOT be sent
+        loadfile_calls = [
+            c for c in session.ipc_manager.send.call_args_list
+            if c[0] and c[0][0].get("command", [])[:1] == ["loadfile"]
+        ]
+        self.assertEqual(loadfile_calls, [])
+
+    def test_orchestrate_playback_stale_cancel_passes_session_generation(self):
+        """Regression: _orchestrate_playback passes captured session_generation to clear() on Launch cancelled."""
+        from utils.handlers.playback_handler import PlaybackHandler
+        from utils import native_link
+
+        ctx = MagicMock()
+        ctx.io = file_io
+        ctx.script_dir = self.test_dir
+        ctx.temp_playlists_dir = os.path.join(self.test_dir, "temp_playlists")
+        ctx.mpv.sync_lock = threading.RLock()
+        ctx.mpv.is_alive = False
+        ctx.mpv.pid = None
+        ctx.mpv.session_generation = 9
+        ctx.mpv.start.side_effect = RuntimeError("Launch cancelled by user.")
+
+        handler = PlaybackHandler(ctx)
+        handler.item_processor.resolve_input_items = MagicMock(
+            return_value=([{"id": "i1", "url": "https://example.com/1.mp4", "title": "Ep 1"}], False)
+        )
+        req = native_link.PlaybackRequest(
+            action="play",
+            folder_id="Anime",
+            url_item={"id": "i1", "url": "https://example.com/1.mp4", "title": "Ep 1"},
+        )
+        res = handler._orchestrate_playback(req, "single")
+        self.assertFalse(res.get("success"))
+        ctx.mpv.clear.assert_called_once_with(session_generation=9)
+
+    def test_with_automatic_flags_does_not_mutate_caller_list(self):
+        """Regression: MpvCommandBuilder.with_automatic_flags copies input list so with_start_paused does not mutate it."""
+        from utils.mpv_command_builder import MpvCommandBuilder
+
+        caller_flags = [{"flag": "--fs", "enabled": True}]
+        builder = MpvCommandBuilder("mpv").with_automatic_flags(caller_flags).with_start_paused(True)
+        self.assertEqual(caller_flags, [{"flag": "--fs", "enabled": True}])
+        self.assertEqual(len(builder.automatic_flags), 2)
+
+    def test_create_time_persisted_before_persist_session_and_reset_on_clear(self):
+        """Regression: LauncherService.launch sets create_time before persist_session(), and clear() resets it to None."""
+        deps = {
+            "get_all_folders_from_file": lambda: {},
+            "get_mpv_executable": lambda: "mpv",
+            "log_stream": lambda **kw: (lambda s: None),
+            "send_message": lambda m: None,
+            "SCRIPT_DIR": self.test_dir,
+            "TEMP_PLAYLISTS_DIR": os.path.join(self.test_dir, "temp_playlists"),
+        }
+        session_file = os.path.join(self.test_dir, "session_ctime.json")
+        mgr = MpvSessionManager(session_file, deps)
+
+        observed_create_time = {"value": None}
+        orig_persist = mgr.persist_session
+
+        def spy_persist():
+            observed_create_time["value"] = mgr.create_time
+            orig_persist()
+
+        mgr.persist_session = spy_persist
+
+        fake_proc = MagicMock()
+        fake_proc.pid = 55555
+        fake_proc.stdout = None
+        fake_proc.poll.return_value = None
+
+        fake_ipc = MagicMock()
+        fake_ipc.connect.return_value = True
+        fake_ipc.get_property.return_value = 55556
+        fake_ipc.is_connected.return_value = True
+
+        fake_tracker = MagicMock()
+        fake_tracker.stop_tracking.return_value = {}
+
+        with patch.object(ipc_utils, "get_ipc_path", return_value=os.path.join(self.test_dir, "mpv.sock")), \
+             patch("services.create_handshake_file", return_value=(os.path.join(self.test_dir, "hs.json"), None)), \
+             patch("services.construct_mpv_command", return_value=(["mpv", "https://example.com/v.mp4"], False)), \
+             patch("services.get_mpv_popen_kwargs", return_value={}), \
+             patch("subprocess.Popen", return_value=fake_proc), \
+             patch.object(ipc_utils, "IPCSocketManager", return_value=fake_ipc), \
+             patch("playlist_tracker.PlaylistTracker", return_value=fake_tracker), \
+             patch.object(mgr.launcher, "_start_exit_watcher"):
+            res = mgr.launcher.launch({"id": "1", "url": "https://example.com/v.mp4", "title": "V"}, "Anime", {}, file_io)
+
+        self.assertTrue(res.get("success"), res)
+        self.assertIsNotNone(observed_create_time["value"])
+        self.assertIsNotNone(mgr.create_time)
+        with open(session_file, "r", encoding="utf-8") as fh:
+            saved = json.load(fh)
+        self.assertIsNotNone(saved.get("create_time"))
+
+        mgr.clear(mpv_return_code=0)
+        self.assertIsNone(mgr.create_time)
+
 if __name__ == '__main__':
     unittest.main()

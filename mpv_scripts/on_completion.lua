@@ -230,6 +230,14 @@ local function handle_natural_completion(reason)
     
     -- Delay to ensure the flag is flushed to disk before the process dies (User requested 0.5s)
     mp.add_timeout(0.5, function()
+        if manual_quit then
+            log("0.5s quit aborted: manual_quit is true.")
+            return
+        end
+        if not mp.get_property_bool("idle-active") then
+            log("0.5s quit aborted: player is no longer idle.")
+            return
+        end
         log("Exiting with code 99.")
         mp.command("quit 99")
     end)
@@ -285,10 +293,6 @@ local function on_end_file(event)
         if (not pos or pos < 0) and loop_playlist == "no" then
             handle_natural_completion("Reached end of playlist (EOF on last item)")
         end
-    
-    -- Case 2: The player went idle (usually happens after EOF with --idle=yes)
-    elseif event.reason == 'idle' then
-        handle_natural_completion("MPV entered idle state")
     end
 end
 

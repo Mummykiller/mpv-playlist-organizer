@@ -140,9 +140,6 @@ local function apply_adaptive_settings()
                         if data.original_url then mp.set_property_native("user-data/original-url", data.original_url) end
                         if data.cookies_browser then mp.set_property("user-data/cookies-browser", data.cookies_browser) end
                         if data.is_unmanaged ~= nil then mp.set_property("user-data/is-unmanaged", data.is_unmanaged and "yes" or "no") end
-                        
-                        -- Clear the handshake option so we don't re-process it for subsequent files
-                        mp.set_property("opt-mpv_organizer-handshake", "")
                     end
                 end
             end
@@ -304,7 +301,7 @@ local function apply_adaptive_settings()
         debug_log("Applied final resume time: " .. tostring(final_resume_time))
         
         -- CLEAR PRIMED DATA: Only if we are NOT a YT unresolved URL (which will reload)
-        local is_yt_unresolved = path:find("youtube%.com/watch") or path:find("youtu%.be/")
+        local is_yt_unresolved = path:find("youtube%.com/watch") or path:find("youtu%.be/") or path:find("youtube%.com/shorts/") or path:find("youtube%.com/live/")
         if not is_yt_unresolved then
             mp.set_property("user-data/primed-resume-time", "")
             primed_resume_time = nil -- Consume Lua global
@@ -376,7 +373,7 @@ local function apply_adaptive_settings()
         
         -- Use robust reconnect flags
         local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d,analyzeduration=%s,probesize=%s", 
-                                 persistence, reconnect_val, r_delay, tostring(opts.analyzeduration or 0), tostring(opts.probesize or 32))
+                                 persistence, reconnect_val, math.floor(r_delay), tostring(opts.analyzeduration or 0), tostring(opts.probesize or 32))
         
         set_property_if_diff("demuxer-lavf-o", lp)
     else
@@ -422,7 +419,7 @@ local function apply_adaptive_settings()
             
             local reconnect_val = (opts.enable_reconnect ~= false) and "1" or "0"
             local r_delay = tonumber(opts.reconnect_delay) or 4
-            local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d", persistence, reconnect_val, r_delay)
+            local lp = string.format("http_persistent=%s,reconnect=%s,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=%d", persistence, reconnect_val, math.floor(r_delay))
             set_property_if_diff("demuxer-lavf-o", lp)
         end
     end

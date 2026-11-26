@@ -1,3 +1,4 @@
+import collections
 import contextlib
 import importlib.util
 import io
@@ -840,7 +841,8 @@ def _tail_one_log(
 
     grep_l = grep.lower() if grep else None
     level_u = level.upper() if level else None
-    matched: list[str] = []
+    matched: collections.deque[str] = collections.deque(maxlen=max_lines)
+    total = 0
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         for raw_line in fh:
             line = raw_line.rstrip("\r\n")
@@ -848,10 +850,10 @@ def _tail_one_log(
                 continue
             if grep_l and grep_l not in line.lower():
                 continue
-            matched.append(_mask_text(line, data_dir=data_dir))
+            total += 1
+            matched.append(line)
 
-    total = len(matched)
-    sliced = matched[-max_lines:]
+    sliced = [_mask_text(line, data_dir=data_dir) for line in matched]
     return {
         "exists": True,
         "total_matched": total,
@@ -1176,13 +1178,23 @@ def _list_ipc_sockets() -> dict[str, Any]:
         except OSError:
             is_sock = False
         pid_str = name[len("mpv-socket-") :]
-        pid = int(pid_str) if pid_str.isdigit() else None
-        proc_info = _verify_mpv_pid(pid) if pid is not None else {"alive": False, "is_mpv": False}
-        stale = not (is_sock and proc_info["alive"] and proc_info["is_mpv"])
+        host_pid = int(pid_str) if pid_str.isdigit() else None
+        mpv_pid: int | None = None
+        if is_sock:
+            try:
+                probe = _query_mpv_properties(full, ["pid"], timeout=0.5)
+                probed_pid = probe.get("values", {}).get("pid")
+                if isinstance(probed_pid, int) and not isinstance(probed_pid, bool):
+                    mpv_pid = probed_pid
+            except OSError:
+                mpv_pid = None
+        proc_info = _verify_mpv_pid(mpv_pid) if mpv_pid is not None else {"alive": False, "is_mpv": False}
+        stale = not (is_sock and mpv_pid is not None and proc_info["alive"] and proc_info["is_mpv"])
         entries.append(
             {
                 "socket_path": full,
-                "pid": pid,
+                "pid": mpv_pid,
+                "host_pid": host_pid,
                 "is_socket": is_sock,
                 "alive": proc_info["alive"],
                 "is_mpv": proc_info["is_mpv"],

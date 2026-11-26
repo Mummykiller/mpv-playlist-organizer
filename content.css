@@ -547,18 +547,6 @@ select:focus-visible {
 	animation: text-glow-success 1.5s ease-out;
 }
 
-.url-position {
-	color: var(--accent-success);
-	background-color: rgba(67, 181, 129, 0.15); /* A subtle background */
-	font-family: var(--font-mono);
-	font-size: 11px;
-	font-weight: 600;
-	padding: 2px 5px;
-	border-radius: 4px;
-	margin-left: auto; /* Push the badge to the right */
-	flex-shrink: 0; /* Prevent the badge from shrinking */
-}
-
 .btn-remove-item {
 	position: absolute;
 	right: 6px;
@@ -749,8 +737,7 @@ select:focus-visible {
 }
 
 /* --- Placeholders --- */
-#playlist-placeholder,
-#log-placeholder {
+#playlist-placeholder {
 	color: var(--text-secondary);
 	text-align: center;
 	font-style: italic;
@@ -1169,12 +1156,6 @@ button.btn-closing {
 #m3u8-minimized-stub.url-in-playlist {
 	background-color: rgba(249, 168, 37, 0.8); /* Yellow with transparency */
 	border-color: #f9a825;
-}
-
-/* New class for the "duplicate detected" feedback state */
-#m3u8-minimized-stub.url-duplicate {
-	background-color: rgba(250, 166, 26, 0.8); /* A warning yellow */
-	border-color: #faa61a;
 }
 
 #m3u8-minimized-stub:hover {

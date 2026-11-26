@@ -302,7 +302,6 @@ try:
 
     def build_handler_registry(
         mpv_session_inst=None,
-        handler_manager_inst=None,
         restore_lock=None,
         restore_state=None
     ):
@@ -471,7 +470,6 @@ try:
             _restore_state = {"done_by_handler": False, "stale_result": None}
             build_handler_registry(
                 mpv_session_inst=mpv_session,
-                handler_manager_inst=handler_manager,
                 restore_lock=restore_lock,
                 restore_state=_restore_state
             )

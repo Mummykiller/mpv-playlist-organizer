@@ -17,12 +17,6 @@ export class OptionsManager {
 		this.showStatus = dependencies.showStatus;
 		this.fetchAniListReleases = dependencies.fetchAniListReleases;
 
-		this.elements = {
-			get geometrySelect() {
-				return document.getElementById("geometry-select");
-			},
-		};
-
 		try {
 			this.currentMode = localStorage.getItem("mpv_settings_view_mode") || "simple";
 			this.currentCategory = localStorage.getItem("mpv_settings_category") || "all";

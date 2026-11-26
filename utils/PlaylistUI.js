@@ -424,6 +424,17 @@ window.MPV_INTERNAL = window.MPV_INTERNAL || {};
 							.sendCommandToBackground("remove_item", folderId, {
 								data: { index, id: itemId },
 							})
+							.then((res) => {
+								if (!res?.success) {
+									listItem.classList.remove("removing");
+									if (res?.error) {
+										this.controller.addLogEntry({
+											text: `[Content]: Failed to remove item: ${res.error}`,
+											type: "error",
+										});
+									}
+								}
+							})
 							.catch((err) => {
 								// Rollback on error
 								listItem.classList.remove("removing");
